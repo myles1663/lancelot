@@ -1,0 +1,32 @@
+# =========================
+# Model Configuration Example
+# =========================
+# This file configures which AI models Lancelot uses
+
+models:
+  # Primary model for conversations and reasoning
+  primary:
+    provider: google
+    name: gemini-2.0-flash
+    temperature: 0.7
+    max_tokens: 8192
+  
+  # Orchestrator model for planning and delegation
+  orchestrator:
+    provider: google
+    name: gemini-2.0-flash
+    temperature: 0.3
+    max_tokens: 4096
+  
+  # Utility model for quick tasks
+  utility:
+    provider: google
+    name: gemini-2.0-flash
+    temperature: 0.5
+    max_tokens: 2048
+
+# Model aliases (for easy switching)
+aliases:
+  default: primary
+  planner: orchestrator
+  quick: utility

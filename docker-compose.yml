@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  lancelot-core:
+    build: .
+    container_name: lancelot_core
+    volumes:
+      - ./lancelot_data:/home/lancelot/data
+      # Map the current directory to /home/lancelot/app for development
+      - .:/home/lancelot/app
+      # Mount Google OAuth credentials (ADC) from host
+      - ${APPDATA}/gcloud/application_default_credentials.json:/home/lancelot/.config/gcloud/application_default_credentials.json:ro
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GOOGLE_APPLICATION_CREDENTIALS=/home/lancelot/.config/gcloud/application_default_credentials.json
+    # Keep the container running
+    ports:
+      - "8000:8000"
+      - "8501:8501"
+    command: sh -c "uvicorn gateway:app --host 0.0.0.0 --port 8000 & streamlit run war_room.py --server.port 8501 --server.address 0.0.0.0"
+    networks:
+      - lancelot_net
+
+networks:
+  lancelot_net:
+    driver: bridge

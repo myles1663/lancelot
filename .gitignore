@@ -1,0 +1,61 @@
+# =========================
+# Project Lancelot .gitignore
+# =========================
+
+# Environment & Secrets
+.env
+*.env
+.env.*
+secrets/
+*.key
+*.pem
+*.p12
+credentials.json
+**/application_default_credentials.json
+oauth_client*.json
+service-account*.json
+
+# Runtime Data
+lancelot_data/
+data/
+logs/
+*.log
+tmp/
+temp/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docker
+*.tar
+
+# Build artifacts
+*.exe
+*.msi
+*.spec
+
+# Test outputs
+.coverage
+htmlcov/
