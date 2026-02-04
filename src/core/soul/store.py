@@ -10,6 +10,7 @@ Public API:
     load_active_soul(soul_dir) → Soul
     list_versions(soul_dir)    → list[str]
     get_active_version(soul_dir) → str
+    set_active_version(version, soul_dir) → None
 """
 
 import logging
@@ -141,6 +142,26 @@ def get_active_version(soul_dir: Optional[str] = None) -> str:
     return versions[-1]
 
 
+def set_active_version(version: str, soul_dir: Optional[str] = None) -> None:
+    """Write the ACTIVE pointer file to switch the active soul version.
+
+    Args:
+        version: Version string (e.g. "v1").
+        soul_dir: Path to soul directory.
+
+    Raises:
+        SoulStoreError if the version file doesn't exist.
+    """
+    d = _resolve_soul_dir(soul_dir)
+    version_file = d / "soul_versions" / f"soul_{version}.yaml"
+    if not version_file.exists():
+        raise SoulStoreError(f"Cannot activate — version file not found: {version_file}")
+
+    active_file = d / "ACTIVE"
+    active_file.write_text(version, encoding="utf-8")
+    logger.info("Soul active version set to %s", version)
+
+
 def list_versions(soul_dir: Optional[str] = None) -> list[str]:
     """List all available soul versions, sorted ascending.
 
@@ -214,5 +235,5 @@ def load_active_soul(soul_dir: Optional[str] = None) -> Soul:
     from src.core.soul.linter import lint_or_raise  # local import to avoid circular
     lint_or_raise(soul)
 
-    logger.info("Soul loaded: version=%s", soul.version)
+    logger.info("soul_loaded: version=%s", soul.version)
     return soul
