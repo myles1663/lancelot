@@ -1,0 +1,6 @@
+Summarize the following text in 2-3 concise sentences for internal use.
+Focus on key facts and actionable information.
+
+Text: {input}
+
+Summary:

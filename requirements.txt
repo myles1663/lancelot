@@ -10,3 +10,8 @@ google-auth-oauthlib
 pywebview
 plyer
 cryptography
+pyyaml>=6.0
+llama-cpp-python>=0.2.0
+pytest>=7.0
+pytest-cov
+pytest-timeout

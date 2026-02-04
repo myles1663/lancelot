@@ -1,0 +1,7 @@
+Classify the user's intent into exactly one category.
+
+Categories: question, command, information, greeting, feedback, unclear
+
+User message: {input}
+
+Respond with ONLY the category name, nothing else.

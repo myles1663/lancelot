@@ -1,21 +1,29 @@
 import os
 import json
 
+from src.core.onboarding_snapshot import OnboardingSnapshot, OnboardingState
+from src.core import recovery_commands
+from src.core.local_utility_setup import handle_local_utility_setup
+
 class OnboardingOrchestrator:
     def __init__(self, data_dir="/home/lancelot/data"):
         self.data_dir = data_dir
         self.user_file = os.path.join(data_dir, "USER.md")
-        self.lock_file = os.path.join(data_dir, "LOCKDOWN")
         self.env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
         self.fail_count = 0
         self.temp_data = {} # Store transient data like webhook url before verification
+        self.snapshot = OnboardingSnapshot(data_dir)
         self.state = self._determine_state()
 
     def _determine_state(self):
-        """Determines current state based on file existence and content."""
-        if os.path.exists(self.lock_file):
-            return "LOCKDOWN"
-            
+        """Determines current state based on snapshot and file existence."""
+        # v4: COOLDOWN replaces permanent LOCKDOWN — check snapshot first
+        if self.snapshot.state == OnboardingState.COOLDOWN:
+            if self.snapshot.is_in_cooldown():
+                return "COOLDOWN"
+            # Cooldown expired — resume from before cooldown
+            # (snapshot.transition guards already handle this)
+
         if not os.path.exists(self.user_file):
             return "WELCOME"
         
@@ -56,14 +64,10 @@ class OnboardingOrchestrator:
             
         return "READY"
 
-    def _enter_lockdown(self):
-        """Creates lockdown file."""
-        try:
-            with open(self.lock_file, "w") as f:
-                f.write("LOCKED")
-            self.state = "LOCKDOWN"
-        except Exception:
-            pass
+    def _enter_cooldown(self, seconds: int = 300, reason: str = "Too many failures"):
+        """Enter time-based cooldown (v4: replaces permanent LOCKDOWN)."""
+        self.snapshot.enter_cooldown(seconds, reason)
+        self.state = "COOLDOWN"
 
     def _complete_onboarding(self):
         """Marks onboarding as complete in USER.md."""
@@ -361,14 +365,29 @@ class OnboardingOrchestrator:
 
     def process(self, user: str, text: str) -> str:
         """Main state machine processor."""
-        if self.state == "LOCKDOWN":
-            return "SYSTEM LOCKED. Security Protocol Enforced. Manual Reset Required on Host."
+        # --- Global recovery commands (v4: STATUS, BACK, etc.) ---
+        recovery_response = recovery_commands.try_handle(text, self.snapshot)
+        if recovery_response is not None:
+            return recovery_response
+
+        if self.state == "COOLDOWN":
+            remaining = self.snapshot.cooldown_remaining()
+            if remaining > 0:
+                mins, secs = divmod(int(remaining), 60)
+                return (f"System is in cooldown. {mins}m {secs}s remaining. "
+                        "Use `STATUS` to check progress.")
+            else:
+                # Cooldown expired — re-determine state and continue
+                self.state = self._determine_state()
 
         if self.state == "WELCOME":
             return self._bond_identity(user)
 
         elif self.state == "HANDSHAKE":
             return self._verify_oauth_creds()
+
+        elif self.state == "LOCAL_UTILITY_SETUP":
+            return handle_local_utility_setup(text, self.snapshot)
 
         elif self.state == "COMMS_SELECTION":
             return self._handle_comms_selection(text)

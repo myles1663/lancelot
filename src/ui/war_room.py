@@ -131,7 +131,7 @@ with cols[3]:
 st.divider()
 
 # Tabs for Main Interface
-tab_command, tab_audit = st.tabs(["Command Center", "Neural Audit"])
+tab_command, tab_recovery, tab_audit = st.tabs(["Command Center", "Setup & Recovery", "Neural Audit"])
 
 with tab_command:
     # Main Header
@@ -238,6 +238,10 @@ with tab_command:
                             else:
                                 st.markdown(response)
                                 st.session_state.messages.append({"role": "assistant", "content": response})
+
+with tab_recovery:
+    from recovery_panel import render_recovery_panel
+    render_recovery_panel(DATA_DIR)
 
 with tab_audit:
     st.header("Neural Audit Trail")

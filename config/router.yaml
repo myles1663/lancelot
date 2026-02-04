@@ -1,0 +1,63 @@
+# ===========================================================================
+# Lancelot v4 — Router Configuration
+# ===========================================================================
+# Defines the lane-based routing order and escalation rules.
+# Consumed by ModelRouter (Prompt 15) and Provider Lanes (Prompt 16).
+#
+# Version: 1.0
+
+version: "1.0"
+
+# ---------------------------------------------------------------------------
+# Routing order (evaluated top-to-bottom, highest priority first)
+# ---------------------------------------------------------------------------
+routing_order:
+  - lane: "local_redaction"
+    priority: 1
+    description: "PII redaction always runs locally first"
+    enabled: true
+
+  - lane: "local_utility"
+    priority: 2
+    description: "Classification, extraction, summarization, RAG rewriting"
+    enabled: true
+
+  - lane: "flagship_fast"
+    priority: 3
+    description: "Orchestration, tool calls, retries"
+    enabled: true
+
+  - lane: "flagship_deep"
+    priority: 4
+    description: "Planning, high-risk decisions, complex reasoning"
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# Escalation triggers (fast lane → deep lane)
+# ---------------------------------------------------------------------------
+escalation:
+  triggers:
+    - type: "risk"
+      description: "High-risk or irreversible actions"
+    - type: "complexity"
+      description: "Multi-step planning or reasoning tasks"
+    - type: "failure"
+      description: "Fast lane failure or low-confidence output"
+
+# ---------------------------------------------------------------------------
+# Receipt generation
+# ---------------------------------------------------------------------------
+receipts:
+  enabled: true
+  include_rationale: true
+  include_timing: true
+
+# ---------------------------------------------------------------------------
+# Local utility task types (routed to local model)
+# ---------------------------------------------------------------------------
+local_utility_tasks:
+  - "classify_intent"
+  - "extract_json"
+  - "summarize"
+  - "redact"
+  - "rag_rewrite"

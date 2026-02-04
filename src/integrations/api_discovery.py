@@ -32,8 +32,8 @@ class APIDiscoveryEngine:
                 req = Request(url_or_text, headers={"User-Agent": "Lancelot-Discovery/1.0"})
                 with urlopen(req, timeout=10) as response:
                     return response.read().decode("utf-8", errors="replace")
-            except (URLError, Exception) as e:
-                return f"Error fetching URL: {e}"
+            except (URLError, Exception):
+                return "Error fetching URL: request failed"
         return url_or_text
 
     def generate_manifest(self, doc_text: str) -> dict:

@@ -1,0 +1,46 @@
+# ==========================================================
+# Local Utility Model Lockfile (v4 Upgrade)
+# ==========================================================
+# Pinned model metadata — weights are NOT bundled.
+# Downloaded from upstream with user consent during onboarding.
+#
+# Spec reference: §3.1 What Is Included
+# ==========================================================
+
+model:
+  name: "hermes-2-pro-mistral-7b"
+  version: "2.0"
+  quantization: "Q4_K_M"
+  format: "gguf"
+  filename: "Hermes-2-Pro-Mistral-7B.Q4_K_M.gguf"
+  size_mb: 4370
+
+  # SHA-256 checksum for integrity verification
+  checksum:
+    algorithm: "sha256"
+    hash: "e1e4253b94e3c04c7b6544250f29ad864a56eb2126e61eb440991a8284453674"
+
+  # Download sources (tried in order)
+  sources:
+    - url: "https://huggingface.co/NousResearch/Hermes-2-Pro-Mistral-7B-GGUF/resolve/main/Hermes-2-Pro-Mistral-7B.Q4_K_M.gguf"
+      provider: "huggingface"
+
+  # Licensing
+  license:
+    model: "Apache-2.0"
+    runtime: "MIT"
+
+# Runtime configuration
+runtime:
+  engine: "llama.cpp"
+  context_length: 4096
+  threads: 4
+  gpu_layers: 0  # CPU-only by default
+
+# Prompt suite references
+prompts:
+  - classify_intent
+  - extract_json
+  - summarize_internal
+  - redact
+  - rag_rewrite

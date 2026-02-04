@@ -15,11 +15,40 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - GOOGLE_APPLICATION_CREDENTIALS=/home/lancelot/.config/gcloud/application_default_credentials.json
-    # Keep the container running
+      - LOCAL_LLM_URL=http://local-llm:8080
+    depends_on:
+      local-llm:
+        condition: service_healthy
     ports:
       - "8000:8000"
       - "8501:8501"
     command: sh -c "uvicorn gateway:app --host 0.0.0.0 --port 8000 & streamlit run war_room.py --server.port 8501 --server.address 0.0.0.0"
+    networks:
+      - lancelot_net
+
+  local-llm:
+    build:
+      context: ./local_models
+      dockerfile: Dockerfile
+    container_name: lancelot_local_llm
+    volumes:
+      # Model weights — downloaded during onboarding, never baked into image
+      - ./local_models/weights:/home/llm/models:ro
+    environment:
+      - LOCAL_MODELS_DIR=/home/llm/models
+      - LOCAL_MODEL_CTX=4096
+      - LOCAL_MODEL_THREADS=4
+      - LOCAL_MODEL_GPU_LAYERS=0
+      - LOCAL_LLM_PORT=8080
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    restart: unless-stopped
     networks:
       - lancelot_net
 

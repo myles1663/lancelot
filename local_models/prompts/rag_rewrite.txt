@@ -1,0 +1,6 @@
+Rewrite the following query to improve retrieval from a vector database.
+Make it specific, remove filler words, and expand abbreviations.
+
+Original query: {input}
+
+Rewritten query:

@@ -254,7 +254,7 @@ async def chat_webhook(request: Request):
         }
     except Exception as e:
         logger.error(f"[{request_id}] Chat error: {e}")
-        return error_response(500, "Internal server error", detail=str(e), request_id=request_id)
+        return error_response(500, "Internal server error", request_id=request_id)
 
 
 @app.post("/mfa_submit")
@@ -281,27 +281,34 @@ async def mfa_submit(request: Request):
             return error_response(404, "Unknown Task ID or no pending challenge.", request_id=request_id)
             
     except Exception as e:
-        return error_response(500, "Internal server error", detail=str(e), request_id=request_id)
+        return error_response(500, "Internal server error", request_id=request_id)
 
 
 @app.get("/health")
 def health_check():
     """F6: Enhanced health check with component status."""
-    components = {
-        "gateway": "ok",
-        "orchestrator": "ok" if main_orchestrator.client else "degraded",
-        "sentry": "ok",
-        "vault": "ok",
-        "chromadb": "ok" if main_orchestrator.memory_collection else "unavailable",
-    }
-    uptime = round(time.time() - _startup_time, 1) if _startup_time else 0
-    return {
-        "status": "online",
-        "version": "3.0",
-        "components": components,
-        "crusader_mode": crusader_mode.is_active,
-        "uptime_seconds": uptime,
-    }
+    try:
+        components = {
+            "gateway": "ok",
+            "orchestrator": "ok" if main_orchestrator.client else "degraded",
+            "sentry": "ok",
+            "vault": "ok",
+            "chromadb": "ok" if main_orchestrator.memory_collection else "unavailable",
+        }
+        uptime = round(time.time() - _startup_time, 1) if _startup_time else 0
+        return {
+            "status": "online",
+            "version": "3.0",
+            "components": components,
+            "crusader_mode": crusader_mode.is_active,
+            "uptime_seconds": uptime,
+        }
+    except Exception as exc:
+        logger.error("Health check error: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "error": "Health check failed"},
+        )
 
 
 @app.get("/ready")
@@ -343,7 +350,7 @@ def get_receipt(task_id: str, request: Request):
         path = receipt_svc.generate_receipt(task_id)
         return {"receipt_path": path, "message": "Receipt generated & sent to Chat.", "request_id": request_id}
     except Exception as e:
-        return error_response(500, "Internal server error", detail=str(e), request_id=request_id)
+        return error_response(500, "Internal server error", request_id=request_id)
 
 
 @app.post("/mcp_callback")
@@ -368,7 +375,7 @@ async def mcp_callback(request: Request):
                 return error_response(400, "Request ID not found or invalid.", request_id=req_request_id)
         return {"status": "Action ignored.", "request_id": req_request_id}
     except Exception as e:
-        return error_response(500, "Internal server error", detail=str(e), request_id=req_request_id)
+        return error_response(500, "Internal server error", request_id=req_request_id)
 
 
 # --- Forge of Innovation Endpoints ---
@@ -399,7 +406,7 @@ async def forge_discover(request: Request):
             "request_id": request_id,
         }
     except Exception as e:
-        return error_response(500, "Internal server error", detail=str(e), request_id=request_id)
+        return error_response(500, "Internal server error", request_id=request_id)
 
 
 @app.post("/forge/dispatch")
@@ -421,7 +428,7 @@ async def forge_dispatch(request: Request):
         results = forge_dispatcher.dispatch_from_prompt(prompt, content)
         return {"results": results, "dispatched_count": len(results), "request_id": request_id}
     except Exception as e:
-        return error_response(500, "Internal server error", detail=str(e), request_id=request_id)
+        return error_response(500, "Internal server error", request_id=request_id)
 
 
 # --- Live API (Real-Time Streaming) ---
@@ -466,7 +473,7 @@ async def live_stream(websocket: WebSocket):
     except Exception as e:
         logger.error(f"Live API error: {e}")
         try:
-            await websocket.send_text(f"Error: {e}")
+            await websocket.send_text("Error: internal server error")
         except Exception:
             pass
     finally:
@@ -495,7 +502,7 @@ async def ucp_discover(request: Request):
         manifest = ucp_connector.discover_merchant(merchant_url)
         return {"manifest": manifest, "request_id": request_id}
     except Exception as e:
-        return error_response(500, "Internal server error", detail=str(e), request_id=request_id)
+        return error_response(500, "Internal server error", request_id=request_id)
 
 
 @app.post("/ucp/search")
@@ -514,7 +521,7 @@ async def ucp_search(request: Request):
         results = ucp_connector.search_products(merchant_url, query)
         return {"results": results, "result_count": len(results), "request_id": request_id}
     except Exception as e:
-        return error_response(500, "Internal server error", detail=str(e), request_id=request_id)
+        return error_response(500, "Internal server error", request_id=request_id)
 
 
 @app.post("/ucp/transact")
@@ -549,7 +556,7 @@ async def ucp_transact(request: Request):
         result = ucp_connector.initiate_transaction(merchant_url, product_id, params)
         return {"transaction": result, "request_id": request_id}
     except Exception as e:
-        return error_response(500, "Internal server error", detail=str(e), request_id=request_id)
+        return error_response(500, "Internal server error", request_id=request_id)
 
 
 @app.post("/ucp/confirm")
@@ -567,4 +574,4 @@ async def ucp_confirm(request: Request):
         result = ucp_connector.confirm_transaction(transaction_id)
         return {"result": result, "request_id": request_id}
     except Exception as e:
-        return error_response(500, "Internal server error", detail=str(e), request_id=request_id)
+        return error_response(500, "Internal server error", request_id=request_id)
