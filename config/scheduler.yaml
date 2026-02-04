@@ -1,0 +1,43 @@
+# ===========================================================================
+# Lancelot Scheduler Configuration (example)
+# ===========================================================================
+# Copy to config/scheduler.yaml and customize.
+# Jobs defined here are registered at startup.
+
+jobs:
+  - id: health_sweep
+    name: "Health Sweep"
+    trigger:
+      type: interval
+      seconds: 60
+    enabled: true
+    requires_ready: true
+    requires_approvals: []
+    timeout_s: 30
+    skill: health_check
+    description: "Periodic health check sweep."
+
+  - id: memory_cleanup
+    name: "Memory Cleanup"
+    trigger:
+      type: cron
+      expression: "0 3 * * *"
+    enabled: true
+    requires_ready: true
+    requires_approvals: []
+    timeout_s: 120
+    skill: memory_cleanup
+    description: "Daily cleanup of stale memory entries."
+
+  - id: credential_rotation
+    name: "Credential Rotation"
+    trigger:
+      type: cron
+      expression: "0 0 1 * *"
+    enabled: false
+    requires_ready: true
+    requires_approvals:
+      - owner
+    timeout_s: 300
+    skill: credential_rotation
+    description: "Monthly credential rotation (requires owner approval)."
