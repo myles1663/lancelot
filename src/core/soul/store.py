@@ -210,5 +210,9 @@ def load_active_soul(soul_dir: Optional[str] = None) -> Soul:
             f"Soul validation failed for {version}: {exc}"
         ) from exc
 
+    # Run linter — fail on critical invariant violations
+    from src.core.soul.linter import lint_or_raise  # local import to avoid circular
+    lint_or_raise(soul)
+
     logger.info("Soul loaded: version=%s", soul.version)
     return soul

@@ -32,14 +32,17 @@ def _minimal_soul_dict(**overrides) -> dict:
             "requires_approval": ["deploy"],
         },
         "risk_rules": [
-            {"name": "approval_required", "description": "Destructive actions need approval", "enforced": True},
+            {"name": "destructive_actions_require_approval", "description": "Destructive actions need approval", "enforced": True},
         ],
         "approval_rules": {
             "default_timeout_seconds": 3600,
             "escalation_on_timeout": "skip_and_log",
             "channels": ["war_room"],
         },
-        "tone_invariants": ["Never mislead the owner"],
+        "tone_invariants": [
+            "Never mislead the owner",
+            "Never suppress errors or degrade silently",
+        ],
         "memory_ethics": ["Do not store PII without consent"],
         "scheduling_boundaries": {
             "max_concurrent_jobs": 5,
