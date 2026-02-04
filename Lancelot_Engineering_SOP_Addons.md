@@ -1,40 +1,40 @@
 
 # Lancelot Engineering SOP  
-## Add‑Ons, Extensions, and Incremental Upgrades
+## Add-Ons, Extensions, Incremental Upgrades **and GitHub Development Standards**
 
 **Status:** Active  
-**Applies to:** All new features, subsystems, and architectural add‑ons  
-**Audience:** Engineers and code‑generation agents (e.g. Claude)  
-**Last Updated:** 2026‑02‑03  
+**Applies to:** All new features, subsystems, architectural add-ons, and any repo changes  
+**Audience:** Engineers and code-generation agents (e.g. Claude, Codex)  
+**Last Updated:** 2026-02-04  
 
 ---
 
 ## 1. Purpose
 
-This SOP defines **how new add‑ons and subsystems are introduced into the Lancelot repository** without destabilizing in‑flight work, breaking existing upgrades, or creating documentation drift.
+This SOP defines **how new add-ons and subsystems are introduced into the Lancelot repository** *and* **how changes are developed, branched, reviewed, and merged in GitHub**—without destabilizing in-flight work, breaking existing upgrades, or creating documentation drift.
 
 This SOP is mandatory.  
-All add‑ons **must comply** before implementation begins.
+All add-ons **must comply** before implementation begins.
 
 ---
 
-## 2. Core Principles (Non‑Negotiable)
+## 2. Core Principles (Non-Negotiable)
 
 ### 2.1 No Moving Targets
 Once a spec or blueprint is marked **In Progress**, it is **frozen**.
 
 - ❌ Do not edit or extend an active spec
-- ❌ Do not “fold in” new ideas mid‑implementation
-- ✅ Create a **new spec + new blueprint**
+- ❌ Do not “fold in” new ideas mid-implementation
+- ✅ Create a **new spec + new blueprint** (new upgrade slice)
 
 ---
 
-### 2.2 Add‑Ons Are New Upgrade Slices
+### 2.2 Add-Ons Are New Upgrade Slices
 Any of the following automatically qualifies as a **new upgrade slice**:
 - new subsystem (heartbeat, scheduler, memory engine, etc.)
 - new background process
 - new runtime dependency
-- new control‑plane surface
+- new control-plane surface
 - new persistent state
 - new recurring behavior (cron, polling, watchers)
 
@@ -52,7 +52,17 @@ Invisible background logic is not allowed.
 
 ---
 
-## 3. Required Workflow for Add‑Ons
+### 2.4 Main Is Always Releasable
+`main` must remain:
+- green (tests pass)
+- runnable (boot works)
+- safe to deploy (no half-wired modules)
+
+No direct commits to `main`.
+
+---
+
+## 3. Required Workflow for Add-Ons
 
 ### Step 1 — Create New Versioned Spec
 Create a **new spec document**, never modify an active one.
@@ -87,7 +97,7 @@ Blueprint must include:
 ---
 
 ### Step 3 — Capability Gating (Feature Flags)
-All new add‑ons must be gated.
+All new add-ons must be gated.
 
 Required pattern:
 ```env
@@ -129,31 +139,124 @@ Contracts are part of the spec, not “discovered” during coding.
 
 ---
 
-## 4. Testing Standards (Strict)
+## 4. GitHub Development Standards (Branching, PRs, Push/Pull)
 
-### 4.1 Unit Tests (Required)
-- deterministic
-- no network
-- no timers unless injected
-- validate:
-  - state transitions
-  - config parsing
-  - gating behavior
-  - failure modes
+### 4.1 Branching Model
+We use **trunk-based development with short-lived branches**:
+
+- `main` = stable, releasable, protected
+- feature branches = small, scoped, merge fast
+
+**Branch naming**
+```
+feat/<slug>
+fix/<slug>
+chore/<slug>
+docs/<slug>
+spec/<slug>
+```
+
+**One branch = one slice**
+- Each branch should map to **one spec/blueprint slice**.
+- If scope grows: **stop** and create a **new spec + new branch**.
 
 ---
 
-### 4.2 Integration Tests (Required, Env‑Gated)
-Integration tests must:
-- use **real services**
-- be skipped cleanly if env vars are missing
-- never mock external APIs
+### 4.2 Pull Before You Push
+Before opening a PR and before any major push:
+- sync with `main`
+- resolve conflicts locally
 
-Examples:
-- local‑llm ping and inference
-- scheduler job execution
-- health heartbeat freshness
-- provider API calls (when credentials exist)
+Preferred:
+- rebase your branch on `main`, or
+- merge `main` into your branch
+
+**Never** rebase `main`.
+
+---
+
+### 4.3 Pull Requests Are Mandatory
+All changes land via PR.
+
+PR must include:
+- link to Spec and Blueprint
+- feature flag used (or docs-only)
+- test evidence
+- rollout notes
+
+---
+
+### 4.4 Required PR Checklist
+- [ ] Spec created (new, not modified)
+- [ ] Blueprint created
+- [ ] Feature gated
+- [ ] Contracts defined
+- [ ] Unit tests added
+- [ ] Integration tests added (env-gated)
+- [ ] Receipts emitted
+- [ ] War Room visibility added (if required)
+- [ ] Runbook added/updated
+- [ ] CHANGELOG updated
+
+---
+
+### 4.5 Commit Standards
+Commits should be small and descriptive:
+- feat: add scheduler receipts
+- fix: onboarding READY gating
+- docs: add health monitor runbook
+
+---
+
+### 4.6 Merging Rules
+- Prefer squash merges for messy histories
+- Rebase merge only for clean histories
+- Avoid merge commits unless necessary
+
+Delete branch after merge.
+
+---
+
+### 4.7 Protected Branch Policy
+`main` must:
+- require PR approval
+- require CI to pass
+- disallow force-push
+- disallow direct commits
+
+---
+
+### 4.8 Hotfixes
+For broken `main`:
+1. branch from `main`
+2. minimal fix only
+3. fast PR + merge
+
+---
+
+### 4.9 Repo Hygiene
+Never commit:
+- secrets or keys
+- `.env` files
+- private certs
+
+Use `.env.example` and `.gitignore`.
+
+---
+
+## 5. Testing Standards (Strict)
+
+### 5.1 Unit Tests
+- deterministic
+- no network
+- injected timers only
+
+---
+
+### 5.2 Integration Tests
+- real services only
+- env-gated
+- no mocks
 
 Use:
 ```python
@@ -162,136 +265,79 @@ Use:
 
 ---
 
-## 5. Persistence & Receipts
+## 6. Persistence & Receipts
 
-### 5.1 Persistent State Rules
-If state matters across restarts, it **must be persisted**:
-- onboarding snapshots
-- scheduler state
-- job history
-- cooldown timers
-
-In‑memory only state is not acceptable for add‑ons.
+### 6.1 Persistent State
+State that matters must persist across restarts.
 
 ---
 
-### 5.2 Receipts Are Mandatory
-Every add‑on must emit receipts for:
+### 6.2 Receipts
+Receipts required for:
 - state changes
 - job execution
 - failures
-- skipped actions (with reason)
-
-Receipt types must be named and documented.
+- skipped actions
 
 ---
 
-## 6. War Room Requirements
+## 7. War Room Requirements
 
-Any add‑on that:
-- runs in background
-- makes decisions
-- performs actions
-- schedules work
-
-**must surface in the War Room**.
-
-Minimum visibility:
-- status (running / degraded / stopped)
-- last activity timestamp
+Background or decision-making add-ons must surface:
+- status
+- last activity
 - last error
 - recovery actions
 
 ---
 
-## 7. Onboarding & Gating Rules
+## 8. Onboarding & Gating Rules
 
-### 7.1 Onboarding Integrity
-If a feature is **mandatory**, it must be:
-- installed
-- verified
-- persisted
-
-before onboarding reaches READY.
-
-No partial readiness states are allowed.
+### 8.1 Onboarding Integrity
+Mandatory features must be installed, verified, and persisted before READY.
 
 ---
 
-### 7.2 Scheduler & Background Gating
-Background jobs must not run unless:
-- onboarding state == READY
-- required dependencies are healthy
-- approvals (if required) are satisfied
+### 8.2 Scheduler & Background Gating
+Jobs run only when:
+- onboarding == READY
+- dependencies healthy
 
-Skipped jobs must record **why**.
-
----
-
-## 8. Documentation Requirements
-
-### 8.1 Required Docs per Add‑On
-Every new add‑on requires:
-- Spec (what)
-- Blueprint (how)
-- Architecture note (how it works)
-- Runbook (how to fix it)
-
-Minimum files:
-```
-docs/specs/
-docs/blueprints/
-docs/architecture/
-docs/operations/runbooks/
-```
+Skipped jobs must log why.
 
 ---
 
-### 8.2 CHANGELOG Entry
-Each add‑on must add an entry to:
-```
-docs/CHANGELOG.md
-```
+## 9. Documentation Requirements
 
-Include:
-- version
-- summary
-- link to spec
-- link to blueprint
+Each add-on requires:
+- Spec
+- Blueprint
+- Architecture note
+- Runbook
 
 ---
 
-## 9. Prohibited Practices
+## 10. Prohibited Practices
 
-🚫 Modifying active specs mid‑implementation  
-🚫 Introducing background loops without visibility  
-🚫 Silent degradation  
-🚫 Hidden cron jobs  
-🚫 Hardcoded schedules in code  
-🚫 Mocked “fake” integrations for production paths  
-🚫 Orphan modules not wired into runtime  
+🚫 Modifying active specs
+🚫 Hidden background logic
+🚫 Silent failures
+🚫 Direct commits to `main`
+🚫 Secrets in repo
 
 ---
 
-## 10. Enforcement
+## 11. Enforcement
 
-If an add‑on:
-- violates this SOP
-- bypasses documentation
-- skips observability
-- introduces hidden behavior
-
-It **must be refactored or removed** before merge.
+Violations must be refactored or removed before merge.
 
 ---
 
-## 11. Engineer Acknowledgement
+## 12. Engineer Acknowledgement
 
-By implementing add‑ons in Lancelot, the engineer agrees to:
-- respect frozen specs
-- create new upgrade slices
-- follow this SOP exactly
+By contributing, engineers agree to follow this SOP exactly.
 
 ---
 
 **This SOP is the execution contract for all future Lancelot extensions.**
+
