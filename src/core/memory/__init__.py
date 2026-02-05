@@ -120,6 +120,13 @@ from .compiler import (
     CORE_BLOCK_ORDER,
 )
 
+from .index import (
+    MemoryIndex,
+    SearchResult,
+    SearchQuery,
+    create_index,
+)
+
 __all__ = [
     # Feature flag
     "is_memory_enabled",
@@ -151,4 +158,9 @@ __all__ = [
     "ContextCompiler",
     "ContextCompilerService",
     "CORE_BLOCK_ORDER",
+    # Index
+    "MemoryIndex",
+    "SearchResult",
+    "SearchQuery",
+    "create_index",
 ]
