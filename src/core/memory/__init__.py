@@ -138,6 +138,8 @@ from .gates import (
     QuarantineManager,
 )
 
+from .api import router as memory_router
+
 __all__ = [
     # Feature flag
     "is_memory_enabled",
@@ -181,4 +183,6 @@ __all__ = [
     "WriteGateValidator",
     "GateResult",
     "QuarantineManager",
+    # API
+    "memory_router",
 ]

@@ -209,6 +209,40 @@ class MemoryItemStore:
         if not self._initialized:
             self.initialize()
 
+    def _escape_fts5_query(self, query: str) -> str:
+        """
+        Escape a query string for safe use with FTS5 MATCH.
+
+        FTS5 has special syntax characters that need handling.
+        This escapes the query by:
+        1. Replacing double quotes (FTS5 phrase delimiter)
+        2. Removing other problematic characters
+        3. Wrapping in double quotes for literal matching
+
+        Args:
+            query: Raw search query
+
+        Returns:
+            Escaped query safe for FTS5 MATCH
+        """
+        # Remove or escape FTS5 special characters
+        # FTS5 operators: AND, OR, NOT, NEAR, *, ^, :, -, +
+        # Also need to handle quotes and parentheses
+        escaped = query.replace('"', '""')
+
+        # Remove other FTS5 special characters that could cause syntax errors
+        for char in ["'", "(", ")", "{", "}", "[", "]", "^", "*", ":", "-", "+"]:
+            escaped = escaped.replace(char, " ")
+
+        # Collapse multiple spaces
+        escaped = " ".join(escaped.split())
+
+        # Return empty query protection
+        if not escaped.strip():
+            return '""'
+
+        return f'"{escaped}"'
+
     def _item_to_row(self, item: MemoryItem) -> dict[str, Any]:
         """Convert a MemoryItem to a database row."""
         return {
@@ -461,7 +495,7 @@ class MemoryItemStore:
         # Build the search query
         # FTS5 requires special handling for the query
         # Escape special characters and wrap in quotes for phrase matching
-        safe_query = query.replace('"', '""')
+        safe_query = self._escape_fts5_query(query)
 
         conditions = ["mi.tier = ?"]
         params: list[Any] = [self.tier.value]
@@ -516,7 +550,7 @@ class MemoryItemStore:
             List of (MemoryItem, score) tuples
         """
         self._ensure_initialized()
-        safe_query = query.replace('"', '""')
+        safe_query = self._escape_fts5_query(query)
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
