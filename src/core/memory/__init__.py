@@ -109,6 +109,11 @@ from .config import (
     MAX_CONTEXT_TOKENS,
 )
 
+from .sqlite_store import (
+    MemoryItemStore,
+    MemoryStoreManager,
+)
+
 __all__ = [
     # Feature flag
     "is_memory_enabled",
@@ -133,4 +138,7 @@ __all__ = [
     "default_config",
     "DEFAULT_CORE_BLOCK_BUDGETS",
     "MAX_CONTEXT_TOKENS",
+    # SQLite Stores
+    "MemoryItemStore",
+    "MemoryStoreManager",
 ]
