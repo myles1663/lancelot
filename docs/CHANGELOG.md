@@ -65,6 +65,16 @@ runner, optional CLI adapters, and Antigravity integration.
 - Receipt generation with exec results and policy snapshots
 - 36 integration tests for full Tool Fabric workflow
 
+#### Prompt 6 — RepoOps + FileOps Integration Tests
+- Comprehensive RepoOps tests: status, diff, apply_patch, commit, branch, checkout
+- Comprehensive FileOps tests: read, write, list, delete, apply_diff
+- File hash tracking verification: hash_before and hash_after in FileChange
+- Apply patch + commit workflow with complete hash verification
+- Receipt integration tests with file change serialization
+- Path traversal blocking tests through ToolFabric
+- Error handling tests for edge cases
+- 49 integration tests for repository and file operations
+
 ### New Files
 
 - `docs/specs/Lancelot_ToolFabric_Spec.md` — Tool Fabric specification
@@ -83,6 +93,7 @@ runner, optional CLI adapters, and Antigravity integration.
 - `tests/test_tool_router.py` — 43 tests for router and health
 - `src/tools/fabric.py` — Main Tool Fabric orchestrator (Prompt 5)
 - `tests/test_tool_fabric_integration.py` — 36 integration tests (Prompt 5)
+- `tests/test_repo_file_ops.py` — 49 integration tests for RepoOps + FileOps (Prompt 6)
 
 ### Modified Files
 
