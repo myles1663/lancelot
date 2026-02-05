@@ -23,6 +23,15 @@ runner, optional CLI adapters, and Antigravity integration.
 - Feature flags: FEATURE_TOOLS_FABRIC, FEATURE_TOOLS_CLI_PROVIDERS, FEATURE_TOOLS_ANTIGRAVITY, FEATURE_TOOLS_NETWORK, FEATURE_TOOLS_HOST_EXECUTION
 - 63 unit tests for schema validation and JSON serialization
 
+#### Prompt 2 — LocalSandboxProvider MVP
+- Docker-based tool runner implementation
+- ShellExec capability: run commands with stdout/stderr capture, timeout, output bounding
+- RepoOps capability: git status, diff, apply_patch, commit, branch, checkout
+- FileOps capability: read, write (atomic), list, delete with file hashing
+- Security: command denylist (rm -rf, mkfs, fork bomb), configurable allowlist
+- Health checks: Docker availability, image status, provider state tracking
+- 39 unit tests + 7 integration tests (Docker required)
+
 ### New Files
 
 - `docs/specs/Lancelot_ToolFabric_Spec.md` — Tool Fabric specification
@@ -31,7 +40,9 @@ runner, optional CLI adapters, and Antigravity integration.
 - `src/tools/contracts.py` — Capability interfaces and type definitions
 - `src/tools/receipts.py` — Tool-specific receipt extensions
 - `src/tools/providers/__init__.py` — Provider module placeholder
+- `src/tools/providers/local_sandbox.py` — Docker-based tool runner (Prompt 2)
 - `tests/test_tool_contracts.py` — 63 unit tests for contracts and receipts
+- `tests/test_local_sandbox.py` — 46 tests for LocalSandboxProvider
 
 ### Modified Files
 
