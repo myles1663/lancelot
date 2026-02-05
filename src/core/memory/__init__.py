@@ -132,6 +132,12 @@ from .commits import (
     CommitError,
 )
 
+from .gates import (
+    WriteGateValidator,
+    GateResult,
+    QuarantineManager,
+)
+
 __all__ = [
     # Feature flag
     "is_memory_enabled",
@@ -171,4 +177,8 @@ __all__ = [
     # Commits
     "CommitManager",
     "CommitError",
+    # Gates
+    "WriteGateValidator",
+    "GateResult",
+    "QuarantineManager",
 ]
