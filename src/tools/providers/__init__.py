@@ -28,6 +28,11 @@ from src.tools.providers.ui_templates import (
     create_template_scaffolder,
     TEMPLATES,
 )
+from src.tools.providers.ui_antigravity import (
+    AntigravityUIProvider,
+    AntigravityUIConfig,
+    create_antigravity_ui_provider,
+)
 
 __all__ = [
     # Local Sandbox
@@ -39,4 +44,8 @@ __all__ = [
     "TemplateConfig",
     "create_template_scaffolder",
     "TEMPLATES",
+    # Antigravity UI
+    "AntigravityUIProvider",
+    "AntigravityUIConfig",
+    "create_antigravity_ui_provider",
 ]

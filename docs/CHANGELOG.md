@@ -84,6 +84,16 @@ runner, optional CLI adapters, and Antigravity integration.
 - Template content generation with project name, title, description interpolation
 - 45 unit tests for template scaffolding and verification
 
+#### Prompt 8 — Antigravity UIBuilder
+- AntigravityUIProvider for generative UI scaffolding
+- GENERATIVE mode with AI-powered project generation
+- Graceful fallback to templates when Antigravity unavailable
+- Feature flag integration (FEATURE_TOOLS_ANTIGRAVITY)
+- GenerationReceipt for audit trail with prompt/spec hashes
+- Prompt-to-template mapping for intelligent fallback
+- Health checks with availability and fallback status
+- 38 tests for generative scaffolding and fallback
+
 ### New Files
 
 - `docs/specs/Lancelot_ToolFabric_Spec.md` — Tool Fabric specification
@@ -105,6 +115,8 @@ runner, optional CLI adapters, and Antigravity integration.
 - `tests/test_repo_file_ops.py` — 49 integration tests for RepoOps + FileOps (Prompt 6)
 - `src/tools/providers/ui_templates.py` — Template-based UI scaffolder (Prompt 7)
 - `tests/test_ui_templates.py` — 45 tests for UIBuilder templates (Prompt 7)
+- `src/tools/providers/ui_antigravity.py` — Antigravity generative UI provider (Prompt 8)
+- `tests/test_ui_antigravity.py` — 38 tests for Antigravity UIBuilder (Prompt 8)
 
 ### Modified Files
 
