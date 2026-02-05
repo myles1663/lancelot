@@ -105,6 +105,19 @@ runner, optional CLI adapters, and Antigravity integration.
 - State verification with expected/actual comparison
 - 35 tests for vision control operations
 
+#### Prompt 10 — War Room Panel
+- ToolsPanel data provider for War Room integration
+- Provider health display with state icons (healthy/degraded/offline)
+- Health summary with counts and overall status
+- Routing policy summary with capability→provider mapping
+- Safe Mode toggle (disables optional providers)
+- Receipt management with capability/provider filtering
+- Receipt callbacks for real-time updates
+- render_tools_panel() Streamlit render function
+- War Room integration with new "Tool Fabric" tab
+- Global singleton with thread-safe initialization
+- 50 tests for panel functionality
+
 ### New Files
 
 - `docs/specs/Lancelot_ToolFabric_Spec.md` — Tool Fabric specification
@@ -130,10 +143,14 @@ runner, optional CLI adapters, and Antigravity integration.
 - `tests/test_ui_antigravity.py` — 38 tests for Antigravity UIBuilder (Prompt 8)
 - `src/tools/providers/vision_antigravity.py` — Antigravity vision control provider (Prompt 9)
 - `tests/test_vision_control.py` — 35 tests for VisionControl (Prompt 9)
+- `src/ui/panels/tools_panel.py` — Tool Fabric panel for War Room (Prompt 10)
+- `tests/test_tools_panel.py` — 50 tests for Tools Panel (Prompt 10)
 
 ### Modified Files
 
 - `src/core/feature_flags.py` — Added Tool Fabric feature flags
+- `src/ui/panels/__init__.py` — Added ToolsPanel exports (Prompt 10)
+- `src/ui/war_room.py` — Added Tool Fabric tab integration (Prompt 10)
 
 ---
 
