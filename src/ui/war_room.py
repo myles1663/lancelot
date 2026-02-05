@@ -6,6 +6,7 @@ from orchestrator import LancelotOrchestrator
 from onboarding import OnboardingOrchestrator
 from crusader import CrusaderMode, CrusaderAdapter
 from receipts import get_receipt_service, ReceiptStatus, ActionType
+from panels.tools_panel import get_tools_panel, render_tools_panel
 
 # Page Config
 st.set_page_config(
@@ -131,7 +132,7 @@ with cols[3]:
 st.divider()
 
 # Tabs for Main Interface
-tab_command, tab_recovery, tab_audit = st.tabs(["Command Center", "Setup & Recovery", "Neural Audit"])
+tab_command, tab_recovery, tab_audit, tab_tools = st.tabs(["Command Center", "Setup & Recovery", "Neural Audit", "Tool Fabric"])
 
 with tab_command:
     # Main Header
@@ -269,3 +270,13 @@ with tab_audit:
         status_icon = "✅" if r.status == "success" else "❌" if r.status == "failure" else "⏳"
         with st.expander(f"{status_icon} [{r.timestamp[:19]}] {r.action_name} ({r.action_type})"):
             st.json(r.to_dict())
+
+with tab_tools:
+    # Initialize tools panel in session state if needed
+    if "tools_panel" not in st.session_state:
+        st.session_state.tools_panel = get_tools_panel()
+
+    render_tools_panel(
+        panel=st.session_state.tools_panel,
+        streamlit_module=st,
+    )
