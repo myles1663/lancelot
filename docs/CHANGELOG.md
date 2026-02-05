@@ -43,6 +43,16 @@ runner, optional CLI adapters, and Antigravity integration.
 - PolicySnapshot for audit trail
 - 63 unit tests covering all security gates
 
+#### Prompt 4 — Router + Health
+- HealthMonitor for provider discovery and health tracking
+- Health probes with caching, TTL, and retry logic
+- ProviderRouter for capability-based provider selection
+- Priority-based selection with failover to healthy providers
+- Policy engine integration for intent-based routing
+- RouteDecision captures selection rationale and alternatives tried
+- Global singleton instances with thread safety
+- 43 unit tests for routing and health monitoring
+
 ### New Files
 
 - `docs/specs/Lancelot_ToolFabric_Spec.md` — Tool Fabric specification
@@ -53,9 +63,12 @@ runner, optional CLI adapters, and Antigravity integration.
 - `src/tools/providers/__init__.py` — Provider module placeholder
 - `src/tools/providers/local_sandbox.py` — Docker-based tool runner (Prompt 2)
 - `src/tools/policies.py` — Policy engine with security gates (Prompt 3)
+- `src/tools/health.py` — Health monitoring and probing (Prompt 4)
+- `src/tools/router.py` — Provider routing and failover (Prompt 4)
 - `tests/test_tool_contracts.py` — 63 unit tests for contracts and receipts
 - `tests/test_local_sandbox.py` — 46 tests for LocalSandboxProvider
 - `tests/test_tool_policies.py` — 63 tests for policy engine
+- `tests/test_tool_router.py` — 43 tests for router and health
 
 ### Modified Files
 
