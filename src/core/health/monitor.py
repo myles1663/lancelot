@@ -15,7 +15,6 @@ Public API:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import threading
 import time
@@ -104,9 +103,11 @@ class HealthMonitor:
 
         snapshot = HealthSnapshot(
             ready=ready,
-            onboarding_state=results.get("onboarding_ready", "UNKNOWN")
-                if "onboarding_ready" not in results
-                else ("READY" if results["onboarding_ready"] else "NOT_READY"),
+            onboarding_state=(
+                ("READY" if results["onboarding_ready"] else "NOT_READY")
+                if "onboarding_ready" in results
+                else "UNKNOWN"
+            ),
             local_llm_ready=results.get("local_llm", False),
             scheduler_running=results.get("scheduler", False),
             last_health_tick_at=datetime.now(timezone.utc).isoformat(),

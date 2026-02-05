@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List
 
 from src.core.skills.registry import SkillRegistry, SkillEntry, SkillOwnership, SignatureState
 from src.core.skills.schema import SkillError

@@ -1,7 +1,7 @@
+import contextlib
 import io
 import sys
 import ast
-import re
 import threading
 from typing import Optional
 
@@ -141,14 +141,11 @@ class SandboxExecutor:
         execution_error = [None]
 
         def _run():
-            old_stdout = sys.stdout
             try:
-                sys.stdout = captured_output
-                exec(code, sandbox_globals)
+                with contextlib.redirect_stdout(captured_output):
+                    exec(code, sandbox_globals)
             except Exception as e:
                 execution_error[0] = str(e)
-            finally:
-                sys.stdout = old_stdout
 
         thread = threading.Thread(target=_run)
         thread.start()

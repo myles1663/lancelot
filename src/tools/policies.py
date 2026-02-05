@@ -550,7 +550,7 @@ class PolicyEngine:
             if not cmd_decision.allowed:
                 return cmd_decision
             warnings.extend(cmd_decision.warnings)
-            if cmd_decision.risk_level.value > risk_level.value:
+            if cmd_decision.risk_level > risk_level:
                 risk_level = cmd_decision.risk_level
 
         # Check paths in inputs

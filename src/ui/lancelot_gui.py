@@ -8,7 +8,6 @@ import webview
 import threading
 import time
 import requests
-import sys
 import subprocess
 import os
 import webbrowser

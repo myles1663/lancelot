@@ -117,6 +117,17 @@ class SkillExecutor:
         if entry.manifest_path:
             manifest_dir = Path(entry.manifest_path).parent
             execute_py = manifest_dir / "execute.py"
+
+            # Validate skill path does not escape the manifest directory
+            try:
+                resolved = execute_py.resolve()
+                if not str(resolved).startswith(str(manifest_dir.resolve())):
+                    raise SkillError(
+                        f"SECURITY: Skill path escapes manifest directory: {execute_py}"
+                    )
+            except OSError as exc:
+                raise SkillError(f"Invalid skill path: {exc}") from exc
+
             if execute_py.exists():
                 func = self._load_module_execute(execute_py, entry.name)
                 self._loaded[entry.name] = func

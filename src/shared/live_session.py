@@ -3,7 +3,6 @@
 Manages async WebSocket sessions with Gemini's Live API, enabling
 low-latency text streaming with session memory.
 """
-import asyncio
 from google import genai
 from google.genai import types
 

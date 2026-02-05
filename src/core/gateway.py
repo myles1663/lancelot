@@ -12,11 +12,11 @@ from mcp_sentry import MCPSentry
 from vault import SecretVault
 from sandbox import SandboxExecutor
 from api_discovery import APIDiscoveryEngine
-from api_discovery import APIDiscoveryEngine
 from post_dispatcher import PostDispatcher
 from chat_poller import ChatPoller
 from crusader import CrusaderMode, CrusaderAdapter
 import threading
+import hmac
 import time
 import uuid
 import os
@@ -82,11 +82,14 @@ API_TOKEN = os.getenv("LANCELOT_API_TOKEN")
 def verify_token(request: Request) -> bool:
     """Validates Bearer token from Authorization header."""
     if not API_TOKEN:
-        # No token configured — allow access (dev mode)
+        logger.warning(
+            "SECURITY: Gateway running in dev mode — no authentication token configured. "
+            "Set LANCELOT_API_TOKEN for production."
+        )
         return True
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
-        return auth_header[7:] == API_TOKEN
+        return hmac.compare_digest(auth_header[7:], API_TOKEN)
     return False
 
 
@@ -444,9 +447,14 @@ async def live_stream(websocket: WebSocket):
     """
     await websocket.accept()
 
-    # Auth check via query param
+    # Auth check via query param (deprecated — tokens in URLs are logged)
     token = websocket.query_params.get("token", "")
-    if API_TOKEN and token != API_TOKEN:
+    if token:
+        logger.warning(
+            "SECURITY: WebSocket auth via URL query parameter is deprecated. "
+            "Token may appear in server logs and browser history."
+        )
+    if API_TOKEN and not hmac.compare_digest(token or "", API_TOKEN):
         await websocket.close(code=4001, reason="Unauthorized")
         return
 

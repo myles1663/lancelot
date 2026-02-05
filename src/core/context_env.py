@@ -3,11 +3,9 @@ import time
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
 import json
-import re
 import ast
 import subprocess
-from enum import Enum
-from receipts import get_receipt_service, create_receipt, ActionType, CognitionTier
+from receipts import get_receipt_service, create_receipt, ActionType, CognitionTier, ReceiptStatus
 
 # Configuration
 MAX_CONTEXT_TOKENS = 128000  # Default safe limit

@@ -5,7 +5,6 @@ import datetime
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from google import genai
-from google.genai import types
 from receipts import create_receipt, get_receipt_service, ActionType, ReceiptStatus, CognitionTier
 
 class FileAction:
@@ -186,48 +185,19 @@ class FileAction:
         if self.receipt_service:
             receipt = create_receipt(ActionType.FILE_OP, "write_file", {"path": path}, tier=CognitionTier.DETERMINISTIC)
             self.receipt_service.create(receipt)
-            
+
         start_time = __import__("time").time()
         try:
              # Ensure dir exists
             parent_dir = os.path.dirname(path)
             if parent_dir and not os.path.exists(parent_dir):
                 os.makedirs(parent_dir)
-                
+
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(content)
-                
+
             self.log_action("WRITE", path, justification)
-            
-            if receipt:
-                 duration = int((__import__("time").time() - start_time) * 1000)
-                 self.receipt_service.update(receipt.complete({"size": len(content)}, duration))
-            return True
-        except Exception as e:
-            if receipt:
-                duration = int((__import__("time").time() - start_time) * 1000)
-                self.receipt_service.update(receipt.fail(str(e), duration))
-            return False
-            
-    def write_file(self, path: str, content: str, justification: str = "Automated Write"):
-        """Writes content to a file safely."""
-        receipt = None
-        if self.receipt_service:
-            receipt = create_receipt(ActionType.FILE_OP, "write_file", {"path": path}, tier=CognitionTier.DETERMINISTIC)
-            self.receipt_service.create(receipt)
-            
-        start_time = __import__("time").time()
-        try:
-             # Ensure dir exists
-            parent_dir = os.path.dirname(path)
-            if parent_dir and not os.path.exists(parent_dir):
-                os.makedirs(parent_dir)
-                
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write(content)
-                
-            self.log_action("WRITE", path, justification)
-            
+
             if receipt:
                  duration = int((__import__("time").time() - start_time) * 1000)
                  self.receipt_service.update(receipt.complete({"size": len(content)}, duration))

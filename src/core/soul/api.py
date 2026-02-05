@@ -11,6 +11,7 @@ All mutation endpoints require owner identity (Bearer token).
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 from typing import Optional
@@ -33,7 +34,7 @@ from src.core.soul.amendments import (
     get_proposal,
     save_proposals,
 )
-from src.core.soul.linter import lint, lint_or_raise, LintSeverity
+from src.core.soul.linter import lint_or_raise
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +54,14 @@ def _set_soul_dir(soul_dir: str) -> None:
 def _verify_owner(request: Request) -> bool:
     """Check that the request comes from the owner (Bearer token)."""
     if not _API_TOKEN:
+        logger.warning(
+            "SECURITY: Soul API running in dev mode — no authentication token configured. "
+            "Set LANCELOT_API_TOKEN for production."
+        )
         return True  # dev mode — no token configured
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
-        return auth_header[7:] == _API_TOKEN
+        return hmac.compare_digest(auth_header[7:], _API_TOKEN)
     return False
 
 

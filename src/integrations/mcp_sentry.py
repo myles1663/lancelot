@@ -3,7 +3,6 @@ import json
 import uuid
 import time
 import datetime
-import requests
 
 # Approval time-to-live in seconds
 APPROVAL_TTL = 300  # 5 minutes

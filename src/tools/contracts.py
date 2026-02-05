@@ -46,6 +46,33 @@ class RiskLevel(str, Enum):
     MEDIUM = "medium"    # apply patches, install deps in container, run tests
     HIGH = "high"        # network enabled, deploy, delete operations, creds
 
+    def __lt__(self, other):
+        if not isinstance(other, RiskLevel):
+            return NotImplemented
+        return _RISK_ORDER[self] < _RISK_ORDER[other]
+
+    def __le__(self, other):
+        if not isinstance(other, RiskLevel):
+            return NotImplemented
+        return _RISK_ORDER[self] <= _RISK_ORDER[other]
+
+    def __gt__(self, other):
+        if not isinstance(other, RiskLevel):
+            return NotImplemented
+        return _RISK_ORDER[self] > _RISK_ORDER[other]
+
+    def __ge__(self, other):
+        if not isinstance(other, RiskLevel):
+            return NotImplemented
+        return _RISK_ORDER[self] >= _RISK_ORDER[other]
+
+
+_RISK_ORDER = {
+    RiskLevel.LOW: 0,
+    RiskLevel.MEDIUM: 1,
+    RiskLevel.HIGH: 2,
+}
+
 
 class ProviderState(str, Enum):
     """Health state of a provider."""

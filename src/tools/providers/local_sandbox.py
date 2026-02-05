@@ -26,6 +26,7 @@ import hashlib
 import logging
 import os
 import subprocess
+import shlex
 import shutil
 import tempfile
 import time
@@ -440,7 +441,7 @@ class LocalSandboxProvider(BaseProvider):
 
     def diff(self, workspace: str, ref: Optional[str] = None) -> str:
         """Get diff output."""
-        cmd = "git diff" if ref is None else f"git diff {ref}"
+        cmd = "git diff" if ref is None else f"git diff {shlex.quote(ref)}"
         result = self.run(cmd, workspace)
         if not result.success:
             return f"Error: {result.stderr}"
@@ -544,14 +545,13 @@ class LocalSandboxProvider(BaseProvider):
         # Stage files
         if files:
             for f in files:
-                self.run(f"git add {f}", workspace)
+                self.run(f"git add {shlex.quote(f)}", workspace)
         else:
             self.run("git add -A", workspace)
 
-        # Commit
-        # Escape single quotes in message
-        safe_message = message.replace("'", "'\\''")
-        result = self.run(f"git commit -m '{safe_message}'", workspace)
+        # Commit (shlex.quote handles all shell escaping)
+        safe_message = shlex.quote(message)
+        result = self.run(f"git commit -m {safe_message}", workspace)
 
         if result.exit_code != 0:
             return f"Error: {result.stderr}"
@@ -567,15 +567,16 @@ class LocalSandboxProvider(BaseProvider):
         checkout: bool = True,
     ) -> bool:
         """Create and optionally checkout a branch."""
+        safe_name = shlex.quote(name)
         if checkout:
-            result = self.run(f"git checkout -b {name}", workspace)
+            result = self.run(f"git checkout -b {safe_name}", workspace)
         else:
-            result = self.run(f"git branch {name}", workspace)
+            result = self.run(f"git branch {safe_name}", workspace)
         return result.exit_code == 0
 
     def checkout(self, workspace: str, ref: str) -> bool:
         """Checkout a ref (branch, tag, commit)."""
-        result = self.run(f"git checkout {ref}", workspace)
+        result = self.run(f"git checkout {shlex.quote(ref)}", workspace)
         return result.exit_code == 0
 
     # =========================================================================

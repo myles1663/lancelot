@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from threading import RLock
@@ -419,9 +420,21 @@ class CommitManager:
             self.core_store.restore_snapshot(snapshot)
             logger.warning("Rolled back to snapshot for failed commit %s", commit_id)
 
+    @staticmethod
+    def _validate_commit_id(commit_id: str) -> None:
+        """Validate commit_id is safe for use in file paths."""
+        if not re.match(r'^[a-zA-Z0-9_-]+$', commit_id):
+            raise ValueError(f"Invalid commit_id format: {commit_id}")
+
     def _persist_commit(self, commit: MemoryCommit) -> None:
         """Persist a commit to disk."""
+        self._validate_commit_id(commit.commit_id)
         commit_file = self.commits_dir / f"{commit.commit_id}.json"
+
+        # Verify resolved path stays under commits_dir
+        if not str(commit_file.resolve()).startswith(str(self.commits_dir.resolve())):
+            raise ValueError(f"Commit path escapes commits directory: {commit.commit_id}")
+
         data = commit.model_dump(mode="json")
 
         with open(commit_file, "w", encoding="utf-8") as f:
@@ -439,7 +452,18 @@ class CommitManager:
         Returns:
             The MemoryCommit or None if not found
         """
+        try:
+            self._validate_commit_id(commit_id)
+        except ValueError as e:
+            logger.error("Invalid commit_id: %s", e)
+            return None
+
         commit_file = self.commits_dir / f"{commit_id}.json"
+
+        if not str(commit_file.resolve()).startswith(str(self.commits_dir.resolve())):
+            logger.error("Commit path escapes commits directory: %s", commit_id)
+            return None
+
         if not commit_file.exists():
             return None
 

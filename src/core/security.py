@@ -201,8 +201,7 @@ class NetworkInterceptor:
             print(f"SECURITY ALERT: Blocked outbound connection to {hostname}")
             return False
         except Exception:
-            return False
-        except Exception:
+            # Fail closed: if we cannot resolve, treat as blocked
             return False
 
 class CognitionGovernor:
@@ -224,7 +223,7 @@ class CognitionGovernor:
             try:
                 with open(self.usage_file, "r") as f:
                     self.usage = json.load(f)
-            except:
+            except Exception:
                 self.usage = {}
         else:
             self.usage = {}
@@ -240,7 +239,7 @@ class CognitionGovernor:
         try:
             with open(self.usage_file, "w") as f:
                 json.dump(self.usage, f)
-        except:
+        except Exception:
             pass
 
     def check_limit(self, metric: str, cost: int = 1) -> bool:
@@ -279,7 +278,7 @@ class Sentry:
             try:
                 with open(self.approvals_file, "r") as f:
                     self.approvals = json.load(f)
-            except:
+            except Exception:
                 self.approvals = {}
 
     def _save_approvals(self):
@@ -287,8 +286,8 @@ class Sentry:
         try:
             with open(self.approvals_file, "w") as f:
                 json.dump(self.approvals, f)
-        except:
-             pass
+        except Exception:
+            pass
 
     def add_approval(self, action_type: str, metadata: dict):
         """Whitelists an action signature."""

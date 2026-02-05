@@ -405,12 +405,27 @@ class CoreBlockStore:
         Bootstrap the 'human' block from USER.md file.
 
         Args:
-            user_file_path: Path to USER.md file
+            user_file_path: Path to USER.md file (must be under data directory)
 
         Returns:
             The updated human block, or None if file doesn't exist
         """
         user_file = Path(user_file_path)
+
+        # Validate file is under the data directory to prevent arbitrary reads
+        try:
+            resolved = user_file.resolve()
+            data_resolved = self.data_dir.resolve()
+            if not str(resolved).startswith(str(data_resolved)):
+                logger.error(
+                    "SECURITY: bootstrap_from_user_file blocked — "
+                    "path outside data directory: %s", user_file_path
+                )
+                return None
+        except OSError as e:
+            logger.error("Invalid path for bootstrap: %s", e)
+            return None
+
         if not user_file.exists():
             logger.info("USER.md not found at %s, skipping bootstrap", user_file)
             return None

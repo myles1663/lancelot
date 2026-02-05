@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from .schemas import (
     CoreBlockType,
+    MemoryEdit,
     MemoryEditOp,
     MemoryStatus,
     MemoryTier,
@@ -367,6 +368,27 @@ async def add_edit(
             provenance.append(Provenance(type=prov_type, ref=request.provenance_ref))
         except ValueError:
             pass
+
+    # Verify commit exists and is staged before gate validation
+    staged = commit_manager.get_staged_commit(commit_id)
+    if staged is None:
+        raise HTTPException(status_code=400, detail=f"Staged commit {commit_id} not found")
+
+    # Validate edit against write gates before allowing
+    edit = MemoryEdit(
+        op=op,
+        target=request.target,
+        after=request.after,
+        reason=request.reason or "API edit",
+        confidence=request.confidence or 0.5,
+        provenance=provenance,
+    )
+    gate_result = gate_validator.validate_edit(edit, editor="agent")
+    if not gate_result.allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Edit blocked by write gate: {gate_result.reason}",
+        )
 
     try:
         edit_id = commit_manager.add_edit(

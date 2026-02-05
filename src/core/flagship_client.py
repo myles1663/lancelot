@@ -123,7 +123,8 @@ class FlagshipClient:
     def _call_gemini(
         self, prompt: str, model: str, max_tokens: int, temperature: float, timeout: float
     ) -> str:
-        url = _GEMINI_URL.format(model=model) + f"?key={self._api_key}"
+        url = _GEMINI_URL.format(model=model)
+        headers = {"x-goog-api-key": self._api_key}
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
@@ -131,7 +132,7 @@ class FlagshipClient:
                 "temperature": temperature,
             },
         }
-        data = self._http_post(url, payload, timeout)
+        data = self._http_post(url, payload, timeout, extra_headers=headers)
         try:
             return data["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, IndexError) as exc:
