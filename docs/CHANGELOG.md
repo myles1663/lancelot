@@ -1,5 +1,44 @@
 # Lancelot Changelog
 
+## v7.0.0 — Tool Fabric Upgrade (In Progress)
+
+**Spec:** [docs/specs/Lancelot_ToolFabric_Spec.md](specs/Lancelot_ToolFabric_Spec.md)
+**Blueprint:** [docs/blueprints/Lancelot_ToolFabric_Blueprint.md](blueprints/Lancelot_ToolFabric_Blueprint.md)
+
+### Summary
+
+Tool Fabric upgrade introducing a capability-based abstraction layer that decouples
+Lancelot from vendor-specific tooling (Gemini CLI, Antigravity). Provides stable
+capability interfaces with multiple provider implementations including local sandbox
+runner, optional CLI adapters, and Antigravity integration.
+
+### Prompts Completed
+
+#### Prompt 1 — Contracts + Receipts (Foundation)
+- Capability interfaces (Protocol classes): ShellExec, RepoOps, FileOps, WebOps, UIBuilder, DeployOps, VisionControl
+- Result types: ExecResult, FileChange, PatchResult, ScaffoldResult, VisionResult
+- Provider types: ProviderHealth, ProviderState, BaseProvider
+- Intent and policy: ToolIntent, PolicySnapshot, RiskLevel
+- Tool receipts: ToolReceipt, VisionReceipt with redaction and bounding
+- Feature flags: FEATURE_TOOLS_FABRIC, FEATURE_TOOLS_CLI_PROVIDERS, FEATURE_TOOLS_ANTIGRAVITY, FEATURE_TOOLS_NETWORK, FEATURE_TOOLS_HOST_EXECUTION
+- 63 unit tests for schema validation and JSON serialization
+
+### New Files
+
+- `docs/specs/Lancelot_ToolFabric_Spec.md` — Tool Fabric specification
+- `docs/blueprints/Lancelot_ToolFabric_Blueprint.md` — Tool Fabric blueprint
+- `src/tools/__init__.py` — Tool Fabric module exports
+- `src/tools/contracts.py` — Capability interfaces and type definitions
+- `src/tools/receipts.py` — Tool-specific receipt extensions
+- `src/tools/providers/__init__.py` — Provider module placeholder
+- `tests/test_tool_contracts.py` — 63 unit tests for contracts and receipts
+
+### Modified Files
+
+- `src/core/feature_flags.py` — Added Tool Fabric feature flags
+
+---
+
 ## v4.0.0 — Multi-Provider Upgrade (2026-02-03)
 
 **Spec:** [docs/specs/Lancelot_v4Next_Spec_MultiProvider_Upgrade.md](specs/Lancelot_v4Next_Spec_MultiProvider_Upgrade.md)
