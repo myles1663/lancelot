@@ -114,6 +114,12 @@ from .sqlite_store import (
     MemoryStoreManager,
 )
 
+from .compiler import (
+    ContextCompiler,
+    ContextCompilerService,
+    CORE_BLOCK_ORDER,
+)
+
 __all__ = [
     # Feature flag
     "is_memory_enabled",
@@ -141,4 +147,8 @@ __all__ = [
     # SQLite Stores
     "MemoryItemStore",
     "MemoryStoreManager",
+    # Compiler
+    "ContextCompiler",
+    "ContextCompilerService",
+    "CORE_BLOCK_ORDER",
 ]
