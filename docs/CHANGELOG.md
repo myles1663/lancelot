@@ -118,6 +118,19 @@ runner, optional CLI adapters, and Antigravity integration.
 - Global singleton with thread-safe initialization
 - 50 tests for panel functionality
 
+#### Prompt 11 — Hardening
+- Command denylist regression tests (25+ dangerous patterns)
+- Path traversal tests (obvious, encoded, double-encoded)
+- Network policy enforcement tests
+- Sensitive data redaction tests (passwords, API keys, tokens, AWS keys)
+- Provider offline degradation tests (failover, fallback)
+- All-providers-offline scenario tests (graceful error handling)
+- Malformed provider output tests (receipts remain valid)
+- Intent-based policy tests (VisionControl requires approval)
+- Policy snapshot serialization tests
+- Vulnerability regression tests (shell injection, null bytes, unicode)
+- 105 security regression tests
+
 ### New Files
 
 - `docs/specs/Lancelot_ToolFabric_Spec.md` — Tool Fabric specification
@@ -145,6 +158,7 @@ runner, optional CLI adapters, and Antigravity integration.
 - `tests/test_vision_control.py` — 35 tests for VisionControl (Prompt 9)
 - `src/ui/panels/tools_panel.py` — Tool Fabric panel for War Room (Prompt 10)
 - `tests/test_tools_panel.py` — 50 tests for Tools Panel (Prompt 10)
+- `tests/test_tool_fabric_hardening.py` — 105 security regression tests (Prompt 11)
 
 ### Modified Files
 
