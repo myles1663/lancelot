@@ -1,14 +1,14 @@
-# Functional Specifications: Project Lancelot v6.0
+# Functional Specifications: Project Lancelot v7.0
 
-**Document Version:** 6.0
-**Last Updated:** 2026-02-04
-**Status:** Current — reflects v4 Multi-Provider Upgrade + vNext2 Soul/Skills/Heartbeat/Scheduler
+**Document Version:** 7.0
+**Last Updated:** 2026-02-05
+**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening
 
 ---
 
 ## 1. System Overview
 
-Lancelot v6.0 is a self-hosted, high-context autonomous AI agent. It operates as a single-owner "Paladin" within a secure Docker perimeter, replacing stateless chat paradigms with a persistent, stateful "War Room" experience. The system combines multi-provider LLM routing, constitutional governance (Soul), modular capabilities (Skills), real-time health monitoring (Heartbeat), and automated job scheduling (Scheduler) into a unified platform.
+Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as a single-owner "Paladin" within a secure Docker perimeter, replacing stateless chat paradigms with a persistent, stateful "War Room" experience. The system combines multi-provider LLM routing, constitutional governance (Soul), modular capabilities (Skills), real-time health monitoring (Heartbeat), automated job scheduling (Scheduler), tiered commit-based memory (Memory vNext), and provider-agnostic tool execution (Tool Fabric) into a unified platform.
 
 ### 1.1 Design Principles
 
@@ -30,6 +30,8 @@ Lancelot v6.0 is a self-hosted, high-context autonomous AI agent. It operates as
 | **Inquisitor** (Verifier) | Audits step outputs against success criteria | `verifier.py` |
 | **Sentinel** (Health Monitor) | Continuously monitors subsystem health | `health/monitor.py` |
 | **Chronicler** (Scheduler) | Manages and executes periodic automated jobs | `scheduler/service.py` |
+| **Archivist** (Memory Manager) | Manages tiered memory with commit-based editing | `memory/api.py` |
+| **Armorer** (Tool Fabric) | Orchestrates provider-agnostic tool execution with policy enforcement | `tools/fabric.py` |
 
 ---
 
@@ -221,8 +223,87 @@ Lancelot v6.0 is a self-hosted, high-context autonomous AI agent. It operates as
   - `FEATURE_SKILLS` — Enable/disable Skills subsystem (default: true)
   - `FEATURE_HEALTH_MONITOR` — Enable/disable background health monitoring (default: true)
   - `FEATURE_SCHEDULER` — Enable/disable Scheduler subsystem (default: true)
+  - `FEATURE_MEMORY_VNEXT` — Enable/disable Memory vNext subsystem (default: true)
+  - `FEATURE_TOOLS_FABRIC` — Enable/disable Tool Fabric subsystem (default: true)
+  - `FEATURE_TOOLS_CLI_PROVIDERS` — Enable/disable CLI tool providers (default: false)
+  - `FEATURE_TOOLS_ANTIGRAVITY` — Enable/disable Antigravity providers (default: false)
+  - `FEATURE_TOOLS_NETWORK` — Enable/disable network operations (default: false)
+  - `FEATURE_TOOLS_HOST_EXECUTION` — Enable/disable host (non-Docker) execution (default: false)
 - **F-13.2 Configuration:** Flags read from environment variables at startup. Accept `true`, `1`, `yes` (case-insensitive).
 - **F-13.3 Runtime Reload:** `reload_flags()` re-reads flags from environment without restart.
+
+### FA-14: Memory vNext (Tiered Memory)
+
+**Modules:** `src/core/memory/store.py`, `src/core/memory/commits.py`, `src/core/memory/compiler.py`, `src/core/memory/api.py`, `src/core/memory/sqlite_store.py`, `src/core/memory/index.py`
+
+- **F-14.1 Core Block Store:** Five core memory blocks (persona, human, mission, operating_rules, workspace_state) stored with schema validation and versioning. Each block has a type, content string, and metadata.
+- **F-14.2 Tiered Memory Storage:** Three memory tiers with distinct lifecycles:
+  - **Working:** Short-term memory for active session context
+  - **Episodic:** Session-scoped memory persisted across interactions
+  - **Archival:** Long-term memory with permanent retention
+- **F-14.3 Commit-Based Editing:** All memory modifications go through a transactional commit pipeline:
+  - `begin_edits(commit_id)` — Start a staged commit with snapshot isolation
+  - `apply_edit(commit_id, op, target, data)` — Stage an insert, update, delete, or rethink operation
+  - `finish_edits(commit_id)` — Apply all staged changes atomically
+  - `rollback(commit_id)` — Restore to pre-commit snapshot state
+- **F-14.4 Context Compiler:** Assembles memory into a token-budgeted context window:
+  - Core blocks loaded first with per-type token budgets
+  - Tiered items appended by relevance and recency
+  - Total output bounded by configurable max token limit
+- **F-14.5 Governed Self-Edits:** Memory operations enforce governance:
+  - Provenance tracking (system, user, agent, tool) on every edit
+  - Quarantine flow for suspicious edits requiring owner approval
+  - Undo log for rollback of item-level operations
+- **F-14.6 SQLite Persistence:** Thread-safe SQLite storage with:
+  - Thread-local connections for concurrent access
+  - Tiered tables for working, episodic, and archival memory
+  - Full-text search index with position-based relevance scoring
+- **F-14.7 Memory API Endpoints:**
+  - `GET /memory/status` — Current memory statistics and tier counts
+  - `POST /memory/edit` — Submit a governed memory edit
+  - `POST /memory/compile` — Compile context from memory
+  - `GET /memory/search` — Search across memory tiers
+  - `POST /memory/quarantine/{id}/approve` — Approve quarantined edit
+- **F-14.8 Scheduled Maintenance:** Automatic memory jobs:
+  - `memory_cleanup` — Daily cleanup of expired working memory items
+  - Archival promotion of mature episodic items
+
+### FA-15: Tool Fabric (Provider-Agnostic Execution)
+
+**Modules:** `src/tools/fabric.py`, `src/tools/contracts.py`, `src/tools/policies.py`, `src/tools/router.py`, `src/tools/health.py`, `src/tools/receipts.py`
+
+- **F-15.1 Capability Interfaces:** Seven protocol-based capability types:
+
+  | Capability | Operations | Risk Level |
+  |-----------|-----------|------------|
+  | ShellExec | Run commands with stdout/stderr capture | MEDIUM-HIGH |
+  | RepoOps | git status, diff, apply_patch, commit, branch, checkout | MEDIUM |
+  | FileOps | read, write (atomic), list, delete with file hashing | LOW-MEDIUM |
+  | WebOps | HTTP requests with policy filtering | MEDIUM |
+  | UIBuilder | Template and generative UI scaffolding | LOW |
+  | DeployOps | Deployment operations | HIGH |
+  | VisionControl | Screen capture, element location, UI actions | MEDIUM |
+
+- **F-15.2 Provider Architecture:** Pluggable provider implementations:
+  - **LocalSandboxProvider:** Docker-based execution for ShellExec, RepoOps, FileOps
+  - **TemplateScaffolder:** Template-based UI scaffolding (4 template packs)
+  - **AntigravityUIProvider:** AI-generative UI scaffolding with template fallback
+  - **AntigravityVisionProvider:** Vision-based UI control via Antigravity
+- **F-15.3 Policy Engine:** Centralized security enforcement:
+  - Command denylist with shlex-based token matching
+  - Path traversal detection (encoded, double-encoded)
+  - Workspace boundary enforcement with symlink resolution
+  - Sensitive path pattern blocking (.env, .ssh, credentials)
+  - Network policy (disabled by default)
+  - Automatic redaction of passwords, API keys, tokens in receipts
+- **F-15.4 Provider Routing:** Capability-based provider selection:
+  - Priority-based selection with health-aware failover
+  - Policy engine integration for intent-based routing
+  - RouteDecision captures selection rationale and alternatives
+- **F-15.5 Tool Receipts:** Every invocation generates typed receipts:
+  - ToolReceipt: capability, action, provider, inputs (redacted), outputs (bounded), policy snapshot, file changes, verification results
+  - VisionReceipt: screenshots (hashed), detected elements, actions, confidence scores
+- **F-15.6 Safe Mode:** Toggle restricts execution to local sandbox providers only, disabling optional/external providers.
 
 ---
 
@@ -240,6 +321,8 @@ The primary command center with specialized panels:
 | **Skills Panel** | `src/ui/panels/skills_panel.py` | Browse installed skills, enable/disable, view manifests |
 | **Health Panel** | `src/ui/panels/health_panel.py` | Real-time health snapshot, degraded reasons, LLM status |
 | **Scheduler Panel** | `src/ui/panels/scheduler_panel.py` | Job listing, manual triggers, enable/disable jobs |
+| **Memory Panel** | `src/ui/panels/memory_panel.py` | Tier browser, edit history, quarantine approvals |
+| **Tool Fabric Panel** | `src/ui/panels/tools_panel.py` | Provider health, capability routing, receipts, safe mode |
 
 All panels handle backend-down scenarios gracefully with safe fallback displays.
 
@@ -347,6 +430,56 @@ POST /soul/proposals/{id}/activate  (owner Bearer token)
 ACTIVATED (new soul version live)
 ```
 
+### 5.4 Memory Commit Flow
+
+```
+Memory Edit Request
+    |
+    v
+begin_edits(commit_id) --> Snapshot current state
+    |
+    v
+apply_edit(commit_id, op, target, data)
+    +--> Provenance check
+    +--> Quarantine check (suspicious? -> hold for review)
+    +--> Record undo entry
+    |
+    v
+finish_edits(commit_id) --> Apply atomically
+    |
+    v
+Receipt Emission (memory_edit_committed)
+```
+
+### 5.5 Tool Execution Flow
+
+```
+Tool Invocation Request
+    |
+    v
+PolicyEngine.evaluate(intent)
+    +--> Command denylist check
+    +--> Path traversal check
+    +--> Risk assessment
+    |
+    v
+ProviderRouter.select(capability)
+    +--> Health check providers
+    +--> Priority-based selection
+    +--> Failover if unhealthy
+    |
+    v
+Provider.execute(action)
+    +--> Docker sandbox (if ShellExec)
+    +--> Workspace boundary enforcement (if FileOps)
+    |
+    v
+ToolReceipt Generation
+    +--> Policy snapshot
+    +--> File changes (hashed)
+    +--> Output bounding
+```
+
 ---
 
 ## 6. Error Handling
@@ -356,3 +489,5 @@ ACTIVATED (new soul version live)
 - **Skill Execution:** Errors are caught, logged, and reported via receipts. Failed skills do not crash the scheduler or orchestrator.
 - **Gate Failures:** Jobs are skipped with descriptive receipts when gates fail, including gate exception handling.
 - **Soul Loading:** Lint failures at load time produce descriptive `SoulStoreError` messages identifying which invariants were violated.
+- **Memory Commits:** Failed commits rollback to snapshot state with item-level undo support. Error messages sanitized for API responses.
+- **Tool Fabric:** Policy violations return structured errors without leaking internal paths. Provider failures trigger failover to next healthy provider.

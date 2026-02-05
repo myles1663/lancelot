@@ -1,16 +1,22 @@
 # Lancelot Changelog
 
-## v7.0.0 — Tool Fabric Upgrade (In Progress)
+## v7.0.0 — Memory vNext + Tool Fabric + Security Hardening
 
-**Spec:** [docs/specs/Lancelot_ToolFabric_Spec.md](specs/Lancelot_ToolFabric_Spec.md)
-**Blueprint:** [docs/blueprints/Lancelot_ToolFabric_Blueprint.md](blueprints/Lancelot_ToolFabric_Blueprint.md)
+**Specs:**
+- [Tool Fabric Spec](specs/Lancelot_ToolFabric_Spec.md)
+- [Memory vNext Spec](specs/Lancelot_vNext3_Spec_Memory_BlockMemory_ContextCompiler.md)
+
+**Blueprints:**
+- [Tool Fabric Blueprint](blueprints/Lancelot_ToolFabric_Blueprint.md)
+- [Memory vNext Blueprint](blueprints/Lancelot_vNext3_Blueprint_Memory_BlockMemory_ContextCompiler.md)
 
 ### Summary
 
-Tool Fabric upgrade introducing a capability-based abstraction layer that decouples
-Lancelot from vendor-specific tooling (Gemini CLI, Antigravity). Provides stable
-capability interfaces with multiple provider implementations including local sandbox
-runner, optional CLI adapters, and Antigravity integration.
+Major release combining three upgrades: (1) Tool Fabric — a capability-based abstraction
+layer decoupling Lancelot from vendor-specific tooling with stable capability interfaces,
+Docker sandboxing, and policy enforcement; (2) Memory vNext — tiered commit-based memory
+with working/episodic/archival storage, context compiler, and governed self-edits;
+(3) Security Hardening — 96 vulnerabilities remediated across two comprehensive passes.
 
 ### Prompts Completed
 
@@ -160,11 +166,67 @@ runner, optional CLI adapters, and Antigravity integration.
 - `tests/test_tools_panel.py` — 50 tests for Tools Panel (Prompt 10)
 - `tests/test_tool_fabric_hardening.py` — 105 security regression tests (Prompt 11)
 
+### Memory vNext Prompts Completed
+
+#### Prompt 12 — Core Block Store + Schemas
+- CoreBlockStore with in-memory block storage
+- CoreBlock, CoreBlockType, MemoryItem, CompiledContext schemas
+- MemoryStoreManager for tiered SQLite persistence
+- Full-text search index with position-based relevance scoring
+
+#### Prompt 13 — Commit Pipeline + Rollback
+- CommitManager with begin/finish/rollback semantics
+- Snapshot isolation for concurrent edit safety
+- MemoryEditOp: insert, update, delete, rethink operations
+- Item-level undo log for rollback of tiered edits
+- MAX_RETAINED_SNAPSHOTS (50) with LRU eviction
+
+#### Prompt 14 — Context Compiler
+- ContextCompilerService assembling memory into token-budgeted context
+- Per-block-type token budgets with priority ordering
+- Tier-based item inclusion (working > episodic > archival)
+- Shared store instance support to prevent duplicate singletons
+
+#### Prompt 15 — Memory API + Panel
+- FastAPI router for memory operations (status, edit, compile, search, quarantine, rollback)
+- Thread-safe singleton initialization with double-checked locking
+- Memory panel in War Room for tier browsing and quarantine management
+- Scheduled maintenance jobs for cleanup and archival promotion
+
+#### Prompt 16 — Security Hardening (Pass 1)
+- 16 issues fixed: 4 critical, 5 high, 7 medium
+- Skill factory code injection via description sanitization
+- Unsigned skill execution warning receipts
+- Duplicate store instance consolidation
+- Incomplete rollback for item edits
+
+#### Prompt 17 — Security Hardening (Pass 2)
+- 80 issues fixed: 13 security, 40 bugs, 27 dead code
+- Symlink-safe workspace boundary enforcement
+- Provider file ops workspace validation
+- Race condition fixes (memory service, health monitor, soul proposals)
+- Atomic file writes for registry persistence
+- Command denylist with shlex token matching
+- Docker env var value sanitization
+- Vision provider page reuse and element detection fixes
+- Error message sanitization across all API endpoints
+- Dead code cleanup: 27 unused imports, classes, and functions removed
+
 ### Modified Files
 
-- `src/core/feature_flags.py` — Added Tool Fabric feature flags
+- `src/core/feature_flags.py` — Added Tool Fabric and Memory vNext feature flags
 - `src/ui/panels/__init__.py` — Added ToolsPanel exports (Prompt 10)
-- `src/ui/war_room.py` — Added Tool Fabric tab integration (Prompt 10)
+- `src/ui/war_room.py` — Added Tool Fabric and Memory tabs
+- `src/core/memory/*.py` — Memory vNext subsystem (10 modules)
+- `src/core/skills/factory.py` — Code injection fix
+- `src/core/skills/executor.py` — Unsigned skill warning
+- `src/core/skills/registry.py` — Atomic file writes
+- `src/core/soul/api.py` — Thread-safe proposals
+- `src/core/soul/amendments.py` — Error logging for corrupted files
+- `src/core/health/monitor.py` — Thread-safe snapshots
+- `src/tools/policies.py` — Symlink-safe paths, shlex denylist
+- `src/tools/providers/local_sandbox.py` — Workspace validation, shlex denylist, Docker sanitization
+- `src/tools/providers/vision_antigravity.py` — Page reuse, element detection, asyncio fixes
 
 ---
 

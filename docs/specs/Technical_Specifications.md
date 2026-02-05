@@ -1,8 +1,8 @@
-# Technical Specifications: Project Lancelot v6.0
+# Technical Specifications: Project Lancelot v7.0
 
-**Document Version:** 6.0
-**Last Updated:** 2026-02-04
-**Status:** Current — reflects v4 Multi-Provider Upgrade + vNext2 Soul/Skills/Heartbeat/Scheduler
+**Document Version:** 7.0
+**Last Updated:** 2026-02-05
+**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening
 
 ---
 
@@ -96,6 +96,31 @@ gateway.py
     |       +-- schema.py (config model)
     |       +-- service.py (SQLite persistence)
     |       +-- executor.py (gating pipeline)
+    |
+    +-- memory/ (tiered memory)
+    |       +-- store.py (core block store)
+    |       +-- schemas.py (block types, memory items)
+    |       +-- commits.py (commit pipeline, rollback)
+    |       +-- compiler.py (context compiler service)
+    |       +-- sqlite_store.py (SQLite persistence)
+    |       +-- index.py (full-text search)
+    |       +-- config.py (tier configuration)
+    |       +-- jobs.py (maintenance jobs)
+    |       +-- api.py (REST endpoints)
+    |       +-- memory_panel.py (War Room panel)
+    |
+    +-- tools/ (Tool Fabric)
+            +-- contracts.py (7 capability protocols)
+            +-- fabric.py (main orchestrator)
+            +-- policies.py (security policy engine)
+            +-- router.py (capability-based routing)
+            +-- health.py (provider health monitoring)
+            +-- receipts.py (tool receipt extensions)
+            +-- providers/
+                    +-- local_sandbox.py (Docker sandbox)
+                    +-- ui_templates.py (template scaffolder)
+                    +-- ui_antigravity.py (generative UI)
+                    +-- vision_antigravity.py (vision control)
     |
     +-- feature_flags.py (subsystem kill switches)
 ```
@@ -832,6 +857,12 @@ class JobExecutor:
 | FEATURE_SKILLS | `FEATURE_SKILLS` | true |
 | FEATURE_HEALTH_MONITOR | `FEATURE_HEALTH_MONITOR` | true |
 | FEATURE_SCHEDULER | `FEATURE_SCHEDULER` | true |
+| FEATURE_MEMORY_VNEXT | `FEATURE_MEMORY_VNEXT` | true |
+| FEATURE_TOOLS_FABRIC | `FEATURE_TOOLS_FABRIC` | true |
+| FEATURE_TOOLS_CLI_PROVIDERS | `FEATURE_TOOLS_CLI_PROVIDERS` | false |
+| FEATURE_TOOLS_ANTIGRAVITY | `FEATURE_TOOLS_ANTIGRAVITY` | false |
+| FEATURE_TOOLS_NETWORK | `FEATURE_TOOLS_NETWORK` | false |
+| FEATURE_TOOLS_HOST_EXECUTION | `FEATURE_TOOLS_HOST_EXECUTION` | false |
 
 **Accepted Values:** `true`, `1`, `yes` (case-insensitive). Everything else is treated as false.
 
@@ -940,6 +971,269 @@ FastAPI router providing system management endpoints for the War Room.
 | GET | `/usage/savings` | Local model savings estimate |
 | POST | `/usage/reset` | Reset usage counters |
 
+### 3.25 Memory Block Store
+
+**File:** `src/core/memory/store.py`
+
+Core memory block storage with in-memory caching.
+
+**Public API:**
+
+```python
+class CoreBlockStore:
+    def __init__(self)
+    def get_block(self, block_type: str) -> Optional[CoreBlock]
+    def set_block(self, block_type: str, content: str, metadata: dict = None) -> None
+    def list_blocks(self) -> List[CoreBlock]
+    def delete_block(self, block_type: str) -> None
+```
+
+**Block Types:** persona, human, mission, operating_rules, workspace_state
+
+### 3.26 Memory Commit Pipeline
+
+**File:** `src/core/memory/commits.py`
+
+Transactional memory editing with snapshot isolation and rollback support.
+
+**Public API:**
+
+```python
+class MemoryEditOp(Enum):
+    INSERT = "insert"
+    UPDATE = "update"
+    DELETE = "delete"
+    RETHINK = "rethink"
+
+class CommitManager:
+    def __init__(self, core_store: CoreBlockStore, memory_manager: MemoryStoreManager)
+    def begin_edits(self, commit_id: str) -> None    # Snapshot current state
+    def apply_core_edit(self, commit_id, op, block_type, data) -> None
+    def apply_item_edit(self, commit_id, op, tier, item_id, data) -> None
+    def finish_edits(self, commit_id: str) -> None    # Apply atomically
+    def rollback(self, commit_id: str) -> None         # Restore snapshot
+```
+
+**Snapshot Management:**
+- MAX_RETAINED_SNAPSHOTS = 50 with LRU eviction on `begin_edits`
+- Snapshots preserved after commit for rollback support
+- Item-level undo log for insert/update/delete rollback
+
+### 3.27 Context Compiler
+
+**File:** `src/core/memory/compiler.py`
+
+Assembles memory into a token-budgeted context window for LLM prompts.
+
+**Public API:**
+
+```python
+class ContextCompilerService:
+    def __init__(self, core_store=None, memory_manager=None)
+    def compile_context(self, max_tokens: int = 8000) -> CompiledContext
+    def get_tier_summary(self) -> Dict[str, int]
+```
+
+**Compilation Order:**
+1. Core blocks (persona first, then human, mission, operating_rules, workspace_state)
+2. Working memory items (most recent first)
+3. Episodic memory items (most relevant first)
+4. Archival memory items (if budget remains)
+
+### 3.28 Memory SQLite Store
+
+**File:** `src/core/memory/sqlite_store.py`
+
+Thread-safe SQLite persistence for tiered memory items.
+
+**Public API:**
+
+```python
+class MemoryStoreManager:
+    def __init__(self, db_path: str = "data/memory.sqlite")
+    def insert_item(self, tier: str, item: MemoryItem) -> None
+    def get_item(self, tier: str, item_id: str) -> Optional[MemoryItem]
+    def update_item(self, tier: str, item_id: str, data: dict) -> None
+    def delete_item(self, tier: str, item_id: str) -> None
+    def list_items(self, tier: str) -> List[MemoryItem]
+    def search(self, query: str, tier: str = None) -> List[SearchResult]
+    def close_all(self) -> None    # Cleanup thread-local connections
+```
+
+**Thread Safety:** Thread-local SQLite connections with `atexit` cleanup registration.
+
+### 3.29 Memory API
+
+**File:** `src/core/memory/api.py`
+
+FastAPI router for memory operations with thread-safe singleton initialization.
+
+**Endpoints:**
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/memory/status` | None | Memory statistics, tier counts, compiler info |
+| POST | `/memory/edit` | Bearer | Submit governed memory edit |
+| POST | `/memory/compile` | None | Compile context from memory tiers |
+| GET | `/memory/search` | None | Search across memory tiers |
+| POST | `/memory/quarantine/{id}/approve` | Bearer | Approve quarantined edit |
+| POST | `/memory/rollback/{commit_id}` | Bearer | Rollback a committed edit |
+
+**Singleton Pattern:** `get_memory_service()` with `threading.Lock()` double-checked locking.
+
+### 3.30 Tool Fabric Contracts
+
+**File:** `src/tools/contracts.py`
+
+Protocol-based capability interfaces and result types.
+
+**Capability Protocols:**
+
+```python
+class Capability(Enum):
+    SHELL_EXEC = "shell_exec"
+    REPO_OPS = "repo_ops"
+    FILE_OPS = "file_ops"
+    WEB_OPS = "web_ops"
+    UI_BUILDER = "ui_builder"
+    DEPLOY_OPS = "deploy_ops"
+    VISION_CONTROL = "vision_control"
+
+class RiskLevel(Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+@dataclass
+class ExecResult:
+    stdout: str
+    stderr: str
+    exit_code: int
+    success: bool
+    duration_ms: int
+
+@dataclass
+class FileChange:
+    path: str
+    operation: str      # "read" | "write" | "delete" | "list"
+    hash_before: Optional[str]
+    hash_after: Optional[str]
+    success: bool
+```
+
+### 3.31 Tool Fabric Orchestrator
+
+**File:** `src/tools/fabric.py`
+
+Main orchestration class coordinating policy, routing, and execution.
+
+**Public API:**
+
+```python
+class ToolFabric:
+    def __init__(self)
+    def register_provider(self, provider: BaseProvider) -> None
+    def execute_command(self, command: str, workspace: str = None) -> ExecResult
+    def git_status(self, workspace: str) -> str
+    def git_diff(self, workspace: str) -> str
+    def read_file(self, path: str, workspace: str) -> str
+    def write_file(self, path: str, content: str, workspace: str) -> FileChange
+    def list_files(self, workspace: str) -> List[str]
+    def health_status(self) -> Dict[str, Any]
+    def set_safe_mode(self, enabled: bool) -> None
+```
+
+**Execution Pipeline:** PolicyEngine.evaluate() -> ProviderRouter.select() -> Provider.execute() -> ToolReceipt
+
+### 3.32 Policy Engine
+
+**File:** `src/tools/policies.py`
+
+Centralized security enforcement for tool operations.
+
+**Security Gates:**
+
+| Gate | Function |
+|------|----------|
+| Command denylist | shlex-based token matching against dangerous commands |
+| Path traversal | Encoded/double-encoded `../` detection |
+| Workspace boundary | `os.path.realpath()` + `os.sep` suffix matching |
+| Sensitive paths | Pattern matching for .env, .ssh, .aws, credentials |
+| Network policy | Disabled by default, capability-based exceptions |
+| Risk assessment | LOW (read), MEDIUM (modify), HIGH (network/delete/deploy) |
+
+**Public API:**
+
+```python
+class PolicyEngine:
+    def __init__(self, workspace: str = None)
+    def evaluate_command(self, command: str) -> PolicySnapshot
+    def evaluate_path(self, path: str) -> PolicySnapshot
+    def evaluate_intent(self, intent: ToolIntent) -> PolicySnapshot
+    def redact_sensitive(self, text: str) -> str
+```
+
+### 3.33 Provider Router
+
+**File:** `src/tools/router.py`
+
+Capability-based provider selection with health-aware failover.
+
+**Public API:**
+
+```python
+class ProviderRouter:
+    def __init__(self)
+    def select(self, capability: Capability, intent: ToolIntent = None) -> RouteDecision
+    def register_provider(self, provider: BaseProvider) -> None
+```
+
+**Selection Algorithm:**
+1. Filter providers by capability support
+2. Filter by health state (HEALTHY or DEGRADED)
+3. Sort by priority (lower = higher priority)
+4. Apply policy engine constraints
+5. Return highest-priority healthy provider
+6. On failure, failover to next healthy provider
+
+### 3.34 Tool Receipts
+
+**File:** `src/tools/receipts.py`
+
+Extended receipt types for tool operations.
+
+**Receipt Types:**
+
+```python
+@dataclass
+class ToolReceipt:
+    receipt_id: str           # UUID
+    timestamp: str            # ISO 8601
+    capability: str
+    action: str
+    provider_id: str
+    inputs_summary: dict      # Redacted
+    stdout: str               # Bounded
+    stderr: str               # Bounded
+    exit_code: Optional[int]
+    changed_files: List[dict] # With hashes
+    policy_snapshot: dict
+    risk_level: str
+    duration_ms: Optional[int]
+    success: bool
+
+@dataclass
+class VisionReceipt:
+    receipt_id: str
+    action: str               # capture_screen, locate_element, perform_action, verify_state
+    screenshot_before_hash: Optional[str]
+    screenshot_after_hash: Optional[str]
+    elements_detected: List[dict]
+    confidence_score: float
+    success: bool
+```
+
 ---
 
 ## 4. Security Architecture
@@ -966,6 +1260,33 @@ InputSanitizer
 [PASSED] --> Orchestrator
 [FAILED] --> 400 Bad Request (sanitized message)
 ```
+
+### 4.5 Tool Execution Security
+
+```
+Tool Request
+    |
+    v
+PolicyEngine
+    +-- Command denylist (shlex tokenization)
+    +-- Path traversal detection (encoded variants)
+    +-- Workspace boundary (realpath + sep check)
+    +-- Sensitive path blocking (.env, .ssh, .aws)
+    +-- Network policy evaluation
+    +-- Risk level assessment
+    |
+    v
+[ALLOWED] --> Provider Router --> Docker Sandbox
+[DENIED] --> PolicyViolation (structured error)
+```
+
+### 4.6 Memory Security
+
+- Governed self-edits require provenance tracking on every operation
+- Quarantine flow holds suspicious edits for owner review
+- Memory API endpoints require Bearer token for write operations
+- Error messages sanitized (no internal paths or stack traces in API responses)
+- Thread-safe singleton initialization with double-checked locking
 
 ### 4.2 Error Safety
 
@@ -1055,6 +1376,9 @@ All API endpoints follow these rules:
 | Config (scheduler) | YAML | `config/scheduler.yaml` | Job definitions |
 | User profile | Markdown | `lancelot_data/USER.md` | Owner identity |
 | Context log | JSON | `lancelot_data/chat_log.json` | Chat history |
+| Memory blocks | In-memory | `CoreBlockStore` | Core memory blocks |
+| Memory items | SQLite | `data/memory.sqlite` | Tiered memory items |
+| Memory search | SQLite FTS | `data/memory.sqlite` | Full-text search index |
 
 ---
 
@@ -1102,7 +1426,21 @@ timeout = 30
 | Security | `test_security_s*.py` (11 files) | ~60 |
 | Control Plane | `test_control_plane.py` | ~15 |
 | Hardening (v4) | `test_hardening.py` | ~40 |
-| **Total (vNext2 only)** | **17 files** | **317** |
+| Memory API | `test_memory_api.py` | ~40 |
+| Memory Commits | `test_context_compiler.py` | ~30 |
+| Memory Panel | `test_memory_panel.py` | ~20 |
+| Tool Contracts | `test_tool_contracts.py` | 59 |
+| Tool Policies | `test_tool_policies.py` | 63 |
+| Tool Router | `test_tool_router.py` | 43 |
+| Tool Fabric | `test_tool_fabric_integration.py` | 36 |
+| Repo/File Ops | `test_repo_file_ops.py` | 49 |
+| UI Templates | `test_ui_templates.py` | 45 |
+| UI Antigravity | `test_ui_antigravity.py` | 38 |
+| Vision Control | `test_vision_control.py` | 35 |
+| Tools Panel | `test_tools_panel.py` | 50 |
+| Tool Hardening | `test_tool_fabric_hardening.py` | 105 |
+| Security Hardening | `test_vnext3_hardening.py` | ~50 |
+| **Total** | **~40 files** | **1900+** |
 
 ### 7.3 Test Patterns
 
@@ -1125,3 +1463,5 @@ Located in `docs/operations/runbooks/`:
 | `health.md` | Heartbeat | Health endpoints, degraded reasons, LLM troubleshooting |
 | `scheduler.md` | Scheduler | Job listing, manual triggers, SQLite locking |
 | `skills.md` | Skills | Installation, factory proposals, marketplace permissions |
+| `memory.md` | Memory | Tier browsing, commit rollback, quarantine management |
+| `tools.md` | Tool Fabric | Provider registration, policy configuration, safe mode |

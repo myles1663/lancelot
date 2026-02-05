@@ -1,8 +1,8 @@
-# Product Requirements Document: Project Lancelot v6.0
+# Product Requirements Document: Project Lancelot v7.0
 
-**Document Version:** 6.0
-**Last Updated:** 2026-02-04
-**Status:** Current — reflects v4 Multi-Provider Upgrade + vNext2 Soul/Skills/Heartbeat/Scheduler
+**Document Version:** 7.0
+**Last Updated:** 2026-02-05
+**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening
 
 ---
 
@@ -167,6 +167,8 @@ Provide a centralized control interface for monitoring and managing all subsyste
 | PR-4.8.4 | Display Scheduler: job listing, manual triggers, status |
 | PR-4.8.5 | Display routing decisions and usage telemetry |
 | PR-4.8.6 | Handle backend-down gracefully with safe fallback displays |
+| PR-4.8.7 | Display Memory: tier contents, recent edits, quarantined items |
+| PR-4.8.8 | Display Tool Fabric: provider health, capability routing, recent receipts, safe mode toggle |
 
 ### 4.9 Security
 
@@ -184,6 +186,13 @@ Protect against prompt injection, unauthorized access, and data leakage.
 | PR-4.9.6 | Log all security-relevant events with audit trails |
 | PR-4.9.7 | Execute file commands via SafeREPL (Python stdlib, no shell) |
 | PR-4.9.8 | Sanitize all API error responses (no stack traces, no internal paths) |
+| PR-4.9.9 | Enforce symlink-safe workspace boundary via `os.path.realpath()` + `os.sep` suffix matching |
+| PR-4.9.10 | Enforce command denylist with shlex-based token matching (not substring) |
+| PR-4.9.11 | Sanitize Docker env var values via `shlex.quote()` to prevent shell injection |
+| PR-4.9.12 | Use atomic file writes (temp + `os.replace()`) for crash-safe registry and config persistence |
+| PR-4.9.13 | Employ double-checked locking for thread-safe singleton initialization |
+| PR-4.9.14 | Sanitize skill factory code generation to prevent docstring breakout injection |
+| PR-4.9.15 | Validate workspace paths in all file operation providers before execution |
 
 ### 4.10 Onboarding
 
@@ -211,6 +220,46 @@ Enable selective subsystem activation for deployment flexibility and fault isola
 | PR-4.11.2 | Read flags from environment variables at startup (default: all enabled) |
 | PR-4.11.3 | Support runtime flag reload without process restart |
 | PR-4.11.4 | Log flag state at startup for operational visibility |
+| PR-4.11.5 | Provide kill switches for Memory vNext and Tool Fabric subsystems |
+| PR-4.11.6 | Support granular Tool Fabric flags: CLI providers, Antigravity, network, host execution |
+
+### 4.12 Memory vNext (Tiered Memory)
+
+**Priority:** P0 (Core)
+
+Provide a commit-based, tiered memory system with governed self-edits and context compilation.
+
+| Requirement | Description |
+|-------------|-------------|
+| PR-4.12.1 | Store core memory blocks (persona, human, mission, operating_rules, workspace_state) with schema validation |
+| PR-4.12.2 | Support three memory tiers: working (short-term), episodic (session-based), archival (long-term) |
+| PR-4.12.3 | Implement commit-based editing with begin/finish/rollback semantics and snapshot isolation |
+| PR-4.12.4 | Compile context from memory tiers with configurable token budgets per block type |
+| PR-4.12.5 | Provide governed self-edit operations: insert, update, delete, rethink with provenance tracking |
+| PR-4.12.6 | Persist memory in SQLite with thread-safe connection management |
+| PR-4.12.7 | Support full-text search across memory tiers with relevance scoring |
+| PR-4.12.8 | Quarantine suspicious memory edits for owner review before application |
+| PR-4.12.9 | Expose REST API for memory operations with authentication |
+| PR-4.12.10 | Schedule automatic memory maintenance jobs (cleanup, archival promotion) |
+
+### 4.13 Tool Fabric (Provider-Agnostic Tool Execution)
+
+**Priority:** P0 (Core)
+
+Provide a capability-based tool execution layer with provider routing, Docker sandboxing, and policy enforcement.
+
+| Requirement | Description |
+|-------------|-------------|
+| PR-4.13.1 | Define 7 capability interfaces: ShellExec, RepoOps, FileOps, WebOps, UIBuilder, DeployOps, VisionControl |
+| PR-4.13.2 | Route tool invocations to providers based on capability, health, and priority |
+| PR-4.13.3 | Execute shell commands in Docker sandbox with output bounding and timeout enforcement |
+| PR-4.13.4 | Enforce security policies: command denylist, path traversal detection, sensitive path blocking, network control |
+| PR-4.13.5 | Generate ToolReceipt and VisionReceipt for every tool invocation with full audit trail |
+| PR-4.13.6 | Support provider health monitoring with caching, TTL, and automatic failover |
+| PR-4.13.7 | Provide template-based and AI-generative UI scaffolding via UIBuilder capability |
+| PR-4.13.8 | Support vision-based UI control via VisionControl capability (Antigravity integration) |
+| PR-4.13.9 | Enforce workspace boundary for all file operations with symlink resolution |
+| PR-4.13.10 | Support safe mode toggle restricting providers to local sandbox only |
 
 ---
 
@@ -230,6 +279,10 @@ Enable selective subsystem activation for deployment flexibility and fault isola
 | US-10 | Owner | Disable a subsystem | I set a feature flag to false and the system boots cleanly without that subsystem |
 | US-11 | Developer | Switch LLM providers | I update models.yaml and the router uses the new provider without code changes |
 | US-12 | Ops Engineer | Debug a failed scheduled job | I check the job receipt for skip_reason and gate details to identify the root cause |
+| US-13 | Developer | Inspect Lancelot's memory | I view working/episodic/archival tiers and see what context the agent is operating with |
+| US-14 | Owner | Review memory self-edits | I approve or quarantine proposed memory changes before they take effect |
+| US-15 | Developer | Execute code in sandbox | I run commands through Tool Fabric which enforces security policies and produces audit receipts |
+| US-16 | Ops Engineer | Add a new tool provider | I register a new provider that implements a capability interface and it auto-routes via priority |
 
 ---
 
@@ -331,6 +384,7 @@ Enable selective subsystem activation for deployment flexibility and fault isola
 | v4.0 | Multi-Provider Upgrade | Lane-based routing, 3 flagship providers, control plane, usage tracking |
 | v5.0 (vNext2) | Soul + Skills + Heartbeat + Scheduler | Constitutional governance, modular skills, health monitoring, job scheduling, feature flags |
 | v6.0 | Current | All v4 + vNext2 features integrated and hardened with regression tests |
+| v7.0 | Memory vNext + Tool Fabric + Security Hardening | Tiered memory with commit-based editing, provider-agnostic tool execution, 96 security vulnerabilities remediated |
 
 ---
 
@@ -348,3 +402,10 @@ Enable selective subsystem activation for deployment flexibility and fault isola
 | **Crusader Mode** | A high-agency autonomy mode that increases tool autonomy while respecting Soul constraints |
 | **GGUF** | A quantized model format used by llama-cpp-python for local inference |
 | **HealthSnapshot** | A point-in-time data structure reporting the health state of all subsystems |
+| **Memory vNext** | The tiered memory subsystem providing working, episodic, and archival storage with commit-based governed self-edits |
+| **Tool Fabric** | The provider-agnostic tool execution subsystem with capability routing, Docker sandboxing, and policy enforcement |
+| **Core Block** | A fundamental memory element (persona, human, mission, operating_rules, workspace_state) stored in the block store |
+| **Context Compiler** | Component that assembles memory tiers into a token-budgeted context window for LLM prompts |
+| **PolicySnapshot** | A frozen record of the security policy state at the time of a tool invocation, included in receipts |
+| **Capability** | A typed interface (protocol) defining a category of tool operations (e.g., ShellExec, FileOps) |
+| **Provider** | An implementation of one or more capabilities that executes tool operations (e.g., LocalSandboxProvider) |

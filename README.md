@@ -1,25 +1,25 @@
-# 🛡️ Project Lancelot
+# Project Lancelot
 
-**Your AI-Powered Digital Knight** - An autonomous agent system that executes tasks, manages files, and communicates through your preferred channels (Telegram, Google Chat).
+**Your AI-Powered Digital Knight** - An autonomous agent system with constitutional governance, tiered memory, provider-agnostic tool execution, and receipt-based accountability.
 
 ![Lancelot Logo](static/logo.jpeg)
 
 ## What is Lancelot?
 
-Lancelot is a self-hosted AI assistant that operates as your digital knight. It combines the power of Google's Gemini AI with autonomous execution capabilities, allowing it to plan, research, and execute complex tasks on your behalf. Think of it as an AI agent that can actually *do* things, not just talk about them.
+Lancelot is a self-hosted AI assistant that operates as your digital knight. It combines multi-provider LLM routing (Gemini, OpenAI, Anthropic) with autonomous execution capabilities, constitutional governance (Soul), governed memory self-edits, and a provider-agnostic tool fabric for sandboxed code and file operations. Think of it as an AI agent that can actually *do* things, not just talk about them.
 
-## 🚀 Quickstart
+## Quickstart
 
 ### Prerequisites
 - Docker Desktop
-- Python 3.11+ (for the launcher)
-- A Gemini API Key ([Get one free](https://aistudio.google.com/app/apikey))
+- Python 3.11+
+- At least one LLM API key (Gemini, OpenAI, or Anthropic)
 
 ### Installation
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/lancelot.git
+   git clone https://github.com/myles1663/lancelot.git
    cd lancelot
    ```
 
@@ -29,8 +29,8 @@ Lancelot is a self-hosted AI assistant that operates as your digital knight. It 
    ```
 
 3. **Edit `.env` with your settings**
-   - Add your `GEMINI_API_KEY`
-   - Configure Telegram or Google Chat
+   - Add your `GEMINI_API_KEY`, `OPENAI_API_KEY`, and/or `ANTHROPIC_API_KEY`
+   - Configure Telegram or Google Chat (optional)
 
 4. **Start Lancelot**
    ```bash
@@ -41,47 +41,89 @@ Lancelot is a self-hosted AI assistant that operates as your digital knight. It 
    - Navigate to `http://localhost:8501`
    - Or run `python src/ui/lancelot_gui.py` for the native launcher
 
-## 📁 Project Structure
+## Architecture
+
+Lancelot is organized into six major subsystems, each gated by a feature flag:
+
+| Subsystem | Feature Flag | Description |
+|-----------|-------------|-------------|
+| **Soul** | `FEATURE_SOUL` | Constitutional identity, versioned governance, amendment workflow |
+| **Skills** | `FEATURE_SKILLS` | Modular capabilities with manifests, factory pipeline, marketplace |
+| **Heartbeat** | `FEATURE_HEALTH_MONITOR` | Liveness/readiness probes, state transition receipts |
+| **Scheduler** | `FEATURE_SCHEDULER` | Cron/interval job scheduling with gating pipeline |
+| **Memory vNext** | `FEATURE_MEMORY_VNEXT` | Tiered memory (working/episodic/archival), context compiler, governed self-edits |
+| **Tool Fabric** | `FEATURE_TOOLS_FABRIC` | Provider-agnostic tool execution, Docker sandbox, policy engine |
+
+## Project Structure
 
 ```
 lancelot/
 ├── src/
-│   ├── core/          # Orchestration, routing, security
-│   ├── agents/        # Planner, Verifier, Crusader
-│   ├── ui/            # War Room, Launcher, Onboarding
-│   ├── integrations/  # Telegram, Google Chat, MCP
-│   ├── memory/        # RAG, indexing, vault
-│   └── shared/        # Utilities, logging
-├── config/            # Example configuration files
-├── docs/              # Documentation
-├── tests/             # Test suite
-└── static/            # UI assets
+│   ├── core/              # Orchestration, routing, security
+│   │   ├── memory/        # Memory vNext: block store, tiered storage, commits, compiler
+│   │   ├── soul/          # Constitutional identity: store, linter, amendments, API
+│   │   ├── skills/        # Modular skills: schema, registry, executor, factory
+│   │   ├── health/        # Heartbeat: health types, monitor, API
+│   │   ├── scheduler/     # Job scheduling: schema, service, executor
+│   │   └── feature_flags.py
+│   ├── tools/             # Tool Fabric
+│   │   ├── contracts.py   # Capability interfaces (7 protocols)
+│   │   ├── fabric.py      # Main orchestrator
+│   │   ├── policies.py    # Security policy engine
+│   │   ├── health.py      # Provider health monitoring
+│   │   ├── router.py      # Capability-based provider routing
+│   │   ├── receipts.py    # Tool-specific receipt extensions
+│   │   └── providers/     # Local sandbox, UI templates, Antigravity
+│   ├── agents/            # Planner, Verifier, Crusader
+│   ├── ui/                # War Room, Launcher, Onboarding
+│   │   └── panels/        # Soul, Skills, Health, Scheduler, Memory, Tool Fabric panels
+│   ├── integrations/      # Telegram, Google Chat, MCP
+│   └── shared/            # Utilities, logging, receipts
+├── config/                # YAML configuration files
+├── docs/                  # Documentation
+│   ├── specs/             # Product, Functional, and Technical specifications
+│   ├── blueprints/        # Implementation blueprints
+│   └── operations/        # Runbooks
+├── soul/                  # Soul version files (constitutional identity)
+├── tests/                 # Test suite (1900+ tests)
+└── static/                # UI assets
 ```
 
-## ⚙️ Configuration
+## Configuration
 
-All configuration is done through environment variables. See [`config/example.env`](config/example.env) for all options.
+All configuration is done through environment variables and YAML files. See [`config/example.env`](config/example.env) for all options.
 
 ### Model Configuration
-Models can be configured in `config/models.example.yaml`. Lancelot supports:
-- **Primary Model**: Main conversation and reasoning
-- **Orchestrator**: Planning and task delegation
-- **Utility**: Quick, lightweight tasks
+Models can be configured in `config/models.yaml`. Lancelot supports:
+- **Local Model**: Mandatory GGUF model for utility/redaction tasks
+- **Flagship Fast**: Standard reasoning (Gemini Flash, GPT-4o-mini, Claude Haiku)
+- **Flagship Deep**: Complex reasoning (Gemini Pro, GPT-4o, Claude Sonnet)
 
-## 📖 Documentation
+### Feature Flags
+All subsystems can be independently enabled or disabled via environment variables. See `src/core/feature_flags.py` for the full list.
 
-- [Onboarding Guide](docs/onboarding/)
-- [War Room Usage](docs/war-room/)
-- [Architecture Overview](docs/architecture/)
-- [Specifications](docs/specs/)
+## Documentation
 
-## 🔐 Security
+- [Product Requirements](docs/specs/Product_Requirements_Document.md) - What Lancelot does and why
+- [Functional Specifications](docs/specs/Functional_Specifications.md) - How each feature works
+- [Technical Specifications](docs/specs/Technical_Specifications.md) - Architecture and component details
+- [Tool Fabric Spec](docs/specs/Lancelot_ToolFabric_Spec.md) - Tool execution subsystem
+- [Memory vNext Spec](docs/specs/Lancelot_vNext3_Spec_Memory_BlockMemory_ContextCompiler.md) - Memory subsystem
+- [Operational Runbooks](docs/operations/runbooks/) - Day-to-day operations guides
 
-- All secrets are stored in `.env` (never committed)
-- Vault encryption for sensitive data
-- Rate limiting and action receipts
-- Sandboxed code execution
+## Security
 
-## 📜 License
+- 96 security vulnerabilities identified and remediated across two hardening passes
+- Symlink-safe workspace boundary enforcement
+- Command denylist with precise token matching (shlex-based)
+- Docker env var sanitization to prevent shell injection
+- Atomic file writes with backup recovery for crash safety
+- Thread-safe singletons with double-checked locking
+- Input sanitization blocking prompt injection (16 patterns + homoglyph normalization)
+- PII redaction via local model before external API calls
+- All secrets stored in `.env` (never committed)
+- Rate limiting and action receipts for every operation
+
+## License
 
 MIT License - See [LICENSE](LICENSE) for details.
