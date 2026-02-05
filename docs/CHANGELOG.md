@@ -94,6 +94,17 @@ runner, optional CLI adapters, and Antigravity integration.
 - Health checks with availability and fallback status
 - 38 tests for generative scaffolding and fallback
 
+#### Prompt 9 — VisionControl
+- AntigravityVisionProvider for vision-based UI control
+- VisionControlCapability: capture_screen, locate_element, perform_action, verify_state
+- Explicit failure when Antigravity unavailable (no silent downgrade)
+- AntigravityUnavailableError and VisionOperationError exceptions
+- VisionReceipt with screenshot hashes (not raw bytes)
+- CSS selector and natural language element location
+- Click, type, drag, scroll action support
+- State verification with expected/actual comparison
+- 35 tests for vision control operations
+
 ### New Files
 
 - `docs/specs/Lancelot_ToolFabric_Spec.md` — Tool Fabric specification
@@ -117,6 +128,8 @@ runner, optional CLI adapters, and Antigravity integration.
 - `tests/test_ui_templates.py` — 45 tests for UIBuilder templates (Prompt 7)
 - `src/tools/providers/ui_antigravity.py` — Antigravity generative UI provider (Prompt 8)
 - `tests/test_ui_antigravity.py` — 38 tests for Antigravity UIBuilder (Prompt 8)
+- `src/tools/providers/vision_antigravity.py` — Antigravity vision control provider (Prompt 9)
+- `tests/test_vision_control.py` — 35 tests for VisionControl (Prompt 9)
 
 ### Modified Files
 

@@ -33,6 +33,12 @@ from src.tools.providers.ui_antigravity import (
     AntigravityUIConfig,
     create_antigravity_ui_provider,
 )
+from src.tools.providers.vision_antigravity import (
+    AntigravityVisionProvider,
+    VisionConfig,
+    create_vision_provider,
+    AntigravityUnavailableError,
+)
 
 __all__ = [
     # Local Sandbox
@@ -48,4 +54,9 @@ __all__ = [
     "AntigravityUIProvider",
     "AntigravityUIConfig",
     "create_antigravity_ui_provider",
+    # Antigravity Vision
+    "AntigravityVisionProvider",
+    "VisionConfig",
+    "create_vision_provider",
+    "AntigravityUnavailableError",
 ]
