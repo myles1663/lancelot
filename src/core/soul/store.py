@@ -17,7 +17,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import List, Optional
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError, field_validator

@@ -14,6 +14,7 @@ from __future__ import annotations
 import hmac
 import logging
 import os
+import threading
 from typing import Optional
 
 import yaml
@@ -23,7 +24,6 @@ from fastapi.responses import JSONResponse
 from src.core.soul.store import (
     Soul,
     SoulStoreError,
-    load_active_soul,
     get_active_version,
     set_active_version,
     list_versions,
@@ -43,6 +43,7 @@ router = APIRouter(prefix="/soul", tags=["soul"])
 # Soul directory — configurable via env or default
 _SOUL_DIR: Optional[str] = os.environ.get("SOUL_DIR", None)
 _API_TOKEN = os.environ.get("LANCELOT_API_TOKEN", os.environ.get("API_TOKEN", ""))
+_proposals_lock = threading.Lock()
 
 
 def _set_soul_dir(soul_dir: str) -> None:
@@ -97,24 +98,25 @@ async def approve_proposal(proposal_id: str, request: Request):
     if not _verify_owner(request):
         raise HTTPException(status_code=403, detail="Owner identity required")
 
-    proposals = list_proposals(_SOUL_DIR)
-    target = None
-    for p in proposals:
-        if p.id == proposal_id:
-            target = p
-            break
+    with _proposals_lock:
+        proposals = list_proposals(_SOUL_DIR)
+        target = None
+        for p in proposals:
+            if p.id == proposal_id:
+                target = p
+                break
 
-    if target is None:
-        raise HTTPException(status_code=404, detail="Proposal not found")
+        if target is None:
+            raise HTTPException(status_code=404, detail="Proposal not found")
 
-    if target.status != ProposalStatus.PENDING:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Proposal status is '{target.status}', expected 'pending'",
-        )
+        if target.status != ProposalStatus.PENDING:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Proposal status is '{target.status}', expected 'pending'",
+            )
 
-    target.status = ProposalStatus.APPROVED
-    save_proposals(proposals, _SOUL_DIR)
+        target.status = ProposalStatus.APPROVED
+        save_proposals(proposals, _SOUL_DIR)
 
     logger.info("soul_approved: proposal=%s, version=%s",
                 target.id, target.proposed_version)
@@ -140,53 +142,54 @@ async def activate_proposal(proposal_id: str, request: Request):
     if not _verify_owner(request):
         raise HTTPException(status_code=403, detail="Owner identity required")
 
-    proposals = list_proposals(_SOUL_DIR)
-    target = None
-    for p in proposals:
-        if p.id == proposal_id:
-            target = p
-            break
+    with _proposals_lock:
+        proposals = list_proposals(_SOUL_DIR)
+        target = None
+        for p in proposals:
+            if p.id == proposal_id:
+                target = p
+                break
 
-    if target is None:
-        raise HTTPException(status_code=404, detail="Proposal not found")
+        if target is None:
+            raise HTTPException(status_code=404, detail="Proposal not found")
 
-    if target.status != ProposalStatus.APPROVED:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Proposal must be approved first (status='{target.status}')",
-        )
+        if target.status != ProposalStatus.APPROVED:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Proposal must be approved first (status='{target.status}')",
+            )
 
-    if not target.proposed_yaml:
-        raise HTTPException(status_code=400, detail="Proposal has no YAML content")
+        if not target.proposed_yaml:
+            raise HTTPException(status_code=400, detail="Proposal has no YAML content")
 
-    # Parse and validate
-    try:
-        proposed_dict = yaml.safe_load(target.proposed_yaml)
-        soul = Soul(**proposed_dict)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Proposed soul validation failed: {exc}",
-        )
+        # Parse and validate
+        try:
+            proposed_dict = yaml.safe_load(target.proposed_yaml)
+            soul = Soul(**proposed_dict)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Proposed soul validation failed: {exc}",
+            )
 
-    # Run linter
-    try:
-        lint_or_raise(soul)
-    except SoulStoreError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        # Run linter
+        try:
+            lint_or_raise(soul)
+        except SoulStoreError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
 
-    # Write version file
-    from src.core.soul.store import _resolve_soul_dir
-    d = _resolve_soul_dir(_SOUL_DIR)
-    version_file = d / "soul_versions" / f"soul_{soul.version}.yaml"
-    version_file.write_text(target.proposed_yaml, encoding="utf-8")
+        # Write version file
+        from src.core.soul.store import _resolve_soul_dir
+        d = _resolve_soul_dir(_SOUL_DIR)
+        version_file = d / "soul_versions" / f"soul_{soul.version}.yaml"
+        version_file.write_text(target.proposed_yaml, encoding="utf-8")
 
-    # Set active pointer
-    set_active_version(soul.version, _SOUL_DIR)
+        # Set active pointer
+        set_active_version(soul.version, _SOUL_DIR)
 
-    # Update proposal status
-    target.status = ProposalStatus.ACTIVATED
-    save_proposals(proposals, _SOUL_DIR)
+        # Update proposal status
+        target.status = ProposalStatus.ACTIVATED
+        save_proposals(proposals, _SOUL_DIR)
 
     logger.info("soul_activated: proposal=%s, version=%s",
                 target.id, soul.version)

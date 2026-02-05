@@ -248,7 +248,7 @@ class ToolsPanel:
             Dict mapping capability to list of provider IDs
         """
         routing = self.get_routing_summary()
-        return routing.get("capability_providers", {})
+        return routing.get("capabilities", {})
 
     def is_capability_available(self, capability: str) -> bool:
         """

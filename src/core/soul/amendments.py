@@ -116,8 +116,12 @@ def _load_proposals_raw(soul_dir: Optional[str] = None) -> List[dict]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, list) else []
-    except (json.JSONDecodeError, OSError):
-        return []
+    except json.JSONDecodeError as exc:
+        logger.error("Corrupted proposals file %s: %s", path, exc)
+        raise SoulStoreError(f"Corrupted proposals file: {exc}") from exc
+    except OSError as exc:
+        logger.error("Failed to read proposals file %s: %s", path, exc)
+        raise SoulStoreError(f"Failed to read proposals: {exc}") from exc
 
 
 def save_proposals(

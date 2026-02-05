@@ -18,8 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-from src.core.scheduler.service import SchedulerService, JobRecord
-from src.core.scheduler.schema import SchedulerError
+from src.core.scheduler.service import SchedulerService
 
 logger = logging.getLogger(__name__)
 

@@ -451,32 +451,3 @@ def _summarize_inputs(inputs: Dict[str, Any], max_length: int = 100) -> Dict[str
             summary[key] = value
 
     return summary
-
-
-def hash_file_content(content: bytes) -> str:
-    """
-    Compute SHA-256 hash of file content.
-
-    Args:
-        content: File content bytes
-
-    Returns:
-        Hex-encoded SHA-256 hash
-    """
-    return hashlib.sha256(content).hexdigest()
-
-
-def bound_output(output: str, max_chars: int = 10000) -> tuple[str, bool]:
-    """
-    Bound output to maximum character length.
-
-    Args:
-        output: Raw output string
-        max_chars: Maximum characters to keep
-
-    Returns:
-        Tuple of (bounded_output, was_truncated)
-    """
-    if len(output) <= max_chars:
-        return output, False
-    return output[:max_chars] + "\n... (truncated)", True

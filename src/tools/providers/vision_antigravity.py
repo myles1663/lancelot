@@ -33,7 +33,6 @@ from src.tools.contracts import (
     ProviderHealth,
     ProviderState,
     VisionResult,
-    VisionControlCapability,
 )
 from src.tools.receipts import (
     VisionReceipt,
@@ -272,7 +271,7 @@ class AntigravityVisionProvider(BaseProvider):
 
         try:
             # Run async capture
-            screenshot_bytes, screenshot_hash = asyncio.get_event_loop().run_until_complete(
+            screenshot_bytes, screenshot_hash = asyncio.run(
                 self._async_capture_screen()
             )
 
@@ -334,7 +333,7 @@ class AntigravityVisionProvider(BaseProvider):
                 receipt.screenshot_before_hash = hashlib.sha256(screenshot).hexdigest()
 
         try:
-            elements = asyncio.get_event_loop().run_until_complete(
+            elements = asyncio.run(
                 self._async_locate_element(selector_or_description, screenshot)
             )
 
@@ -450,7 +449,7 @@ class AntigravityVisionProvider(BaseProvider):
             receipt.action_value = value
 
         try:
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 self._async_perform_action(action, target, value)
             )
 
@@ -561,7 +560,7 @@ class AntigravityVisionProvider(BaseProvider):
                 receipt.screenshot_before_hash = hashlib.sha256(screenshot).hexdigest()
 
         try:
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 self._async_verify_state(expected, screenshot)
             )
 
@@ -609,6 +608,8 @@ class AntigravityVisionProvider(BaseProvider):
                 count = await locator.count()
                 if count == 0:
                     verification_passed = False
+                else:
+                    detected_elements.append({"type": "text", "value": expected["text"], "count": count})
 
             # Check for expected selector
             if "selector" in expected:
@@ -616,6 +617,8 @@ class AntigravityVisionProvider(BaseProvider):
                 count = await locator.count()
                 if count == 0:
                     verification_passed = False
+                else:
+                    detected_elements.append({"type": "selector", "value": expected["selector"], "count": count})
 
             # Check for expected URL
             if "url" in expected:
@@ -659,7 +662,7 @@ class AntigravityVisionProvider(BaseProvider):
         """Destructor to cleanup engine."""
         if self._engine:
             try:
-                asyncio.get_event_loop().run_until_complete(self.cleanup())
+                asyncio.run(self.cleanup())
             except Exception:
                 pass
 

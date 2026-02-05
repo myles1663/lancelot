@@ -10,14 +10,6 @@ from dataclasses import dataclass, field
 from typing import Dict
 
 
-@dataclass(frozen=True)
-class CoreBlockBudget:
-    """Token budget for a core memory block."""
-    block_type: str
-    max_tokens: int
-    warning_threshold: float = 0.8  # Warn when usage exceeds this ratio
-
-
 # Default token budgets for core blocks
 DEFAULT_CORE_BLOCK_BUDGETS: Dict[str, int] = {
     "persona": 500,

@@ -15,12 +15,13 @@ Features:
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
@@ -29,7 +30,6 @@ from .config import (
     WORKING_MEMORY_DB,
     EPISODIC_DB,
     ARCHIVAL_DB,
-    DEFAULT_WORKING_MEMORY_TTL_HOURS,
 )
 from .schemas import (
     MemoryItem,
@@ -750,6 +750,7 @@ class MemoryStoreManager:
         self.data_dir = Path(data_dir)
         self._stores: dict[MemoryTier, MemoryItemStore] = {}
         self._lock = threading.Lock()
+        atexit.register(self.close_all)
 
     def get_store(self, tier: MemoryTier) -> MemoryItemStore:
         """

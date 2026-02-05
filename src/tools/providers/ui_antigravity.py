@@ -31,7 +31,6 @@ from src.tools.contracts import (
     ProviderState,
     ScaffoldResult,
     UIBuilderMode,
-    UIBuilderCapability,
 )
 from src.tools.providers.ui_templates import (
     TemplateScaffolder,

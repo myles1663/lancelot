@@ -21,7 +21,6 @@ import hashlib
 import os
 import re
 from dataclasses import dataclass, field
-from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -261,9 +260,23 @@ class PolicyEngine:
 
     def _is_denied_command(self, command: str) -> bool:
         """Check if command matches any denylist pattern."""
+        import shlex
         cmd_lower = command.lower().strip()
+
+        # Try to parse the command to check first token more precisely
+        try:
+            tokens = shlex.split(cmd_lower)
+        except ValueError:
+            tokens = None
+
         for denied in self.config.command_denylist:
-            if denied.lower() in cmd_lower:
+            denied_lower = denied.lower()
+            # Check if the first token matches single-word denylist entries
+            if tokens and " " not in denied_lower:
+                if tokens[0] == denied_lower:
+                    return True
+            # Fall back to substring match for multi-word patterns
+            if denied_lower in cmd_lower:
                 return True
         return False
 
@@ -441,18 +454,18 @@ class PolicyEngine:
         return False
 
     def _is_within_workspace(self, path: str, workspace: str) -> bool:
-        """Check if path is within workspace boundary."""
+        """Check if path is within workspace boundary (symlink-safe)."""
         try:
-            # Resolve to absolute paths
+            # Resolve symlinks to real paths
             if os.path.isabs(path):
-                abs_path = os.path.normpath(path)
+                abs_path = os.path.realpath(path)
             else:
-                abs_path = os.path.normpath(os.path.join(workspace, path))
+                abs_path = os.path.realpath(os.path.join(workspace, path))
 
-            abs_workspace = os.path.normpath(os.path.abspath(workspace))
+            abs_workspace = os.path.realpath(workspace)
 
-            # Check if path starts with workspace
-            return abs_path.startswith(abs_workspace)
+            # Use os.sep to prevent prefix confusion (e.g. /workspace-evil matching /workspace)
+            return abs_path == abs_workspace or abs_path.startswith(abs_workspace + os.sep)
         except Exception:
             return False
 

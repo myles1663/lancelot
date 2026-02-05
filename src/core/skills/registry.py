@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -78,6 +79,18 @@ class SkillRegistry:
     def _load(self) -> None:
         """Load registry from disk."""
         if not self._registry_path.exists():
+            # Try backup if main file missing
+            bak = Path(str(self._registry_path) + ".bak")
+            if bak.exists():
+                logger.warning("Main registry missing, loading from backup")
+                try:
+                    data = json.loads(bak.read_text(encoding="utf-8"))
+                    if isinstance(data, list):
+                        for entry_dict in data:
+                            entry = SkillEntry(**entry_dict)
+                            self._skills[entry.name] = entry
+                except (json.JSONDecodeError, OSError) as exc:
+                    logger.warning("Failed to load backup registry: %s", exc)
             return
         try:
             data = json.loads(self._registry_path.read_text(encoding="utf-8"))
@@ -87,14 +100,33 @@ class SkillRegistry:
                     self._skills[entry.name] = entry
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Failed to load skill registry: %s", exc)
+            # Try backup on corruption
+            bak = Path(str(self._registry_path) + ".bak")
+            if bak.exists():
+                logger.warning("Loading from backup after corruption")
+                try:
+                    data = json.loads(bak.read_text(encoding="utf-8"))
+                    if isinstance(data, list):
+                        for entry_dict in data:
+                            entry = SkillEntry(**entry_dict)
+                            self._skills[entry.name] = entry
+                except (json.JSONDecodeError, OSError):
+                    pass
 
     def _save(self) -> None:
-        """Persist registry to disk."""
+        """Persist registry to disk atomically."""
         data = [e.model_dump() for e in self._skills.values()]
-        self._registry_path.write_text(
-            json.dumps(data, indent=2, default=str),
-            encoding="utf-8",
-        )
+        content = json.dumps(data, indent=2, default=str)
+        tmp_path = Path(str(self._registry_path) + ".tmp")
+        tmp_path.write_text(content, encoding="utf-8")
+        # Create backup of current file before replacing
+        if self._registry_path.exists():
+            bak = Path(str(self._registry_path) + ".bak")
+            try:
+                os.replace(str(self._registry_path), str(bak))
+            except OSError:
+                pass
+        os.replace(str(tmp_path), str(self._registry_path))
 
     def install_skill(
         self,

@@ -30,7 +30,6 @@ from .config import (
 )
 from .schemas import (
     CompiledContext,
-    CoreBlock,
     CoreBlockType,
     MemoryItem,
     MemoryStatus,
@@ -444,6 +443,8 @@ class ContextCompilerService:
         data_dir: str | Path,
         config: Optional[MemoryConfig] = None,
         soul_version: Optional[str] = None,
+        core_store: Optional[Any] = None,
+        memory_manager: Optional[Any] = None,
     ):
         """
         Initialize the compiler service.
@@ -452,17 +453,24 @@ class ContextCompilerService:
             data_dir: Base data directory
             config: Memory configuration
             soul_version: Current Soul version
+            core_store: Optional existing CoreBlockStore (avoids duplicate instances)
+            memory_manager: Optional existing MemoryStoreManager (avoids duplicate instances)
         """
-        from .store import CoreBlockStore
-        from .sqlite_store import MemoryStoreManager
-
         self.data_dir = Path(data_dir)
         self.config = config or default_config
 
-        self.core_store = CoreBlockStore(data_dir=self.data_dir, config=self.config)
-        self.core_store.initialize()
+        if core_store is not None:
+            self.core_store = core_store
+        else:
+            from .store import CoreBlockStore
+            self.core_store = CoreBlockStore(data_dir=self.data_dir, config=self.config)
+            self.core_store.initialize()
 
-        self.memory_manager = MemoryStoreManager(data_dir=self.data_dir)
+        if memory_manager is not None:
+            self.memory_manager = memory_manager
+        else:
+            from .sqlite_store import MemoryStoreManager
+            self.memory_manager = MemoryStoreManager(data_dir=self.data_dir)
 
         self.compiler = ContextCompiler(
             core_store=self.core_store,

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -104,6 +105,15 @@ class SkillFactory:
         if permissions is None:
             permissions = ["read_input"]
 
+        # Validate skill name (defense-in-depth)
+        if not re.match(r'^[a-z][a-z0-9_]*$', name):
+            raise SkillError(
+                f"Invalid skill name '{name}': must be lowercase alphanumeric with underscores"
+            )
+
+        # Sanitize description to prevent code injection via f-string interpolation
+        safe_description = description.replace('\\', '\\\\').replace('"""', '\\"\\"\\"')
+
         manifest = {
             "name": name,
             "version": "0.1.0",
@@ -119,7 +129,7 @@ class SkillFactory:
 
         execute_code = f'''"""
 Skill: {name}
-{description}
+{safe_description}
 """
 
 

@@ -15,14 +15,13 @@ import importlib.util
 import logging
 import sys
 import time
-import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from src.core.skills.schema import SkillError, SkillManifest
-from src.core.skills.registry import SkillRegistry, SkillEntry
+from src.core.skills.registry import SkillRegistry, SkillEntry, SignatureState
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +128,20 @@ class SkillExecutor:
                 raise SkillError(f"Invalid skill path: {exc}") from exc
 
             if execute_py.exists():
+                # Warn if skill is not signature-verified
+                if entry.signature_state != SignatureState.VERIFIED:
+                    logger.warning(
+                        "SECURITY: Loading unsigned skill '%s' from %s. "
+                        "Skill code has not been signature-verified.",
+                        entry.name, execute_py,
+                    )
+                    self._emit_receipt(
+                        "skill_unsigned_load",
+                        skill=entry.name,
+                        path=str(execute_py),
+                        signature_state=entry.signature_state.value,
+                    )
+
                 func = self._load_module_execute(execute_py, entry.name)
                 self._loaded[entry.name] = func
                 return func

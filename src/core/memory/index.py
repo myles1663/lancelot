@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -181,9 +180,9 @@ class MemoryIndex:
         )
 
         results = []
-        for item in items:
+        for i, item in enumerate(items):
             # Use inverse position as score (first results are most relevant)
-            score = 1.0
+            score = 1.0 / (i + 1)
             results.append(SearchResult(
                 item=item,
                 score=score,

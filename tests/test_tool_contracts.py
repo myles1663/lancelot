@@ -48,8 +48,6 @@ from src.tools.receipts import (
     VisionReceipt,
     create_tool_receipt,
     create_vision_receipt,
-    hash_file_content,
-    bound_output,
     _summarize_inputs,
 )
 
@@ -699,39 +697,6 @@ class TestReceiptFactories:
 
 class TestHelperFunctions:
     """Test helper functions."""
-
-    def test_hash_file_content(self):
-        """hash_file_content produces consistent SHA-256 hash."""
-        content = b"test content"
-        hash1 = hash_file_content(content)
-        hash2 = hash_file_content(content)
-
-        assert hash1 == hash2
-        assert len(hash1) == 64  # SHA-256 hex
-
-    def test_hash_file_content_different_inputs(self):
-        """hash_file_content produces different hashes for different inputs."""
-        hash1 = hash_file_content(b"content 1")
-        hash2 = hash_file_content(b"content 2")
-
-        assert hash1 != hash2
-
-    def test_bound_output_short(self):
-        """bound_output returns short output unchanged."""
-        output = "short output"
-        bounded, truncated = bound_output(output, max_chars=1000)
-
-        assert bounded == output
-        assert truncated is False
-
-    def test_bound_output_long(self):
-        """bound_output truncates long output."""
-        output = "x" * 20000
-        bounded, truncated = bound_output(output, max_chars=1000)
-
-        assert len(bounded) < 20000
-        assert truncated is True
-        assert "truncated" in bounded
 
     def test_summarize_inputs_basic(self):
         """_summarize_inputs handles basic types."""

@@ -19,8 +19,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
-import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,7 +31,6 @@ from src.tools.contracts import (
     ProviderState,
     ScaffoldResult,
     UIBuilderMode,
-    UIBuilderCapability,
 )
 
 logger = logging.getLogger(__name__)

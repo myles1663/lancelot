@@ -42,9 +42,6 @@ from src.tools.contracts import (
     PatchResult,
     ProviderHealth,
     ProviderState,
-    ShellExecCapability,
-    RepoOpsCapability,
-    FileOpsCapability,
 )
 
 logger = logging.getLogger(__name__)
@@ -373,9 +370,10 @@ class LocalSandboxProvider(BaseProvider):
         # Environment variables
         if env:
             for key, value in env.items():
-                # Sanitize env var names
+                # Sanitize env var names and values
                 if key.isidentifier():
-                    docker_cmd.extend(["-e", f"{key}={value}"])
+                    safe_value = shlex.quote(value)
+                    docker_cmd.extend(["-e", f"{key}={safe_value}"])
 
         # Image and command
         docker_cmd.append(self.config.docker_image)
@@ -386,8 +384,21 @@ class LocalSandboxProvider(BaseProvider):
     def _is_denied_command(self, cmd: str) -> bool:
         """Check if command matches any denylist pattern."""
         cmd_lower = cmd.lower().strip()
+
+        # Try to parse the command to check first token more precisely
+        try:
+            tokens = shlex.split(cmd_lower)
+        except ValueError:
+            tokens = None
+
         for denied in self.config.command_denylist:
-            if denied.lower() in cmd_lower:
+            denied_lower = denied.lower()
+            # Check if the first token matches single-word denylist entries
+            if tokens and " " not in denied_lower:
+                if tokens[0] == denied_lower:
+                    return True
+            # Fall back to substring match for multi-word patterns
+            if denied_lower in cmd_lower:
                 return True
         return False
 
@@ -583,8 +594,27 @@ class LocalSandboxProvider(BaseProvider):
     # FileOps Capability
     # =========================================================================
 
+    def _validate_workspace_path(self, path: str) -> Optional[str]:
+        """Validate that path is within the configured workspace.
+
+        Returns None if valid, or an error message if not.
+        """
+        if not self._workspace:
+            return None  # No workspace restriction configured
+        try:
+            abs_path = os.path.realpath(path)
+            abs_workspace = os.path.realpath(self._workspace)
+            if abs_path == abs_workspace or abs_path.startswith(abs_workspace + os.sep):
+                return None
+            return f"Path '{path}' is outside workspace boundary"
+        except Exception:
+            return f"Cannot validate path '{path}'"
+
     def read(self, path: str) -> str:
         """Read file contents."""
+        error = self._validate_workspace_path(path)
+        if error:
+            return f"Error: {error}"
         try:
             with open(path, "r", encoding="utf-8") as f:
                 return f.read()
@@ -593,6 +623,9 @@ class LocalSandboxProvider(BaseProvider):
 
     def write(self, path: str, content: str, atomic: bool = True) -> FileChange:
         """Write content to file with atomic write support."""
+        error = self._validate_workspace_path(path)
+        if error:
+            return FileChange(path=path, action="error", error_message=error)
         # Get hash before if file exists
         hash_before = None
         size_before = None
@@ -642,6 +675,9 @@ class LocalSandboxProvider(BaseProvider):
 
     def list(self, path: str, recursive: bool = False) -> List[str]:
         """List files in directory."""
+        error = self._validate_workspace_path(path)
+        if error:
+            return [f"Error: {error}"]
         try:
             if recursive:
                 files = []
@@ -692,6 +728,9 @@ class LocalSandboxProvider(BaseProvider):
 
     def delete(self, path: str) -> FileChange:
         """Delete a file."""
+        error = self._validate_workspace_path(path)
+        if error:
+            return FileChange(path=path, action="error", error_message=error)
         hash_before = None
         size_before = None
 

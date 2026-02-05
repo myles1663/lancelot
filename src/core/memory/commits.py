@@ -22,7 +22,6 @@ from typing import Any, Optional
 from .config import MEMORY_DIR, COMMITS_DIR
 from .schemas import (
     CommitStatus,
-    CoreBlock,
     CoreBlockType,
     CoreBlocksSnapshot,
     MemoryCommit,
@@ -38,6 +37,9 @@ from .store import CoreBlockStore, estimate_tokens
 from .sqlite_store import MemoryStoreManager
 
 logger = logging.getLogger(__name__)
+
+
+MAX_RETAINED_SNAPSHOTS = 50
 
 
 class CommitError(Exception):
@@ -83,6 +85,7 @@ class CommitManager:
         self._lock = RLock()
         self._staged_commits: dict[str, MemoryCommit] = {}
         self._snapshots: dict[str, CoreBlocksSnapshot] = {}
+        self._item_undo_log: list[tuple[str, str, str, Optional[MemoryItem]]] = []
         self._last_commit_id: Optional[str] = None
 
         # Ensure commits directory exists
@@ -116,6 +119,13 @@ class CommitManager:
 
             self._staged_commits[commit.commit_id] = commit
             self._snapshots[commit.commit_id] = snapshot
+
+            # Evict oldest snapshots if limit exceeded
+            if len(self._snapshots) > MAX_RETAINED_SNAPSHOTS:
+                oldest_keys = list(self._snapshots.keys())[:-MAX_RETAINED_SNAPSHOTS]
+                for key in oldest_keys:
+                    del self._snapshots[key]
+                    self._staged_commits.pop(key, None)
 
             logger.info("Started staged commit %s by %s", commit.commit_id, created_by)
             return commit.commit_id
@@ -209,6 +219,9 @@ class CommitManager:
                 raise CommitError(f"Commit {commit_id} has no edits")
 
             try:
+                # Clear undo log for this commit
+                self._item_undo_log = []
+
                 # Apply all edits
                 for edit in commit.edits:
                     self._apply_edit(edit)
@@ -223,10 +236,9 @@ class CommitManager:
                 # Update last commit pointer
                 self._last_commit_id = commit.commit_id
 
-                # Clean up staged state
+                # Clean up staged state (keep snapshot for rollback)
                 del self._staged_commits[commit_id]
-                # Keep snapshot for rollback capability
-                # del self._snapshots[commit_id]
+                self._item_undo_log = []
 
                 logger.info(
                     "Committed %s with %d edits",
@@ -236,8 +248,9 @@ class CommitManager:
 
             except Exception as e:
                 logger.error("Failed to apply commit %s: %s", commit_id, e)
-                # Rollback on failure
+                # Rollback on failure — core blocks and item edits
                 self._rollback_to_snapshot(commit_id)
+                self._rollback_item_edits()
                 raise CommitError(f"Commit failed: {e}") from e
 
     def cancel_edits(self, commit_id: str) -> bool:
@@ -365,16 +378,20 @@ class CommitManager:
                 status=MemoryStatus.active,
             )
 
+        elif edit.op == MemoryEditOp.rethink:
+            raise CommitError("rethink operation not yet implemented")
+
     def _apply_item_edit(self, edit: MemoryEdit, tier: str, item_id: str) -> None:
-        """Apply an edit to a memory item."""
+        """Apply an edit to a memory item, recording undo info for rollback."""
         store = self._get_store_for_tier(tier)
         if store is None:
             raise CommitError(f"Unknown tier: {tier}")
 
         if edit.op == MemoryEditOp.insert:
             # Insert creates a new item
+            actual_id = item_id if item_id else generate_id()
             item = MemoryItem(
-                id=item_id if item_id else generate_id(),
+                id=actual_id,
                 tier=MemoryTier(tier),
                 title=edit.reason,  # Use reason as title for new items
                 content=edit.after or "",
@@ -382,11 +399,18 @@ class CommitManager:
                 provenance=edit.provenance,
             )
             store.insert(item)
+            # Undo: delete the inserted item
+            self._item_undo_log.append((tier, "delete", actual_id, None))
 
         elif edit.op == MemoryEditOp.replace:
             item = store.get(item_id)
             if item is None:
                 raise CommitError(f"Item {item_id} not found in {tier}")
+
+            # Save original for undo
+            from copy import deepcopy
+            original = deepcopy(item)
+            self._item_undo_log.append((tier, "restore", item_id, original))
 
             item.content = edit.after or ""
             item.confidence = edit.confidence
@@ -395,7 +419,15 @@ class CommitManager:
             store.update(item)
 
         elif edit.op == MemoryEditOp.delete:
+            # Save original for undo
+            item = store.get(item_id)
+            if item:
+                from copy import deepcopy
+                self._item_undo_log.append((tier, "restore", item_id, deepcopy(item)))
             store.delete(item_id)
+
+        elif edit.op == MemoryEditOp.rethink:
+            raise CommitError("rethink operation not yet implemented")
 
     def _get_store_for_tier(self, tier: str) -> Optional[Any]:
         """Get the store for a tier."""
@@ -418,7 +450,24 @@ class CommitManager:
         snapshot = self._snapshots.get(commit_id)
         if snapshot:
             self.core_store.restore_snapshot(snapshot)
-            logger.warning("Rolled back to snapshot for failed commit %s", commit_id)
+            logger.warning("Rolled back core blocks for failed commit %s", commit_id)
+
+    def _rollback_item_edits(self) -> None:
+        """Rollback item-level edits using the undo log (reverse order)."""
+        for tier, action, item_id, original_item in reversed(self._item_undo_log):
+            try:
+                store = self._get_store_for_tier(tier)
+                if store is None:
+                    continue
+                if action == "delete":
+                    store.delete(item_id)
+                elif action == "restore" and original_item is not None:
+                    store.update(original_item)
+            except Exception as exc:
+                logger.error("Failed to rollback item %s in %s: %s", item_id, tier, exc)
+        count = len(self._item_undo_log)
+        self._item_undo_log = []
+        logger.warning("Rolled back %d item-level edits", count)
 
     @staticmethod
     def _validate_commit_id(commit_id: str) -> None:

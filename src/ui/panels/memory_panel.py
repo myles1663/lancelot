@@ -231,8 +231,12 @@ class MemoryPanel:
                 block_type = CoreBlockType(block_type_str)
                 result = self._quarantine_manager.approve_core_block(block_type, approver)
             else:
-                # Try to infer tier from the item
-                result = self._quarantine_manager.approve_item(item_id, "working", approver)
+                # Try each tier to find the quarantined item
+                result = False
+                for tier_name in ["working", "episodic", "archival"]:
+                    result = self._quarantine_manager.approve_item(item_id, tier_name, approver)
+                    if result:
+                        break
 
             if result:
                 return {"status": "approved", "item_id": item_id, "approver": approver}
@@ -264,7 +268,12 @@ class MemoryPanel:
                 block_type = CoreBlockType(block_type_str)
                 result = self._quarantine_manager.reject_core_block(block_type, rejector, reason)
             else:
-                result = self._quarantine_manager.reject_item(item_id, "working", rejector)
+                # Try each tier to find the quarantined item
+                result = False
+                for tier_name in ["working", "episodic", "archival"]:
+                    result = self._quarantine_manager.reject_item(item_id, tier_name, rejector)
+                    if result:
+                        break
 
             if result:
                 return {"status": "rejected", "item_id": item_id, "rejector": rejector}

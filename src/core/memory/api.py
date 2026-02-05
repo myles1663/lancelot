@@ -12,7 +12,6 @@ This module provides REST API endpoints for:
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -30,6 +29,8 @@ from .schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+import threading
 
 # Create router for memory endpoints
 router = APIRouter(prefix="/memory", tags=["memory"])
@@ -181,12 +182,17 @@ class CompileContextResponse(BaseModel):
 # Service Factory (Dependency Injection)
 # ---------------------------------------------------------------------------
 _memory_service = None
+_service_lock = threading.Lock()
 
 
 def get_memory_service():
-    """Get or create the memory service singleton."""
+    """Get or create the memory service singleton (thread-safe)."""
     global _memory_service
-    if _memory_service is None:
+    if _memory_service is not None:
+        return _memory_service
+    with _service_lock:
+        if _memory_service is not None:
+            return _memory_service
         from ..feature_flags import FEATURE_MEMORY_VNEXT
         if not FEATURE_MEMORY_VNEXT:
             raise HTTPException(
@@ -215,7 +221,9 @@ def get_memory_service():
             "gate_validator": WriteGateValidator(),
             "quarantine_manager": QuarantineManager(core_store, store_manager),
             "memory_index": MemoryIndex(store_manager),
-            "compiler_service": ContextCompilerService(data_dir),
+            "compiler_service": ContextCompilerService(
+                data_dir, core_store=core_store, memory_manager=store_manager
+            ),
         }
 
     return _memory_service
@@ -367,7 +375,10 @@ async def add_edit(
             prov_type = ProvenanceType(request.provenance_type)
             provenance.append(Provenance(type=prov_type, ref=request.provenance_ref))
         except ValueError:
-            pass
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid provenance type: {request.provenance_type}",
+            )
 
     # Verify commit exists and is staged before gate validation
     staged = commit_manager.get_staged_commit(commit_id)
@@ -407,7 +418,8 @@ async def add_edit(
         )
 
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error("Failed to add edit to commit %s: %s", commit_id, e)
+        raise HTTPException(status_code=400, detail="Failed to add edit to commit")
 
 
 @router.post("/commit/{commit_id}/finish", response_model=FinishCommitResponse)
@@ -435,7 +447,8 @@ async def finish_commit(
         )
 
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error("Failed to finish commit %s: %s", commit_id, e)
+        raise HTTPException(status_code=400, detail="Failed to finish commit")
 
 
 @router.post("/rollback/{commit_id}", response_model=RollbackResponse)
@@ -460,7 +473,8 @@ async def rollback_commit(
         )
 
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error("Failed to rollback commit %s: %s", commit_id, e)
+        raise HTTPException(status_code=400, detail="Failed to rollback commit")
 
 
 # ---------------------------------------------------------------------------
