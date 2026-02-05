@@ -16,3 +16,27 @@ Optional:
 - ui_antigravity: Antigravity UI generation adapter
 - vision_antigravity: Antigravity vision control adapter
 """
+
+from src.tools.providers.local_sandbox import (
+    LocalSandboxProvider,
+    SandboxConfig,
+    create_local_sandbox,
+)
+from src.tools.providers.ui_templates import (
+    TemplateScaffolder,
+    TemplateConfig,
+    create_template_scaffolder,
+    TEMPLATES,
+)
+
+__all__ = [
+    # Local Sandbox
+    "LocalSandboxProvider",
+    "SandboxConfig",
+    "create_local_sandbox",
+    # UI Templates
+    "TemplateScaffolder",
+    "TemplateConfig",
+    "create_template_scaffolder",
+    "TEMPLATES",
+]

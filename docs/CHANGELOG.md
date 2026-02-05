@@ -75,6 +75,15 @@ runner, optional CLI adapters, and Antigravity integration.
 - Error handling tests for edge cases
 - 49 integration tests for repository and file operations
 
+#### Prompt 7 — UIBuilder Templates
+- TemplateScaffolder provider implementing UIBuilderCapability
+- Template packs: nextjs_shadcn_dashboard, fastapi_service, streamlit_dashboard, flask_api
+- DETERMINISTIC mode scaffolding with spec substitution
+- list_templates() returning all available templates with metadata
+- verify_build() checking Python syntax and package.json validity
+- Template content generation with project name, title, description interpolation
+- 45 unit tests for template scaffolding and verification
+
 ### New Files
 
 - `docs/specs/Lancelot_ToolFabric_Spec.md` — Tool Fabric specification
@@ -94,6 +103,8 @@ runner, optional CLI adapters, and Antigravity integration.
 - `src/tools/fabric.py` — Main Tool Fabric orchestrator (Prompt 5)
 - `tests/test_tool_fabric_integration.py` — 36 integration tests (Prompt 5)
 - `tests/test_repo_file_ops.py` — 49 integration tests for RepoOps + FileOps (Prompt 6)
+- `src/tools/providers/ui_templates.py` — Template-based UI scaffolder (Prompt 7)
+- `tests/test_ui_templates.py` — 45 tests for UIBuilder templates (Prompt 7)
 
 ### Modified Files
 
