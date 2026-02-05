@@ -53,6 +53,18 @@ runner, optional CLI adapters, and Antigravity integration.
 - Global singleton instances with thread safety
 - 43 unit tests for routing and health monitoring
 
+#### Prompt 5 — Orchestrator Wiring
+- ToolFabric main orchestration class coordinating all components
+- Provider registration and management
+- Command execution through policy→router→provider pipeline
+- Repository operations: git_status, git_diff, git_apply_patch, git_commit
+- File operations: read_file, write_file, list_files with policy enforcement
+- Health status and probing API
+- Safe mode toggle for restricted provider selection
+- Global singleton with thread-safe initialization
+- Receipt generation with exec results and policy snapshots
+- 36 integration tests for full Tool Fabric workflow
+
 ### New Files
 
 - `docs/specs/Lancelot_ToolFabric_Spec.md` — Tool Fabric specification
@@ -69,6 +81,8 @@ runner, optional CLI adapters, and Antigravity integration.
 - `tests/test_local_sandbox.py` — 46 tests for LocalSandboxProvider
 - `tests/test_tool_policies.py` — 63 tests for policy engine
 - `tests/test_tool_router.py` — 43 tests for router and health
+- `src/tools/fabric.py` — Main Tool Fabric orchestrator (Prompt 5)
+- `tests/test_tool_fabric_integration.py` — 36 integration tests (Prompt 5)
 
 ### Modified Files
 

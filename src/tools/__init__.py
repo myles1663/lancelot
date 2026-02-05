@@ -43,6 +43,30 @@ from src.tools.receipts import (
     create_tool_receipt,
 )
 
+from src.tools.policies import (
+    PolicyEngine,
+    PolicyConfig,
+    PolicyDecision,
+)
+
+from src.tools.health import (
+    HealthMonitor,
+    HealthConfig,
+)
+
+from src.tools.router import (
+    ProviderRouter,
+    RouterConfig,
+    RouteDecision,
+)
+
+from src.tools.fabric import (
+    ToolFabric,
+    ToolFabricConfig,
+    get_tool_fabric,
+    reset_tool_fabric,
+)
+
 __all__ = [
     # Capabilities
     "Capability",
@@ -63,4 +87,20 @@ __all__ = [
     "ToolReceipt",
     "VisionReceipt",
     "create_tool_receipt",
+    # Policies
+    "PolicyEngine",
+    "PolicyConfig",
+    "PolicyDecision",
+    # Health
+    "HealthMonitor",
+    "HealthConfig",
+    # Router
+    "ProviderRouter",
+    "RouterConfig",
+    "RouteDecision",
+    # Fabric
+    "ToolFabric",
+    "ToolFabricConfig",
+    "get_tool_fabric",
+    "reset_tool_fabric",
 ]
