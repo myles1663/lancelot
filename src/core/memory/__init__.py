@@ -140,6 +140,12 @@ from .gates import (
 
 from .api import router as memory_router
 
+from .jobs import (
+    JobResult,
+    MemoryJobExecutor,
+    get_memory_job_specs,
+)
+
 __all__ = [
     # Feature flag
     "is_memory_enabled",
@@ -185,4 +191,8 @@ __all__ = [
     "QuarantineManager",
     # API
     "memory_router",
+    # Jobs
+    "JobResult",
+    "MemoryJobExecutor",
+    "get_memory_job_specs",
 ]
