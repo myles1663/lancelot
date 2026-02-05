@@ -32,6 +32,17 @@ runner, optional CLI adapters, and Antigravity integration.
 - Health checks: Docker availability, image status, provider state tracking
 - 39 unit tests + 7 integration tests (Docker required)
 
+#### Prompt 3 — Policies
+- PolicyEngine for centralized security enforcement
+- Command policies: allowlist/denylist evaluation, case-insensitive matching
+- Risk assessment: LOW (read), MEDIUM (modify), HIGH (network/delete/deploy)
+- Path security: traversal detection (encoded/double-encoded), workspace boundary
+- Sensitive path patterns: .env, .ssh, .aws, credentials, secrets.yaml
+- Network policy: disabled by default, capability-based exceptions
+- Redaction: passwords, API keys, tokens, paths
+- PolicySnapshot for audit trail
+- 63 unit tests covering all security gates
+
 ### New Files
 
 - `docs/specs/Lancelot_ToolFabric_Spec.md` — Tool Fabric specification
@@ -41,8 +52,10 @@ runner, optional CLI adapters, and Antigravity integration.
 - `src/tools/receipts.py` — Tool-specific receipt extensions
 - `src/tools/providers/__init__.py` — Provider module placeholder
 - `src/tools/providers/local_sandbox.py` — Docker-based tool runner (Prompt 2)
+- `src/tools/policies.py` — Policy engine with security gates (Prompt 3)
 - `tests/test_tool_contracts.py` — 63 unit tests for contracts and receipts
 - `tests/test_local_sandbox.py` — 46 tests for LocalSandboxProvider
+- `tests/test_tool_policies.py` — 63 tests for policy engine
 
 ### Modified Files
 
