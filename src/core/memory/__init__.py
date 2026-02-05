@@ -127,6 +127,11 @@ from .index import (
     create_index,
 )
 
+from .commits import (
+    CommitManager,
+    CommitError,
+)
+
 __all__ = [
     # Feature flag
     "is_memory_enabled",
@@ -163,4 +168,7 @@ __all__ = [
     "SearchResult",
     "SearchQuery",
     "create_index",
+    # Commits
+    "CommitManager",
+    "CommitError",
 ]
