@@ -86,16 +86,38 @@ class OnboardingOrchestrator:
 
             self.state = "HANDSHAKE"
             return (f"Welcome, {user}. I've bonded to your identity.\n\n"
-                    "**Authentication Required**\n"
-                    "I need a valid Google Identity to function.\n\n"
-                    "**Option A: Google Cloud ADC (Recommended for PRO)**\n"
-                    "Run:\n"
-                    "`gcloud auth application-default login --scopes=https://www.googleapis.com/auth/generative-language.retriever,https://www.googleapis.com/auth/chat.messages,https://www.googleapis.com/auth/chat.spaces.readonly`\n"
-                    "Type **'scan'** to detect credentials.\n\n"
-                    "**Option B: Gemini API Key**\n"
-                    "Paste your API Key below.")
+                    "**LLM Authentication Required**\n"
+                    "I need an LLM connection to function. Choose one:\n\n"
+                    "**Option A: Gemini API Key (Recommended)**\n"
+                    "Get a free key at: [Google AI Studio](https://aistudio.google.com/app/apikey)\n"
+                    "Then paste your API Key below.\n\n"
+                    "**Option B: Google Cloud ADC (Advanced)**\n"
+                    "If you already have `gcloud` configured, type **'scan'** to detect credentials.")
         except Exception as e:
             return f"Error bonding identity: {e}"
+
+    def _handle_auth_options(self, text: str) -> str:
+        """Handles HANDSHAKE state — user provides API key or types 'scan' for ADC."""
+        stripped = text.strip()
+        if stripped.lower() == "scan":
+            result = self._verify_oauth_creds()
+            if self.state == "COMMS_CHAT_SCAN":
+                # ADC found — move to comms selection instead of chat scan
+                self.state = "COMMS_SELECTION"
+                return ("**Identity Verified.** ✅ (Google ADC detected)\n\n"
+                        "**Secure Comms Link**\n"
+                        "Select your communication channel:\n"
+                        "[1] Telegram (Simple setup via BotFather)\n"
+                        "[2] Google Chat (Requires Google Cloud project)\n"
+                        "[3] Skip (Configure later)")
+            return result
+        elif stripped.startswith("AIza") or stripped.startswith("AI"):
+            return self._verify_api_key(stripped)
+        else:
+            return ("Please provide your authentication:\n\n"
+                    "**Option A: Gemini API Key** — Paste your key (starts with 'AI...')\n"
+                    "[Get a free key](https://aistudio.google.com/app/apikey)\n\n"
+                    "**Option B: Google Cloud ADC** — Type **'scan'** to detect credentials.")
 
     def _verify_api_key(self, text: str) -> str:
         """Verifies and saves API Key."""
@@ -118,8 +140,8 @@ class OnboardingOrchestrator:
                     "**Secure Comms Link**\n"
                     "I can link to your preferred communication channel for remote command.\n"
                     "Select Channel:\n"
-                    "[1] Google Chat (Recommended for Personal Accounts)\n"
-                    "[2] Telegram\n"
+                    "[1] Telegram (Simple setup via BotFather)\n"
+                    "[2] Google Chat (Requires Google Cloud project)\n"
                     "[3] Skip (Configure later)")
         except Exception as e:
             return f"Error saving API Key: {e}"
@@ -207,33 +229,35 @@ class OnboardingOrchestrator:
 
     def _calibrate(self) -> str:
         """Mock calibration step."""
-        # In real scenario, we'd test the key and volume
+        pass
+
     def _handle_comms_selection(self, text: str) -> str:
         """Handles provider selection."""
         choice = text.strip()
-        if "1" in choice or "google" in choice.lower():
-            self.temp_data["comms_type"] = "google_chat"
-            self.state = "COMMS_ADC_CHECK"
-            # Trigger ADC check immediately
-            return self._verify_oauth_creds()
-            
-        elif "2" in choice or "telegram" in choice.lower():
+        if "1" in choice or "telegram" in choice.lower():
             self.temp_data["comms_type"] = "telegram"
             self.state = "COMMS_TELEGRAM_TOKEN"
             return (
                 "**Telegram Selected.**\n\n"
-                "1. Open Telegram and search for **@BotFather**.\n"
-                "2. Send `/newbot` and follow the instructions.\n"
+                "**Setup Instructions:**\n"
+                "1. Open Telegram and search for **@BotFather**\n"
+                "2. Send `/newbot` and follow the prompts to create your bot\n"
                 "   [BotFather Guide](https://core.telegram.org/bots/features#botfather)\n"
-                "3. Paste your **Bot Token** below."
+                "3. Copy the **Bot Token** BotFather gives you\n"
+                "4. Paste your **Bot Token** below."
             )
+        elif "2" in choice or "google" in choice.lower():
+            self.temp_data["comms_type"] = "google_chat"
+            self.state = "COMMS_ADC_CHECK"
+            # Trigger ADC check immediately
+            return self._verify_oauth_creds()
         elif "3" in choice or "skip" in choice.lower():
             self.state = "READY"
             self._complete_onboarding()
             return ("**Comms Setup Skipped.**\n\n"
                     "**Lancelot is now operational.** How may I serve you, Commander?")
         else:
-            return "Invalid selection. Please choose [1] Google Chat, [2] Telegram, or [3] Skip."
+            return "Invalid selection. Please choose [1] Telegram, [2] Google Chat, or [3] Skip."
 
     def _handle_chat_scan(self, text: str) -> str:
         """Scans for Google Chat spaces."""
@@ -260,7 +284,7 @@ class OnboardingOrchestrator:
                 "**Step 2: Authenticate with Chat Scopes**\n"
                 "Run this command on your **host machine** (not in Docker):\n"
                 "```\n"
-                "gcloud auth application-default login --scopes=https://www.googleapis.com/auth/chat.messages,https://www.googleapis.com/auth/chat.spaces.readonly,https://www.googleapis.com/auth/generative-language.retriever\n"
+                "gcloud auth application-default login --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/chat.messages,https://www.googleapis.com/auth/chat.spaces.readonly,https://www.googleapis.com/auth/generative-language.retriever\n"
                 "```\n\n"
                 "**Step 3: Create a Chat Space**\n"
                 "Open [Google Chat](https://chat.google.com), create a new Space, and name it 'Lancelot'.\n\n"
@@ -384,7 +408,7 @@ class OnboardingOrchestrator:
             return self._bond_identity(user)
 
         elif self.state == "HANDSHAKE":
-            return self._verify_oauth_creds()
+            return self._handle_auth_options(text)
 
         elif self.state == "LOCAL_UTILITY_SETUP":
             return handle_local_utility_setup(text, self.snapshot)

@@ -58,16 +58,18 @@ if len(st.session_state.messages) == 0:
     elif onboard.state == "HANDSHAKE_API_KEY":
         initial_msg = "**Neural Link Required (LLM)**\n\nPlease provide your **Gemini API Key** to activate my core logic.\n[Get API Key](https://aistudio.google.com/app/apikey)"
     elif onboard.state == "COMMS_SELECTION":
-        initial_msg = "Resuming setup. Please select your Communication Channel:\n[1] Google Chat\n[2] Telegram\n[3] Skip"
+        initial_msg = ("Resuming setup. Please select your Communication Channel:\n"
+                       "[1] Telegram (Simple setup via BotFather)\n"
+                       "[2] Google Chat (Requires Google Cloud project)\n"
+                       "[3] Skip (Configure later)")
     elif onboard.state == "HANDSHAKE":
-        initial_msg = ("**Authentication Required**\n\n"
-                       "I need a valid Google Identity to function.\n\n"
-                       "**Option A: Google Cloud ADC (Recommended for PRO)**\n"
-                       "Run:\n"
-                       "`gcloud auth application-default login --scopes=...`\n"
-                       "Then type **'scan'** to detect credentials.\n\n"
-                       "**Option B: Gemini API Key**\n"
-                       "Paste your API Key below.")
+        initial_msg = ("**LLM Authentication Required**\n\n"
+                       "I need an LLM connection to function. Choose one:\n\n"
+                       "**Option A: Gemini API Key (Recommended)**\n"
+                       "Get a free key at: [Google AI Studio](https://aistudio.google.com/app/apikey)\n"
+                       "Then paste your API Key below.\n\n"
+                       "**Option B: Google Cloud ADC (Advanced)**\n"
+                       "If you already have `gcloud` configured, type **'scan'** to detect credentials.")
     elif onboard.state in ["COMMS_WEBHOOK_INPUT", "COMMS_TELEGRAM_TOKEN", "COMMS_TELEGRAM_CHAT", "COMMS_VERIFY", "COMMS_ADC_CHECK", "COMMS_CHAT_SCAN"]:
         initial_msg = "Resuming setup. Please complete the communications configuration."
     elif "onboarding" in st.query_params and st.query_params["onboarding"] == "true":
