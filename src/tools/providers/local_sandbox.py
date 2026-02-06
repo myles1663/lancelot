@@ -129,6 +129,7 @@ class LocalSandboxProvider(BaseProvider):
             Capability.SHELL_EXEC,
             Capability.REPO_OPS,
             Capability.FILE_OPS,
+            Capability.WEB_OPS,
             Capability.DEPLOY_OPS,
         ]
 

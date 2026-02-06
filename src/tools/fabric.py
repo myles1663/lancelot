@@ -59,6 +59,9 @@ from src.tools.providers.local_sandbox import (
     LocalSandboxProvider,
     SandboxConfig,
 )
+from src.tools.providers.ui_templates import (
+    TemplateScaffolder,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +152,10 @@ class ToolFabric:
             workspace=self.config.default_workspace,
         )
         self._health_monitor.register(sandbox)
+
+        # TemplateScaffolder provides UI_BUILDER (no external deps)
+        templates = TemplateScaffolder()
+        self._health_monitor.register(templates)
 
     def register_provider(self, provider: BaseProvider) -> None:
         """
