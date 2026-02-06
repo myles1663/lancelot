@@ -6,8 +6,12 @@ services:
       - ./lancelot_data:/home/lancelot/data
       # Map the current directory to /home/lancelot/app for development
       - .:/home/lancelot/app
+      # Docker socket for sandbox provider (sibling containers)
+      - /var/run/docker.sock:/var/run/docker.sock
       # Mount Google OAuth credentials (ADC) from host (uncomment if using Google OAuth)
       # - ${APPDATA}/gcloud/application_default_credentials.json:/home/lancelot/.config/gcloud/application_default_credentials.json:ro
+    group_add:
+      - "0"  # root group to access Docker socket (owned root:root on Docker Desktop)
     env_file:
       - .env
     environment:

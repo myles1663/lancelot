@@ -11,10 +11,19 @@ RUN groupadd -r lancelot && useradd -r -g lancelot -m -d /home/lancelot -s /bin/
 # Set the working directory
 WORKDIR /home/lancelot/app
 
-# Install system dependencies if needed (e.g., for chromadb)
+# Install system dependencies
 # build-essential for compiling some python extensions
+# docker-cli so the sandbox provider can spawn sibling containers
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    curl \
+    gnupg \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends docker-ce-cli \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements.txt first to leverage Docker cache
@@ -28,6 +37,9 @@ COPY . .
 
 # Change ownership of the application directory to the non-root user
 RUN chown -R lancelot:lancelot /home/lancelot
+
+# Add lancelot to docker group so it can use the mounted socket
+RUN groupadd docker 2>/dev/null; usermod -aG docker lancelot
 
 # Switch to non-root user
 USER lancelot
