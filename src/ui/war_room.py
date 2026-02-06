@@ -90,10 +90,18 @@ with st.sidebar:
 
     st.title("🛡️ LANCELOT OS")
     
-    # [NEW] Restart Indicator
-    if os.path.exists(os.path.join(DATA_DIR, "FLAGS", "RESTART_REQUIRED")):
-        st.warning("⚠️ System Restart Initiated...")
-        st.stop()
+    # [NEW] Restart Indicator — clear flag and reload UI
+    restart_flag = os.path.join(DATA_DIR, "FLAGS", "RESTART_REQUIRED")
+    if os.path.exists(restart_flag):
+        os.remove(restart_flag)
+        # Clear cached onboarding state so it re-evaluates
+        if "onboarding_orchestrator" in st.session_state:
+            del st.session_state["onboarding_orchestrator"]
+        if "messages" in st.session_state:
+            st.session_state.messages = []
+        st.success("Configuration updated. Reloading...")
+        time.sleep(2)
+        st.rerun()
         
     st.divider()
     
