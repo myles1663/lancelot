@@ -9,7 +9,8 @@ class OnboardingOrchestrator:
     def __init__(self, data_dir="/home/lancelot/data"):
         self.data_dir = data_dir
         self.user_file = os.path.join(data_dir, "USER.md")
-        self.env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+        # .env is at the project root (mounted as /home/lancelot/app/.env in Docker)
+        self.env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".env")
         self.fail_count = 0
         self.temp_data = {} # Store transient data like webhook url before verification
         self.snapshot = OnboardingSnapshot(data_dir)

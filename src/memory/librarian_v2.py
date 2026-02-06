@@ -148,11 +148,20 @@ class LibrarianV2:
             finally:
                 self.queue.task_done()
 
+    # System files that the Librarian must never move
+    PROTECTED_FILES = {
+        "USER.md", "onboarding_snapshot.json", "usage_stats.json",
+        "vault.key", "receipts.db", "receipts.db-shm", "receipts.db-wal",
+        "librarian.log",
+    }
+
     async def _organize_file(self, file_path):
         filename = os.path.basename(file_path)
-        
-        # Ignore system files
+
+        # Ignore system files and protected files
         if filename.startswith(".") or filename.endswith(".tmp"):
+            return
+        if filename in self.PROTECTED_FILES:
             return
 
         logger.info(f"Analyzing: {filename}")
