@@ -12,6 +12,7 @@ plyer
 cryptography
 pyyaml>=6.0
 llama-cpp-python>=0.2.0
+requests
 pytest>=7.0
 pytest-cov
 pytest-timeout

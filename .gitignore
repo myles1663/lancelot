@@ -48,6 +48,9 @@ build/
 Thumbs.db
 desktop.ini
 
+# Model Weights (downloaded at runtime, not committed)
+local_models/weights/
+
 # Docker
 *.tar
 

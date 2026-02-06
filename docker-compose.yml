@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   lancelot-core:
     build: .
@@ -8,21 +6,22 @@ services:
       - ./lancelot_data:/home/lancelot/data
       # Map the current directory to /home/lancelot/app for development
       - .:/home/lancelot/app
-      # Mount Google OAuth credentials (ADC) from host
-      - ${APPDATA}/gcloud/application_default_credentials.json:/home/lancelot/.config/gcloud/application_default_credentials.json:ro
+      # Mount Google OAuth credentials (ADC) from host (uncomment if using Google OAuth)
+      # - ${APPDATA}/gcloud/application_default_credentials.json:/home/lancelot/.config/gcloud/application_default_credentials.json:ro
     env_file:
       - .env
     environment:
       - PYTHONUNBUFFERED=1
-      - GOOGLE_APPLICATION_CREDENTIALS=/home/lancelot/.config/gcloud/application_default_credentials.json
+      # - GOOGLE_APPLICATION_CREDENTIALS=/home/lancelot/.config/gcloud/application_default_credentials.json
       - LOCAL_LLM_URL=http://local-llm:8080
+      - PYTHONPATH=/home/lancelot/app/src/core:/home/lancelot/app/src/ui:/home/lancelot/app/src/agents:/home/lancelot/app/src/memory:/home/lancelot/app/src/shared:/home/lancelot/app/src/integrations:/home/lancelot/app/src:/home/lancelot/app
     depends_on:
       local-llm:
         condition: service_healthy
     ports:
       - "8000:8000"
       - "8501:8501"
-    command: sh -c "uvicorn gateway:app --host 0.0.0.0 --port 8000 & streamlit run war_room.py --server.port 8501 --server.address 0.0.0.0"
+    command: sh -c "uvicorn gateway:app --host 0.0.0.0 --port 8000 & streamlit run src/ui/war_room.py --server.port 8501 --server.address 0.0.0.0"
     networks:
       - lancelot_net
 

@@ -1,0 +1,25 @@
+# Model weights (mounted as volume, not baked into image)
+local_models/weights/
+
+# Data directory (mounted as volume)
+lancelot_data/
+
+# Git
+.git/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Tests (not needed in production image)
+tests/
+
+# Docs
+docs/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
