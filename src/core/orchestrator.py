@@ -595,7 +595,9 @@ class LancelotOrchestrator:
             # S9: Clamp confidence to 0-100
             confidence = min(max(int(match.group(1)), 0), 100)
             # Strip the confidence tag from the displayed response
-            clean_response = re.sub(r'(?:Confidence[:\s]*\d{1,3}%?\s*)', '', response_text, flags=re.IGNORECASE).strip()
+            # Handles "Confidence: 85", "[95]", and bare "95 Action:" formats
+            clean_response = re.sub(r'(?:Confidence[:\s]*\d{1,3}%?\s*)', '', response_text, flags=re.IGNORECASE)
+            clean_response = re.sub(r'^\[?\d{1,3}\]?\s*', '', clean_response).strip()
 
             if confidence > 90:
                 # S9: Log candidate instead of auto-writing to RULES.md
