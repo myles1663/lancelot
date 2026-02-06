@@ -32,6 +32,11 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Install Playwright Chromium + OS-level dependencies (fonts, libs)
+# Install as root for system deps, then set shared browser path
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+RUN playwright install --with-deps chromium
+
 # Copy the rest of the application code
 COPY . .
 

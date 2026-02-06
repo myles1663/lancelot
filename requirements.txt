@@ -13,6 +13,9 @@ cryptography
 pyyaml>=6.0
 llama-cpp-python>=0.2.0
 requests
+playwright
+browser-use>=0.11.0
+langchain-google-genai
 pytest>=7.0
 pytest-cov
 pytest-timeout

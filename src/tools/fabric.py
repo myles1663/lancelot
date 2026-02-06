@@ -62,6 +62,9 @@ from src.tools.providers.local_sandbox import (
 from src.tools.providers.ui_templates import (
     TemplateScaffolder,
 )
+from src.tools.providers.ui_antigravity import AntigravityUIProvider
+from src.tools.providers.vision_antigravity import AntigravityVisionProvider
+from src.core.feature_flags import FEATURE_TOOLS_ANTIGRAVITY
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +159,14 @@ class ToolFabric:
         # TemplateScaffolder provides UI_BUILDER (no external deps)
         templates = TemplateScaffolder()
         self._health_monitor.register(templates)
+
+        # Antigravity providers (requires feature flag + Playwright)
+        if FEATURE_TOOLS_ANTIGRAVITY:
+            ui_ag = AntigravityUIProvider()
+            self._health_monitor.register(ui_ag)
+
+            vision_ag = AntigravityVisionProvider()
+            self._health_monitor.register(vision_ag)
 
     def register_provider(self, provider: BaseProvider) -> None:
         """

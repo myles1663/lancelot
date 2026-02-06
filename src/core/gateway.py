@@ -6,10 +6,7 @@ from onboarding import OnboardingOrchestrator
 from orchestrator import LancelotOrchestrator
 # [NEW] Production Modules
 from librarian_v2 import LibrarianV2
-try:
-    from antigravity_engine import AntigravityEngine
-except ImportError:
-    AntigravityEngine = None
+from antigravity_engine import AntigravityEngine
 from security_bridge import MFAListener, WebhookAuthenticator
 from mcp_sentry import MCPSentry
 from vault import SecretVault
@@ -109,7 +106,7 @@ rate_limiter = RateLimiter()
 main_orchestrator = LancelotOrchestrator(data_dir="/home/lancelot/data")
 onboarding_orch = OnboardingOrchestrator(data_dir="/home/lancelot/data")
 librarian = LibrarianV2(data_dir="/home/lancelot/data")
-antigravity = AntigravityEngine(data_dir="/home/lancelot/data") if AntigravityEngine else None
+antigravity = AntigravityEngine(data_dir="/home/lancelot/data")
 mfa_guard = MFAListener()
 webhook_auth = WebhookAuthenticator()
 
@@ -150,8 +147,7 @@ async def startup_event():
 
     # [NEW] Start Production Services
     librarian.start()
-    if antigravity:
-        await antigravity.start()
+    await antigravity.start()
 
     # Inject Sentry into Orchestrator (Dependency Injection pattern)
     main_orchestrator.sentry = sentry
@@ -184,8 +180,7 @@ async def shutdown_event():
     logger.info("Lancelot Gateway shutting down.")
     try:
         librarian.stop()
-        if antigravity:
-            await antigravity.stop()
+        await antigravity.stop()
         if telegram_bot:
             telegram_bot.stop_polling()
         if chat_poller:
