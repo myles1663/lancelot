@@ -184,10 +184,13 @@ class LancelotOrchestrator:
         Options: off, low, medium, high. Models that don't support thinking
         will ignore this config gracefully.
         """
-        level = os.getenv("GEMINI_THINKING_LEVEL", "medium")
+        level = os.getenv("GEMINI_THINKING_LEVEL", "off")
         if level == "off":
             return None
-        return types.ThinkingConfig(thinking_level=level)
+        try:
+            return types.ThinkingConfig(thinking_level=level)
+        except Exception:
+            return None
 
     def _init_context_cache(self):
         """Creates a context cache for static memory content (RULES.md, USER.md, MEMORY_SUMMARY.md).

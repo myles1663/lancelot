@@ -556,7 +556,8 @@ def render_tools_panel(
         for cap, provs in cap_provs.items():
             available = panel.is_capability_available(cap)
             icon = "✅" if available else "❌"
-            st.write(f"**{cap}:** {icon} → {', '.join(provs) if provs else 'None'}")
+            prov_names = [p["id"] if isinstance(p, dict) else str(p) for p in provs] if provs else []
+            st.write(f"**{cap}:** {icon} → {', '.join(prov_names) if prov_names else 'None'}")
     else:
         st.info("No routing data available")
 
