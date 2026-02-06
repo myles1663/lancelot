@@ -17,6 +17,7 @@ from sandbox import SandboxExecutor
 from api_discovery import APIDiscoveryEngine
 from post_dispatcher import PostDispatcher
 from chat_poller import ChatPoller
+from telegram_bot import TelegramBot
 from crusader import CrusaderMode, CrusaderAdapter
 import threading
 import hmac
@@ -123,7 +124,17 @@ forge_vault = SecretVault(data_dir="/home/lancelot/data")
 forge_sandbox = SandboxExecutor()
 forge_discovery = APIDiscoveryEngine(orchestrator=main_orchestrator)
 forge_dispatcher = PostDispatcher(vault=forge_vault)
-chat_poller = ChatPoller(data_dir="/home/lancelot/data", orchestrator=main_orchestrator)
+# Communications: Select backend based on LANCELOT_COMMS_TYPE
+COMMS_TYPE = os.getenv("LANCELOT_COMMS_TYPE", "").lower()
+chat_poller = None
+telegram_bot = None
+
+if COMMS_TYPE == "telegram":
+    telegram_bot = TelegramBot(orchestrator=main_orchestrator)
+    logger.info("Comms backend: Telegram")
+else:
+    chat_poller = ChatPoller(data_dir="/home/lancelot/data", orchestrator=main_orchestrator)
+    logger.info("Comms backend: Google Chat")
 
 
 @app.on_event("startup")
@@ -148,15 +159,21 @@ async def startup_event():
     main_orchestrator.mfa_guard = mfa_guard
     main_orchestrator.antigravity = antigravity
     
-    # Start Chat Polling
-    chat_poller.start_polling()
-    
-    # Register Google Chat for Dispatcher
-    forge_dispatcher.register_platform(
-        name="google_chat",
-        handler=lambda content: chat_poller.send_message(content),
-        mode="local"
-    )
+    # Start Communications Polling
+    if telegram_bot:
+        telegram_bot.start_polling()
+        forge_dispatcher.register_platform(
+            name="telegram",
+            handler=lambda content: telegram_bot.send_message(content),
+            mode="local"
+        )
+    elif chat_poller:
+        chat_poller.start_polling()
+        forge_dispatcher.register_platform(
+            name="google_chat",
+            handler=lambda content: chat_poller.send_message(content),
+            mode="local"
+        )
     
     logger.info("Lancelot Gateway started.")
 
@@ -169,7 +186,10 @@ async def shutdown_event():
         librarian.stop()
         if antigravity:
             await antigravity.stop()
-        chat_poller.stop_polling()
+        if telegram_bot:
+            telegram_bot.stop_polling()
+        if chat_poller:
+            chat_poller.stop_polling()
         main_orchestrator.audit_logger.log_event("GATEWAY_SHUTDOWN", "Graceful shutdown initiated")
     except Exception as e:
         logger.error(f"Shutdown error: {e}")
