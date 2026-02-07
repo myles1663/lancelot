@@ -586,8 +586,14 @@ class LancelotOrchestrator:
             return f"Error generating response: {e}"
 
     def _parse_response(self, response_text: str) -> str:
-        """Parses the LLM response for confidence score and routes accordingly."""
+        """Parses the LLM response for confidence score and routes accordingly.
+
+        Honest Closure policy: Never prefix output with "DRAFT:" or other
+        planner-internal markers. Governor blocks simulated work language.
+        """
         import re
+        from response_governor import detect_forbidden_async_language
+
         # Look for a confidence score pattern like "Confidence: 85" or "[95]"
         match = re.search(r'(?:Confidence[:\s]*|^\[)(\d{1,3})(?:\]|%)?', response_text, re.IGNORECASE)
 
@@ -604,16 +610,40 @@ class LancelotOrchestrator:
                 if clean_response.startswith("Action:"):
                     action_text = clean_response[len("Action:"):].strip()
                     self._log_rule_candidate(f"- [Learned Rule] (Confidence {confidence}%): {action_text}")
-                return clean_response
+                return self._apply_honesty_gate(clean_response)
             elif confidence >= 70:
-                # Stage as draft for review
-                return f"DRAFT: {clean_response}"
+                # Medium confidence: return clean response (no DRAFT: prefix)
+                return self._apply_honesty_gate(clean_response)
             else:
                 # Low confidence: request permission
                 return f"PERMISSION REQUIRED (Confidence {confidence}%): {clean_response}"
 
         # No confidence score found, return as-is
-        return response_text
+        return self._apply_honesty_gate(response_text)
+
+    def _apply_honesty_gate(self, text: str) -> str:
+        """Apply Honest Closure gates: strip leakage markers, block simulated work."""
+        import re
+        from response_governor import detect_forbidden_async_language
+        from plan_types import assert_no_planner_leakage
+
+        # Strip any DRAFT: prefix that the LLM may have generated
+        cleaned = re.sub(r'^DRAFT:\s*', '', text, flags=re.IGNORECASE).strip()
+
+        # Strip other planner leakage markers
+        for marker in ["PLANNER:", "[INTERNAL]", "[SCRATCHPAD]", "PLANNING_INTERNAL"]:
+            cleaned = cleaned.replace(marker, "").strip()
+
+        # Check for simulated work language and strip it
+        violations = detect_forbidden_async_language(cleaned)
+        if violations:
+            # Remove the simulated-work sentences but keep the rest
+            for v in violations:
+                cleaned = re.sub(re.escape(v), '', cleaned, flags=re.IGNORECASE).strip()
+            # Clean up any resulting double spaces or orphan punctuation
+            cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
+
+        return cleaned
 
     def set_state(self, new_state: RuntimeState):
         """Updates the runtime state with audit logging."""
