@@ -52,6 +52,28 @@ FORBIDDEN_PHRASES: list[str] = [
     "please wait while i",
     "i'll get back to you",
     "i will get back to you",
+    # v2: Patterns caught from real Lancelot stalling output
+    "i will provide",
+    "i'll provide",
+    "actively compiling",
+    "actively processing",
+    "deliver it shortly",
+    "deliver shortly",
+    "i am currently",
+    "i'm currently",
+    "compiling a detailed",
+    "compiling the",
+    "i will have",
+    "i'll have",
+    "in the process of",
+    "i will deliver",
+    "i'll deliver",
+    "allow me to",
+    "working on this",
+    "preparing a detailed",
+    "preparing a comprehensive",
+    "i am actively",
+    "i'm actively",
 ]
 
 # Compile patterns for efficient matching

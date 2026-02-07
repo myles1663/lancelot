@@ -193,7 +193,10 @@ def get_memory_service():
     with _service_lock:
         if _memory_service is not None:
             return _memory_service
-        from ..feature_flags import FEATURE_MEMORY_VNEXT
+        try:
+            from feature_flags import FEATURE_MEMORY_VNEXT
+        except ImportError:
+            from ..feature_flags import FEATURE_MEMORY_VNEXT
         if not FEATURE_MEMORY_VNEXT:
             raise HTTPException(
                 status_code=503,

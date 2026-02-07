@@ -23,7 +23,10 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from ..feature_flags import FEATURE_MEMORY_VNEXT
+try:
+    from feature_flags import FEATURE_MEMORY_VNEXT
+except ImportError:
+    from ..feature_flags import FEATURE_MEMORY_VNEXT
 
 if TYPE_CHECKING:
     from .store import CoreBlockStore

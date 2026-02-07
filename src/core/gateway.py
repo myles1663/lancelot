@@ -154,7 +154,150 @@ async def startup_event():
     # [NEW] Inject MFA Guard and Antigravity into Orchestrator (Monkey Patching for now)
     main_orchestrator.mfa_guard = mfa_guard
     main_orchestrator.antigravity = antigravity
-    
+
+    # ===== FEATURE FLAG LOGGING =====
+    try:
+        from feature_flags import log_feature_flags
+        log_feature_flags()
+    except Exception as e:
+        logger.warning(f"Feature flag logging failed: {e}")
+
+    # ===== PHASE 2: MEMORY vNEXT =====
+    try:
+        from feature_flags import FEATURE_MEMORY_VNEXT
+        if FEATURE_MEMORY_VNEXT:
+            from pathlib import Path
+            from memory.store import CoreBlockStore
+            from memory.sqlite_store import MemoryStoreManager
+            from memory.compiler import ContextCompilerService
+            from memory.api import router as memory_router
+
+            mem_data_dir = Path("/home/lancelot/data")
+            core_store = CoreBlockStore(data_dir=mem_data_dir)
+            core_store.initialize()
+            # Bootstrap human block from USER.md if it exists
+            user_md = mem_data_dir / "USER.md"
+            if user_md.exists():
+                core_store.bootstrap_from_user_file(str(user_md))
+
+            store_manager = MemoryStoreManager(data_dir=mem_data_dir)
+            compiler_svc = ContextCompilerService(
+                data_dir=mem_data_dir,
+                core_store=core_store,
+                memory_manager=store_manager,
+            )
+
+            app.include_router(memory_router)
+            # Wire memory into orchestrator
+            main_orchestrator._memory_enabled = True
+            main_orchestrator.context_compiler = compiler_svc
+            logger.info("Memory vNext initialized and wired.")
+        else:
+            logger.info("Memory vNext disabled by feature flag.")
+    except Exception as e:
+        logger.error(f"Memory vNext initialization failed: {e}")
+        main_orchestrator._memory_enabled = False
+
+    # ===== PHASE 3: SOUL SYSTEM =====
+    try:
+        from feature_flags import FEATURE_SOUL
+        if FEATURE_SOUL:
+            from soul.store import load_active_soul, SoulStoreError
+            try:
+                from soul.api import router as soul_router
+                active_soul = load_active_soul()
+                main_orchestrator.soul = active_soul
+                app.include_router(soul_router)
+                logger.info(f"Soul loaded: version={active_soul.version}")
+            except SoulStoreError as exc:
+                logger.error(f"Soul load failed: {exc} — running without soul constraints")
+            except Exception as exc:
+                logger.warning(f"Soul subsystem not available: {exc}")
+        else:
+            logger.info("Soul disabled by feature flag.")
+    except ImportError:
+        logger.info("Soul module not available.")
+
+    # ===== PHASE 4: SCHEDULER + SKILLS =====
+    _scheduler_service = None
+    _skill_executor = None
+    try:
+        from feature_flags import FEATURE_SKILLS
+        if FEATURE_SKILLS:
+            from skills.registry import SkillRegistry
+            from skills.executor import SkillExecutor
+            skill_registry = SkillRegistry(data_dir="/home/lancelot/data")
+            _skill_executor = SkillExecutor(registry=skill_registry)
+            main_orchestrator.skill_executor = _skill_executor
+            logger.info(f"Skills initialized: {len(skill_registry.list_skills())} skills")
+    except Exception as e:
+        logger.warning(f"Skills initialization failed: {e}")
+
+    try:
+        from feature_flags import FEATURE_SCHEDULER
+        if FEATURE_SCHEDULER:
+            from scheduler.service import SchedulerService
+            _scheduler_service = SchedulerService(
+                data_dir="/home/lancelot/data",
+                config_dir="/home/lancelot/config",
+            )
+            count = _scheduler_service.register_from_config()
+            main_orchestrator.scheduler_service = _scheduler_service
+            logger.info(f"Scheduler initialized: {count} jobs registered")
+            # Connect job executor if skills available
+            if _skill_executor:
+                from scheduler.executor import JobExecutor
+                job_executor = JobExecutor(
+                    scheduler_service=_scheduler_service,
+                    skill_execute_fn=lambda name, inputs: _skill_executor.run(name, inputs),
+                )
+                main_orchestrator.job_executor = job_executor
+                logger.info("Job executor wired to skill executor.")
+    except Exception as e:
+        logger.warning(f"Scheduler initialization failed: {e}")
+
+    # ===== PHASE 5: HEALTH MONITOR =====
+    try:
+        from feature_flags import FEATURE_HEALTH_MONITOR
+        if FEATURE_HEALTH_MONITOR:
+            from health.monitor import HealthMonitor, HealthCheck
+            from health.api import router as health_api_router, set_snapshot_provider
+            checks = [
+                HealthCheck(
+                    name="gemini_client",
+                    check_fn=lambda: main_orchestrator.client is not None,
+                    degraded_reason="Gemini client not initialized",
+                ),
+                HealthCheck(
+                    name="onboarding_ready",
+                    check_fn=lambda: onboarding_orch._determine_state() == "READY",
+                    degraded_reason="Onboarding not complete",
+                ),
+            ]
+            if _scheduler_service:
+                checks.append(HealthCheck(
+                    name="scheduler",
+                    check_fn=lambda: _scheduler_service is not None,
+                    degraded_reason="Scheduler not available",
+                ))
+            health_monitor = HealthMonitor(checks=checks, interval_s=30.0)
+            health_monitor.start_monitor()
+            set_snapshot_provider(lambda: health_monitor.latest_snapshot)
+            app.include_router(health_api_router)
+            logger.info("Health monitor started.")
+    except Exception as e:
+        logger.warning(f"Health monitor initialization failed: {e}")
+
+    # ===== PHASE 6: CONTROL PLANE =====
+    try:
+        from control_plane import init_control_plane
+        from control_plane import router as cp_router
+        init_control_plane(data_dir="/home/lancelot/data")
+        app.include_router(cp_router)
+        logger.info("Control plane initialized.")
+    except Exception as e:
+        logger.warning(f"Control plane initialization failed: {e}")
+
     # Start Communications Polling
     if telegram_bot:
         telegram_bot.start_polling()
@@ -185,6 +328,12 @@ async def shutdown_event():
             telegram_bot.stop_polling()
         if chat_poller:
             chat_poller.stop_polling()
+        # Stop health monitor if running
+        try:
+            if 'health_monitor' in dir() and health_monitor:
+                health_monitor.stop_monitor()
+        except Exception:
+            pass
         main_orchestrator.audit_logger.log_event("GATEWAY_SHUTDOWN", "Graceful shutdown initiated")
     except Exception as e:
         logger.error(f"Shutdown error: {e}")
