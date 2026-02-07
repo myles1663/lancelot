@@ -326,6 +326,71 @@ class TestAC4_NoDraftLeakage:
 
 
 # =========================================================================
+# AC-5: No Fake Work Proposals
+# =========================================================================
+
+
+class TestAC5_NoFakeWorkProposals:
+    """
+    Gemini LLM fallback path must never produce fake work proposals
+    with feasibility studies, time estimates, or multi-phase plans
+    proposing work the LLM cannot execute.
+    """
+
+    FAKE_PROPOSAL_PHRASES = [
+        "feasibility study",
+        "feasibility assessment",
+        "prototype development",
+        "research phase",
+        "discovery phase",
+        "assessment phase",
+        "i will now proceed with",
+        "i recommend starting with",
+        "assess the viability",
+    ]
+
+    @pytest.mark.parametrize("phrase", FAKE_PROPOSAL_PHRASES)
+    def test_governor_detects_fake_proposal_phrases(self, phrase):
+        """All fake proposal phrases are detected by the governor."""
+        matches = detect_forbidden_async_language(phrase)
+        assert len(matches) >= 1, f"Governor missed fake proposal phrase: {phrase}"
+
+    def test_structural_detector_catches_elaborate_proposals(self):
+        """Structural detector catches multi-signal fake work proposals."""
+        from response_governor import detect_fake_work_proposal
+        text = (
+            "Feasibility Study (1 hour): Research Telegram bot frameworks.\n"
+            "Prototype Development (4 hours): Build a proof of concept.\n"
+            "I recommend starting with the feasibility study."
+        )
+        result = detect_fake_work_proposal(text)
+        assert result is not None, "Structural detector missed elaborate fake proposal"
+
+    def test_enforcement_blocks_fake_proposals(self):
+        """enforce_no_simulated_work blocks fake work proposals."""
+        ctx = ResponseContext(
+            text=(
+                "I will now proceed with the feasibility study to assess "
+                "the viability of this integration. Phase 1: Research (2 hours). "
+                "Phase 2: Development (4 hours)."
+            )
+        )
+        result = enforce_no_simulated_work(ctx)
+        assert result.passed is False
+
+    def test_legitimate_plan_artifact_not_blocked(self):
+        """PlanningPipeline output must not be caught by fake work detector."""
+        from response_governor import detect_fake_work_proposal
+        pipeline = PlanningPipeline()
+        result = pipeline.process("Plan the database migration to PostgreSQL")
+        assert result.outcome == OutcomeType.COMPLETED_WITH_PLAN_ARTIFACT
+        fwd = detect_fake_work_proposal(result.rendered_output)
+        assert fwd is None, (
+            f"Legitimate PlanArtifact triggered fake work detector: {fwd}"
+        )
+
+
+# =========================================================================
 # Cross-Cutting: Full Pipeline Determinism
 # =========================================================================
 

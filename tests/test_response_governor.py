@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "core"))
 
 from response_governor import (
     detect_forbidden_async_language,
+    detect_fake_work_proposal,
     enforce_no_simulated_work,
     ResponseContext,
     JobContext,
@@ -205,3 +206,27 @@ class TestForbiddenPhrasesList:
     def test_minimum_count(self):
         # The spec requires at least 5 core phrases
         assert len(FORBIDDEN_PHRASES) >= 5
+
+
+# =========================================================================
+# Structural Fake Work Proposal Detection (Integration)
+# =========================================================================
+
+
+class TestFakeWorkProposalInGovernor:
+    """Integration: detect_fake_work_proposal is accessible and works."""
+
+    def test_function_exists(self):
+        assert callable(detect_fake_work_proposal)
+
+    def test_returns_none_for_clean(self):
+        assert detect_fake_work_proposal("Here is your answer.") is None
+
+    def test_returns_string_for_fake_work(self):
+        result = detect_fake_work_proposal(
+            "Phase 1: Research (2 hours)\n"
+            "Phase 2: Development (4 hours)\n"
+            "I recommend starting with the feasibility study."
+        )
+        assert isinstance(result, str)
+        assert len(result) > 0

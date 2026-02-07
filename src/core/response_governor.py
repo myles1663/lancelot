@@ -74,6 +74,50 @@ FORBIDDEN_PHRASES: list[str] = [
     "preparing a comprehensive",
     "i am actively",
     "i'm actively",
+    # v3: Fake work proposal patterns
+    "i will now proceed with",
+    "i'll now proceed with",
+    "i will proceed with",
+    "i'll proceed with",
+    "feasibility study",
+    "feasibility assessment",
+    "feasibility analysis",
+    "i recommend starting with",
+    "assess the viability",
+    "assessing the viability",
+    "once the feasibility is confirmed",
+    "once feasibility is confirmed",
+    "i will begin by",
+    "i'll begin by",
+    "let me begin by",
+    "i will start by researching",
+    "i'll start by researching",
+    "prototype development",
+    "proof of concept phase",
+    "initial research phase",
+    "research phase",
+    "discovery phase",
+    "assessment phase",
+    "i will conduct",
+    "i'll conduct",
+    "i will research",
+    "i'll research",
+    "i will investigate",
+    "i'll investigate",
+    "i will analyze the",
+    "i'll analyze the",
+    "i will evaluate",
+    "i'll evaluate",
+    "i will explore",
+    "i'll explore",
+    "i will assess",
+    "i'll assess",
+    "let me assess",
+    "let me evaluate",
+    "let me research",
+    "let me investigate",
+    "let me explore",
+    "let me analyze",
 ]
 
 # Compile patterns for efficient matching
@@ -81,6 +125,105 @@ _FORBIDDEN_PATTERNS: list[re.Pattern] = [
     re.compile(re.escape(phrase), re.IGNORECASE)
     for phrase in FORBIDDEN_PHRASES
 ]
+
+
+# =============================================================================
+# Structural Fake Work Detection Patterns
+# =============================================================================
+
+# Matches time estimates like "(1 hour)", "(2-3 hours)", "(30 minutes)", "(1 day)"
+_TIME_ESTIMATE_PATTERN = re.compile(
+    r'\(\s*\d+(?:\s*-\s*\d+)?\s*(?:hour|hr|minute|min|day|week|month)s?\s*\)',
+    re.IGNORECASE,
+)
+
+# Matches "Phase 1:", "Stage 2:" headers in fake work proposals
+_PHASE_HEADER_PATTERN = re.compile(
+    r'(?:phase|stage)\s+\d+\s*[:\-]\s*\w',
+    re.IGNORECASE,
+)
+
+# Matches "I recommend starting with" pattern
+_RECOMMEND_STARTING_PATTERN = re.compile(
+    r'i\s+recommend\s+starting\s+with',
+    re.IGNORECASE,
+)
+
+
+def detect_fake_work_proposal(text: str) -> Optional[str]:
+    """
+    Detect structural fake work proposals — multi-phase plans with time
+    estimates that propose work the LLM cannot actually execute.
+
+    Unlike detect_forbidden_async_language() which catches individual
+    phrases, this function detects the *pattern* of a fake work proposal
+    by scoring multiple heuristic signals.
+
+    Returns:
+        A reason string if a fake work proposal is detected, None if clean.
+    """
+    if not text or len(text) < 50:
+        return None
+
+    text_lower = text.lower()
+    score = 0
+    signals: list[str] = []
+
+    # Signal 1: Time estimates like "(2 hours)", "(1-2 days)"
+    time_matches = _TIME_ESTIMATE_PATTERN.findall(text)
+    if time_matches:
+        score += 3 * len(time_matches)
+        signals.append(f"time_estimates({len(time_matches)})")
+
+    # Signal 2: Phase/stage headers like "Phase 1: Research"
+    phase_matches = _PHASE_HEADER_PATTERN.findall(text)
+    if phase_matches:
+        score += 2 * len(phase_matches)
+        signals.append(f"phase_headers({len(phase_matches)})")
+
+    # Signal 3: "I recommend starting with" pattern
+    if _RECOMMEND_STARTING_PATTERN.search(text):
+        score += 3
+        signals.append("recommend_starting")
+
+    # Signal 4: Multiple future-tense "I will" actions (>=3)
+    i_will_count = len(re.findall(r'\bi\s+will\s+(?!not\b)', text_lower))
+    if i_will_count >= 3:
+        score += 2 * (i_will_count - 2)
+        signals.append(f"i_will_count({i_will_count})")
+
+    # Signal 5: Keywords that indicate proposed-but-unexecutable work
+    proposal_keywords = [
+        "feasibility", "viability", "proof of concept", "prototype",
+        "pilot program", "initial assessment", "preliminary",
+        "research phase", "discovery phase", "investigation phase",
+        "assessment phase", "evaluation phase",
+    ]
+    keyword_hits = sum(1 for kw in proposal_keywords if kw in text_lower)
+    if keyword_hits >= 1:
+        score += 2 * keyword_hits
+        signals.append(f"proposal_keywords({keyword_hits})")
+
+    # Signal 6: The response proposes sequential work over time
+    timeline_indicators = [
+        "after completing", "once complete", "upon completion",
+        "following the", "in the next phase", "in the subsequent",
+        "will then", "next we will", "next i will",
+        "then i will", "afterward",
+    ]
+    timeline_hits = sum(1 for t in timeline_indicators if t in text_lower)
+    if timeline_hits >= 2:
+        score += 2 * timeline_hits
+        signals.append(f"timeline_indicators({timeline_hits})")
+
+    # Threshold: score >= 5 indicates a fake work proposal
+    if score >= 5:
+        return (
+            f"Fake work proposal detected (score={score}): "
+            f"{', '.join(signals)}"
+        )
+
+    return None
 
 
 # =============================================================================
@@ -182,6 +325,11 @@ def enforce_no_simulated_work(
     job_ctx = job_context or JobContext()
 
     violations = detect_forbidden_async_language(response_ctx.text)
+
+    # Also check for structural fake work proposals
+    fake_work_reason = detect_fake_work_proposal(response_ctx.text)
+    if fake_work_reason:
+        violations.append(fake_work_reason)
 
     # No violations → pass
     if not violations:

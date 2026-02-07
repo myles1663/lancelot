@@ -204,7 +204,16 @@ class LancelotOrchestrator:
             "You must unmistakably never simulate progress — if you cannot do something, say so directly. "
             "Complete the task in this response or state honestly what you cannot do. "
             "If asked to plan something, produce a complete structured plan immediately. Never stall. "
-            "Never use phrases like 'I am currently processing', 'I will provide shortly', or 'actively compiling'."
+            "Never use phrases like 'I am currently processing', 'I will provide shortly', or 'actively compiling'. "
+            "You must unmistakably never propose work you cannot execute — no feasibility studies, "
+            "no research phases, no prototype development timelines, no 'Phase 1/Phase 2' work proposals. "
+            "You must unmistakably never include time estimates like '(1 hour)' or '(2-3 days)' for work you will do. "
+            "You must unmistakably never say 'I will now proceed with', 'I recommend starting with', "
+            "'I will conduct research', or 'I will investigate'. "
+            "If a user asks you to build or set up something complex, respond with: "
+            "concrete steps they or you can take right now, code snippets if applicable, "
+            "what config or credentials you need from them, and an honest statement of what you cannot do. "
+            "Never propose a multi-phase work plan as if you will autonomously execute it over time."
         )
 
         instruction = f"{persona}\n\n{rules}\n\n{guardrails}\n\n{honesty}"
@@ -708,28 +717,93 @@ class LancelotOrchestrator:
         return self._apply_honesty_gate(response_text)
 
     def _apply_honesty_gate(self, text: str) -> str:
-        """Apply Honest Closure gates: strip leakage markers, block simulated work."""
+        """Apply Honest Closure gates: strip leakage markers, block simulated work.
+
+        Three-tier enforcement:
+        1. Strip planner leakage markers (DRAFT:, PLANNER:, etc.)
+        2. Check for structural fake work proposals — replace entire response
+        3. Check individual forbidden phrases — replace if >= 2, strip if 1
+        """
         import re
-        from response_governor import detect_forbidden_async_language
-        from plan_types import assert_no_planner_leakage
+        from response_governor import (
+            detect_forbidden_async_language,
+            detect_fake_work_proposal,
+        )
 
-        # Strip any DRAFT: prefix that the LLM may have generated
+        # Tier 1: Strip planner leakage markers
         cleaned = re.sub(r'^DRAFT:\s*', '', text, flags=re.IGNORECASE).strip()
-
-        # Strip other planner leakage markers
         for marker in ["PLANNER:", "[INTERNAL]", "[SCRATCHPAD]", "PLANNING_INTERNAL"]:
             cleaned = cleaned.replace(marker, "").strip()
 
-        # Check for simulated work language and strip it
+        # Tier 2: Check for structural fake work proposal (highest priority)
+        fake_work_reason = detect_fake_work_proposal(cleaned)
+        if fake_work_reason:
+            return self._generate_honest_replacement(cleaned, fake_work_reason)
+
+        # Tier 3: Check for individual forbidden phrases
         violations = detect_forbidden_async_language(cleaned)
         if violations:
-            # Remove the simulated-work sentences but keep the rest
+            # 2+ violations = systemic stalling — replace entire response
+            if len(violations) >= 2:
+                return self._generate_honest_replacement(
+                    cleaned,
+                    f"Multiple stalling phrases: {', '.join(violations[:3])}",
+                )
+            # Single violation: strip it but keep the rest
             for v in violations:
                 cleaned = re.sub(re.escape(v), '', cleaned, flags=re.IGNORECASE).strip()
-            # Clean up any resulting double spaces or orphan punctuation
             cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
 
         return cleaned
+
+    def _generate_honest_replacement(self, original_text: str, reason: str) -> str:
+        """Generate an honest replacement for a blocked fake work proposal.
+
+        Instead of stripping individual phrases (which leaves incoherent
+        remnants), this produces a complete honest response acknowledging
+        what the user asked for and what Lancelot can and cannot do.
+        """
+        import re
+
+        print(f"HONESTY GATE BLOCKED: {reason}")
+
+        # Try to extract the core topic from the original text
+        sentences = re.split(r'[.!?\n]', original_text)
+        topic_hint = ""
+        for s in sentences:
+            s = s.strip()
+            if len(s) > 20 and not any(
+                kw in s.lower() for kw in [
+                    "feasibility", "phase 1", "phase 2", "i will",
+                    "i recommend", "prototype", "research phase",
+                    "i'll", "assessment", "viability",
+                ]
+            ):
+                topic_hint = s
+                break
+
+        if topic_hint:
+            return (
+                f"I understand you're asking about: {topic_hint}\n\n"
+                "I can help with this right now by providing concrete guidance, "
+                "code snippets, or configuration steps. However, I cannot "
+                "autonomously run research, feasibility studies, or multi-phase "
+                "development projects.\n\n"
+                "What specific part would you like me to help with first? "
+                "If you can share any relevant API keys, credentials, or "
+                "configuration details, I can provide more targeted assistance."
+            )
+        else:
+            return (
+                "I cannot execute a multi-phase research or development project "
+                "autonomously. Instead, I can help you right now with:\n\n"
+                "- Concrete implementation steps and code snippets\n"
+                "- Configuration guidance for specific tools or services\n"
+                "- Answering specific technical questions\n\n"
+                "What specific part would you like me to help with? "
+                "Please share any relevant details and I'll provide direct, "
+                "actionable guidance."
+            )
 
     def set_state(self, new_state: RuntimeState):
         """Updates the runtime state with audit logging."""
