@@ -146,17 +146,19 @@ class TestEnvContextIntegration:
 
 
 class TestEdgeCases:
-    def test_empty_input_defaults_to_plan(self):
+    def test_empty_input_defers_to_caller(self):
         pipeline = PlanningPipeline()
         result = pipeline.process("")
-        # Empty defaults to PLAN_REQUEST via classifier
-        assert result.outcome == OutcomeType.COMPLETED_WITH_PLAN_ARTIFACT
+        # Empty defaults to AMBIGUOUS → deferred to orchestrator/Gemini
+        assert result.intent == IntentType.AMBIGUOUS
+        assert result.rendered_output == ""
 
-    def test_gibberish_produces_valid_plan(self):
+    def test_gibberish_defers_to_caller(self):
         pipeline = PlanningPipeline()
         result = pipeline.process("asdf jkl xyz qwerty")
-        assert result.outcome == OutcomeType.COMPLETED_WITH_PLAN_ARTIFACT
-        assert "## Goal" in result.rendered_output
+        # Gibberish defaults to AMBIGUOUS → deferred to orchestrator/Gemini
+        assert result.intent == IntentType.AMBIGUOUS
+        assert result.rendered_output == ""
 
     def test_exec_request_defers_to_caller(self):
         pipeline = PlanningPipeline()

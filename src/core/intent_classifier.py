@@ -166,7 +166,7 @@ def classify_intent(text: str) -> IntentType:
         An IntentType enum value.
     """
     if not text or not text.strip():
-        return IntentType.PLAN_REQUEST  # default for empty/ambiguous input
+        return IntentType.AMBIGUOUS  # empty/whitespace → let Gemini handle
 
     text_lower = text.lower().strip()
     words = _tokenize(text_lower)
@@ -189,5 +189,5 @@ def classify_intent(text: str) -> IntentType:
     if has_knowledge:
         return IntentType.KNOWLEDGE_REQUEST
 
-    # If uncertain → default to PLAN_REQUEST (spec requirement)
-    return IntentType.PLAN_REQUEST
+    # If uncertain → default to AMBIGUOUS (route to Gemini for natural response)
+    return IntentType.AMBIGUOUS

@@ -143,26 +143,26 @@ class TestKnowledgeRequest:
 
 
 # =========================================================================
-# Default Behavior (Uncertain → PLAN_REQUEST)
+# Default Behavior (Uncertain → AMBIGUOUS)
 # =========================================================================
 
 
 class TestDefaultBehavior:
     def test_empty_string(self):
-        assert classify_intent("") == IntentType.PLAN_REQUEST
+        assert classify_intent("") == IntentType.AMBIGUOUS
 
     def test_whitespace_only(self):
-        assert classify_intent("   ") == IntentType.PLAN_REQUEST
+        assert classify_intent("   ") == IntentType.AMBIGUOUS
 
     def test_short_ambiguous(self):
-        assert classify_intent("hello") == IntentType.PLAN_REQUEST
+        assert classify_intent("hello") == IntentType.AMBIGUOUS
 
     def test_gibberish(self):
-        assert classify_intent("asdf jkl xyz") == IntentType.PLAN_REQUEST
+        assert classify_intent("asdf jkl xyz") == IntentType.AMBIGUOUS
 
     def test_none_like_input(self):
-        # Very short input with no matching keywords defaults to PLAN_REQUEST
-        assert classify_intent("ok") == IntentType.PLAN_REQUEST
+        # Very short input with no matching keywords defaults to AMBIGUOUS
+        assert classify_intent("ok") == IntentType.AMBIGUOUS
 
 
 # =========================================================================

@@ -189,11 +189,12 @@ class TestAC2_PlanningCompletion:
             state_words = set(state.lower().split(":"))
             assert not (state_words & stalling_words), f"Stalling state found: {state}"
 
-    def test_empty_input_still_completes(self):
-        """Even empty input should produce a plan (defaults to PLAN_REQUEST)."""
+    def test_empty_input_defers_to_gemini(self):
+        """Empty input should be AMBIGUOUS and deferred to Gemini."""
         pipeline = PlanningPipeline()
         result = pipeline.process("")
-        assert result.outcome == OutcomeType.COMPLETED_WITH_PLAN_ARTIFACT
+        assert result.intent == IntentType.AMBIGUOUS
+        assert result.rendered_output == ""
 
     def test_with_env_context_still_completes(self):
         """Adding env context should not prevent completion."""
