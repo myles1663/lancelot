@@ -43,6 +43,9 @@ class ActionType(str, Enum):
     STEP_FAILED = "step_failed"
     VERIFY_PASSED = "verify_passed"
     VERIFY_FAILED = "verify_failed"
+    # Fix Pack V1 — Voice Notes
+    VOICE_STT = "voice_stt"
+    VOICE_TTS = "voice_tts"
 
 
 class ReceiptStatus(str, Enum):
