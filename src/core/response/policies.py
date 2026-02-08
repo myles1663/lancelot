@@ -33,9 +33,18 @@ class OutputPolicy:
         "security_log",
     ]
 
-    # Markdown section headers that indicate verbose content
+    # Markdown section headers that indicate verbose content to route to War Room.
+    # Keep in chat: Goal, Plan Steps, Next Action
+    # Route to War Room: everything else
     _VERBOSE_HEADERS = re.compile(
-        r"^##\s*(Assumptions|Decision\s+Points|Risks|Done\s+When|Context)\s*$",
+        r"^##\s*(Assumptions|Decision\s+Points|Risks|Done\s+When|Context|"
+        r"MVP\s+Path|Test\s+Plan|Estimate|References)\s*$",
+        re.IGNORECASE | re.MULTILINE,
+    )
+
+    # Section headers that are allowed in chat output
+    _CHAT_HEADERS = re.compile(
+        r"^##\s*(Goal|Plan\s+Steps|Next\s+Action)\s*$",
         re.IGNORECASE | re.MULTILINE,
     )
 
@@ -58,6 +67,10 @@ class OutputPolicy:
     def extract_verbose_sections(markdown: str) -> tuple:
         """Split markdown into (chat_content, verbose_content).
 
+        Uses a whitelist approach: only known chat sections (Goal, Plan Steps,
+        Next Action) stay in chat. All other ## sections route to War Room.
+        Non-section content (no ## header) stays in chat.
+
         Returns:
             (chat_md, verbose_md) where verbose_md contains assumptions,
             risks, decision points, etc.
@@ -70,9 +83,15 @@ class OutputPolicy:
         for section in sections:
             if not section.strip():
                 continue
-            if OutputPolicy._VERBOSE_HEADERS.search(section):
-                verbose_parts.append(section.strip())
+            # If it starts with ##, check if it's a known chat section
+            if section.strip().startswith("## "):
+                if OutputPolicy._CHAT_HEADERS.search(section):
+                    chat_parts.append(section.strip())
+                else:
+                    # All other ## sections go to War Room
+                    verbose_parts.append(section.strip())
             else:
+                # Non-section content (no ## header) stays in chat
                 chat_parts.append(section.strip())
 
         chat_md = "\n\n".join(chat_parts)

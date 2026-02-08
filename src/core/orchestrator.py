@@ -771,12 +771,19 @@ class LancelotOrchestrator:
             pipeline_result = self.planning_pipeline.process(user_message)
             if pipeline_result.outcome == OutcomeType.COMPLETED_WITH_PLAN_ARTIFACT:
                 # Fix Pack V1: Cache the plan artifact for later compilation
-                if hasattr(pipeline_result, 'plan_artifact') and pipeline_result.plan_artifact:
-                    self._last_plan_artifact = pipeline_result.plan_artifact
+                # Note: PipelineResult stores it as .artifact (not .plan_artifact)
+                if pipeline_result.artifact:
+                    self._last_plan_artifact = pipeline_result.artifact
 
                 # Fix Pack V1: Route through assembler if available
-                if self.assembler and hasattr(pipeline_result, 'plan_artifact') and pipeline_result.plan_artifact:
-                    assembled = self.assembler.assemble(plan_artifact=pipeline_result.plan_artifact)
+                if self.assembler and pipeline_result.artifact:
+                    assembled = self.assembler.assemble(plan_artifact=pipeline_result.artifact)
+                    self.context_env.add_history("assistant", assembled.chat_response)
+                    return assembled.chat_response
+
+                # Fallback: route rendered markdown through assembler for section stripping
+                if self.assembler and pipeline_result.rendered_output:
+                    assembled = self.assembler.assemble(raw_planner_output=pipeline_result.rendered_output)
                     self.context_env.add_history("assistant", assembled.chat_response)
                     return assembled.chat_response
 
@@ -785,18 +792,16 @@ class LancelotOrchestrator:
             # If pipeline couldn't complete, fall through to LLM
 
         if intent == IntentType.EXEC_REQUEST:
-            # Fix Pack V1: Compile into task graph and request permission
-            if self.task_store and self.plan_compiler:
-                plan_output = self.plan_task(user_message)
-                if plan_output and not plan_output.startswith("Failed"):
-                    self.context_env.add_history("assistant", plan_output)
-                    return plan_output
-            else:
-                # Legacy: Route execution requests through the existing planner
-                plan_output = self.plan_task(user_message)
-                if plan_output and not plan_output.startswith("Failed"):
-                    self.context_env.add_history("assistant", plan_output)
-                    return plan_output
+            # Route execution requests through the planner
+            plan_output = self.plan_task(user_message)
+            if plan_output and not plan_output.startswith("Failed"):
+                # Fix Pack V1: Route through assembler for clean output
+                if self.assembler:
+                    assembled = self.assembler.assemble(raw_planner_output=plan_output)
+                    self.context_env.add_history("assistant", assembled.chat_response)
+                    return assembled.chat_response
+                self.context_env.add_history("assistant", plan_output)
+                return plan_output
             # If planning failed, fall through to LLM
 
         # KNOWLEDGE_REQUEST, AMBIGUOUS, or fallback — route to Gemini LLM
@@ -876,6 +881,11 @@ class LancelotOrchestrator:
             self.governor.log_usage("tokens", est_tokens + est_input_tokens)
 
             final_response = self._parse_response(sanitized_response)
+
+            # Fix Pack V1: Route LLM output through assembler for output hygiene
+            if self.assembler and final_response:
+                assembled = self.assembler.assemble(raw_planner_output=final_response)
+                final_response = assembled.chat_response
 
             # Store conversation turn in episodic memory if enabled
             if self._memory_enabled and self.context_compiler:
