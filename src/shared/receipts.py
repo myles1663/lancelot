@@ -33,6 +33,16 @@ class ActionType(str, Enum):
     VERIFICATION = "verification"
     USER_INTERACTION = "user_interaction"
     SYSTEM = "system"
+    # Fix Pack V1 — Execution Authority + Task Graph
+    TOKEN_MINTED = "token_minted"
+    TOKEN_REVOKED = "token_revoked"
+    TOKEN_EXPIRED = "token_expired"
+    TASK_CREATED = "task_created"
+    STEP_STARTED = "step_started"
+    STEP_COMPLETED = "step_completed"
+    STEP_FAILED = "step_failed"
+    VERIFY_PASSED = "verify_passed"
+    VERIFY_FAILED = "verify_failed"
 
 
 class ReceiptStatus(str, Enum):

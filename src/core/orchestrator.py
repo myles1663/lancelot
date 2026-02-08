@@ -3,7 +3,9 @@ import subprocess
 import shlex
 import hmac
 import hashlib
+import uuid
 from enum import Enum
+from pathlib import Path
 from google import genai
 from google.genai import types
 from typing import Optional
@@ -17,6 +19,38 @@ from planning_pipeline import PlanningPipeline
 from intent_classifier import classify_intent, IntentType
 from plan_builder import EnvContext
 from plan_types import OutcomeType
+
+# Fix Pack V1: New subsystem imports
+try:
+    from response.assembler import ResponseAssembler, AssembledResponse
+    from action_language_gate import check_action_language
+    from tasking.schema import RunStatus, TaskGraph, TaskRun, TaskStep
+    from tasking.store import TaskStore
+    from tasking.compiler import PlanCompiler
+    from tasking.runner import TaskRunner
+    from execution_authority.schema import ExecutionToken, TokenStatus
+    from execution_authority.store import ExecutionTokenStore
+    from execution_authority.minter import PermissionMinter
+except ImportError:
+    try:
+        from src.core.response.assembler import ResponseAssembler, AssembledResponse
+        from src.core.action_language_gate import check_action_language
+        from src.core.tasking.schema import RunStatus, TaskGraph, TaskRun, TaskStep
+        from src.core.tasking.store import TaskStore
+        from src.core.tasking.compiler import PlanCompiler
+        from src.core.tasking.runner import TaskRunner
+        from src.core.execution_authority.schema import ExecutionToken, TokenStatus
+        from src.core.execution_authority.store import ExecutionTokenStore
+        from src.core.execution_authority.minter import PermissionMinter
+    except ImportError as e:
+        print(f"Fix Pack V1 imports unavailable: {e}")
+        ResponseAssembler = None
+        check_action_language = None
+        TaskStore = None
+        PlanCompiler = None
+        TaskRunner = None
+        ExecutionTokenStore = None
+        PermissionMinter = None
 
 # Whitelist of allowed command binaries
 COMMAND_WHITELIST = {
@@ -88,9 +122,170 @@ class LancelotOrchestrator:
         self._memory_enabled = False
         self.context_compiler = None
 
+        # Fix Pack V1: Execution authority + tasking + response assembler
+        self._init_fix_pack_v1()
+
         self._load_memory()
         self._init_gemini()
         self._init_context_cache()
+
+    def _init_fix_pack_v1(self):
+        """Initialize Fix Pack V1 subsystems: execution authority, tasking, response assembler."""
+        self.task_store = None
+        self.token_store = None
+        self.minter = None
+        self.plan_compiler = None
+        self.task_runner = None
+        self.assembler = None
+        self._last_plan_artifact = None
+
+        try:
+            if TaskStore is None:
+                print("Fix Pack V1: Imports not available, skipping init.")
+                return
+
+            from feature_flags import (
+                FEATURE_EXECUTION_TOKENS,
+                FEATURE_TASK_GRAPH_EXECUTION,
+                FEATURE_RESPONSE_ASSEMBLER,
+            )
+
+            db_dir = Path(self.data_dir)
+
+            if FEATURE_TASK_GRAPH_EXECUTION:
+                self.task_store = TaskStore(db_dir / "tasks.db")
+                self.plan_compiler = PlanCompiler()
+                print("Fix Pack V1: TaskStore + PlanCompiler initialized.")
+
+            if FEATURE_EXECUTION_TOKENS:
+                self.token_store = ExecutionTokenStore(db_dir / "tokens.db")
+                self.minter = PermissionMinter(
+                    store=self.token_store,
+                    receipt_service=self.receipt_service,
+                )
+                print("Fix Pack V1: ExecutionTokenStore + PermissionMinter initialized.")
+
+            if FEATURE_TASK_GRAPH_EXECUTION and self.task_store:
+                self.task_runner = TaskRunner(
+                    task_store=self.task_store,
+                    token_store=self.token_store,
+                    minter=self.minter,
+                    receipt_service=self.receipt_service,
+                    skill_executor=self.skill_executor,
+                    verifier=self.verifier,
+                )
+                print("Fix Pack V1: TaskRunner initialized.")
+
+            if FEATURE_RESPONSE_ASSEMBLER:
+                self.assembler = ResponseAssembler()
+                print("Fix Pack V1: ResponseAssembler initialized.")
+
+        except Exception as e:
+            print(f"Fix Pack V1 init error (non-fatal): {e}")
+
+    def _is_proceed_message(self, message: str) -> bool:
+        """Detect if the user message is a 'proceed' / 'approve' instruction."""
+        lower = message.strip().lower()
+        proceed_phrases = [
+            "proceed", "go ahead", "approved", "approve",
+            "yes, proceed", "yes proceed", "do it", "execute",
+            "run it", "start execution", "yes go ahead",
+            "confirmed", "confirm",
+        ]
+        return any(lower.startswith(p) or lower == p for p in proceed_phrases)
+
+    def _handle_proceed(self, user_message: str, session_id: str = "") -> str:
+        """Handle 'Proceed' messages: compile plan, request permission, or execute.
+
+        Three branches:
+        1. No eligible plan/task graph → compile from last plan artifact or error
+        2. Task graph exists but no active token → request permission
+        3. Token exists → create/run TaskRun immediately
+        """
+        if not self.task_store:
+            return "Task execution not available. Please describe what you'd like me to do."
+
+        # Check for existing task graph in session
+        active_graph = self.task_store.get_latest_graph_for_session(session_id)
+
+        if not active_graph:
+            # Try to compile from last plan artifact
+            if self._last_plan_artifact and self.plan_compiler:
+                graph = self.plan_compiler.compile_plan_artifact(
+                    self._last_plan_artifact, session_id=session_id,
+                )
+                self.task_store.save_graph(graph)
+                return self._request_permission(graph)
+            return "No plan to proceed with. Please describe what you'd like me to do."
+
+        # Check for active token
+        active_tokens = []
+        if self.token_store:
+            active_tokens = self.token_store.get_active_for_session(session_id)
+
+        if not active_tokens:
+            return self._request_permission(active_graph)
+
+        # Have graph + token → execute
+        token = active_tokens[0]
+        run = TaskRun(
+            task_graph_id=active_graph.id,
+            execution_token_id=token.id,
+            session_id=session_id,
+        )
+        self.task_store.create_run(run)
+
+        result = self.task_runner.run(run.id)
+
+        # Assemble response
+        if self.assembler:
+            assembled = self.assembler.assemble(
+                task_graph=active_graph,
+                task_run=self.task_store.get_run(run.id),
+            )
+            return assembled.chat_response
+        return f"Task completed with status: {result.status}"
+
+    def _request_permission(self, graph: TaskGraph) -> str:
+        """Format a permission request for a TaskGraph."""
+        if self.assembler:
+            tools_needed = set(s.type for s in graph.steps)
+            risk_levels = [s.risk_level for s in graph.steps]
+            risk = max(risk_levels, key=lambda r: {"LOW": 0, "MED": 1, "HIGH": 2}.get(r, 0)) if risk_levels else "LOW"
+
+            return self.assembler.assemble_permission_request(
+                what_i_will_do=[s.inputs.get("description", s.type) for s in graph.steps],
+                tools_enabled=tools_needed,
+                risk_tier=risk,
+                limits={"duration": 300, "actions": len(graph.steps) * 2},
+            )
+        # Fallback without assembler
+        steps_desc = "\n".join(f"- {s.type}: {s.inputs}" for s in graph.steps[:5])
+        return f"**Permission required** to execute {len(graph.steps)} steps:\n{steps_desc}\n\nApprove or Deny?"
+
+    def _handle_approval(self, session_id: str = "") -> str:
+        """Mint a token when user approves a permission request."""
+        if not self.minter or not self.task_store:
+            return "Execution authority not available."
+
+        graph = self.task_store.get_latest_graph_for_session(session_id)
+        if not graph:
+            return "No pending plan to approve."
+
+        tools_needed = list(set(s.type for s in graph.steps))
+        risk_levels = [s.risk_level for s in graph.steps]
+        risk = max(risk_levels, key=lambda r: {"LOW": 0, "MED": 1, "HIGH": 2}.get(r, 0)) if risk_levels else "LOW"
+
+        token = self.minter.mint_from_approval(
+            scope=graph.goal,
+            tools=tools_needed,
+            risk_tier=risk,
+            max_actions=len(graph.steps) * 2,
+            session_id=session_id,
+        )
+
+        # Now execute
+        return self._handle_proceed("proceed", session_id=session_id)
 
     def _load_memory(self):
         """Loads Tier A memory files into ContextEnvironment."""
@@ -564,20 +759,44 @@ class LancelotOrchestrator:
         intent = classify_intent(user_message)
         print(f"Intent Classifier: {intent.value}")
 
+        # Fix Pack V1: Check for "Proceed" / "Approve" messages first
+        if self._is_proceed_message(user_message) and self.task_store:
+            session_id = getattr(self, '_current_session_id', '')
+            result = self._handle_approval(session_id=session_id)
+            self.context_env.add_history("assistant", result)
+            return result
+
         if intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST):
             # Route through PlanningPipeline — produces PlanArtifact same turn
             pipeline_result = self.planning_pipeline.process(user_message)
             if pipeline_result.outcome == OutcomeType.COMPLETED_WITH_PLAN_ARTIFACT:
+                # Fix Pack V1: Cache the plan artifact for later compilation
+                if hasattr(pipeline_result, 'plan_artifact') and pipeline_result.plan_artifact:
+                    self._last_plan_artifact = pipeline_result.plan_artifact
+
+                # Fix Pack V1: Route through assembler if available
+                if self.assembler and hasattr(pipeline_result, 'plan_artifact') and pipeline_result.plan_artifact:
+                    assembled = self.assembler.assemble(plan_artifact=pipeline_result.plan_artifact)
+                    self.context_env.add_history("assistant", assembled.chat_response)
+                    return assembled.chat_response
+
                 self.context_env.add_history("assistant", pipeline_result.rendered_output)
                 return pipeline_result.rendered_output
             # If pipeline couldn't complete, fall through to LLM
 
         if intent == IntentType.EXEC_REQUEST:
-            # Route execution requests through the existing planner
-            plan_output = self.plan_task(user_message)
-            if plan_output and not plan_output.startswith("Failed"):
-                self.context_env.add_history("assistant", plan_output)
-                return plan_output
+            # Fix Pack V1: Compile into task graph and request permission
+            if self.task_store and self.plan_compiler:
+                plan_output = self.plan_task(user_message)
+                if plan_output and not plan_output.startswith("Failed"):
+                    self.context_env.add_history("assistant", plan_output)
+                    return plan_output
+            else:
+                # Legacy: Route execution requests through the existing planner
+                plan_output = self.plan_task(user_message)
+                if plan_output and not plan_output.startswith("Failed"):
+                    self.context_env.add_history("assistant", plan_output)
+                    return plan_output
             # If planning failed, fall through to LLM
 
         # KNOWLEDGE_REQUEST, AMBIGUOUS, or fallback — route to Gemini LLM
@@ -739,6 +958,16 @@ class LancelotOrchestrator:
         fake_work_reason = detect_fake_work_proposal(cleaned)
         if fake_work_reason:
             return self._generate_honest_replacement(cleaned, fake_work_reason)
+
+        # Tier 2b (Fix Pack V1): Action Language Gate — block execution claims
+        #   without a real TaskRun + receipt
+        if check_action_language is not None:
+            active_run = None
+            if self.task_store:
+                active_run = self.task_store.get_active_run()
+            gate_result = check_action_language(cleaned, task_run=active_run)
+            if not gate_result.passed:
+                cleaned = gate_result.corrected_text
 
         # Tier 3: Check for individual forbidden phrases
         violations = detect_forbidden_async_language(cleaned)
