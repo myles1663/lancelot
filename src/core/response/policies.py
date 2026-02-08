@@ -28,6 +28,28 @@ _USER_MESSAGE_PARAM = re.compile(
     re.IGNORECASE,
 )
 
+# ── Gemini tool-call syntax (Fix Pack V3) ──
+# "Action:I will now browse..." prefix line
+_ACTION_PREFIX = re.compile(
+    r"^Action:\s?.*$",
+    re.MULTILINE,
+)
+# ```Tool_Code ... ``` fenced blocks
+_TOOL_CODE_BLOCK = re.compile(
+    r"```(?:Tool_Code|tool_code)?\s*\n.*?```",
+    re.DOTALL,
+)
+# Unfenced Tool_Code blocks (plain text)
+_TOOL_CODE_INLINE = re.compile(
+    r"^Tool_Code\s*\n.*?(?=\n\n|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+# Function call syntax: print(google_search.search(...))
+_FUNCTION_CALL = re.compile(
+    r"print\s*\([^)]*\)",
+    re.IGNORECASE,
+)
+
 
 class OutputPolicy:
     """Defines limits and routing rules for response output."""
@@ -73,9 +95,15 @@ class OutputPolicy:
         text = _TOOL_SCAFFOLDING.sub("", text)
         text = _MODEL_REFERENCE.sub("", text)
         text = _USER_MESSAGE_PARAM.sub("", text)
-        # Clean up residual empty parens or trailing commas
+        # Gemini tool-call syntax (Fix Pack V3)
+        text = _ACTION_PREFIX.sub("", text)
+        text = _TOOL_CODE_BLOCK.sub("", text)
+        text = _TOOL_CODE_INLINE.sub("", text)
+        text = _FUNCTION_CALL.sub("", text)
+        # Clean up residual empty parens, trailing commas, excess blank lines
         text = re.sub(r"\(\s*\)", "", text)
         text = re.sub(r",\s*$", "", text, flags=re.MULTILINE)
+        text = re.sub(r"\n{3,}", "\n\n", text)
         return text
 
     @staticmethod

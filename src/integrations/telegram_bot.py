@@ -70,8 +70,18 @@ class TelegramBot:
         text = re.sub(r",?\s*model=[\w.\-]+", "", text)
         # Strip user_message= LLM params
         text = re.sub(r",?\s*user_message=[^,\n)]+", "", text)
+        # Strip Action: prefix lines (Gemini tool-call syntax, V3)
+        text = re.sub(r"^Action:\s?.*$", "", text, flags=re.MULTILINE)
+        # Strip Tool_Code fenced blocks
+        text = re.sub(r"```(?:Tool_Code|tool_code)?\s*\n.*?```", "", text, flags=re.DOTALL)
+        # Strip unfenced Tool_Code blocks
+        text = re.sub(r"^Tool_Code\s*\n.*?(?=\n\n|\Z)", "", text, flags=re.MULTILINE | re.DOTALL)
+        # Strip print() function calls
+        text = re.sub(r"print\s*\([^)]*\)", "", text, flags=re.IGNORECASE)
         # Clean up empty parens left behind
         text = re.sub(r"\(\s*\)", "", text)
+        # Clean up excess blank lines
+        text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
 
     def send_message(self, text: str, chat_id: str = None):

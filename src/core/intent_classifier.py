@@ -87,6 +87,12 @@ EXECUTION_KEYWORDS: frozenset = frozenset({
     "fix",
     "patch",
     "refactor",
+    "set",          # "set up X"
+    "configure",    # "configure the system"
+    "setup",        # "setup voice"
+    "connect",      # "connect devices"
+    "enable",       # "enable voice"
+    "create",       # "create a channel"
 })
 
 EXECUTION_PHRASES: frozenset = frozenset({
@@ -99,6 +105,9 @@ EXECUTION_PHRASES: frozenset = frozenset({
     "hook it up",
     "spin up",
     "roll out",
+    "set up",       # "set up a way" (broader than "set it up")
+    "hook up",      # "hook up voice"
+    "wire up",      # "wire up X"
 })
 
 KNOWLEDGE_KEYWORDS: frozenset = frozenset({
@@ -113,6 +122,14 @@ KNOWLEDGE_KEYWORDS: frozenset = frozenset({
     "difference",
     "compare",
     "versus",
+    "does",         # "does slack offer..."
+    "how",          # "how do I..."
+    "which",        # "which one..."
+    "is",           # "is there a free plan?"
+    "are",          # "are there options?"
+    "can",          # "can I use..."
+    "should",       # "should I use..."
+    "offer",        # "does X offer..."
 })
 
 KNOWLEDGE_PHRASES: frozenset = frozenset({
@@ -125,6 +142,15 @@ KNOWLEDGE_PHRASES: frozenset = frozenset({
     "can you explain",
     "tell me about",
     "what's the difference",
+    "does it",      # "does it support..."
+    "is there",     # "is there a free plan?"
+    "can i",        # "can I use..."
+    "can you",      # "can you help..."
+    "should i",     # "should I use..."
+    "do they",      # "do they offer..."
+    "how do",       # "how do I..."
+    "how can",      # "how can I..."
+    "which one",    # "which one is best?"
 })
 
 
@@ -189,5 +215,5 @@ def classify_intent(text: str) -> IntentType:
     if has_knowledge:
         return IntentType.KNOWLEDGE_REQUEST
 
-    # If uncertain → default to AMBIGUOUS (route to Gemini for natural response)
-    return IntentType.AMBIGUOUS
+    # If uncertain → default to PLAN_REQUEST (spec lines 13-14)
+    return IntentType.PLAN_REQUEST

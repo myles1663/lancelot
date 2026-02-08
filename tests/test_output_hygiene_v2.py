@@ -1,8 +1,8 @@
 """
-Tests for Fix Pack V2 — Output Hygiene: tool parameter stripping.
+Tests for Fix Pack V2+V3 — Output Hygiene: tool parameter + Gemini syntax stripping.
 
 Validates that internal tool call syntax (Tool:, Params:, model=, user_message=)
-never reaches the user through any output path.
+and Gemini tool-call syntax (Action:, Tool_Code, print()) never reach the user.
 """
 
 import pytest
@@ -86,6 +86,61 @@ class TestStripToolScaffolding:
         text = "Do something ()"
         result = self.policy.strip_tool_scaffolding(text)
         assert "()" not in result
+
+    # ── V3: Gemini tool-call syntax ──
+
+    def test_strips_action_prefix_with_space(self):
+        text = "Action: I will now browse the internet."
+        result = self.policy.strip_tool_scaffolding(text)
+        assert "Action:" not in result
+
+    def test_strips_action_prefix_no_space(self):
+        """The exact pattern from the screenshot: 'Action:I will now browse'."""
+        text = 'Action:I will now browse the internet and search for "Does Slack offer a free use account?".'
+        result = self.policy.strip_tool_scaffolding(text)
+        assert "Action:" not in result
+        assert "browse" not in result
+
+    def test_strips_tool_code_fenced_block(self):
+        text = "Here is the result:\n```Tool_Code\nprint(google_search.search(queries=[\"slack free\"]))\n```\nDone."
+        result = self.policy.strip_tool_scaffolding(text)
+        assert "Tool_Code" not in result
+        assert "print(" not in result
+        assert "google_search" not in result
+        assert "Done." in result
+
+    def test_strips_tool_code_unfenced(self):
+        text = "Searching now.\nTool_Code\nprint(google_search.search(queries=[\"test\"]))\n\nHere are results."
+        result = self.policy.strip_tool_scaffolding(text)
+        assert "Tool_Code" not in result
+        assert "print(" not in result
+        assert "Here are results." in result
+
+    def test_strips_print_function_call(self):
+        text = "print(google_search.search(queries=[\"Does Slack offer a free use account?\"]))"
+        result = self.policy.strip_tool_scaffolding(text)
+        assert "print(" not in result
+        assert "google_search" not in result
+
+    def test_strips_mixed_gemini_output(self):
+        """Full Gemini output with Action: + Tool_Code + print()."""
+        text = (
+            "I'll help you find out.\n\n"
+            "Action:I will now browse the internet.\n"
+            "```Tool_Code\n"
+            "print(google_search.search(queries=[\"slack free account\"]))\n"
+            "```"
+        )
+        result = self.policy.strip_tool_scaffolding(text)
+        assert "Action:" not in result
+        assert "Tool_Code" not in result
+        assert "print(" not in result
+        assert "help you find" in result
+
+    def test_clean_text_unaffected_by_v3_patterns(self):
+        text = "Slack offers a free tier. You can create an account at slack.com."
+        result = self.policy.strip_tool_scaffolding(text)
+        assert result.strip() == text
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +238,40 @@ class TestTelegramSanitize:
 
     def test_empty_string(self):
         assert self.bot._sanitize_for_telegram("") == ""
+
+    # ── V3: Gemini tool-call syntax in Telegram ──
+
+    def test_strips_action_prefix_telegram(self):
+        text = 'Action:I will now browse the internet and search for "Does Slack offer a free use account?".'
+        result = self.bot._sanitize_for_telegram(text)
+        assert "Action:" not in result
+
+    def test_strips_tool_code_block_telegram(self):
+        text = "Result:\n```Tool_Code\nprint(google_search.search(queries=[\"slack free\"]))\n```\nEnd."
+        result = self.bot._sanitize_for_telegram(text)
+        assert "Tool_Code" not in result
+        assert "print(" not in result
+        assert "End." in result
+
+    def test_strips_print_call_telegram(self):
+        text = "print(google_search.search(queries=[\"test\"]))"
+        result = self.bot._sanitize_for_telegram(text)
+        assert "print(" not in result
+
+    def test_strips_full_gemini_leak_telegram(self):
+        """Full Gemini tool-call output as seen in screenshots."""
+        text = (
+            "I'll help.\n\n"
+            "Action:I will now browse the internet.\n"
+            "```Tool_Code\n"
+            "print(google_search.search(queries=[\"slack free account\"]))\n"
+            "```"
+        )
+        result = self.bot._sanitize_for_telegram(text)
+        assert "Action:" not in result
+        assert "Tool_Code" not in result
+        assert "print(" not in result
+        assert "help" in result
 
 
 # ---------------------------------------------------------------------------

@@ -25,7 +25,7 @@ class GateResult:
 
 # Patterns that imply execution is happening right now
 _EXECUTION_PATTERNS = [
-    re.compile(r"^Action:\s", re.MULTILINE),
+    re.compile(r"^Action:\s?", re.MULTILINE),  # V3: optional space after colon
     re.compile(r"(?:executing|executed)\s+step\b", re.IGNORECASE),
     re.compile(r"running\s+command\b", re.IGNORECASE),
     re.compile(r"deploying\s+to\b", re.IGNORECASE),
@@ -38,11 +38,19 @@ _EXECUTION_PATTERNS = [
     re.compile(r"i\s+(?:have|just)\s+(?:executed|deployed|created|modified|deleted|written)", re.IGNORECASE),
     re.compile(r"successfully\s+(?:executed|deployed|created|modified|deleted|written)", re.IGNORECASE),
     re.compile(r"completed\s+step\s+\d", re.IGNORECASE),
+    # V3: "I will now browse/search/look/check/find/query" — Gemini phantom action
+    re.compile(r"i\s+will\s+now\s+(?:browse|search|look|check|find|query)", re.IGNORECASE),
 ]
 
 # Map of patterns to plan-only replacements
 _PLAN_ALTERNATIVES = {
-    r"^Action:\s": "Planned action: ",
+    r"^Action:\s?": "Planned action: ",
+    r"i will now browse": "I can help find",
+    r"i will now search": "I can help search for",
+    r"i will now look": "I can help look into",
+    r"i will now check": "I can help check",
+    r"i will now find": "I can help find",
+    r"i will now query": "I can help look up",
     r"executing step": "planned step",
     r"running command": "planned command",
     r"deploying to": "will deploy to (pending approval)",
