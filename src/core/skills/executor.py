@@ -62,8 +62,33 @@ def _echo_execute(context: SkillContext, inputs: Dict[str, Any]) -> Dict[str, An
     return {"echo": inputs}
 
 
+def _load_builtin_execute(module_name: str) -> SkillExecuteFunc:
+    """Lazily load execute function from a builtins module."""
+    def _wrapper(context: SkillContext, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            from src.core.skills.builtins import repo_writer, command_runner, service_runner, network_client
+        except ImportError:
+            from skills.builtins import repo_writer, command_runner, service_runner, network_client
+
+        module_map = {
+            "repo_writer": repo_writer,
+            "command_runner": command_runner,
+            "service_runner": service_runner,
+            "network_client": network_client,
+        }
+        mod = module_map.get(module_name)
+        if mod is None:
+            raise SkillError(f"Unknown builtin: {module_name}")
+        return mod.execute(context, inputs)
+    return _wrapper
+
+
 _BUILTIN_SKILLS: Dict[str, SkillExecuteFunc] = {
     "echo": _echo_execute,
+    "repo_writer": _load_builtin_execute("repo_writer"),
+    "command_runner": _load_builtin_execute("command_runner"),
+    "service_runner": _load_builtin_execute("service_runner"),
+    "network_client": _load_builtin_execute("network_client"),
 }
 
 
