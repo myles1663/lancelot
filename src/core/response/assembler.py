@@ -204,6 +204,8 @@ class ResponseAssembler:
 
     def _assemble_from_markdown(self, markdown: str) -> tuple:
         """Split raw markdown into chat + War Room artifacts."""
+        # Safety net: strip inline tool scaffolding before section splitting
+        markdown = OutputPolicy.strip_tool_scaffolding(markdown)
         chat_md, verbose_md = OutputPolicy.extract_verbose_sections(markdown)
         artifacts = []
 

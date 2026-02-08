@@ -118,6 +118,15 @@ FORBIDDEN_PHRASES: list[str] = [
     "let me investigate",
     "let me explore",
     "let me analyze",
+    # v4: Stalling / idle posturing without real work
+    "awaiting further instructions",
+    "awaiting your instructions",
+    "awaiting your command",
+    "ready and awaiting",
+    "standing by for",
+    "awaiting your next",
+    "waiting for your",
+    "at your command",
 ]
 
 # Compile patterns for efficient matching

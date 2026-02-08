@@ -14,6 +14,21 @@ import re
 from typing import List
 
 
+    # ── Regex patterns for stripping internal tool scaffolding ──
+_TOOL_SCAFFOLDING = re.compile(
+    r"\s*\(Tool:\s*\w+,?\s*Params:\s*[^)]*\)",
+    re.IGNORECASE,
+)
+_MODEL_REFERENCE = re.compile(
+    r",?\s*model=[\w.\-]+",
+    re.IGNORECASE,
+)
+_USER_MESSAGE_PARAM = re.compile(
+    r",?\s*user_message=[^,\n)]+",
+    re.IGNORECASE,
+)
+
+
 class OutputPolicy:
     """Defines limits and routing rules for response output."""
 
@@ -47,6 +62,21 @@ class OutputPolicy:
         r"^##\s*(Goal|Plan\s+Steps|Next\s+Action)\s*$",
         re.IGNORECASE | re.MULTILINE,
     )
+
+    @staticmethod
+    def strip_tool_scaffolding(text: str) -> str:
+        """Remove internal tool call syntax, model refs, and LLM params from text.
+
+        This is a safety-net filter that catches inline scaffolding that
+        section-based extraction would miss (e.g. '(Tool: x, Params: y=z)').
+        """
+        text = _TOOL_SCAFFOLDING.sub("", text)
+        text = _MODEL_REFERENCE.sub("", text)
+        text = _USER_MESSAGE_PARAM.sub("", text)
+        # Clean up residual empty parens or trailing commas
+        text = re.sub(r"\(\s*\)", "", text)
+        text = re.sub(r",\s*$", "", text, flags=re.MULTILINE)
+        return text
 
     @staticmethod
     def should_route_to_war_room(section_name: str) -> bool:

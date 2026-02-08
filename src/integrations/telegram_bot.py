@@ -9,6 +9,7 @@ Uses only `requests` (no extra dependencies beyond voice_processor).
 """
 
 import os
+import re
 import time
 import threading
 import logging
@@ -55,6 +56,23 @@ class TelegramBot:
     def stop_polling(self):
         self.running = False
         logger.info("TelegramBot: Polling stopped.")
+
+    @staticmethod
+    def _sanitize_for_telegram(text: str) -> str:
+        """Last-resort filter: strip internal tool scaffolding before sending.
+
+        Catches any (Tool: ..., Params: ...) syntax, model= references, and
+        user_message= LLM parameter traces that slipped past the assembler.
+        """
+        # Strip tool call syntax: (Tool: search_workspace, Params: query=foo)
+        text = re.sub(r"\s*\(Tool:\s*\w+,?\s*Params:\s*[^)]*\)", "", text)
+        # Strip model references: model=gemini-2.0-flash
+        text = re.sub(r",?\s*model=[\w.\-]+", "", text)
+        # Strip user_message= LLM params
+        text = re.sub(r",?\s*user_message=[^,\n)]+", "", text)
+        # Clean up empty parens left behind
+        text = re.sub(r"\(\s*\)", "", text)
+        return text.strip()
 
     def send_message(self, text: str, chat_id: str = None):
         """Sends a message to the configured chat."""
@@ -196,6 +214,7 @@ class TelegramBot:
         try:
             response = self.orchestrator.chat(text)
             if response:
+                response = self._sanitize_for_telegram(response)
                 self.send_message(response, sender_chat_id)
         except Exception as e:
             logger.error(f"TelegramBot: Orchestrator error: {e}")

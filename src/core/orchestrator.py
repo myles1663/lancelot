@@ -177,22 +177,49 @@ class LancelotOrchestrator:
                 print("Fix Pack V1: TaskRunner initialized.")
 
             if FEATURE_RESPONSE_ASSEMBLER:
-                self.assembler = ResponseAssembler()
-                print("Fix Pack V1: ResponseAssembler initialized.")
+                print("Fix Pack V1: FEATURE_RESPONSE_ASSEMBLER flag active.")
 
         except Exception as e:
             print(f"Fix Pack V1 init error (non-fatal): {e}")
 
+        # Fix Pack V2: Always initialize assembler — output hygiene is mandatory
+        try:
+            self.assembler = ResponseAssembler()
+            print("Fix Pack V2: ResponseAssembler initialized (always-on).")
+        except Exception as e:
+            print(f"ResponseAssembler init failed (non-fatal): {e}")
+            self.assembler = None
+
     def _is_proceed_message(self, message: str) -> bool:
-        """Detect if the user message is a 'proceed' / 'approve' instruction."""
+        """Detect if the user message is a 'proceed' / 'approve' instruction.
+
+        Two tiers:
+        - Strong signals: always treated as proceed (regardless of plan state)
+        - Contextual signals: only if a pending plan artifact exists
+        """
         lower = message.strip().lower()
-        proceed_phrases = [
+
+        # Strong proceed signals — always treated as proceed
+        strong_phrases = [
             "proceed", "go ahead", "approved", "approve",
-            "yes, proceed", "yes proceed", "do it", "execute",
+            "yes, proceed", "yes proceed", "execute",
             "run it", "start execution", "yes go ahead",
             "confirmed", "confirm",
         ]
-        return any(lower.startswith(p) or lower == p for p in proceed_phrases)
+        if any(lower.startswith(p) or lower == p for p in strong_phrases):
+            return True
+
+        # Contextual proceed signals — only if a plan exists
+        contextual_phrases = [
+            "do it", "set it up", "get it done", "make it happen",
+            "wire it up", "hook it up", "let's go", "do this",
+            "yes do it", "yes, do it",
+        ]
+        has_plan = self._last_plan_artifact is not None
+        if has_plan and any(lower.startswith(p) or lower == p for p in contextual_phrases):
+            return True
+
+        return False
 
     def _handle_proceed(self, user_message: str, session_id: str = "") -> str:
         """Handle 'Proceed' messages: compile plan, request permission, or execute.
@@ -656,11 +683,10 @@ class LancelotOrchestrator:
         if not plan:
             return "Failed to generate plan."
             
-        # Format plan for display
+        # Format plan for display — human-readable only, no tool/param internals
         output = [f"Plan for: {plan.goal}"]
         for step in plan.steps:
-            params = ", ".join([f"{p.key}={p.value}" for p in step.params])
-            output.append(f"{step.id}. {step.description} (Tool: {step.tool}, Params: {params})")
+            output.append(f"{step.id}. {step.description}")
             
         return "\n".join(output)
 
@@ -792,17 +818,38 @@ class LancelotOrchestrator:
             # If pipeline couldn't complete, fall through to LLM
 
         if intent == IntentType.EXEC_REQUEST:
-            # Route execution requests through the planner
-            plan_output = self.plan_task(user_message)
-            if plan_output and not plan_output.startswith("Failed"):
-                # Fix Pack V1: Route through assembler for clean output
-                if self.assembler:
-                    assembled = self.assembler.assemble(raw_planner_output=plan_output)
-                    self.context_env.add_history("assistant", assembled.chat_response)
-                    return assembled.chat_response
-                self.context_env.add_history("assistant", plan_output)
-                return plan_output
-            # If planning failed, fall through to LLM
+            # Fix Pack V2: Route through PlanningPipeline → TaskGraph → Permission
+            pipeline_result = self.planning_pipeline.process(user_message)
+
+            if pipeline_result.artifact:
+                self._last_plan_artifact = pipeline_result.artifact
+
+                # Compile to TaskGraph and request permission
+                if self.plan_compiler and self.task_store:
+                    session_id = getattr(self, '_current_session_id', '')
+                    graph = self.plan_compiler.compile_plan_artifact(
+                        pipeline_result.artifact, session_id=session_id,
+                    )
+                    self.task_store.save_graph(graph)
+                    result = self._request_permission(graph)
+                    self.context_env.add_history("assistant", result)
+                    return result
+
+            # Fallback: show clean plan via assembler
+            if self.assembler and pipeline_result.artifact:
+                assembled = self.assembler.assemble(plan_artifact=pipeline_result.artifact)
+                self.context_env.add_history("assistant", assembled.chat_response)
+                return assembled.chat_response
+
+            if self.assembler and pipeline_result.rendered_output:
+                assembled = self.assembler.assemble(raw_planner_output=pipeline_result.rendered_output)
+                self.context_env.add_history("assistant", assembled.chat_response)
+                return assembled.chat_response
+
+            # Last resort fallback
+            resp = pipeline_result.rendered_output or "I need more details to create an execution plan."
+            self.context_env.add_history("assistant", resp)
+            return resp
 
         # KNOWLEDGE_REQUEST, AMBIGUOUS, or fallback — route to Gemini LLM
         # Model Routing
