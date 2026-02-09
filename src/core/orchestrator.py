@@ -358,9 +358,9 @@ class LancelotOrchestrator:
             if steps and len(steps) >= 3:
                 artifact.plan_steps = steps
                 artifact.next_action = steps[0]
-                logger.info("Plan enriched with %d LLM-generated steps", len(steps))
+                print(f"Plan enriched with {len(steps)} LLM-generated steps")
         except Exception as e:
-            logger.warning("Plan enrichment failed, using template: %s", e)
+            print(f"Plan enrichment failed, using template: {e}")
 
         return artifact
 
@@ -403,10 +403,10 @@ class LancelotOrchestrator:
                 )
             )
             result = self._parse_response(response.text)
-            logger.info("LLM execution produced %d chars of content", len(result))
+            print(f"LLM execution produced {len(result)} chars of content")
             return result
         except Exception as e:
-            logger.error("LLM execution failed: %s", e)
+            print(f"LLM execution failed: {e}")
             return ""
 
     def _load_memory(self):
