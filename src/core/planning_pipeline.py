@@ -126,8 +126,13 @@ class PlanningPipeline:
         if intent == IntentType.MIXED_REQUEST:
             return self._handle_mixed_request(user_text, job_context, intent, trace)
 
-        # For EXEC_REQUEST, KNOWLEDGE_REQUEST, AMBIGUOUS — return
-        # classification and let the orchestrator handle downstream.
+        if intent == IntentType.EXEC_REQUEST:
+            # EXEC_REQUEST still needs a PlanArtifact — the orchestrator
+            # compiles it into a TaskGraph → permission prompt → execution.
+            return self._handle_plan_request(user_text, job_context, intent, trace)
+
+        # For KNOWLEDGE_REQUEST, AMBIGUOUS — return classification
+        # and let the orchestrator handle downstream.
         return PipelineResult(
             outcome=OutcomeType.COMPLETED_WITH_RECEIPT,
             intent=intent,

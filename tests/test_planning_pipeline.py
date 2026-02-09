@@ -153,19 +153,22 @@ class TestEdgeCases:
         assert result.intent == IntentType.AMBIGUOUS
         assert result.rendered_output == ""
 
-    def test_gibberish_defers_to_caller(self):
+    def test_gibberish_defaults_to_plan_request(self):
         pipeline = PlanningPipeline()
         result = pipeline.process("asdf jkl xyz qwerty")
-        # Gibberish defaults to AMBIGUOUS → deferred to orchestrator/Gemini
-        assert result.intent == IntentType.AMBIGUOUS
-        assert result.rendered_output == ""
+        # V3: Gibberish defaults to PLAN_REQUEST (spec lines 13-14)
+        assert result.intent == IntentType.PLAN_REQUEST
+        assert result.rendered_output != ""  # Plan is still built
 
-    def test_exec_request_defers_to_caller(self):
+    def test_exec_request_builds_plan_artifact(self):
         pipeline = PlanningPipeline()
         result = pipeline.process("Deploy the application")
-        # Exec requests are classified but not handled by the planning pipeline
+        # V3: EXEC_REQUEST builds a PlanArtifact so orchestrator can
+        # compile it into a TaskGraph → permission prompt → execution
         assert result.intent == IntentType.EXEC_REQUEST
-        assert result.rendered_output == ""  # No plan rendered
+        assert result.artifact is not None
+        assert result.rendered_output != ""
+        assert "Deploy" in result.rendered_output
 
 
 # =========================================================================
