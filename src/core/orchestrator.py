@@ -265,25 +265,30 @@ class LancelotOrchestrator:
 
         result = self.task_runner.run(run.id)
 
-        # Fix Pack V5: Check if skills produced real outputs (not placeholders)
-        has_real_results = False
-        if result.step_results:
-            for sr in result.step_results:
-                if sr.success and sr.outputs:
-                    # Placeholder outputs contain "placeholder" or "executed (placeholder)"
-                    out_str = str(sr.outputs)
-                    if "placeholder" not in out_str.lower():
-                        has_real_results = True
-                        break
-
-        if has_real_results:
-            # V5: Summarize real skill execution results
-            print(f"V5: Real skill results detected — summarizing {len(result.step_results)} steps")
-            content = self._summarize_execution_results(active_graph, result)
-        else:
-            # V5: Fall back to LLM execution (skills not yet wired for this task type)
-            print("V5: No real skill results — falling back to LLM execution")
+        # Fix Pack V7: When agentic loop is enabled, always use _execute_with_llm()
+        # which has forced tool use. The TaskRunner's echo placeholders are not real
+        # execution — the agentic loop IS the execution engine now.
+        from feature_flags import FEATURE_AGENTIC_LOOP
+        if FEATURE_AGENTIC_LOOP:
+            print("V7: Agentic loop enabled — using LLM execution with forced tool use")
             content = self._execute_with_llm(active_graph)
+        else:
+            # Fix Pack V5: Check if skills produced real outputs (not placeholders)
+            has_real_results = False
+            if result.step_results:
+                for sr in result.step_results:
+                    if sr.success and sr.outputs:
+                        out_str = str(sr.outputs)
+                        if "placeholder" not in out_str.lower() and "echo" not in sr.skill_name.lower():
+                            has_real_results = True
+                            break
+
+            if has_real_results:
+                print(f"V5: Real skill results detected — summarizing {len(result.step_results)} steps")
+                content = self._summarize_execution_results(active_graph, result)
+            else:
+                print("V5: No real skill results — falling back to LLM execution")
+                content = self._execute_with_llm(active_graph)
 
         # Assemble status line
         if self.assembler:
@@ -356,27 +361,36 @@ class LancelotOrchestrator:
 
         prompt = (
             f"The user asked: \"{user_text}\"\n\n"
-            f"Generate 4-6 specific, actionable plan steps to accomplish this goal: {artifact.goal}\n\n"
+            f"Your goal: {artifact.goal}\n\n"
             f"{self_awareness}\n\n"
-            "CRITICAL: Ground the plan in YOUR real capabilities. "
-            "You already communicate via Telegram with text and voice notes. "
-            "If the user says 'us' or 'we', that includes you. "
-            "Don't suggest downloading third-party apps when your existing capabilities cover the need.\n\n"
-            "If you need information to create a good plan (API docs, pricing, endpoints), "
-            "USE your network_client tool to research it NOW before generating steps.\n\n"
-            "Return ONLY a numbered list of steps, nothing else.\n"
+            "INSTRUCTIONS:\n"
+            "1. FIRST: Use your network_client tool to research relevant APIs, docs, and endpoints. "
+            "For example, call network_client with method=GET to fetch API documentation pages. "
+            "Do this BEFORE generating any plan steps.\n"
+            "2. AFTER you have research results, generate 4-6 specific, actionable plan steps.\n"
+            "3. Ground the plan in YOUR real capabilities and the research results.\n"
+            "4. You already communicate via Telegram with text and voice notes.\n"
+            "5. If the user says 'us' or 'we', that includes you.\n"
+            "6. Don't suggest downloading third-party apps when your existing capabilities cover the need.\n\n"
+            "Your final text response must be ONLY a numbered list of steps (1. ... 2. ... etc).\n"
         )
 
-        sys_instruction = f"You are Lancelot's planning module. {self_awareness} Return only numbered steps. No preamble."
+        sys_instruction = (
+            f"You are Lancelot's planning module. {self_awareness} "
+            "You MUST use your tools to research before generating plan steps. "
+            "Call network_client to fetch real API docs and data. "
+            "Your final response should be only numbered steps."
+        )
 
         try:
             from feature_flags import FEATURE_AGENTIC_LOOP
             if FEATURE_AGENTIC_LOOP:
-                print("V6: Enriching plan with agentic research")
+                print("V7: Enriching plan with forced tool research")
                 raw = self._agentic_generate(
                     prompt=prompt,
                     system_instruction=sys_instruction,
                     allow_writes=False,
+                    force_tool_use=True,
                 )
             else:
                 response = self.client.models.generate_content(
@@ -422,33 +436,34 @@ class LancelotOrchestrator:
         prompt = (
             f"The user asked: \"{goal}\"\n\n"
             f"Execute this approved plan:\n{steps_text}\n\n"
-            "IMPORTANT RULES:\n"
+            "EXECUTION RULES — YOU MUST FOLLOW THESE:\n"
             "1. You ARE Lancelot — a governed autonomous system deployed on Telegram.\n"
             "2. When the user says 'us' or 'we', that includes YOU.\n"
-            "3. Ground your answer in YOUR real capabilities first:\n"
-            "   - You already communicate via Telegram (text + voice notes)\n"
-            "   - You have skills: command_runner, repo_writer, network_client, service_runner\n"
-            "   - You can execute shell commands, make API calls, edit files, manage Docker\n"
-            "4. Don't tell the user to download apps or Google things when YOUR capabilities cover the need.\n"
-            "5. If the user needs something beyond your current capabilities, say what you CAN do now\n"
-            "   and propose what you could BUILD to extend yourself.\n"
-            "6. Be direct and concise. No walls of text. No comparison charts unless asked.\n"
-            "7. Max 10-15 lines of response.\n"
-            "8. USE your tools to actually execute the steps — don't just describe what to do."
+            "3. You MUST use your tools to execute each step. For example:\n"
+            "   - Use network_client (method=GET) to fetch API docs, check endpoints, research\n"
+            "   - Use command_runner to run shell commands, check system state\n"
+            "   - Use repo_writer to create/edit configuration files\n"
+            "   - Use service_runner to manage Docker services\n"
+            "4. Do NOT just describe what you would do — actually CALL the tools.\n"
+            "5. Do NOT claim you have accomplished something unless you called a tool and got a result.\n"
+            "6. After executing steps with tools, summarize what you ACTUALLY did and what the results were.\n"
+            "7. If a step requires information, fetch it with network_client first.\n"
+            "8. Be direct and concise. Max 10-15 lines in your final summary."
         )
 
         try:
             # V4: Use execution-mode instruction (no honesty blocks)
             system_instruction = self._build_execution_instruction()
 
-            # Fix Pack V6: Use agentic loop for real skill execution
+            # Fix Pack V7: Use agentic loop with forced tool use
             from feature_flags import FEATURE_AGENTIC_LOOP
             if FEATURE_AGENTIC_LOOP:
-                print("V6: Executing approved plan with agentic loop (writes enabled)")
+                print("V7: Executing approved plan with forced tool use (writes enabled)")
                 result = self._agentic_generate(
                     prompt=prompt,
                     system_instruction=system_instruction,
                     allow_writes=True,
+                    force_tool_use=True,
                 )
             else:
                 response = self.client.models.generate_content(
@@ -869,6 +884,7 @@ class LancelotOrchestrator:
         system_instruction: str = None,
         allow_writes: bool = False,
         context_str: str = None,
+        force_tool_use: bool = False,
     ) -> str:
         """Core agentic loop: Gemini + function calling via skills.
 
@@ -881,6 +897,7 @@ class LancelotOrchestrator:
             system_instruction: Optional system instruction override
             allow_writes: If True, write operations auto-execute. If False, escalate.
             context_str: Optional pre-built context string
+            force_tool_use: If True, first iteration forces tool call via mode=ANY
 
         Returns:
             The final text response from Gemini
@@ -901,9 +918,21 @@ class LancelotOrchestrator:
         if not system_instruction:
             system_instruction = self._build_system_instruction()
 
+        # V7: When force_tool_use=True, first iteration uses mode=ANY
+        # to force Gemini to call at least one tool before returning text.
+        # After first tool call, switch back to AUTO.
+        if force_tool_use:
+            tool_config = types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(mode="ANY")
+            )
+            print("V7: Forcing tool use on first iteration (mode=ANY)")
+        else:
+            tool_config = None
+
         config = types.GenerateContentConfig(
             system_instruction=system_instruction,
             tools=[tool],
+            tool_config=tool_config,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
             thinking_config=self._get_thinking_config(),
         )
@@ -961,7 +990,10 @@ class LancelotOrchestrator:
             # Append model's response to conversation
             contents.append(response.candidates[0].content)
 
-            # Process each function call
+            # V7: Process ALL function calls and collect results as parts.
+            # Gemini API requires ALL function responses in a SINGLE Content
+            # message when multiple function calls are in one response.
+            response_parts = []
             for fc in response.function_calls:
                 skill_name = fc.name
                 inputs = dict(fc.args) if fc.args else {}
@@ -971,65 +1003,68 @@ class LancelotOrchestrator:
                 safety = self._classify_tool_call_safety(skill_name, inputs)
 
                 if safety == "escalate" and not allow_writes:
-                    # Don't execute — tell Gemini it needs approval
                     escalation_msg = (
-                        f"BLOCKED: {skill_name} with inputs {inputs} requires user approval. "
-                        "This is a write operation. Inform the user what you want to do "
-                        "and ask for their approval before proceeding."
+                        f"BLOCKED: {skill_name} requires user approval. "
+                        "This is a write operation."
                     )
-                    contents.append(types.Content(
-                        role="tool",
-                        parts=[types.Part.from_function_response(
-                            name=skill_name,
-                            response={"error": escalation_msg},
-                        )],
-                    ))
+                    result_data = {"error": escalation_msg}
                     tool_receipts.append({
                         "skill": skill_name,
                         "inputs": inputs,
                         "result": "ESCALATED — needs user approval",
                     })
-                    continue
-
-                # Execute the skill (governance: count as tool call)
-                self.governor.log_usage("tool_calls", 1)
-                try:
-                    result = self.skill_executor.run(skill_name, inputs)
-                    if result.success:
-                        result_data = result.outputs or {"status": "success"}
-                        # Truncate large responses for context window
-                        result_str = str(result_data)
-                        if len(result_str) > 8000:
-                            result_data = {"truncated": result_str[:8000] + "... [truncated]"}
+                else:
+                    # Execute the skill
+                    self.governor.log_usage("tool_calls", 1)
+                    try:
+                        result = self.skill_executor.run(skill_name, inputs)
+                        if result.success:
+                            result_data = result.outputs or {"status": "success"}
+                            result_str = str(result_data)
+                            if len(result_str) > 8000:
+                                result_data = {"truncated": result_str[:8000] + "... [truncated]"}
+                            tool_receipts.append({
+                                "skill": skill_name,
+                                "inputs": inputs,
+                                "result": "SUCCESS",
+                                "outputs": result_data,
+                            })
+                        else:
+                            result_data = {"error": result.error or "Unknown error"}
+                            tool_receipts.append({
+                                "skill": skill_name,
+                                "inputs": inputs,
+                                "result": f"FAILED: {result.error}",
+                            })
+                    except Exception as e:
+                        result_data = {"error": str(e)}
                         tool_receipts.append({
                             "skill": skill_name,
                             "inputs": inputs,
-                            "result": "SUCCESS",
-                            "outputs": result_data,
+                            "result": f"EXCEPTION: {e}",
                         })
-                    else:
-                        result_data = {"error": result.error or "Unknown error"}
-                        tool_receipts.append({
-                            "skill": skill_name,
-                            "inputs": inputs,
-                            "result": f"FAILED: {result.error}",
-                        })
-                except Exception as e:
-                    result_data = {"error": str(e)}
-                    tool_receipts.append({
-                        "skill": skill_name,
-                        "inputs": inputs,
-                        "result": f"EXCEPTION: {e}",
-                    })
 
-                # Feed result back to Gemini
-                contents.append(types.Content(
-                    role="tool",
-                    parts=[types.Part.from_function_response(
+                response_parts.append(
+                    types.Part.from_function_response(
                         name=skill_name,
                         response=result_data,
-                    )],
-                ))
+                    )
+                )
+
+            # Feed ALL results back to Gemini in a single Content message
+            contents.append(types.Content(role="tool", parts=response_parts))
+
+            # V7: After first tool call(s), switch from ANY back to AUTO
+            # so Gemini can return text on subsequent iterations
+            if force_tool_use and iteration == 0 and tool_receipts:
+                config = types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    tools=[tool],
+                    tool_config=None,  # Back to AUTO (default)
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                    thinking_config=self._get_thinking_config(),
+                )
+                print("V7: Switched from ANY to AUTO after first tool call")
 
         # Max iterations reached
         print(f"V6 agentic loop hit max iterations ({MAX_ITERATIONS})")
