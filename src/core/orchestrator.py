@@ -914,11 +914,21 @@ class LancelotOrchestrator:
             types.Content(role="user", parts=[types.Part(text=f"{ctx}\n\n{prompt}")]),
         ]
 
-        # Track tool calls for receipts
+        # Track tool calls for receipts and cost
         tool_receipts = []
+        total_est_tokens = 0
 
         for iteration in range(MAX_ITERATIONS):
             print(f"V6 agentic loop iteration {iteration + 1}/{MAX_ITERATIONS}")
+
+            # Cost guard: check governance limit before each Gemini call
+            iter_est_tokens = sum(len(str(c)) for c in contents) // 4
+            if not self.governor.check_limit("tokens", iter_est_tokens):
+                print("V6 agentic loop: governance token limit reached, stopping")
+                return self._format_tool_receipts(
+                    tool_receipts,
+                    note="Stopped: daily token limit reached. Here's what I found so far:",
+                )
 
             try:
                 response = self.client.models.generate_content(
@@ -931,6 +941,14 @@ class LancelotOrchestrator:
                 if tool_receipts:
                     return self._format_tool_receipts(tool_receipts, error=str(e))
                 return f"Error during agentic generation: {e}"
+
+            # Track token usage per iteration
+            resp_text = response.text if response.text else ""
+            iter_out_tokens = len(resp_text) // 4
+            iter_total = iter_est_tokens + iter_out_tokens
+            total_est_tokens += iter_total
+            self.governor.log_usage("tokens", iter_total)
+            print(f"V6 iteration {iteration + 1} token est: ~{iter_total} (cumulative: ~{total_est_tokens})")
 
             # Check if response has function calls
             if not response.function_calls:
@@ -973,7 +991,8 @@ class LancelotOrchestrator:
                     })
                     continue
 
-                # Execute the skill
+                # Execute the skill (governance: count as tool call)
+                self.governor.log_usage("tool_calls", 1)
                 try:
                     result = self.skill_executor.run(skill_name, inputs)
                     if result.success:
@@ -1540,8 +1559,9 @@ class LancelotOrchestrator:
                 token_count=est_tokens
             ))
 
-            # Governance: Log Usage
-            self.governor.log_usage("tokens", est_tokens + est_input_tokens)
+            # Governance: Log Usage (skip if agentic loop already tracked per-iteration)
+            if not FEATURE_AGENTIC_LOOP:
+                self.governor.log_usage("tokens", est_tokens + est_input_tokens)
 
             final_response = self._parse_response(sanitized_response)
 
