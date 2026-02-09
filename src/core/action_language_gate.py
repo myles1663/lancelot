@@ -69,19 +69,27 @@ _PLAN_ALTERNATIVES = {
 }
 
 
-def check_action_language(text: str, task_run=None) -> GateResult:
+def check_action_language(text: str, task_run=None, has_tool_receipts: bool = False) -> GateResult:
     """Check text for execution-tense claims.
 
     If a TaskRun exists with status QUEUED/RUNNING/BLOCKED and at least
     one receipt, execution language is allowed.
 
+    Fix Pack V6: If has_tool_receipts is True, execution language is also
+    allowed — the agentic loop has made real tool calls that back the claims.
+
     Args:
         text: The response text to check.
         task_run: Optional TaskRun object with .status and .receipts_index.
+        has_tool_receipts: If True, agentic loop tool calls back the execution claims.
 
     Returns:
         GateResult with passed=True if OK, or violations + corrected text.
     """
+    # Fix Pack V6: If agentic loop made real tool calls, allow execution language
+    if has_tool_receipts:
+        return GateResult(passed=True, corrected_text=text)
+
     # If backed by a real task run with receipts, allow
     if task_run is not None:
         status = task_run.status

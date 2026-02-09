@@ -344,6 +344,9 @@ class LancelotOrchestrator:
         Sends the user's original request to Gemini to generate concrete,
         actionable plan steps specific to the domain.
 
+        Fix Pack V6: When agentic loop is enabled, Gemini can research
+        (via network_client) before generating plan steps.
+
         Falls back to the original template steps if Gemini fails.
         """
         if not self.client:
@@ -359,18 +362,32 @@ class LancelotOrchestrator:
             "You already communicate via Telegram with text and voice notes. "
             "If the user says 'us' or 'we', that includes you. "
             "Don't suggest downloading third-party apps when your existing capabilities cover the need.\n\n"
+            "If you need information to create a good plan (API docs, pricing, endpoints), "
+            "USE your network_client tool to research it NOW before generating steps.\n\n"
             "Return ONLY a numbered list of steps, nothing else.\n"
         )
 
+        sys_instruction = f"You are Lancelot's planning module. {self_awareness} Return only numbered steps. No preamble."
+
         try:
-            response = self.client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=[self.context_env.get_context_string(), prompt],
-                config=types.GenerateContentConfig(
-                    system_instruction=f"You are Lancelot's planning module. {self_awareness} Return only numbered steps. No preamble.",
+            from feature_flags import FEATURE_AGENTIC_LOOP
+            if FEATURE_AGENTIC_LOOP:
+                print("V6: Enriching plan with agentic research")
+                raw = self._agentic_generate(
+                    prompt=prompt,
+                    system_instruction=sys_instruction,
+                    allow_writes=False,
                 )
-            )
-            raw = response.text.strip()
+            else:
+                response = self.client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=[self.context_env.get_context_string(), prompt],
+                    config=types.GenerateContentConfig(
+                        system_instruction=sys_instruction,
+                    )
+                )
+                raw = response.text.strip() if response.text else ""
+
             # Parse numbered steps
             steps = re.findall(r"^\d+\.\s*(.+)$", raw, re.MULTILINE)
             if steps and len(steps) >= 3:
@@ -388,6 +405,9 @@ class LancelotOrchestrator:
         Called after the user approves a plan. Uses execution-mode system
         instruction (no honesty blocks) and bypasses the honesty gate,
         applying only tool-scaffolding cleanup.
+
+        Fix Pack V6: When agentic loop is enabled, Gemini can execute real
+        skills (with allow_writes=True since the plan is already approved).
 
         Returns the LLM-generated content string, or empty string on failure.
         """
@@ -413,23 +433,37 @@ class LancelotOrchestrator:
             "5. If the user needs something beyond your current capabilities, say what you CAN do now\n"
             "   and propose what you could BUILD to extend yourself.\n"
             "6. Be direct and concise. No walls of text. No comparison charts unless asked.\n"
-            "7. Max 10-15 lines of response."
+            "7. Max 10-15 lines of response.\n"
+            "8. USE your tools to actually execute the steps — don't just describe what to do."
         )
 
         try:
             # V4: Use execution-mode instruction (no honesty blocks)
             system_instruction = self._build_execution_instruction()
-            response = self.client.models.generate_content(
-                model=self._route_model(goal),
-                contents=[self.context_env.get_context_string(), prompt],
-                config=types.GenerateContentConfig(
+
+            # Fix Pack V6: Use agentic loop for real skill execution
+            from feature_flags import FEATURE_AGENTIC_LOOP
+            if FEATURE_AGENTIC_LOOP:
+                print("V6: Executing approved plan with agentic loop (writes enabled)")
+                result = self._agentic_generate(
+                    prompt=prompt,
                     system_instruction=system_instruction,
-                    thinking_config=self._get_thinking_config(),
+                    allow_writes=True,
                 )
-            )
+            else:
+                response = self.client.models.generate_content(
+                    model=self._route_model(goal),
+                    contents=[self.context_env.get_context_string(), prompt],
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        thinking_config=self._get_thinking_config(),
+                    )
+                )
+                result = response.text if response.text else ""
+
             # V4: Strip tool scaffolding but bypass honesty gate
             from response.policies import OutputPolicy
-            result = OutputPolicy.strip_tool_scaffolding(response.text)
+            result = OutputPolicy.strip_tool_scaffolding(result)
             print(f"LLM execution produced {len(result)} chars of content")
             return result
         except Exception as e:
@@ -600,15 +634,17 @@ class LancelotOrchestrator:
             "Complete the task in this response or state honestly what you cannot do. "
             "If asked to plan something, produce a complete structured plan immediately. Never stall. "
             "Never use phrases like 'I am currently processing', 'I will provide shortly', or 'actively compiling'. "
-            "You must unmistakably never propose work you cannot execute — no feasibility studies, "
-            "no research phases, no prototype development timelines, no 'Phase 1/Phase 2' work proposals. "
             "You must unmistakably never include time estimates like '(1 hour)' or '(2-3 days)' for work you will do. "
-            "You must unmistakably never say 'I will now proceed with', 'I recommend starting with', "
-            "'I will conduct research', or 'I will investigate'. "
             "If a user asks you to build or set up something complex, respond with: "
             "concrete steps they or you can take right now, code snippets if applicable, "
-            "what config or credentials you need from them, and an honest statement of what you cannot do. "
-            "Never propose a multi-phase work plan as if you will autonomously execute it over time."
+            "what config or credentials you need from them, and an honest statement of what you cannot do.\n\n"
+            "TOOL USAGE — You have tools available. USE THEM proactively:\n"
+            "- When you need information, USE network_client to fetch it (GET requests to APIs, docs, etc.)\n"
+            "- When you need to check the system, USE command_runner (ls, git status, etc.)\n"
+            "- Do NOT ask the user for search terms — research it yourself using your tools\n"
+            "- Do NOT produce plans without researching first when tools are available\n"
+            "- When you USE a tool and get results, you CAN say 'I researched X and found Y'\n"
+            "- The difference: REAL tool-backed research is honest. Claiming you WILL research later is not."
         )
 
         # 5. SELF-AWARENESS (Fix Pack V5)
@@ -689,6 +725,342 @@ class LancelotOrchestrator:
             "- You don't tell users to download apps or Google things. You tell them what YOU can do.\n"
             "- You are a governed autonomous system, not a search engine or chatbot."
         )
+
+    # ── Fix Pack V6: Agentic Loop (Gemini Function Calling) ──────────
+
+    def _build_tool_declarations(self):
+        """Build Gemini FunctionDeclaration list for Lancelot's skills.
+
+        Returns a list of types.FunctionDeclaration objects that map
+        directly to the 4 builtin skills: network_client, command_runner,
+        repo_writer, service_runner.
+        """
+        return [
+            types.FunctionDeclaration(
+                name="network_client",
+                description=(
+                    "Make HTTP requests to external APIs and websites. "
+                    "Use this to research APIs, fetch documentation, check endpoints, "
+                    "or interact with web services."
+                ),
+                parameters_json_schema={
+                    "type": "object",
+                    "properties": {
+                        "method": {
+                            "type": "string",
+                            "enum": ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"],
+                            "description": "HTTP method",
+                        },
+                        "url": {
+                            "type": "string",
+                            "description": "Full URL including https://",
+                        },
+                        "headers": {
+                            "type": "object",
+                            "description": "Optional HTTP headers as key-value pairs",
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": "Optional request body (for POST/PUT/PATCH)",
+                        },
+                    },
+                    "required": ["method", "url"],
+                },
+            ),
+            types.FunctionDeclaration(
+                name="command_runner",
+                description=(
+                    "Execute shell commands on the server. Commands are validated "
+                    "against a whitelist. Use for inspecting the system, listing files, "
+                    "checking versions, running git commands, etc."
+                ),
+                parameters_json_schema={
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "The shell command to execute",
+                        },
+                    },
+                    "required": ["command"],
+                },
+            ),
+            types.FunctionDeclaration(
+                name="repo_writer",
+                description=(
+                    "Create, edit, or delete files in the workspace. "
+                    "Use for writing code, configuration, or documentation."
+                ),
+                parameters_json_schema={
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["create", "edit", "delete"],
+                            "description": "File operation to perform",
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "File path relative to workspace",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "File content (for create/edit)",
+                        },
+                    },
+                    "required": ["action", "path"],
+                },
+            ),
+            types.FunctionDeclaration(
+                name="service_runner",
+                description=(
+                    "Manage Docker services — check status, health, start or stop services."
+                ),
+                parameters_json_schema={
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["up", "down", "status", "health"],
+                            "description": "Docker service action",
+                        },
+                        "service_name": {
+                            "type": "string",
+                            "description": "Optional service name (default: all services)",
+                        },
+                    },
+                    "required": ["action"],
+                },
+            ),
+        ]
+
+    def _classify_tool_call_safety(self, skill_name: str, inputs: dict) -> str:
+        """Classify a tool call as 'auto' (safe, read-only) or 'escalate' (needs approval).
+
+        Read-only operations execute automatically during research.
+        Write operations require user approval before execution.
+        """
+        READ_ONLY_COMMANDS = (
+            "ls", "cat", "grep", "head", "tail", "find", "wc",
+            "git status", "git log", "git diff", "git branch",
+            "echo", "pwd", "whoami", "date", "df", "du",
+            "docker ps", "docker logs",
+        )
+
+        if skill_name == "network_client":
+            method = inputs.get("method", "").upper()
+            if method in ("GET", "HEAD"):
+                return "auto"
+            return "escalate"
+
+        if skill_name == "command_runner":
+            cmd = inputs.get("command", "").strip()
+            for safe_prefix in READ_ONLY_COMMANDS:
+                if cmd.startswith(safe_prefix):
+                    return "auto"
+            return "escalate"
+
+        # repo_writer, service_runner, and anything else → escalate
+        return "escalate"
+
+    def _agentic_generate(
+        self,
+        prompt: str,
+        system_instruction: str = None,
+        allow_writes: bool = False,
+        context_str: str = None,
+    ) -> str:
+        """Core agentic loop: Gemini + function calling via skills.
+
+        Calls Gemini with tool declarations. When Gemini returns a function_call,
+        executes it via SkillExecutor and feeds the result back. Loops until
+        Gemini returns a text response or max iterations are reached.
+
+        Args:
+            prompt: The user's prompt/question
+            system_instruction: Optional system instruction override
+            allow_writes: If True, write operations auto-execute. If False, escalate.
+            context_str: Optional pre-built context string
+
+        Returns:
+            The final text response from Gemini
+        """
+        MAX_ITERATIONS = 10
+
+        if not self.client:
+            return "Error: Gemini client not initialized."
+
+        if not self.skill_executor:
+            print("V6: skill_executor not available, falling back to text-only")
+            return self._text_only_generate(prompt, system_instruction, context_str)
+
+        # Build tool declarations and config
+        declarations = self._build_tool_declarations()
+        tool = types.Tool(function_declarations=declarations)
+
+        if not system_instruction:
+            system_instruction = self._build_system_instruction()
+
+        config = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            tools=[tool],
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+            thinking_config=self._get_thinking_config(),
+        )
+
+        # Build initial contents
+        ctx = context_str or self.context_env.get_context_string()
+        contents = [
+            types.Content(role="user", parts=[types.Part(text=f"{ctx}\n\n{prompt}")]),
+        ]
+
+        # Track tool calls for receipts
+        tool_receipts = []
+
+        for iteration in range(MAX_ITERATIONS):
+            print(f"V6 agentic loop iteration {iteration + 1}/{MAX_ITERATIONS}")
+
+            try:
+                response = self.client.models.generate_content(
+                    model=self._route_model(prompt),
+                    contents=contents,
+                    config=config,
+                )
+            except Exception as e:
+                print(f"V6 agentic loop Gemini call failed: {e}")
+                if tool_receipts:
+                    return self._format_tool_receipts(tool_receipts, error=str(e))
+                return f"Error during agentic generation: {e}"
+
+            # Check if response has function calls
+            if not response.function_calls:
+                # Text response — we're done
+                text = response.text if response.text else ""
+                if tool_receipts:
+                    print(f"V6 agentic loop completed after {len(tool_receipts)} tool calls")
+                return text
+
+            # Append model's response to conversation
+            contents.append(response.candidates[0].content)
+
+            # Process each function call
+            for fc in response.function_calls:
+                skill_name = fc.name
+                inputs = dict(fc.args) if fc.args else {}
+                print(f"V6 tool call: {skill_name}({inputs})")
+
+                # Safety classification
+                safety = self._classify_tool_call_safety(skill_name, inputs)
+
+                if safety == "escalate" and not allow_writes:
+                    # Don't execute — tell Gemini it needs approval
+                    escalation_msg = (
+                        f"BLOCKED: {skill_name} with inputs {inputs} requires user approval. "
+                        "This is a write operation. Inform the user what you want to do "
+                        "and ask for their approval before proceeding."
+                    )
+                    contents.append(types.Content(
+                        role="tool",
+                        parts=[types.Part.from_function_response(
+                            name=skill_name,
+                            response={"error": escalation_msg},
+                        )],
+                    ))
+                    tool_receipts.append({
+                        "skill": skill_name,
+                        "inputs": inputs,
+                        "result": "ESCALATED — needs user approval",
+                    })
+                    continue
+
+                # Execute the skill
+                try:
+                    result = self.skill_executor.run(skill_name, inputs)
+                    if result.success:
+                        result_data = result.outputs or {"status": "success"}
+                        # Truncate large responses for context window
+                        result_str = str(result_data)
+                        if len(result_str) > 8000:
+                            result_data = {"truncated": result_str[:8000] + "... [truncated]"}
+                        tool_receipts.append({
+                            "skill": skill_name,
+                            "inputs": inputs,
+                            "result": "SUCCESS",
+                            "outputs": result_data,
+                        })
+                    else:
+                        result_data = {"error": result.error or "Unknown error"}
+                        tool_receipts.append({
+                            "skill": skill_name,
+                            "inputs": inputs,
+                            "result": f"FAILED: {result.error}",
+                        })
+                except Exception as e:
+                    result_data = {"error": str(e)}
+                    tool_receipts.append({
+                        "skill": skill_name,
+                        "inputs": inputs,
+                        "result": f"EXCEPTION: {e}",
+                    })
+
+                # Feed result back to Gemini
+                contents.append(types.Content(
+                    role="tool",
+                    parts=[types.Part.from_function_response(
+                        name=skill_name,
+                        response=result_data,
+                    )],
+                ))
+
+        # Max iterations reached
+        print(f"V6 agentic loop hit max iterations ({MAX_ITERATIONS})")
+        return self._format_tool_receipts(
+            tool_receipts,
+            note="Reached maximum tool call limit. Here's what I found so far:",
+        )
+
+    def _format_tool_receipts(self, receipts: list, error: str = "", note: str = "") -> str:
+        """Format tool call receipts into a readable summary."""
+        lines = []
+        if note:
+            lines.append(note)
+        if error:
+            lines.append(f"Error: {error}")
+        for r in receipts:
+            status = r.get("result", "unknown")
+            lines.append(f"- {r['skill']}: {status}")
+        return "\n".join(lines) if lines else "No results."
+
+    def _text_only_generate(
+        self,
+        prompt: str,
+        system_instruction: str = None,
+        context_str: str = None,
+    ) -> str:
+        """Standard text-only Gemini call (no tools). Fallback when agentic loop is disabled."""
+        if not self.client:
+            return "Error: Gemini client not initialized."
+
+        if not system_instruction:
+            system_instruction = self._build_system_instruction()
+
+        ctx = context_str or self.context_env.get_context_string()
+
+        try:
+            response = self.client.models.generate_content(
+                model=self._route_model(prompt),
+                contents=[ctx, prompt],
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    thinking_config=self._get_thinking_config(),
+                ),
+            )
+            return response.text if response.text else ""
+        except Exception as e:
+            print(f"Text-only generate failed: {e}")
+            return f"Error generating response: {e}"
+
+    # ── End Fix Pack V6 ──────────────────────────────────────────────
 
     def _get_thinking_config(self):
         """Returns ThinkingConfig based on GEMINI_THINKING_LEVEL env var.
@@ -1126,53 +1498,48 @@ class LancelotOrchestrator:
                     context_str = self.context_env.get_context_string()
             else:
                 context_str = self.context_env.get_context_string()
-            contents = [context_str, user_message]
-            
+
             # Legacy fields
-            self.rules_context = "See ContextEnv" 
+            self.rules_context = "See ContextEnv"
             self.user_context = "See ContextEnv"
             self.memory_summary = "See ContextEnv"
 
-            thinking_config = self._get_thinking_config()
+            system_instruction = self._build_system_instruction(crusader_mode)
 
-            if self._cache and not crusader_mode:
-                # Use cached context
-                response = self.client.models.generate_content(
-                    model=self._cache_model,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        cached_content=self._cache.name,
-                        thinking_config=thinking_config,
-                    )
+            # Fix Pack V6: Agentic loop — give Gemini tool access for autonomous research
+            from feature_flags import FEATURE_AGENTIC_LOOP
+            if FEATURE_AGENTIC_LOOP:
+                print("V6: Routing KNOWLEDGE_REQUEST through agentic loop")
+                raw_response = self._agentic_generate(
+                    prompt=user_message,
+                    system_instruction=system_instruction,
+                    allow_writes=False,
+                    context_str=context_str,
                 )
             else:
-                # No cache or crusader mode
-                system_instruction = self._build_system_instruction(crusader_mode)
-                response = self.client.models.generate_content(
-                    model=selected_model,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction,
-                        thinking_config=thinking_config,
-                    )
+                # V5 fallback: text-only Gemini
+                raw_response = self._text_only_generate(
+                    prompt=user_message,
+                    system_instruction=system_instruction,
+                    context_str=context_str,
                 )
 
             # S10: Sanitize LLM output before parsing
-            sanitized_response = self._validate_llm_response(response.text)
-            
+            sanitized_response = self._validate_llm_response(raw_response)
+
             # S6: Add to History
             self.context_env.add_history("assistant", sanitized_response)
-            
+
             # Helper to estimate tokens (since we don't always get usage metadata)
-            est_tokens = len(response.text) // 4
-            
+            est_tokens = len(sanitized_response) // 4
+
             duration = int((__import__("time").time() - start_time) * 1000)
             self.receipt_service.update(receipt.complete(
-                {"response": sanitized_response}, 
-                duration, 
+                {"response": sanitized_response},
+                duration,
                 token_count=est_tokens
             ))
-            
+
             # Governance: Log Usage
             self.governor.log_usage("tokens", est_tokens + est_input_tokens)
 
@@ -1248,12 +1615,25 @@ class LancelotOrchestrator:
         1. Strip planner leakage markers (DRAFT:, PLANNER:, etc.)
         2. Check for structural fake work proposals — replace entire response
         3. Check individual forbidden phrases — replace if >= 2, strip if 1
+
+        Fix Pack V6: When agentic loop has tool receipts, research/execution
+        phrases are allowed because they describe real tool-backed work.
         """
         import re
         from response_governor import (
             detect_forbidden_async_language,
             detect_fake_work_proposal,
+            filter_forbidden_for_agentic_context,
         )
+
+        # Fix Pack V6: Check if agentic loop made real tool calls
+        has_tool_receipts = False
+        try:
+            from feature_flags import FEATURE_AGENTIC_LOOP
+            if FEATURE_AGENTIC_LOOP and self.skill_executor:
+                has_tool_receipts = len(self.skill_executor.receipts) > 0
+        except Exception:
+            pass
 
         # Tier 1: Strip planner leakage markers
         cleaned = re.sub(r'^DRAFT:\s*', '', text, flags=re.IGNORECASE).strip()
@@ -1261,9 +1641,11 @@ class LancelotOrchestrator:
             cleaned = cleaned.replace(marker, "").strip()
 
         # Tier 2: Check for structural fake work proposal (highest priority)
-        fake_work_reason = detect_fake_work_proposal(cleaned)
-        if fake_work_reason:
-            return self._generate_honest_replacement(cleaned, fake_work_reason)
+        # V6: Skip fake work detection when backed by real tool receipts
+        if not has_tool_receipts:
+            fake_work_reason = detect_fake_work_proposal(cleaned)
+            if fake_work_reason:
+                return self._generate_honest_replacement(cleaned, fake_work_reason)
 
         # Tier 2b (Fix Pack V1): Action Language Gate — block execution claims
         #   without a real TaskRun + receipt
@@ -1271,12 +1653,16 @@ class LancelotOrchestrator:
             active_run = None
             if self.task_store:
                 active_run = self.task_store.get_active_run()
-            gate_result = check_action_language(cleaned, task_run=active_run)
+            gate_result = check_action_language(
+                cleaned, task_run=active_run, has_tool_receipts=has_tool_receipts,
+            )
             if not gate_result.passed:
                 cleaned = gate_result.corrected_text
 
         # Tier 3: Check for individual forbidden phrases
         violations = detect_forbidden_async_language(cleaned)
+        # V6: Filter out research phrases that are backed by tool receipts
+        violations = filter_forbidden_for_agentic_context(violations, has_tool_receipts)
         if violations:
             # 2+ violations = systemic stalling — replace entire response
             if len(violations) >= 2:

@@ -28,6 +28,8 @@
 - Manage Docker containers and services
 - Receive and respond to voice notes via Telegram
 - Plan multi-step tasks and execute them with owner approval
+- Research: fetch web pages, API docs, and external data via network_client skill
+- Autonomous research: use tools proactively to gather information before planning
 
 ## What You Cannot Do
 - Access systems outside the server without network_client skill

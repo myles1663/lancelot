@@ -306,6 +306,48 @@ def detect_forbidden_async_language(text: str) -> List[str]:
     return found
 
 
+# Fix Pack V6: Phrases that are allowed when backed by real tool receipts
+_AGENTIC_ALLOWED_PHRASES = {
+    "i researched", "i found", "i checked", "i discovered",
+    "i fetched", "i retrieved", "i looked up", "i queried",
+    "i investigated", "i explored", "i analyzed",
+    "based on my research", "after researching",
+    "i will research", "i'll research",
+    "i will investigate", "i'll investigate",
+    "i will explore", "i'll explore",
+    "i will analyze the", "i'll analyze the",
+    "let me research", "let me investigate", "let me explore", "let me analyze",
+    "i will conduct", "i'll conduct",
+    "research phase",
+}
+
+
+def filter_forbidden_for_agentic_context(violations: List[str], has_tool_receipts: bool = False) -> List[str]:
+    """Filter out research-related violations when tool receipts are present.
+
+    Fix Pack V6: When the agentic loop has actually called tools (network_client,
+    command_runner, etc.), phrases like "I researched X" or "I will investigate"
+    are legitimate — they describe real tool-backed work, not simulated progress.
+
+    Args:
+        violations: List of detected forbidden phrases.
+        has_tool_receipts: Whether real tool calls were made in this turn.
+
+    Returns:
+        Filtered list of violations with research phrases removed if backed by receipts.
+    """
+    if not has_tool_receipts or not violations:
+        return violations
+
+    filtered = []
+    for v in violations:
+        v_lower = v.lower()
+        if any(allowed in v_lower for allowed in _AGENTIC_ALLOWED_PHRASES):
+            continue  # Skip — this is legitimate tool-backed language
+        filtered.append(v)
+    return filtered
+
+
 # =============================================================================
 # Enforcement
 # =============================================================================
