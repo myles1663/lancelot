@@ -222,3 +222,43 @@ class LocalModelClient:
         prompt = self._render("rag_rewrite", input=query)
         raw = self.complete(prompt, max_tokens=128, temperature=0.1)
         return raw.strip()
+
+    # ------------------------------------------------------------------
+    # Fix Pack V8: Chat completions with tool/function calling
+    # ------------------------------------------------------------------
+
+    def chat_with_tools(
+        self,
+        messages: list,
+        tools: Optional[list] = None,
+        max_tokens: int = 512,
+        temperature: float = 0.1,
+        tool_choice: Optional[str] = None,
+        timeout: float = 60.0,
+    ) -> dict:
+        """Chat completion with optional tool/function calling support.
+
+        Uses the /v1/chat/completions endpoint (OpenAI-compatible).
+
+        Args:
+            messages: List of {role, content} dicts.
+            tools: Optional list of tool declarations (OpenAI format).
+            max_tokens: Max tokens for generation.
+            temperature: Sampling temperature.
+            tool_choice: Optional tool choice constraint.
+            timeout: Request timeout in seconds.
+
+        Returns:
+            Full OpenAI-format chat completion response dict.
+        """
+        payload = {
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if tools:
+            payload["tools"] = tools
+        if tool_choice:
+            payload["tool_choice"] = tool_choice
+
+        return self._post("/v1/chat/completions", payload, timeout=timeout)

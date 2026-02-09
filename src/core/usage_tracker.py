@@ -49,6 +49,7 @@ _COST_PER_1K: dict[str, float] = {
 _AVG_TOKENS: dict[str, int] = {
     "local_redaction": 80,
     "local_utility": 120,
+    "local_agentic": 200,  # V8: local model with tool calling
     "flagship_fast": 500,
     "flagship_deep": 1500,
 }
@@ -148,7 +149,7 @@ class UsageTracker:
         """
         local_requests = 0
         local_tokens = 0
-        for lane_name in ("local_redaction", "local_utility"):
+        for lane_name in ("local_redaction", "local_utility", "local_agentic"):
             usage = self._lanes.get(lane_name)
             if usage:
                 local_requests += usage.requests
@@ -159,7 +160,7 @@ class UsageTracker:
 
         flagship_cost = 0.0
         for lane_name, usage in self._lanes.items():
-            if lane_name not in ("local_redaction", "local_utility"):
+            if lane_name not in ("local_redaction", "local_utility", "local_agentic"):
                 flagship_cost += usage.total_cost_est
 
         return {

@@ -2,11 +2,14 @@
 local-llm HTTP server — exposes the local GGUF model via FastAPI.
 
 Endpoints:
-    GET  /health           — liveness + readiness probe
-    POST /v1/completions   — text completion (llama.cpp compatible)
+    GET  /health               — liveness + readiness probe
+    POST /v1/completions       — text completion (llama.cpp compatible)
+    POST /v1/chat/completions  — OpenAI-compatible chat completions with tool support
 
 The model is loaded once at startup from the path specified by
 LOCAL_MODEL_PATH env var or from the lockfile default.
+
+Fix Pack V8: Added chat completions endpoint with function calling support.
 """
 
 import os
@@ -16,7 +19,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("local-llm")
@@ -41,6 +44,32 @@ class CompletionResponse(BaseModel):
     model: str
     tokens_generated: int
     elapsed_ms: float
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: Optional[str] = None
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+    tool_call_id: Optional[str] = None
+
+
+class ToolFunction(BaseModel):
+    name: str
+    description: Optional[str] = None
+    parameters: Optional[Dict[str, Any]] = None
+
+
+class ToolDeclaration(BaseModel):
+    type: str = "function"
+    function: ToolFunction
+
+
+class ChatCompletionRequest(BaseModel):
+    messages: List[Dict[str, Any]]
+    tools: Optional[List[Dict[str, Any]]] = None
+    max_tokens: int = Field(default=512, ge=1, le=8192)
+    temperature: float = Field(default=0.1, ge=0.0, le=2.0)
+    tool_choice: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -75,9 +104,9 @@ def _do_load_model():
         logger.error(f"Model file not found: {model_path}")
         raise FileNotFoundError(f"Model not found: {model_path}")
 
-    n_ctx = int(os.environ.get("LOCAL_MODEL_CTX", "4096"))
+    n_ctx = int(os.environ.get("LOCAL_MODEL_CTX", "8192"))
     n_threads = int(os.environ.get("LOCAL_MODEL_THREADS", "4"))
-    n_gpu = int(os.environ.get("LOCAL_MODEL_GPU_LAYERS", "0"))
+    n_gpu = int(os.environ.get("LOCAL_MODEL_GPU_LAYERS", "28"))
 
     logger.info(f"Loading model: {model_path}")
     logger.info(f"Config: ctx={n_ctx}, threads={n_threads}, gpu_layers={n_gpu}")
@@ -99,7 +128,7 @@ async def lifespan(a):
     yield
 
 
-app = FastAPI(title="Lancelot local-llm", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Lancelot local-llm", version="2.0.0", lifespan=lifespan)
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +145,7 @@ def health():
         "status": "ok",
         "model": _model_name,
         "uptime_seconds": round(uptime, 1),
+        "capabilities": ["completions", "chat_completions", "tool_calling"],
     }
 
 
@@ -148,6 +178,55 @@ def completions(req: CompletionRequest):
         tokens_generated=tokens,
         elapsed_ms=round(elapsed, 1),
     )
+
+
+@app.post("/v1/chat/completions")
+def chat_completions(req: ChatCompletionRequest):
+    """OpenAI-compatible chat completions with tool/function calling support.
+
+    Fix Pack V8: Qwen3-8B has native tool calling support. llama-cpp-python's
+    create_chat_completion() handles the tool calling format automatically.
+    """
+    if _llm is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+
+    start = time.monotonic()
+
+    # Build kwargs for create_chat_completion
+    kwargs = {
+        "messages": req.messages,
+        "max_tokens": req.max_tokens,
+        "temperature": req.temperature,
+    }
+    if req.tools:
+        kwargs["tools"] = req.tools
+    if req.tool_choice:
+        kwargs["tool_choice"] = req.tool_choice
+
+    try:
+        result = _llm.create_chat_completion(**kwargs)
+    except Exception as exc:
+        logger.error("Chat completion error: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Chat completion failed: {exc}",
+        )
+
+    elapsed = (time.monotonic() - start) * 1000
+
+    # Add timing metadata
+    if isinstance(result, dict):
+        result["_elapsed_ms"] = round(elapsed, 1)
+        result["_model"] = _model_name
+
+    logger.info(
+        "Chat completion: %d messages, tools=%s, elapsed=%.1fms",
+        len(req.messages),
+        "yes" if req.tools else "no",
+        elapsed,
+    )
+
+    return result
 
 
 # ---------------------------------------------------------------------------

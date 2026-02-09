@@ -105,7 +105,7 @@ class TestRealLockfile:
 
     def test_real_lockfile_has_correct_model_name(self):
         data = load_lockfile()
-        assert data["model"]["name"] == "hermes-2-pro-mistral-7b"
+        assert data["model"]["name"] == "qwen3-8b"
 
     def test_real_lockfile_format_is_gguf(self):
         data = load_lockfile()
@@ -426,5 +426,5 @@ class TestGetModelInfo:
 
     def test_model_info_from_real_lockfile(self):
         info = get_model_info()
-        assert info["name"] == "hermes-2-pro-mistral-7b"
+        assert info["name"] == "qwen3-8b"
         assert info["format"] == "gguf"

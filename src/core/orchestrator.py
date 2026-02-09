@@ -878,6 +878,301 @@ class LancelotOrchestrator:
         # repo_writer, service_runner, and anything else → escalate
         return "escalate"
 
+    # ------------------------------------------------------------------
+    # Fix Pack V8: Local agentic routing
+    # ------------------------------------------------------------------
+
+    def _build_openai_tool_declarations(self):
+        """Build OpenAI-format tool declarations for the local model.
+
+        Returns a list of tool dicts in the OpenAI chat completions format,
+        matching the same 4 skills as _build_tool_declarations() for Gemini.
+        """
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "network_client",
+                    "description": (
+                        "Make HTTP requests to external APIs and websites. "
+                        "Use this to research APIs, fetch documentation, check endpoints, "
+                        "or interact with web services."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "method": {
+                                "type": "string",
+                                "enum": ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"],
+                                "description": "HTTP method",
+                            },
+                            "url": {
+                                "type": "string",
+                                "description": "Full URL including https://",
+                            },
+                            "headers": {
+                                "type": "object",
+                                "description": "Optional HTTP headers as key-value pairs",
+                            },
+                            "body": {
+                                "type": "string",
+                                "description": "Optional request body (for POST/PUT/PATCH)",
+                            },
+                        },
+                        "required": ["method", "url"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "command_runner",
+                    "description": (
+                        "Execute shell commands on the server. Commands are validated "
+                        "against a whitelist. Use for inspecting the system, listing files, "
+                        "checking versions, running git commands, etc."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "The shell command to execute",
+                            },
+                        },
+                        "required": ["command"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "service_runner",
+                    "description": (
+                        "Manage Docker services — check status, health, start or stop services."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": ["up", "down", "status", "health"],
+                                "description": "Docker service action",
+                            },
+                            "service_name": {
+                                "type": "string",
+                                "description": "Optional service name (default: all services)",
+                            },
+                        },
+                        "required": ["action"],
+                    },
+                },
+            },
+        ]
+
+    def _is_simple_for_local(self, prompt: str) -> bool:
+        """Heuristic: can this request be handled by the local model?
+
+        Returns True for simple, short, typically read-only queries.
+        Returns False for complex reasoning that needs Gemini.
+        Conservative — defaults to Gemini.
+        """
+        if len(prompt) > 500:
+            return False
+
+        prompt_lower = prompt.lower()
+
+        # Keywords suggesting complex reasoning → Gemini
+        complex_keywords = {
+            "plan", "architect", "analyze", "compare", "strategy",
+            "debug", "refactor", "design", "evaluate", "explain",
+            "research", "investigate", "build", "implement", "create",
+            "write code", "deploy", "migrate",
+        }
+        if any(k in prompt_lower for k in complex_keywords):
+            return False
+
+        # Simple tool-backed queries → local
+        simple_keywords = {
+            "status", "check", "list", "what time", "version",
+            "running", "health", "uptime", "ls", "who", "show",
+            "what services", "docker", "disk", "memory usage",
+            "how much", "is it running", "what is the",
+        }
+        if any(k in prompt_lower for k in simple_keywords):
+            return True
+
+        return False  # Default: Gemini (conservative)
+
+    def _local_agentic_generate(
+        self,
+        prompt: str,
+        system_instruction: str = None,
+        allow_writes: bool = False,
+        context_str: str = None,
+    ) -> str:
+        """Agentic loop using local model for simple tool calls.
+
+        Fix Pack V8: Parallel to _agentic_generate() but uses the local
+        model via chat completions + OpenAI-format tool calling.
+        Lower max iterations (5 vs 10) since local queries are simpler.
+
+        Returns:
+            The final text response from the local model.
+        """
+        MAX_LOCAL_ITERATIONS = 5
+
+        if not self.local_model:
+            print("V8: local_model not available, falling back to Gemini agentic")
+            return self._agentic_generate(
+                prompt=prompt,
+                system_instruction=system_instruction,
+                allow_writes=allow_writes,
+                context_str=context_str,
+            )
+
+        if not self.local_model.is_healthy():
+            print("V8: local model unhealthy, falling back to Gemini agentic")
+            return self._agentic_generate(
+                prompt=prompt,
+                system_instruction=system_instruction,
+                allow_writes=allow_writes,
+                context_str=context_str,
+            )
+
+        tools = self._build_openai_tool_declarations()
+
+        ctx = context_str or self.context_env.get_context_string()
+        sys_msg = system_instruction or self._build_system_instruction()
+
+        messages = [
+            {"role": "system", "content": sys_msg},
+            {"role": "user", "content": f"{ctx}\n\n{prompt}"},
+        ]
+
+        tool_receipts = []
+        total_est_tokens = 0
+
+        for iteration in range(MAX_LOCAL_ITERATIONS):
+            print(f"V8 local agentic iteration {iteration + 1}/{MAX_LOCAL_ITERATIONS}")
+
+            try:
+                result = self.local_model.chat_with_tools(
+                    messages=messages,
+                    tools=tools,
+                    max_tokens=512,
+                    temperature=0.1,
+                )
+            except Exception as e:
+                print(f"V8 local model call failed: {e}")
+                if tool_receipts:
+                    return self._format_tool_receipts(tool_receipts, error=str(e))
+                # Fall back to Gemini
+                print("V8: Falling back to Gemini after local model error")
+                return self._agentic_generate(
+                    prompt=prompt,
+                    system_instruction=system_instruction,
+                    allow_writes=allow_writes,
+                    context_str=context_str,
+                )
+
+            # Parse response
+            choices = result.get("choices", [])
+            if not choices:
+                print("V8: No choices in local model response")
+                return "Error: Local model returned no response."
+
+            choice = choices[0]
+            message = choice.get("message", {})
+            finish_reason = choice.get("finish_reason", "stop")
+
+            # Track token usage
+            usage = result.get("usage", {})
+            iter_tokens = usage.get("total_tokens", 200)
+            total_est_tokens += iter_tokens
+            self.governor.log_usage("tokens", iter_tokens)
+            print(f"V8 iteration {iteration + 1} tokens: ~{iter_tokens} (cumulative: ~{total_est_tokens})")
+
+            # Check for tool calls
+            tool_calls = message.get("tool_calls")
+
+            if not tool_calls or finish_reason == "stop":
+                # Text response — we're done
+                text = message.get("content", "")
+                if tool_receipts:
+                    print(f"V8 local agentic completed after {len(tool_receipts)} tool calls")
+                return text or "No response from local model."
+
+            # Append assistant message to conversation
+            messages.append(message)
+
+            # Execute each tool call
+            for tc in tool_calls:
+                func = tc.get("function", {})
+                skill_name = func.get("name", "")
+                try:
+                    import json as _json
+                    inputs = _json.loads(func.get("arguments", "{}"))
+                except (ValueError, TypeError):
+                    inputs = {}
+
+                tc_id = tc.get("id", f"call_{iteration}_{skill_name}")
+                print(f"V8 local tool call: {skill_name}({inputs})")
+
+                # Safety classification
+                safety = self._classify_tool_call_safety(skill_name, inputs)
+
+                if safety == "escalate" and not allow_writes:
+                    result_content = f"BLOCKED: {skill_name} requires user approval."
+                    tool_receipts.append({
+                        "skill": skill_name,
+                        "inputs": inputs,
+                        "result": "ESCALATED",
+                    })
+                else:
+                    # Execute the skill
+                    self.governor.log_usage("tool_calls", 1)
+                    try:
+                        skill_result = self.skill_executor.run(skill_name, inputs)
+                        if skill_result.success:
+                            result_content = str(skill_result.outputs or {"status": "success"})
+                            if len(result_content) > 4000:
+                                result_content = result_content[:4000] + "... [truncated]"
+                            tool_receipts.append({
+                                "skill": skill_name,
+                                "inputs": inputs,
+                                "result": "SUCCESS",
+                                "outputs": skill_result.outputs,
+                            })
+                        else:
+                            result_content = f"Error: {skill_result.error}"
+                            tool_receipts.append({
+                                "skill": skill_name,
+                                "inputs": inputs,
+                                "result": f"FAILED: {skill_result.error}",
+                            })
+                    except Exception as e:
+                        result_content = f"Exception: {e}"
+                        tool_receipts.append({
+                            "skill": skill_name,
+                            "inputs": inputs,
+                            "result": f"EXCEPTION: {e}",
+                        })
+
+                # Feed tool result back as tool message (OpenAI format)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "content": result_content,
+                })
+
+        # Max iterations reached
+        print(f"V8 local agentic hit max iterations ({MAX_LOCAL_ITERATIONS})")
+        return self._format_tool_receipts(
+            tool_receipts,
+            note="Reached maximum local tool call limit. Here's what I found:",
+        )
+
     def _agentic_generate(
         self,
         prompt: str,
@@ -1560,16 +1855,26 @@ class LancelotOrchestrator:
 
             system_instruction = self._build_system_instruction(crusader_mode)
 
-            # Fix Pack V6: Agentic loop — give Gemini tool access for autonomous research
-            from feature_flags import FEATURE_AGENTIC_LOOP
+            # Fix Pack V6/V8: Agentic loop — tool access for autonomous research
+            from feature_flags import FEATURE_AGENTIC_LOOP, FEATURE_LOCAL_AGENTIC
             if FEATURE_AGENTIC_LOOP:
-                print("V6: Routing KNOWLEDGE_REQUEST through agentic loop")
-                raw_response = self._agentic_generate(
-                    prompt=user_message,
-                    system_instruction=system_instruction,
-                    allow_writes=False,
-                    context_str=context_str,
-                )
+                # V8: Try local model for simple queries to save Gemini tokens
+                if FEATURE_LOCAL_AGENTIC and self._is_simple_for_local(user_message):
+                    print("V8: Routing simple query to local agentic model")
+                    raw_response = self._local_agentic_generate(
+                        prompt=user_message,
+                        system_instruction=system_instruction,
+                        allow_writes=False,
+                        context_str=context_str,
+                    )
+                else:
+                    print("V6: Routing KNOWLEDGE_REQUEST through Gemini agentic loop")
+                    raw_response = self._agentic_generate(
+                        prompt=user_message,
+                        system_instruction=system_instruction,
+                        allow_writes=False,
+                        context_str=context_str,
+                    )
             else:
                 # V5 fallback: text-only Gemini
                 raw_response = self._text_only_generate(

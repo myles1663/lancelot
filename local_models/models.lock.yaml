@@ -1,5 +1,5 @@
 # ==========================================================
-# Local Utility Model Lockfile (v4 Upgrade)
+# Local Utility Model Lockfile (v8 Upgrade — Qwen3-8B)
 # ==========================================================
 # Pinned model metadata — weights are NOT bundled.
 # Downloaded from upstream with user consent during onboarding.
@@ -8,21 +8,21 @@
 # ==========================================================
 
 model:
-  name: "hermes-2-pro-mistral-7b"
-  version: "2.0"
+  name: "qwen3-8b"
+  version: "3.0"
   quantization: "Q4_K_M"
   format: "gguf"
-  filename: "Hermes-2-Pro-Mistral-7B.Q4_K_M.gguf"
-  size_mb: 4370
+  filename: "Qwen3-8B-Q4_K_M.gguf"
+  size_mb: 5000
 
   # SHA-256 checksum for integrity verification
   checksum:
     algorithm: "sha256"
-    hash: "e1e4253b94e3c04c7b6544250f29ad864a56eb2126e61eb440991a8284453674"
+    hash: "0000000000000000000000000000000000000000000000000000000000000000"
 
   # Download sources (tried in order)
   sources:
-    - url: "https://huggingface.co/NousResearch/Hermes-2-Pro-Mistral-7B-GGUF/resolve/main/Hermes-2-Pro-Mistral-7B.Q4_K_M.gguf"
+    - url: "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/qwen3-8b-q4_k_m.gguf"
       provider: "huggingface"
 
   # Licensing
@@ -33,9 +33,9 @@ model:
 # Runtime configuration
 runtime:
   engine: "llama.cpp"
-  context_length: 4096
+  context_length: 8192
   threads: 4
-  gpu_layers: 0  # CPU-only by default
+  gpu_layers: 28  # Partial GPU offload (GTX 1070 8GB, ~4GB free VRAM)
 
 # Prompt suite references
 prompts:

@@ -58,6 +58,9 @@ FEATURE_VOICE_NOTES: bool = _env_bool("FEATURE_VOICE_NOTES")
 # Fix Pack V6 flags
 FEATURE_AGENTIC_LOOP: bool = _env_bool("FEATURE_AGENTIC_LOOP", default=False)
 
+# Fix Pack V8 flags
+FEATURE_LOCAL_AGENTIC: bool = _env_bool("FEATURE_LOCAL_AGENTIC", default=False)
+
 
 def reload_flags() -> None:
     """Re-read feature flags from environment. Used in tests."""
@@ -67,6 +70,7 @@ def reload_flags() -> None:
     global FEATURE_RESPONSE_ASSEMBLER, FEATURE_EXECUTION_TOKENS
     global FEATURE_TASK_GRAPH_EXECUTION, FEATURE_NETWORK_ALLOWLIST, FEATURE_VOICE_NOTES
     global FEATURE_AGENTIC_LOOP
+    global FEATURE_LOCAL_AGENTIC
 
     # vNext2 flags
     FEATURE_SOUL = _env_bool("FEATURE_SOUL")
@@ -92,6 +96,9 @@ def reload_flags() -> None:
     # Fix Pack V6 flags
     FEATURE_AGENTIC_LOOP = _env_bool("FEATURE_AGENTIC_LOOP", default=False)
 
+    # Fix Pack V8 flags
+    FEATURE_LOCAL_AGENTIC = _env_bool("FEATURE_LOCAL_AGENTIC", default=False)
+
 
 def log_feature_flags() -> None:
     """Log current feature flag state at startup."""
@@ -113,4 +120,8 @@ def log_feature_flags() -> None:
     logger.info(
         "Fix Pack V6 flags: AGENTIC_LOOP=%s",
         FEATURE_AGENTIC_LOOP,
+    )
+    logger.info(
+        "Fix Pack V8 flags: LOCAL_AGENTIC=%s",
+        FEATURE_LOCAL_AGENTIC,
     )
