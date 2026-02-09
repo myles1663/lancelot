@@ -227,8 +227,20 @@ async def startup_event():
             from skills.registry import SkillRegistry
             from skills.executor import SkillExecutor
             skill_registry = SkillRegistry(data_dir="/home/lancelot/data")
+            # Fix Pack V5: Register builtins so executor can find them
+            from skills.registry import SkillEntry, SkillOwnership
+            for builtin_name in ("echo", "command_runner", "repo_writer", "service_runner", "network_client"):
+                if not skill_registry.get_skill(builtin_name):
+                    skill_registry._skills[builtin_name] = SkillEntry(
+                        name=builtin_name, version="1.0.0",
+                        enabled=True, ownership=SkillOwnership.SYSTEM,
+                    )
+            skill_registry._save()
             _skill_executor = SkillExecutor(registry=skill_registry)
             main_orchestrator.skill_executor = _skill_executor
+            # Fix Pack V5: Also wire into TaskRunner (created before gateway sets skill_executor)
+            if main_orchestrator.task_runner:
+                main_orchestrator.task_runner.skill_executor = _skill_executor
             logger.info(f"Skills initialized: {len(skill_registry.list_skills())} skills")
     except Exception as e:
         logger.warning(f"Skills initialization failed: {e}")

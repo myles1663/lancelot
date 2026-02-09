@@ -265,21 +265,36 @@ class LancelotOrchestrator:
 
         result = self.task_runner.run(run.id)
 
-        # Fix Pack V4: Use Gemini to produce actual execution content
-        llm_content = self._execute_with_llm(active_graph)
+        # Fix Pack V5: Check if skills produced real outputs (not placeholders)
+        has_real_results = False
+        if result.step_results:
+            for sr in result.step_results:
+                if sr.success and sr.outputs:
+                    # Placeholder outputs contain "placeholder" or "executed (placeholder)"
+                    out_str = str(sr.outputs)
+                    if "placeholder" not in out_str.lower():
+                        has_real_results = True
+                        break
 
-        # Assemble status line only
+        if has_real_results:
+            # V5: Summarize real skill execution results
+            print(f"V5: Real skill results detected — summarizing {len(result.step_results)} steps")
+            content = self._summarize_execution_results(active_graph, result)
+        else:
+            # V5: Fall back to LLM execution (skills not yet wired for this task type)
+            print("V5: No real skill results — falling back to LLM execution")
+            content = self._execute_with_llm(active_graph)
+
+        # Assemble status line
         if self.assembler:
             assembled = self.assembler.assemble(
                 task_graph=active_graph,
                 task_run=self.task_store.get_run(run.id),
             )
-            if llm_content:
-                # V4: Use execution content directly — don't route through
-                # assembler section extraction which strips non-Goal headers
-                return llm_content + "\n\n---\n" + assembled.chat_response
+            if content:
+                return content + "\n\n---\n" + assembled.chat_response
             return assembled.chat_response
-        return llm_content or f"Task completed with status: {result.status}"
+        return content or f"Task completed with status: {result.status}"
 
     def _request_permission(self, graph: TaskGraph) -> str:
         """Format a permission request for a TaskGraph."""
@@ -334,22 +349,25 @@ class LancelotOrchestrator:
         if not self.client:
             return artifact
 
+        self_awareness = self._build_self_awareness()
+
         prompt = (
             f"The user asked: \"{user_text}\"\n\n"
-            f"Generate 4-6 specific, actionable plan steps to accomplish this goal: {artifact.goal}\n"
-            "Each step should be concrete and specific to the user's request.\n"
+            f"Generate 4-6 specific, actionable plan steps to accomplish this goal: {artifact.goal}\n\n"
+            f"{self_awareness}\n\n"
+            "CRITICAL: Ground the plan in YOUR real capabilities. "
+            "You already communicate via Telegram with text and voice notes. "
+            "If the user says 'us' or 'we', that includes you. "
+            "Don't suggest downloading third-party apps when your existing capabilities cover the need.\n\n"
             "Return ONLY a numbered list of steps, nothing else.\n"
-            "Example format:\n"
-            "1. Research available voice communication platforms (Signal, Discord, Zoom, etc.)\n"
-            "2. Compare free tier features across platforms\n"
         )
 
         try:
             response = self.client.models.generate_content(
                 model="gemini-2.0-flash",
-                contents=[prompt],
+                contents=[self.context_env.get_context_string(), prompt],
                 config=types.GenerateContentConfig(
-                    system_instruction="You are a helpful planning assistant. Return only numbered steps. No preamble.",
+                    system_instruction=f"You are Lancelot's planning module. {self_awareness} Return only numbered steps. No preamble.",
                 )
             )
             raw = response.text.strip()
@@ -384,12 +402,18 @@ class LancelotOrchestrator:
         prompt = (
             f"The user asked: \"{goal}\"\n\n"
             f"Execute this approved plan:\n{steps_text}\n\n"
-            "For each step, provide complete results:\n"
-            "- Specific names, platforms, tools with real comparisons\n"
-            "- Exact setup commands and configuration steps\n"
-            "- Links, pricing tiers, compatibility details where relevant\n"
-            "- Code snippets or config files if applicable\n\n"
-            "Be thorough and practical. Produce a complete deliverable."
+            "IMPORTANT RULES:\n"
+            "1. You ARE Lancelot — a governed autonomous system deployed on Telegram.\n"
+            "2. When the user says 'us' or 'we', that includes YOU.\n"
+            "3. Ground your answer in YOUR real capabilities first:\n"
+            "   - You already communicate via Telegram (text + voice notes)\n"
+            "   - You have skills: command_runner, repo_writer, network_client, service_runner\n"
+            "   - You can execute shell commands, make API calls, edit files, manage Docker\n"
+            "4. Don't tell the user to download apps or Google things when YOUR capabilities cover the need.\n"
+            "5. If the user needs something beyond your current capabilities, say what you CAN do now\n"
+            "   and propose what you could BUILD to extend yourself.\n"
+            "6. Be direct and concise. No walls of text. No comparison charts unless asked.\n"
+            "7. Max 10-15 lines of response."
         )
 
         try:
@@ -412,6 +436,56 @@ class LancelotOrchestrator:
             print(f"LLM execution failed: {e}")
             return ""
 
+    def _summarize_execution_results(self, graph, run_result) -> str:
+        """Summarize real skill execution results using Gemini (Fix Pack V5).
+
+        Takes a TaskGraph and TaskRunResult, formats the real step outputs,
+        and sends to Gemini for a concise user-facing summary.
+        """
+        if not self.client:
+            return ""
+
+        # Format real step outputs
+        results_text = []
+        for sr in run_result.step_results:
+            step_label = sr.step_id
+            # Find matching step in graph for a readable label
+            for s in graph.steps:
+                if s.step_id == sr.step_id:
+                    step_label = s.inputs.get("description", s.type)
+                    break
+            if sr.success:
+                results_text.append(f"- {step_label}: SUCCESS — {sr.outputs}")
+            else:
+                results_text.append(f"- {step_label}: FAILED — {sr.error}")
+
+        results_block = "\n".join(results_text)
+
+        prompt = (
+            f"Goal: {graph.goal}\n\n"
+            f"Execution results:\n{results_block}\n\n"
+            "Summarize what was accomplished for the user. "
+            "Be direct and concise. Report real outcomes only. "
+            "If steps failed, explain what went wrong and suggest fixes."
+        )
+
+        try:
+            system_instruction = self._build_execution_instruction()
+            response = self.client.models.generate_content(
+                model=self._route_model(graph.goal or ""),
+                contents=[self.context_env.get_context_string(), prompt],
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    thinking_config=self._get_thinking_config(),
+                )
+            )
+            from response.policies import OutputPolicy
+            return OutputPolicy.strip_tool_scaffolding(response.text)
+        except Exception as e:
+            print(f"Result summarization failed: {e}")
+            # Fallback: return raw results
+            return f"**Execution Complete**\n\n{results_block}"
+
     def _load_memory(self):
         """Loads Tier A memory files into ContextEnvironment."""
         print("Loading memory into Context Environment...")
@@ -420,7 +494,8 @@ class LancelotOrchestrator:
         self.context_env.read_file("USER.md")
         self.context_env.read_file("RULES.md")
         self.context_env.read_file("MEMORY_SUMMARY.md")
-        
+        self.context_env.read_file("CAPABILITIES.md")  # Fix Pack V5: self-awareness
+
         # Cache local strings for prompts/rules (legacy support)
         # Note: ContextEnv stores the actual content now
         
@@ -536,7 +611,10 @@ class LancelotOrchestrator:
             "Never propose a multi-phase work plan as if you will autonomously execute it over time."
         )
 
-        instruction = f"{persona}\n\n{rules}\n\n{guardrails}\n\n{honesty}"
+        # 5. SELF-AWARENESS (Fix Pack V5)
+        self_awareness = self._build_self_awareness()
+
+        instruction = f"{persona}\n\n{self_awareness}\n\n{rules}\n\n{guardrails}\n\n{honesty}"
 
         # Crusader Mode overlay
         if crusader_mode:
@@ -583,7 +661,10 @@ class LancelotOrchestrator:
             "Be comprehensive — the user expects a complete deliverable, not a summary."
         )
 
-        instruction = f"{persona}\n\n{rules}\n\n{guardrails}\n\n{execution_mode}"
+        # SELF-AWARENESS (Fix Pack V5)
+        self_awareness = self._build_self_awareness()
+
+        instruction = f"{persona}\n\n{self_awareness}\n\n{rules}\n\n{guardrails}\n\n{execution_mode}"
 
         # Crusader Mode overlay
         crusader_mode = os.environ.get("CRUSADER_MODE", "false").lower() == "true"
@@ -592,6 +673,22 @@ class LancelotOrchestrator:
             instruction = CrusaderPromptModifier.modify_prompt(instruction)
 
         return instruction
+
+    def _build_self_awareness(self) -> str:
+        """Build self-awareness context block for system instructions (Fix Pack V5).
+
+        Tells Gemini what Lancelot IS, what it CAN DO, and how users interact
+        with it. This is the key difference between a chatbot and a GAS.
+        """
+        return (
+            "CRITICAL CONTEXT — What you are:\n"
+            "- You are deployed as a Telegram bot. Users message you via Telegram.\n"
+            "- You can receive and send voice notes (STT/TTS via Google Cloud).\n"
+            "- When the user says 'us', 'we', or 'our', they include YOU.\n"
+            "- You have 4 executable skills: command_runner, repo_writer, network_client, service_runner.\n"
+            "- You don't tell users to download apps or Google things. You tell them what YOU can do.\n"
+            "- You are a governed autonomous system, not a search engine or chatbot."
+        )
 
     def _get_thinking_config(self):
         """Returns ThinkingConfig based on GEMINI_THINKING_LEVEL env var.
