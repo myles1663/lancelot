@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import shlex
 import hmac
@@ -264,14 +265,21 @@ class LancelotOrchestrator:
 
         result = self.task_runner.run(run.id)
 
-        # Assemble response
+        # Fix Pack V3b: Use Gemini to produce actual execution content
+        llm_content = self._execute_with_llm(active_graph)
+
+        # Assemble response with LLM content prepended before status
         if self.assembler:
             assembled = self.assembler.assemble(
                 task_graph=active_graph,
                 task_run=self.task_store.get_run(run.id),
             )
+            if llm_content:
+                # Route LLM output through assembler for output hygiene
+                llm_assembled = self.assembler.assemble(raw_planner_output=llm_content)
+                return llm_assembled.chat_response + "\n\n" + assembled.chat_response
             return assembled.chat_response
-        return f"Task completed with status: {result.status}"
+        return llm_content or f"Task completed with status: {result.status}"
 
     def _request_permission(self, graph: TaskGraph) -> str:
         """Format a permission request for a TaskGraph."""
@@ -313,6 +321,93 @@ class LancelotOrchestrator:
 
         # Now execute
         return self._handle_proceed("proceed", session_id=session_id)
+
+    def _enrich_plan_with_llm(self, artifact, user_text: str):
+        """Use Gemini to replace generic plan steps with domain-specific ones.
+
+        Called after the deterministic plan_builder produces a template artifact.
+        Sends the user's original request to Gemini to generate concrete,
+        actionable plan steps specific to the domain.
+
+        Falls back to the original template steps if Gemini fails.
+        """
+        if not self.client:
+            return artifact
+
+        prompt = (
+            f"The user asked: \"{user_text}\"\n\n"
+            f"Generate 4-6 specific, actionable plan steps to accomplish this goal: {artifact.goal}\n"
+            "Each step should be concrete and specific to the user's request.\n"
+            "Return ONLY a numbered list of steps, nothing else.\n"
+            "Example format:\n"
+            "1. Research available voice communication platforms (Signal, Discord, Zoom, etc.)\n"
+            "2. Compare free tier features across platforms\n"
+        )
+
+        try:
+            response = self.client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=[prompt],
+                config=types.GenerateContentConfig(
+                    system_instruction="You are a helpful planning assistant. Return only numbered steps. No preamble.",
+                )
+            )
+            raw = response.text.strip()
+            # Parse numbered steps
+            steps = re.findall(r"^\d+\.\s*(.+)$", raw, re.MULTILINE)
+            if steps and len(steps) >= 3:
+                artifact.plan_steps = steps
+                artifact.next_action = steps[0]
+                logger.info("Plan enriched with %d LLM-generated steps", len(steps))
+        except Exception as e:
+            logger.warning("Plan enrichment failed, using template: %s", e)
+
+        return artifact
+
+    def _execute_with_llm(self, graph, user_text: str = "") -> str:
+        """Use Gemini to execute approved plan steps and produce actionable content.
+
+        Called after the user approves a plan. Sends the plan steps to Gemini
+        and asks it to produce concrete results: recommendations, setup
+        instructions, comparisons, configuration details, etc.
+
+        Returns the LLM-generated content string, or empty string on failure.
+        """
+        if not self.client:
+            return ""
+
+        steps_text = "\n".join(
+            f"- {s.inputs.get('description', s.type)}" for s in graph.steps
+        )
+        goal = graph.goal or user_text
+
+        prompt = (
+            f"The user asked: \"{goal}\"\n\n"
+            f"You have been approved to execute this plan:\n{steps_text}\n\n"
+            "Now execute each step and provide the actual results. "
+            "For each step, provide concrete, actionable information: "
+            "specific recommendations, setup instructions, comparisons, "
+            "configuration details, or code snippets as appropriate.\n\n"
+            "Be thorough and practical. The user expects real, useful output — "
+            "not summaries or placeholders."
+        )
+
+        try:
+            system_instruction = self._build_system_instruction()
+            response = self.client.models.generate_content(
+                model=self._route_model(goal),
+                contents=[self.context_env.get_context_string(), prompt],
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    thinking_config=self._get_thinking_config(),
+                )
+            )
+            result = self._parse_response(response.text)
+            logger.info("LLM execution produced %d chars of content", len(result))
+            return result
+        except Exception as e:
+            logger.error("LLM execution failed: %s", e)
+            return ""
 
     def _load_memory(self):
         """Loads Tier A memory files into ContextEnvironment."""
@@ -796,9 +891,11 @@ class LancelotOrchestrator:
             # Route through PlanningPipeline — produces PlanArtifact same turn
             pipeline_result = self.planning_pipeline.process(user_message)
             if pipeline_result.outcome == OutcomeType.COMPLETED_WITH_PLAN_ARTIFACT:
-                # Fix Pack V1: Cache the plan artifact for later compilation
-                # Note: PipelineResult stores it as .artifact (not .plan_artifact)
+                # Fix Pack V3b: Enrich generic plan with LLM-generated specific steps
                 if pipeline_result.artifact:
+                    pipeline_result.artifact = self._enrich_plan_with_llm(
+                        pipeline_result.artifact, user_message
+                    )
                     self._last_plan_artifact = pipeline_result.artifact
 
                 # Fix Pack V1: Route through assembler if available
@@ -822,6 +919,10 @@ class LancelotOrchestrator:
             pipeline_result = self.planning_pipeline.process(user_message)
 
             if pipeline_result.artifact:
+                # Fix Pack V3b: Enrich generic plan with LLM-generated specific steps
+                pipeline_result.artifact = self._enrich_plan_with_llm(
+                    pipeline_result.artifact, user_message
+                )
                 self._last_plan_artifact = pipeline_result.artifact
 
                 # Compile to TaskGraph and request permission
