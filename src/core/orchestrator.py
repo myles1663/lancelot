@@ -773,8 +773,11 @@ class LancelotOrchestrator:
                 name="network_client",
                 description=(
                     "Make HTTP requests to external APIs and websites. "
-                    "Use this to research APIs, fetch documentation, check endpoints, "
-                    "or interact with web services."
+                    "You MUST use this tool to research before answering questions about "
+                    "external services, APIs, pricing, documentation, or capabilities. "
+                    "Do NOT answer from memory alone — fetch real data first. "
+                    "If a URL returns 403/404, try alternative URLs or search endpoints. "
+                    "Always try at least 2-3 sources before concluding information is unavailable."
                 ),
                 parameters_json_schema={
                     "type": "object",
@@ -1045,6 +1048,15 @@ class LancelotOrchestrator:
             "can you find", "can you figure",
             "how can we", "how could we",
             "recommend", "suggest",
+            # V14: Additional research triggers
+            "what about", "have you heard of", "do you know about",
+            "see if", "check if", "check out",
+            "alternative", "alternatives", "other options",
+            "compare", "comparison", "pricing",
+            "how much does", "how much is",
+            "is there a free", "free way to", "free option",
+            "what's the best", "what is the best",
+            "come up with a plan", "plan for",
         ]
         if any(phrase in prompt_lower for phrase in research_phrases):
             return True
@@ -1052,9 +1064,13 @@ class LancelotOrchestrator:
         # Open-ended "can/could you/we" + action verbs suggesting exploration
         import re
         if re.search(
-            r'\b(?:can|could)\s+(?:you|we)\b.*\b(?:communicate|connect|set up|build|get)\b',
+            r'\b(?:can|could)\s+(?:you|we)\b.*\b(?:communicate|connect|set up|build|get|chat|talk|use)\b',
             prompt_lower,
         ):
+            return True
+
+        # "What about X?" pattern — user is suggesting a specific service/tool to research
+        if re.search(r'\bwhat\s+about\s+\w+', prompt_lower):
             return True
 
         return False
@@ -2171,19 +2187,14 @@ class LancelotOrchestrator:
             filter_forbidden_for_agentic_context,
         )
 
-        # Fix Pack V6/V10: Check agentic context
-        # V10: Two levels of trust:
-        # - has_tool_receipts: tools were actually called (highest trust)
-        # - is_agentic_context: agentic loop is active (medium trust —
-        #   allows research phrasing since the system CAN call tools)
+        # Fix Pack V14: Only real tool receipts grant trust.
+        # V10 had a bug: is_agentic_context=True was treated the same as
+        # has_tool_receipts=True, letting stalling language through even when
+        # no tools were called. Now only actual tool calls earn trust.
         has_tool_receipts = False
-        is_agentic_context = False
         try:
-            from feature_flags import FEATURE_AGENTIC_LOOP
-            if FEATURE_AGENTIC_LOOP:
-                is_agentic_context = True
-                if self.skill_executor:
-                    has_tool_receipts = len(self.skill_executor.receipts) > 0
+            if self.skill_executor:
+                has_tool_receipts = len(self.skill_executor.receipts) > 0
         except Exception:
             pass
 
@@ -2193,9 +2204,8 @@ class LancelotOrchestrator:
             cleaned = cleaned.replace(marker, "").strip()
 
         # Tier 2: Check for structural fake work proposal (highest priority)
-        # V6: Skip fake work detection when backed by real tool receipts
-        # V10: Also skip when agentic loop is active (system CAN call tools)
-        if not has_tool_receipts and not is_agentic_context:
+        # V14: Only skip fake work detection when tools were ACTUALLY called.
+        if not has_tool_receipts:
             fake_work_reason = detect_fake_work_proposal(cleaned)
             if fake_work_reason:
                 return self._generate_honest_replacement(cleaned, fake_work_reason)
@@ -2214,10 +2224,10 @@ class LancelotOrchestrator:
 
         # Tier 3: Check for individual forbidden phrases
         violations = detect_forbidden_async_language(cleaned)
-        # V6: Filter out research phrases that are backed by tool receipts
-        # V10: Also filter when agentic loop is active (system CAN call tools)
+        # V14: Only filter out phrases when tools were ACTUALLY called.
+        # (V10 bug: is_agentic_context was treated as has_tool_receipts)
         violations = filter_forbidden_for_agentic_context(
-            violations, has_tool_receipts=has_tool_receipts or is_agentic_context
+            violations, has_tool_receipts=has_tool_receipts
         )
         if violations:
             # 2+ violations = systemic stalling — replace entire response

@@ -306,29 +306,18 @@ def detect_forbidden_async_language(text: str) -> List[str]:
     return found
 
 
-# Fix Pack V6: Phrases that are allowed when backed by real tool receipts
+# Fix Pack V6/V14: Phrases allowed ONLY when backed by REAL tool receipts.
+# V14: Removed future-tense stalling phrases. Only past-tense (proof of
+# completed work) and imperative "let me X" (system will immediately execute)
+# are allowed. "I will provide" and "I'll proceed with" were letting stalling
+# slip through when no tools were actually called.
 _AGENTIC_ALLOWED_PHRASES = {
-    # Past-tense: tool-backed claims about work done
+    # Past-tense ONLY: tool-backed claims about work already done
     "i researched", "i found", "i checked", "i discovered",
     "i fetched", "i retrieved", "i looked up", "i queried",
     "i investigated", "i explored", "i analyzed",
     "based on my research", "after researching",
-    # Future-tense: allowed when agentic loop can actually execute
-    "i will research", "i'll research",
-    "i will investigate", "i'll investigate",
-    "i will explore", "i'll explore",
-    "i will analyze the", "i'll analyze the",
-    "let me research", "let me investigate", "let me explore", "let me analyze",
-    "i will conduct", "i'll conduct",
-    "research phase",
-    # V10: Additional natural agentic language patterns
-    "i will evaluate", "i'll evaluate",
-    "i will assess", "i'll assess",
-    "let me assess", "let me evaluate",
-    "i will start by", "i'll start by",
-    "let me begin by",
-    "i will provide", "i'll provide",
-    "i'll proceed with", "i will proceed with",
+    "i evaluated", "i assessed",
 }
 
 
