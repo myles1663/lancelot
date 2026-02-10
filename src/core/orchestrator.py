@@ -434,22 +434,31 @@ class LancelotOrchestrator:
         )
         goal = graph.goal or user_text
 
+        # Fix Pack V9: Include recent conversation history so Gemini sees
+        # any corrections the user made after the plan was generated.
+        recent_history = self.context_env.get_history_string(limit=6)
+        history_block = ""
+        if recent_history:
+            history_block = f"\n\nRECENT CONVERSATION (includes user corrections):\n{recent_history}\n"
+
         prompt = (
             f"The user asked: \"{goal}\"\n\n"
-            f"Execute this approved plan:\n{steps_text}\n\n"
+            f"Original plan:\n{steps_text}\n"
+            f"{history_block}\n"
             "EXECUTION RULES — YOU MUST FOLLOW THESE:\n"
             "1. You ARE Lancelot — a governed autonomous system deployed on Telegram.\n"
             "2. When the user says 'us' or 'we', that includes YOU.\n"
-            "3. You MUST use your tools to execute each step. For example:\n"
+            "3. If the user corrected the plan in the conversation above, follow their correction — NOT the original plan.\n"
+            "4. You MUST use your tools to execute each step. For example:\n"
             "   - Use network_client (method=GET) to fetch API docs, check endpoints, research\n"
             "   - Use command_runner to run shell commands, check system state\n"
             "   - Use repo_writer to create/edit configuration files\n"
             "   - Use service_runner to manage Docker services\n"
-            "4. Do NOT just describe what you would do — actually CALL the tools.\n"
-            "5. Do NOT claim you have accomplished something unless you called a tool and got a result.\n"
-            "6. After executing steps with tools, summarize what you ACTUALLY did and what the results were.\n"
-            "7. If a step requires information, fetch it with network_client first.\n"
-            "8. Be direct and concise. Max 10-15 lines in your final summary."
+            "5. Do NOT just describe what you would do — actually CALL the tools.\n"
+            "6. Do NOT claim you have accomplished something unless you called a tool and got a result.\n"
+            "7. After executing steps with tools, summarize what you ACTUALLY did and what the results were.\n"
+            "8. If a step requires information, fetch it with network_client first.\n"
+            "9. Be direct and concise. Max 10-15 lines in your final summary."
         )
 
         try:

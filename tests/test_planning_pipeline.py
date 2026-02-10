@@ -153,12 +153,12 @@ class TestEdgeCases:
         assert result.intent == IntentType.AMBIGUOUS
         assert result.rendered_output == ""
 
-    def test_gibberish_defaults_to_plan_request(self):
+    def test_gibberish_defaults_to_knowledge_request(self):
         pipeline = PlanningPipeline()
         result = pipeline.process("asdf jkl xyz qwerty")
-        # V3: Gibberish defaults to PLAN_REQUEST (spec lines 13-14)
-        assert result.intent == IntentType.PLAN_REQUEST
-        assert result.rendered_output != ""  # Plan is still built
+        # V9: Unrecognized input defaults to KNOWLEDGE_REQUEST (not PLAN_REQUEST)
+        # so Gemini gives a natural response instead of generating a plan
+        assert result.intent == IntentType.KNOWLEDGE_REQUEST
 
     def test_exec_request_builds_plan_artifact(self):
         pipeline = PlanningPipeline()
