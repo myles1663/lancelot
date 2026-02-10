@@ -308,10 +308,12 @@ def detect_forbidden_async_language(text: str) -> List[str]:
 
 # Fix Pack V6: Phrases that are allowed when backed by real tool receipts
 _AGENTIC_ALLOWED_PHRASES = {
+    # Past-tense: tool-backed claims about work done
     "i researched", "i found", "i checked", "i discovered",
     "i fetched", "i retrieved", "i looked up", "i queried",
     "i investigated", "i explored", "i analyzed",
     "based on my research", "after researching",
+    # Future-tense: allowed when agentic loop can actually execute
     "i will research", "i'll research",
     "i will investigate", "i'll investigate",
     "i will explore", "i'll explore",
@@ -319,6 +321,14 @@ _AGENTIC_ALLOWED_PHRASES = {
     "let me research", "let me investigate", "let me explore", "let me analyze",
     "i will conduct", "i'll conduct",
     "research phase",
+    # V10: Additional natural agentic language patterns
+    "i will evaluate", "i'll evaluate",
+    "i will assess", "i'll assess",
+    "let me assess", "let me evaluate",
+    "i will start by", "i'll start by",
+    "let me begin by",
+    "i will provide", "i'll provide",
+    "i'll proceed with", "i will proceed with",
 }
 
 

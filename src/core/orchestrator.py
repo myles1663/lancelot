@@ -998,6 +998,10 @@ class LancelotOrchestrator:
             "debug", "refactor", "design", "evaluate", "explain",
             "research", "investigate", "build", "implement", "create",
             "write code", "deploy", "migrate",
+            # V10: Research-intent phrases that need Gemini + tools
+            "figure out", "find out", "find a way", "look into",
+            "explore", "recommend", "options for",
+            "realtime", "real-time", "voice chat", "voice call",
         }
         if any(k in prompt_lower for k in complex_keywords):
             return False
@@ -1013,6 +1017,39 @@ class LancelotOrchestrator:
             return True
 
         return False  # Default: Gemini (conservative)
+
+    def _needs_research(self, prompt: str) -> bool:
+        """Detect queries requiring tool-backed research.
+
+        Fix Pack V10: Returns True for open-ended exploratory queries where
+        Gemini should use network_client to research before answering.
+        Prevents Gemini from generating "I will research..." text that gets
+        blocked by the response governor.
+        """
+        prompt_lower = prompt.lower()
+
+        research_phrases = [
+            "figure out", "find out", "look into", "look up",
+            "research", "investigate", "explore options",
+            "find a way", "find me", "what options",
+            "what are the options", "what tools", "what services",
+            "is there a way", "are there any",
+            "can you find", "can you figure",
+            "how can we", "how could we",
+            "recommend", "suggest",
+        ]
+        if any(phrase in prompt_lower for phrase in research_phrases):
+            return True
+
+        # Open-ended "can/could you/we" + action verbs suggesting exploration
+        import re
+        if re.search(
+            r'\b(?:can|could)\s+(?:you|we)\b.*\b(?:communicate|connect|set up|build|get)\b',
+            prompt_lower,
+        ):
+            return True
+
+        return False
 
     def _local_agentic_generate(
         self,
@@ -1878,12 +1915,18 @@ class LancelotOrchestrator:
                         context_str=context_str,
                     )
                 else:
-                    print("V6: Routing KNOWLEDGE_REQUEST through Gemini agentic loop")
+                    # V10: Force tool use for research-oriented queries
+                    needs_research = self._needs_research(user_message)
+                    if needs_research:
+                        print("V10: Research query detected — forcing tool use")
+                    else:
+                        print("V6: Routing KNOWLEDGE_REQUEST through Gemini agentic loop")
                     raw_response = self._agentic_generate(
                         prompt=user_message,
                         system_instruction=system_instruction,
                         allow_writes=False,
                         context_str=context_str,
+                        force_tool_use=needs_research,
                     )
             else:
                 # V5 fallback: text-only Gemini
@@ -1996,12 +2039,19 @@ class LancelotOrchestrator:
             filter_forbidden_for_agentic_context,
         )
 
-        # Fix Pack V6: Check if agentic loop made real tool calls
+        # Fix Pack V6/V10: Check agentic context
+        # V10: Two levels of trust:
+        # - has_tool_receipts: tools were actually called (highest trust)
+        # - is_agentic_context: agentic loop is active (medium trust —
+        #   allows research phrasing since the system CAN call tools)
         has_tool_receipts = False
+        is_agentic_context = False
         try:
             from feature_flags import FEATURE_AGENTIC_LOOP
-            if FEATURE_AGENTIC_LOOP and self.skill_executor:
-                has_tool_receipts = len(self.skill_executor.receipts) > 0
+            if FEATURE_AGENTIC_LOOP:
+                is_agentic_context = True
+                if self.skill_executor:
+                    has_tool_receipts = len(self.skill_executor.receipts) > 0
         except Exception:
             pass
 
@@ -2012,7 +2062,8 @@ class LancelotOrchestrator:
 
         # Tier 2: Check for structural fake work proposal (highest priority)
         # V6: Skip fake work detection when backed by real tool receipts
-        if not has_tool_receipts:
+        # V10: Also skip when agentic loop is active (system CAN call tools)
+        if not has_tool_receipts and not is_agentic_context:
             fake_work_reason = detect_fake_work_proposal(cleaned)
             if fake_work_reason:
                 return self._generate_honest_replacement(cleaned, fake_work_reason)
@@ -2032,7 +2083,10 @@ class LancelotOrchestrator:
         # Tier 3: Check for individual forbidden phrases
         violations = detect_forbidden_async_language(cleaned)
         # V6: Filter out research phrases that are backed by tool receipts
-        violations = filter_forbidden_for_agentic_context(violations, has_tool_receipts)
+        # V10: Also filter when agentic loop is active (system CAN call tools)
+        violations = filter_forbidden_for_agentic_context(
+            violations, has_tool_receipts=has_tool_receipts or is_agentic_context
+        )
         if violations:
             # 2+ violations = systemic stalling — replace entire response
             if len(violations) >= 2:
@@ -2076,24 +2130,20 @@ class LancelotOrchestrator:
         if topic_hint:
             return (
                 f"I understand you're asking about: {topic_hint}\n\n"
-                "I can help with this right now by providing concrete guidance, "
-                "code snippets, or configuration steps. However, I cannot "
-                "autonomously run research, feasibility studies, or multi-phase "
-                "development projects.\n\n"
-                "What specific part would you like me to help with first? "
-                "If you can share any relevant API keys, credentials, or "
-                "configuration details, I can provide more targeted assistance."
+                "I have tools available to help with this (HTTP requests, "
+                "system commands, file management). My initial response was "
+                "filtered because it contained language that looked like "
+                "simulated progress rather than concrete action.\n\n"
+                "Could you clarify what specific outcome you're looking for? "
+                "With more details I can research concrete options right now."
             )
         else:
             return (
-                "I cannot execute a multi-phase research or development project "
-                "autonomously. Instead, I can help you right now with:\n\n"
-                "- Concrete implementation steps and code snippets\n"
-                "- Configuration guidance for specific tools or services\n"
-                "- Answering specific technical questions\n\n"
-                "What specific part would you like me to help with? "
-                "Please share any relevant details and I'll provide direct, "
-                "actionable guidance."
+                "My initial response was filtered by my honesty system. "
+                "I do have tools to research and act — let me try a more "
+                "direct approach.\n\n"
+                "Could you share more details about what you need? "
+                "I'll use my tools to provide actionable answers."
             )
 
     def set_state(self, new_state: RuntimeState):
