@@ -241,9 +241,7 @@ def classify_intent(text: str) -> IntentType:
     if has_conversational:
         return IntentType.KNOWLEDGE_REQUEST
 
-    # Short messages (1-3 words) with no keywords are likely conversational
-    if len(words) <= 3:
-        return IntentType.KNOWLEDGE_REQUEST
-
-    # If uncertain → default to PLAN_REQUEST (spec lines 13-14)
-    return IntentType.PLAN_REQUEST
+    # Fix Pack V9: Default to KNOWLEDGE_REQUEST instead of PLAN_REQUEST.
+    # Planning keywords are explicit enough to catch real plan requests.
+    # Unrecognized messages should get a natural Gemini response, not a plan.
+    return IntentType.KNOWLEDGE_REQUEST
