@@ -153,6 +153,26 @@ KNOWLEDGE_PHRASES: frozenset = frozenset({
     "which one",    # "which one is best?"
 })
 
+# Fix Pack V9: Conversational keywords — greetings, thanks, small talk
+# These should NOT trigger the planning pipeline.
+CONVERSATIONAL_KEYWORDS: frozenset = frozenset({
+    "hello", "hi", "hey", "yo", "sup",
+    "thanks", "thank", "cheers",
+    "goodbye", "bye", "later",
+    "okay", "ok", "sure", "alright", "cool",
+    "sorry", "please", "wow", "nice", "great",
+    "lol", "haha", "heh",
+})
+
+CONVERSATIONAL_PHRASES: frozenset = frozenset({
+    "good morning", "good afternoon", "good evening", "good night",
+    "how are you", "how's it going", "what's up", "whats up",
+    "thank you", "thanks a lot", "much appreciated",
+    "see you", "talk later", "talk soon",
+    "never mind", "nevermind", "forget it",
+    "you're welcome", "no worries", "no problem",
+})
+
 
 # =============================================================================
 # Tokenization
@@ -201,6 +221,7 @@ def classify_intent(text: str) -> IntentType:
     has_planning = bool(words & PLANNING_KEYWORDS) or _contains_phrase(text_lower, PLANNING_PHRASES)
     has_execution = bool(words & EXECUTION_KEYWORDS) or _contains_phrase(text_lower, EXECUTION_PHRASES)
     has_knowledge = bool(words & KNOWLEDGE_KEYWORDS) or _contains_phrase(text_lower, KNOWLEDGE_PHRASES)
+    has_conversational = bool(words & CONVERSATIONAL_KEYWORDS) or _contains_phrase(text_lower, CONVERSATIONAL_PHRASES)
 
     # Routing logic
     if has_planning and has_execution:
@@ -213,6 +234,15 @@ def classify_intent(text: str) -> IntentType:
         return IntentType.EXEC_REQUEST
 
     if has_knowledge:
+        return IntentType.KNOWLEDGE_REQUEST
+
+    # Fix Pack V9: Conversational messages (greetings, thanks, small talk)
+    # Route to KNOWLEDGE_REQUEST so Gemini gives a natural response
+    if has_conversational:
+        return IntentType.KNOWLEDGE_REQUEST
+
+    # Short messages (1-3 words) with no keywords are likely conversational
+    if len(words) <= 3:
         return IntentType.KNOWLEDGE_REQUEST
 
     # If uncertain → default to PLAN_REQUEST (spec lines 13-14)
