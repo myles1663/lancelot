@@ -2,11 +2,40 @@ import streamlit as st
 import os
 import time
 import datetime
+import requests
 from orchestrator import LancelotOrchestrator
 from onboarding import OnboardingOrchestrator
 from crusader import CrusaderMode, CrusaderAdapter
 from receipts import get_receipt_service, ReceiptStatus, ActionType
 from panels.tools_panel import get_tools_panel, render_tools_panel
+
+# Fix Pack V11: Gateway API URL — War Room calls the gateway API instead of
+# creating its own bare orchestrator. This ensures all subsystems (skill_executor,
+# local_model, scheduler, etc.) are available for tool execution.
+_GATEWAY_URL = os.getenv("LANCELOT_GATEWAY_URL", "http://localhost:8000")
+
+
+def _chat_via_gateway(text: str, crusader_mode: bool = False) -> str:
+    """Send chat message through the gateway API.
+
+    Fix Pack V11: Routes through the FastAPI gateway so all subsystems
+    (skill_executor, local_model, etc.) are available. Falls back to
+    direct orchestrator if gateway is unreachable.
+    """
+    try:
+        resp = requests.post(
+            f"{_GATEWAY_URL}/chat",
+            json={"text": text, "user": "Commander"},
+            timeout=120,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("response", "")
+    except Exception as e:
+        print(f"V11: Gateway call failed ({e}), falling back to direct orchestrator")
+    # Fallback: direct orchestrator (missing subsystems but better than nothing)
+    return st.session_state.orchestrator.chat(text, crusader_mode=crusader_mode)
+
 
 # Page Config
 st.set_page_config(
@@ -231,7 +260,7 @@ with tab_command:
                                 )
                                 st.error(response)
                             else:
-                                raw_response = st.session_state.orchestrator.chat(
+                                raw_response = _chat_via_gateway(
                                     prompt, crusader_mode=True
                                 )
                                 response = adapter.format_response(raw_response)
@@ -239,8 +268,8 @@ with tab_command:
                             st.session_state.messages.append({"role": "assistant", "content": response})
 
                         else:
-                            # Normal mode
-                            response = st.session_state.orchestrator.chat(prompt)
+                            # Normal mode — V11: route through gateway API
+                            response = _chat_via_gateway(prompt)
 
                             if response.startswith("DRAFT:"):
                                 st.warning("System Learning Detected (Confidence 70-90%)")

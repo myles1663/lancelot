@@ -25,7 +25,8 @@ from plan_types import IntentType
 
 class TestPlanRequest:
     def test_plan_keyword(self):
-        assert classify_intent("Create a plan for migrating the database") == IntentType.PLAN_REQUEST
+        # "Create" is in EXECUTION_KEYWORDS, "plan" in PLANNING_KEYWORDS → MIXED_REQUEST
+        assert classify_intent("Create a plan for migrating the database") == IntentType.MIXED_REQUEST
 
     def test_design_keyword(self):
         assert classify_intent("Design the authentication system") == IntentType.PLAN_REQUEST
@@ -154,15 +155,17 @@ class TestDefaultBehavior:
     def test_whitespace_only(self):
         assert classify_intent("   ") == IntentType.AMBIGUOUS
 
-    def test_short_ambiguous(self):
-        assert classify_intent("hello") == IntentType.AMBIGUOUS
+    def test_short_conversational(self):
+        # V9: Conversational keywords route to KNOWLEDGE_REQUEST
+        assert classify_intent("hello") == IntentType.KNOWLEDGE_REQUEST
 
     def test_gibberish(self):
-        assert classify_intent("asdf jkl xyz") == IntentType.AMBIGUOUS
+        # V9: Default fallback is KNOWLEDGE_REQUEST (not AMBIGUOUS)
+        assert classify_intent("asdf jkl xyz") == IntentType.KNOWLEDGE_REQUEST
 
     def test_none_like_input(self):
-        # Very short input with no matching keywords defaults to AMBIGUOUS
-        assert classify_intent("ok") == IntentType.AMBIGUOUS
+        # V9: "ok" is in CONVERSATIONAL_KEYWORDS → KNOWLEDGE_REQUEST
+        assert classify_intent("ok") == IntentType.KNOWLEDGE_REQUEST
 
 
 # =========================================================================
