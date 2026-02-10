@@ -1073,6 +1073,36 @@ class LancelotOrchestrator:
         ]
         return any(phrase in prompt_lower for phrase in action_phrases)
 
+    def _is_conversational(self, prompt: str) -> bool:
+        """Detect purely conversational messages that need no tools.
+
+        Fix Pack V13: Prevents simple chat (greetings, name preferences,
+        thanks) from entering the agentic loop where Gemini may hallucinate
+        tool calls for messages that just need a text response.
+        """
+        prompt_lower = prompt.lower().strip()
+
+        # Very short messages are almost always conversational
+        if len(prompt_lower) < 60:
+            conversational_patterns = [
+                "call me ", "my name is ", "i'm ", "i am ",
+                "hello", "hi ", "hey ", "yo", "sup",
+                "thanks", "thank you", "cheers",
+                "good morning", "good afternoon", "good evening",
+                "how are you", "what's up", "whats up",
+                "bye", "goodbye", "see you", "later",
+                "ok", "okay", "sure", "alright", "cool",
+                "never mind", "nevermind", "forget it",
+                "no worries", "no problem", "you're welcome",
+                "nice to meet", "pleased to meet",
+                "yes", "no", "yep", "nope", "yeah", "nah",
+            ]
+            if any(prompt_lower.startswith(p) or prompt_lower == p
+                   for p in conversational_patterns):
+                return True
+
+        return False
+
     def _local_agentic_generate(
         self,
         prompt: str,
@@ -1357,11 +1387,35 @@ class LancelotOrchestrator:
             # V7: Process ALL function calls and collect results as parts.
             # Gemini API requires ALL function responses in a SINGLE Content
             # message when multiple function calls are in one response.
+            # V13: Set of declared tool names for hallucination guard
+            _DECLARED_TOOL_NAMES = {"network_client", "command_runner", "repo_writer", "service_runner"}
+
             response_parts = []
             for fc in response.function_calls:
                 skill_name = fc.name
                 inputs = dict(fc.args) if fc.args else {}
                 print(f"V6 tool call: {skill_name}({inputs})")
+
+                # V13: Guard against hallucinated tool names
+                if skill_name not in _DECLARED_TOOL_NAMES:
+                    result_data = {
+                        "error": f"Tool '{skill_name}' does not exist. "
+                        f"Available tools: {', '.join(sorted(_DECLARED_TOOL_NAMES))}. "
+                        "If this is a conversational request, respond directly without tools."
+                    }
+                    tool_receipts.append({
+                        "skill": skill_name,
+                        "inputs": inputs,
+                        "result": f"REJECTED — undeclared tool '{skill_name}'",
+                    })
+                    print(f"V13: Rejected hallucinated tool call: {skill_name}")
+                    response_parts.append(
+                        types.Part.from_function_response(
+                            name=skill_name,
+                            response=result_data,
+                        )
+                    )
+                    continue
 
                 # Safety classification
                 safety = self._classify_tool_call_safety(skill_name, inputs)
@@ -1955,8 +2009,17 @@ class LancelotOrchestrator:
             # Fix Pack V6/V8: Agentic loop — tool access for autonomous research
             from feature_flags import FEATURE_AGENTIC_LOOP, FEATURE_LOCAL_AGENTIC
             if FEATURE_AGENTIC_LOOP:
+                # V13: Conversational messages bypass agentic loop entirely
+                # (no tools needed for "call me Myles", "hello", "thanks", etc.)
+                if self._is_conversational(user_message):
+                    print("V13: Conversational message — text-only (no tools)")
+                    raw_response = self._text_only_generate(
+                        prompt=user_message,
+                        system_instruction=system_instruction,
+                        context_str=context_str,
+                    )
                 # V8: Try local model for simple queries to save Gemini tokens
-                if FEATURE_LOCAL_AGENTIC and self._is_simple_for_local(user_message):
+                elif FEATURE_LOCAL_AGENTIC and self._is_simple_for_local(user_message):
                     print("V8: Routing simple query to local agentic model")
                     raw_response = self._local_agentic_generate(
                         prompt=user_message,
