@@ -119,6 +119,7 @@ def execute(context, inputs: Dict[str, Any]) -> Dict[str, Any]:
             "duration_ms": round(duration_ms, 2),
             "method": method,
             "url": url,
+            "hint": f"HTTP {e.code} from {url}. Try a different URL or alternative service.",
         }
 
     except URLError as e:

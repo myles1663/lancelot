@@ -639,8 +639,9 @@ class LancelotOrchestrator:
             f"Rules:\n{self.rules_context}\n"
             f"User Context:\n{self.user_context}\n"
             f"Memory:\n{self.memory_summary}\n"
-            f"Response format: [Confidence Score] [Response Text]. "
-            f"If Score > 90, prefix action with 'Action:'."
+            f"Response format: Answer the user directly in natural language. "
+            f"Do not prefix responses with confidence scores, 'PERMISSION REQUIRED', or 'Action:'. "
+            f"Just give a clear, helpful response."
         )
 
         # 3. GUARDRAILS
@@ -669,7 +670,11 @@ class LancelotOrchestrator:
             "- Do NOT ask the user for search terms — research it yourself using your tools\n"
             "- Do NOT produce plans without researching first when tools are available\n"
             "- When you USE a tool and get results, you CAN say 'I researched X and found Y'\n"
-            "- The difference: REAL tool-backed research is honest. Claiming you WILL research later is not."
+            "- The difference: REAL tool-backed research is honest. Claiming you WILL research later is not.\n"
+            "- RETRY ON FAILURE: If a tool call fails (HTTP 403, 404, timeout, error), do NOT give up.\n"
+            "  Try a different URL, a different service, or a different search approach.\n"
+            "  Always try at least 2-3 alternatives before concluding you cannot find the information.\n"
+            "  For example: if discord.com returns 403, try searching for Discord alternatives or other voice APIs."
         )
 
         # 5. SELF-AWARENESS (Fix Pack V5)
@@ -1397,16 +1402,35 @@ class LancelotOrchestrator:
             contents.append(types.Content(role="tool", parts=response_parts))
 
             # V7: After first tool call(s), switch from ANY back to AUTO
-            # so Gemini can return text on subsequent iterations
-            if force_tool_use and iteration == 0 and tool_receipts:
-                config = types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    tools=[tool],
-                    tool_config=None,  # Back to AUTO (default)
-                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-                    thinking_config=self._get_thinking_config(),
-                )
-                print("V7: Switched from ANY to AUTO after first tool call")
+            # so Gemini can return text on subsequent iterations.
+            # V12: If tool calls had HTTP errors on iteration 0, keep ANY
+            # for one more iteration to encourage retries, then switch to AUTO.
+            if force_tool_use and iteration <= 1 and tool_receipts:
+                should_retry = False
+                if iteration == 0:
+                    # Check if current batch had HTTP errors
+                    batch = tool_receipts[-len(response.function_calls):]
+                    has_http_error = any(
+                        (isinstance(r.get("result"), str) and "FAILED" in r.get("result", ""))
+                        or (isinstance(r.get("outputs"), dict) and r["outputs"].get("error"))
+                        for r in batch
+                    )
+                    if has_http_error:
+                        should_retry = True
+                        print("V12: Tool call failed — keeping forced tool use for one retry")
+
+                if not should_retry:
+                    config = types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        tools=[tool],
+                        tool_config=None,  # Back to AUTO (default)
+                        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                        thinking_config=self._get_thinking_config(),
+                    )
+                    if iteration == 0:
+                        print("V7: Switched from ANY to AUTO after first tool call")
+                    else:
+                        print("V12: Switched from ANY to AUTO after retry iteration")
 
         # Max iterations reached
         print(f"V6 agentic loop hit max iterations ({MAX_ITERATIONS})")
