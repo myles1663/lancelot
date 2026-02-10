@@ -15,16 +15,15 @@ from being bootstrapped from USER.md.
 1. `FEATURE_MEMORY_VNEXT=false` in `.env` disabled the entire memory subsystem
 2. The gateway bootstrap (which syncs USER.md → human core block) is gated behind
    `FEATURE_MEMORY_VNEXT`, so it never ran
-3. The `human` core block in `core_blocks.json` was stale (contained "Arthur" instead
-   of the owner's name "Myles")
-4. The librarian-filed copy `Personal/USER.md` had "Commander" instead of "Myles"
+3. The `human` core block in `core_blocks.json` was stale and out of sync with USER.md
+4. The librarian-filed copy `Personal/USER.md` was out of sync with the canonical USER.md
 
 ### Changes
 
 - **`.env`**: Set `FEATURE_MEMORY_VNEXT=true` (P0 subsystem, should be enabled per architecture)
-- **`lancelot_data/Personal/USER.md`**: Corrected owner name from "Commander" to "Myles"
+- **`lancelot_data/Personal/USER.md`**: Synced with canonical USER.md
 - **`lancelot_data/memory/core_blocks.json`**: Auto-fixed by bootstrap on restart —
-  `human` block updated from "Arthur" to "Myles" (v22, synced from USER.md)
+  `human` block re-synced from USER.md (v22)
 
 ### Verification
 
