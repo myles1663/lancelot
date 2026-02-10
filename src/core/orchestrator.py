@@ -1056,6 +1056,23 @@ class LancelotOrchestrator:
 
         return False
 
+    def _wants_action(self, prompt: str) -> bool:
+        """Detect queries where the user wants Lancelot to take action.
+
+        Fix Pack V12: Returns True when the user expects code writing,
+        file creation, or system configuration — not just information.
+        Used to set allow_writes=True in the agentic loop.
+        """
+        prompt_lower = prompt.lower()
+        action_phrases = [
+            "set up", "create", "build", "write", "implement", "configure",
+            "make", "develop", "code", "install", "deploy", "set it up",
+            "figure out a way", "figure out a plan", "figure out how",
+            "figure out", "find a way", "get it working",
+            "hook up", "wire up", "connect", "enable",
+        ]
+        return any(phrase in prompt_lower for phrase in action_phrases)
+
     def _local_agentic_generate(
         self,
         prompt: str,
@@ -1827,6 +1844,15 @@ class LancelotOrchestrator:
             self.context_env.add_history("assistant", result)
             return result
 
+        # V12: When a PLAN_REQUEST needs real research ("figure out a plan"),
+        # reroute through the agentic loop instead of the template pipeline.
+        # The PlanningPipeline generates template plans without tool usage —
+        # the agentic loop can research first, then present findings.
+        if intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST):
+            if self._needs_research(user_message):
+                print("V12: PLAN_REQUEST with research intent — routing through agentic loop")
+                intent = IntentType.KNOWLEDGE_REQUEST
+
         if intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST):
             # Route through PlanningPipeline — produces PlanArtifact same turn
             pipeline_result = self.planning_pipeline.process(user_message)
@@ -1941,14 +1967,17 @@ class LancelotOrchestrator:
                 else:
                     # V10: Force tool use for research-oriented queries
                     needs_research = self._needs_research(user_message)
+                    # V12: Allow writes when user expects action (code, config, setup)
+                    wants_action = self._wants_action(user_message)
+                    allow_writes = needs_research and wants_action
                     if needs_research:
-                        print("V10: Research query detected — forcing tool use")
+                        print(f"V10: Research query detected — forcing tool use (writes={'enabled' if allow_writes else 'disabled'})")
                     else:
                         print("V6: Routing KNOWLEDGE_REQUEST through Gemini agentic loop")
                     raw_response = self._agentic_generate(
                         prompt=user_message,
                         system_instruction=system_instruction,
-                        allow_writes=False,
+                        allow_writes=allow_writes,
                         context_str=context_str,
                         force_tool_use=needs_research,
                     )
