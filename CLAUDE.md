@@ -500,7 +500,9 @@ docker cp local_file.py lancelot_core:/home/lancelot/app/src/core/
 
 | Pack | Commit | Summary |
 |------|--------|---------|
-| V12 | latest | Research-backed plans + code writing + retry on failure |
+| V14 | c1356fb | Fix governor bypass — only real tool receipts earn trust; strip future-tense allowed phrases; improve tool descriptions + research detection |
+| V13 | d4f7f2d | Conversational bypass (local model) + hallucinated tool guard + name preference guardrail |
+| V12 | 9a8f8b9 | Research-backed plans + code writing + retry on failure |
 | V11 | 004063e | War Room routes through gateway API for subsystem access |
 | V10 | 8222b12 | Fix inaction loop — force tool use for research queries |
 | V9 | dcf232a+ | Intent & conversation fixes (keywords, default fallback, history injection) |
