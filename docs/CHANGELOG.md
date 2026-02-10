@@ -1,5 +1,39 @@
 # Lancelot Changelog
 
+## v7.0.1 — Memory vNext Activation + Identity Fix (2026-02-10)
+
+### Summary
+
+Configuration fix enabling the Memory vNext subsystem and correcting the owner identity
+in core memory. Memory vNext was disabled by feature flag (`FEATURE_MEMORY_VNEXT=false`),
+preventing the CoreBlockStore, ContextCompiler, and Memory API from initializing. This
+caused Lancelot to report it could not access memory and prevented the `human` core block
+from being bootstrapped from USER.md.
+
+### Root Cause
+
+1. `FEATURE_MEMORY_VNEXT=false` in `.env` disabled the entire memory subsystem
+2. The gateway bootstrap (which syncs USER.md → human core block) is gated behind
+   `FEATURE_MEMORY_VNEXT`, so it never ran
+3. The `human` core block in `core_blocks.json` was stale (contained "Arthur" instead
+   of the owner's name "Myles")
+4. The librarian-filed copy `Personal/USER.md` had "Commander" instead of "Myles"
+
+### Changes
+
+- **`.env`**: Set `FEATURE_MEMORY_VNEXT=true` (P0 subsystem, should be enabled per architecture)
+- **`lancelot_data/Personal/USER.md`**: Corrected owner name from "Commander" to "Myles"
+- **`lancelot_data/memory/core_blocks.json`**: Auto-fixed by bootstrap on restart —
+  `human` block updated from "Arthur" to "Myles" (v22, synced from USER.md)
+
+### Verification
+
+- Gateway logs confirm: `Memory vNext initialized and wired.`
+- Bootstrap log: `Updated core block human (v22, 22 tokens, by system)`
+- Feature flags: `MEMORY_VNEXT=True`
+
+---
+
 ## v7.0.0 — Memory vNext + Tool Fabric + Security Hardening
 
 **Specs:**
