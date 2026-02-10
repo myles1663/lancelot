@@ -268,6 +268,20 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Scheduler initialization failed: {e}")
 
+    # ===== PHASE 4b: LOCAL MODEL CLIENT (V8) =====
+    try:
+        from feature_flags import FEATURE_LOCAL_AGENTIC
+        if FEATURE_LOCAL_AGENTIC:
+            from local_model_client import LocalModelClient
+            _local_model = LocalModelClient()
+            if _local_model.is_healthy():
+                main_orchestrator.local_model = _local_model
+                logger.info("Local model client connected and healthy")
+            else:
+                logger.warning("Local model client created but not healthy — local agentic disabled")
+    except Exception as e:
+        logger.warning(f"Local model client initialization failed: {e}")
+
     # ===== PHASE 5: HEALTH MONITOR =====
     try:
         from feature_flags import FEATURE_HEALTH_MONITOR

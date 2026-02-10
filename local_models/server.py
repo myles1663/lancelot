@@ -13,7 +13,10 @@ Fix Pack V8: Added chat completions endpoint with function calling support.
 """
 
 import os
+import re
+import json
 import time
+import uuid
 import logging
 from contextlib import asynccontextmanager
 
@@ -104,9 +107,9 @@ def _do_load_model():
         logger.error(f"Model file not found: {model_path}")
         raise FileNotFoundError(f"Model not found: {model_path}")
 
-    n_ctx = int(os.environ.get("LOCAL_MODEL_CTX", "8192"))
+    n_ctx = int(os.environ.get("LOCAL_MODEL_CTX", "4096"))
     n_threads = int(os.environ.get("LOCAL_MODEL_THREADS", "4"))
-    n_gpu = int(os.environ.get("LOCAL_MODEL_GPU_LAYERS", "28"))
+    n_gpu = int(os.environ.get("LOCAL_MODEL_GPU_LAYERS", "15"))
 
     logger.info(f"Loading model: {model_path}")
     logger.info(f"Config: ctx={n_ctx}, threads={n_threads}, gpu_layers={n_gpu}")
@@ -180,26 +183,106 @@ def completions(req: CompletionRequest):
     )
 
 
+def _strip_think_tags(text: str) -> str:
+    """Remove Qwen3 <think>...</think> reasoning blocks from output."""
+    return re.sub(r"<think>[\s\S]*?</think>\s*", "", text).strip()
+
+
+def _extract_tool_calls(text: str) -> tuple:
+    """Parse Qwen3 <tool_call> tags into OpenAI-format tool_calls.
+
+    Returns (clean_content, tool_calls_list).
+    If no tool calls found, tool_calls_list is None.
+    """
+    pattern = r"<tool_call>\s*(\{[\s\S]*?\})\s*</tool_call>"
+    matches = re.findall(pattern, text)
+    if not matches:
+        return text, None
+
+    tool_calls = []
+    for match in matches:
+        try:
+            parsed = json.loads(match)
+            name = parsed.get("name", "")
+            args = parsed.get("arguments", {})
+            tool_calls.append({
+                "id": f"call_{uuid.uuid4().hex[:8]}",
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": json.dumps(args) if isinstance(args, dict) else str(args),
+                },
+            })
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse tool_call JSON: %s", match)
+            continue
+
+    # Remove tool_call tags from content
+    clean = re.sub(r"<tool_call>[\s\S]*?</tool_call>\s*", "", text).strip()
+    return clean, tool_calls if tool_calls else None
+
+
+def _postprocess_chat_result(result: dict) -> dict:
+    """Post-process llama-cpp-python output for Qwen3 compatibility.
+
+    1. Strip <think> reasoning tags from content
+    2. Convert <tool_call> tags to OpenAI-format tool_calls array
+    """
+    if not isinstance(result, dict):
+        return result
+
+    for choice in result.get("choices", []):
+        msg = choice.get("message", {})
+        content = msg.get("content", "")
+        if not content:
+            continue
+
+        # Strip thinking tokens
+        content = _strip_think_tags(content)
+
+        # Extract tool calls from content
+        content, tool_calls = _extract_tool_calls(content)
+
+        msg["content"] = content if content else None
+        if tool_calls:
+            msg["tool_calls"] = tool_calls
+            choice["finish_reason"] = "tool_calls"
+
+    return result
+
+
 @app.post("/v1/chat/completions")
 def chat_completions(req: ChatCompletionRequest):
     """OpenAI-compatible chat completions with tool/function calling support.
 
-    Fix Pack V8: Qwen3-8B has native tool calling support. llama-cpp-python's
-    create_chat_completion() handles the tool calling format automatically.
+    Fix Pack V8: Qwen3-8B outputs tool calls as <tool_call> XML tags and
+    reasoning as <think> tags. This endpoint post-processes the output to
+    convert to standard OpenAI format.
     """
     if _llm is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
     start = time.monotonic()
 
+    # Inject /no_think into system message to suppress chain-of-thought
+    messages = list(req.messages)
+    if messages and messages[0].get("role") == "system":
+        sys_content = messages[0].get("content", "")
+        if "/no_think" not in sys_content:
+            messages[0] = {**messages[0], "content": sys_content + "\n/no_think"}
+    else:
+        messages.insert(0, {"role": "system", "content": "/no_think"})
+
     # Build kwargs for create_chat_completion
     kwargs = {
-        "messages": req.messages,
+        "messages": messages,
         "max_tokens": req.max_tokens,
         "temperature": req.temperature,
     }
     if req.tools:
         kwargs["tools"] = req.tools
+        # Default to "required" when tools are provided to force tool usage
+        kwargs["tool_choice"] = req.tool_choice or "auto"
     if req.tool_choice:
         kwargs["tool_choice"] = req.tool_choice
 
@@ -213,6 +296,9 @@ def chat_completions(req: ChatCompletionRequest):
         )
 
     elapsed = (time.monotonic() - start) * 1000
+
+    # Post-process: strip <think> tags, convert <tool_call> to OpenAI format
+    result = _postprocess_chat_result(result)
 
     # Add timing metadata
     if isinstance(result, dict):

@@ -33,9 +33,9 @@ model:
 # Runtime configuration
 runtime:
   engine: "llama.cpp"
-  context_length: 8192
+  context_length: 4096
   threads: 4
-  gpu_layers: 28  # Partial GPU offload (GTX 1070 8GB, ~4GB free VRAM)
+  gpu_layers: 15  # Partial GPU offload (GTX 1070 8GB, ~5GB free VRAM)
 
 # Prompt suite references
 prompts:

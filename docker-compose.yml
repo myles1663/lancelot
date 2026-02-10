@@ -39,9 +39,9 @@ services:
       - ./local_models/weights:/home/llm/models:ro
     environment:
       - LOCAL_MODELS_DIR=/home/llm/models
-      - LOCAL_MODEL_CTX=8192
+      - LOCAL_MODEL_CTX=4096
       - LOCAL_MODEL_THREADS=4
-      - LOCAL_MODEL_GPU_LAYERS=28
+      - LOCAL_MODEL_GPU_LAYERS=15
       - LOCAL_LLM_PORT=8080
     # Fix Pack V8: GPU access for CUDA offload
     deploy:

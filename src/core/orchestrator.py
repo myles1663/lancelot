@@ -120,6 +120,7 @@ class LancelotOrchestrator:
         self.skill_executor = None
         self.scheduler_service = None
         self.job_executor = None
+        self.local_model = None  # Fix Pack V8: LocalModelClient for local agentic routing
         self._memory_enabled = False
         self.context_compiler = None
 
