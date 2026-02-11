@@ -1,5 +1,35 @@
 # Lancelot Changelog
 
+## v7.2.0 — Capability Upgrade Phase 2B: First-Party Connectors (2026-02-11)
+
+Four first-party connectors: 6 prompts (P35-P40), 72 tests passing.
+Each connector produces HTTP request specs — never touches the network directly.
+
+### New Connectors
+
+- **EmailConnector** (`connectors/email.py`) — Gmail API: 7 operations
+  - Read: list_messages, get_message, search_messages (T1)
+  - Write: send_message (T3), reply_message (T3), move_to_folder (T2)
+  - Delete: delete_message (T3)
+  - RFC 2822 + base64url encoding for send operations
+
+- **SlackConnector** (`connectors/slack.py`) — Slack Web API: 7 operations
+  - Read: read_channels (T0), read_messages (T1), read_threads (T1)
+  - Write: post_message (T2), add_reaction (T1), upload_file (T2)
+  - Delete: delete_message (T3)
+
+- **CalendarConnector** (`connectors/calendar.py`) — Google Calendar API: 6 operations
+  - Read: read_events (T0), read_availability (T0)
+  - Write: create_event (T2), update_event (T2), send_invite (T3)
+  - Delete: delete_event (T3)
+
+- **GenericRESTConnector** (`connectors/generic_rest.py`) — User-configurable
+  - Dynamic operation generation from config
+  - Input validation: HTTPS-only, SSRF prevention, path traversal, injection prevention
+  - Max 50 endpoints, param name sanitization, wildcard domain rejection
+
+---
+
 ## v7.1.0 — Capability Upgrade Phase 2A: Connector Foundation (2026-02-11)
 
 Complete connector infrastructure: 10 prompts (P25-P34), 149 tests passing.
