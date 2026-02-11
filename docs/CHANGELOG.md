@@ -1,5 +1,61 @@
 # Lancelot Changelog
 
+## v7.4.0 — Capability Upgrade Phase 3: Skill Security Pipeline (2026-02-11)
+
+6-stage skill security pipeline: 11 prompts (P48-P58), 82 tests passing.
+Every skill must pass manifest validation, static analysis, and sandbox testing
+before installation. Runtime enforcement blocks undeclared capabilities.
+
+### New Modules
+
+- **`src/skills/security/manifest.py`** — SkillManifest schema (Pydantic v2)
+  - Capability, credential, and domain declarations
+  - Cross-field validation: credentials need domains, community needs does_not_access
+  - audit() method for warnings/errors/info
+
+- **`src/skills/security/static_analyzer.py`** — Source code scanner
+  - 14 built-in patterns (8 CRITICAL, 4 WARNING, 2 INFO)
+  - Detects: network imports, subprocess, eval/exec, ctypes, signal handlers
+  - Custom pattern support via add_custom_pattern()
+  - Directory and single-source scanning
+
+- **`src/skills/security/sandbox_tester.py`** — Docker sandbox testing
+  - Sibling containers via mounted Docker socket
+  - --network=none, --read-only, memory/CPU limits, non-root user
+  - Violation monitoring: network, filesystem, process, resource
+  - Graceful skip if Docker unavailable
+
+- **`src/skills/security/capability_enforcer.py`** — Runtime enforcement
+  - Per-skill approved capabilities, domains, and vault keys
+  - Enforcement hooks for blocking undeclared actions (PermissionError)
+  - Active skill tracking for execution context
+
+- **`src/skills/security/pipeline.py`** — 6-stage orchestrator
+  - Stage 1: Manifest validation
+  - Stage 2: Static analysis (CRITICAL findings block)
+  - Stage 3: Sandbox testing (violations block)
+  - Stage 4: Owner review (external)
+  - Stage 5: Capability enforcement registration
+  - Stage 6: Trust ledger initialization
+
+- **`src/skills/marketplace/source_tiers.py`** — Source tier policies
+  - First-party: auto-approve reads, skip community review
+  - Community: requires community review
+  - User: skip community review, no auto-approve
+
+- **`src/skills/marketplace/reputation.py`** — Reputation scoring
+  - Weighted score: stars(+2x), installs(+0.5x), issues(-1x), security(-3x)
+  - Version-based rescan tracking
+  - Security issue flagging
+
+### Security Hardening
+
+- End-to-end malicious skill defense test: skill with import requests,
+  subprocess, os.system, and eval is caught at Stage 2 (static analysis)
+- Unregistered skills blocked at enforcer even if somehow bypassing pipeline
+
+---
+
 ## v7.3.0 — Capability Upgrade Phase 2C: Trust Ledger (2026-02-11)
 
 Progressive tier relaxation system: 7 prompts (P41-P47), 69 tests passing.
