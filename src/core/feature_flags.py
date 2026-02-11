@@ -24,6 +24,11 @@ vNext4 Governance Environment variables:
     FEATURE_ASYNC_VERIFICATION     — default: false (async verify for T1 actions)
     FEATURE_INTENT_TEMPLATES       — default: false (cached plan templates)
     FEATURE_BATCH_RECEIPTS         — default: false (batched receipt emission)
+
+Capability Upgrade Environment variables:
+    FEATURE_CONNECTORS               — default: false (external connector system)
+    FEATURE_TRUST_LEDGER             — default: false (progressive tier relaxation)
+    FEATURE_SKILL_SECURITY_PIPELINE  — default: false (6-stage skill security)
 """
 
 from __future__ import annotations
@@ -75,6 +80,11 @@ FEATURE_ASYNC_VERIFICATION: bool = _env_bool("FEATURE_ASYNC_VERIFICATION", defau
 FEATURE_INTENT_TEMPLATES: bool = _env_bool("FEATURE_INTENT_TEMPLATES", default=False)
 FEATURE_BATCH_RECEIPTS: bool = _env_bool("FEATURE_BATCH_RECEIPTS", default=False)
 
+# Capability Upgrade flags
+FEATURE_CONNECTORS: bool = _env_bool("FEATURE_CONNECTORS", default=False)
+FEATURE_TRUST_LEDGER: bool = _env_bool("FEATURE_TRUST_LEDGER", default=False)
+FEATURE_SKILL_SECURITY_PIPELINE: bool = _env_bool("FEATURE_SKILL_SECURITY_PIPELINE", default=False)
+
 
 def reload_flags() -> None:
     """Re-read feature flags from environment. Used in tests."""
@@ -87,6 +97,7 @@ def reload_flags() -> None:
     global FEATURE_LOCAL_AGENTIC
     global FEATURE_RISK_TIERED_GOVERNANCE, FEATURE_POLICY_CACHE
     global FEATURE_ASYNC_VERIFICATION, FEATURE_INTENT_TEMPLATES, FEATURE_BATCH_RECEIPTS
+    global FEATURE_CONNECTORS, FEATURE_TRUST_LEDGER, FEATURE_SKILL_SECURITY_PIPELINE
 
     # vNext2 flags
     FEATURE_SOUL = _env_bool("FEATURE_SOUL")
@@ -122,6 +133,11 @@ def reload_flags() -> None:
     FEATURE_INTENT_TEMPLATES = _env_bool("FEATURE_INTENT_TEMPLATES", default=False)
     FEATURE_BATCH_RECEIPTS = _env_bool("FEATURE_BATCH_RECEIPTS", default=False)
 
+    # Capability Upgrade flags
+    FEATURE_CONNECTORS = _env_bool("FEATURE_CONNECTORS", default=False)
+    FEATURE_TRUST_LEDGER = _env_bool("FEATURE_TRUST_LEDGER", default=False)
+    FEATURE_SKILL_SECURITY_PIPELINE = _env_bool("FEATURE_SKILL_SECURITY_PIPELINE", default=False)
+
 
 def log_feature_flags() -> None:
     """Log current feature flag state at startup."""
@@ -153,4 +169,8 @@ def log_feature_flags() -> None:
         FEATURE_RISK_TIERED_GOVERNANCE, FEATURE_POLICY_CACHE,
         FEATURE_ASYNC_VERIFICATION, FEATURE_INTENT_TEMPLATES,
         FEATURE_BATCH_RECEIPTS,
+    )
+    logger.info(
+        "Capability Upgrade flags: CONNECTORS=%s, TRUST_LEDGER=%s, SKILL_SECURITY=%s",
+        FEATURE_CONNECTORS, FEATURE_TRUST_LEDGER, FEATURE_SKILL_SECURITY_PIPELINE,
     )

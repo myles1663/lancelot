@@ -1,5 +1,43 @@
 # Lancelot Changelog
 
+## v7.1.0 — Capability Upgrade Phase 2A: Connector Foundation (2026-02-11)
+
+Complete connector infrastructure: 10 prompts (P25-P34), 149 tests passing.
+This phase builds the foundation for external integrations with full governance.
+
+### New Modules
+
+- **`src/connectors/`** — Connector subsystem package
+  - `base.py` — ConnectorBase, ConnectorManifest, ConnectorStatus, CredentialSpec
+  - `models.py` — ConnectorOperation, ConnectorResult, ConnectorResponse, HTTPMethod, ParameterSpec
+  - `registry.py` — ConnectorRegistry with YAML config, thread-safe registration
+  - `vault.py` — CredentialVault (Fernet encryption), VaultAccessPolicy (scoped access)
+  - `rate_limiter.py` — Token bucket RateLimiter, RateLimiterRegistry (per-connector)
+  - `proxy.py` — ConnectorProxy (sync HTTP via requests), DomainValidator
+  - `governed_proxy.py` — GovernedConnectorProxy (risk classification + policy + receipts)
+  - `credential_api.py` — FastAPI endpoints for credential onboarding
+  - `connectors/test_echo.py` — EchoConnector (httpbin.org integration test connector)
+
+### New Config Files
+
+- **`config/connectors.yaml`** — Connector settings, rate limits, per-connector config
+- **`config/vault.yaml`** — Credential vault encryption and audit config
+
+### Modified Files
+
+- **`src/core/feature_flags.py`** — Added FEATURE_CONNECTORS, FEATURE_TRUST_LEDGER, FEATURE_SKILL_SECURITY_PIPELINE
+- **`src/tools/contracts.py`** — Extended Capability enum: CONNECTOR_READ, CONNECTOR_WRITE, CONNECTOR_DELETE, CREDENTIAL_READ, CREDENTIAL_WRITE
+
+### Key Architecture Decisions
+
+- **Connectors never touch the network** — they produce HTTP request specs; ConnectorProxy executes them
+- **Synchronous execution** — all backend uses `requests` library, matching existing orchestrator pattern
+- **Scoped vault access** — connectors can only retrieve credentials declared in their manifest
+- **Token bucket rate limiting** — per-connector, thread-safe, configurable via YAML
+- **Domain allowlisting** — ConnectorProxy validates URLs against manifest.target_domains
+
+---
+
 ## v7.0.6 — Conversational Intelligence Upgrade (2026-02-11)
 
 Five targeted changes to unblock the recursive memory pipeline and make Lancelot

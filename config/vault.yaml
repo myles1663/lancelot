@@ -1,0 +1,21 @@
+# ===========================================================================
+# Lancelot Capability Upgrade — Credential Vault Configuration
+# ===========================================================================
+# Configuration for encrypted credential storage.
+#
+# Version: 1.0
+
+version: "1.0"
+
+storage:
+  path: "data/vault/credentials.enc"
+  backup_path: "data/vault/credentials.enc.bak"
+
+encryption:
+  method: "fernet"
+  key_source: "env"
+  key_env_var: "LANCELOT_VAULT_KEY"
+
+audit:
+  log_access: true
+  log_path: "data/vault/access.log"

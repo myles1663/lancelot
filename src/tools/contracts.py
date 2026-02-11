@@ -90,6 +90,12 @@ class Capability(str, Enum):
     UI_BUILDER = "ui_builder"
     DEPLOY_OPS = "deploy_ops"
     VISION_CONTROL = "vision_control"
+    # Connector capabilities (Capability Upgrade)
+    CONNECTOR_READ = "connector.read"
+    CONNECTOR_WRITE = "connector.write"
+    CONNECTOR_DELETE = "connector.delete"
+    CREDENTIAL_READ = "credential.read"
+    CREDENTIAL_WRITE = "credential.write"
 
 
 class UIBuilderMode(str, Enum):
