@@ -38,6 +38,37 @@ def _chat_via_gateway(text: str, crusader_mode: bool = False) -> str:
     return st.session_state.orchestrator.chat(text, crusader_mode=crusader_mode)
 
 
+def _chat_with_files_via_gateway(text: str, uploaded_files: list, save_to_workspace: bool = False) -> str:
+    """Send chat message with file attachments through the gateway API.
+
+    V14: Routes file uploads through /chat/upload (multipart/form-data).
+    """
+    try:
+        files_payload = []
+        for uf in uploaded_files:
+            file_bytes = uf.read()
+            files_payload.append(
+                ("files", (uf.name, file_bytes, uf.type or "application/octet-stream"))
+            )
+
+        resp = requests.post(
+            f"{_GATEWAY_URL}/chat/upload",
+            data={
+                "text": text,
+                "user": "Commander",
+                "save_to_workspace": str(save_to_workspace).lower(),
+            },
+            files=files_payload,
+            timeout=120,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("response", "")
+    except Exception as e:
+        print(f"V14: Gateway upload call failed ({e}), falling back to text-only")
+    return _chat_via_gateway(text)
+
+
 # Page Config
 st.set_page_config(
     page_title="Lancelot War Room",
@@ -211,9 +242,25 @@ with tab_command:
                     if "is_draft" in msg:
                         st.warning("Awaiting Confirmation...")
 
+        # File/Image Upload
+        uploaded_files = st.file_uploader(
+            "Attach files or images",
+            type=["png", "jpg", "jpeg", "gif", "webp", "pdf", "txt", "md", "py", "json", "csv", "yaml", "yml", "log", "xml", "html", "css", "js", "ts"],
+            accept_multiple_files=True,
+            key="file_uploader",
+        )
+        save_to_workspace = False
+        if uploaded_files:
+            save_to_workspace = st.checkbox("Save to Workspace folder", value=False, key="save_ws")
+
         # Chat Input
         if prompt := st.chat_input("Issue command to Lancelot..."):
-            st.session_state.messages.append({"role": "user", "content": prompt})
+            # Build display message with attachment info
+            display_msg = prompt
+            if uploaded_files:
+                attachment_names = ", ".join(f.name for f in uploaded_files)
+                display_msg = f"{prompt}\n\n*Attached: {attachment_names}*"
+            st.session_state.messages.append({"role": "user", "content": display_msg})
             
             with chat_container:
                 with st.chat_message("user"):
@@ -269,8 +316,13 @@ with tab_command:
                             st.session_state.messages.append({"role": "assistant", "content": response})
 
                         else:
-                            # Normal mode — V11: route through gateway API
-                            response = _chat_via_gateway(prompt)
+                            # Normal mode — V14: route with file uploads if present
+                            if uploaded_files:
+                                response = _chat_with_files_via_gateway(
+                                    prompt, uploaded_files, save_to_workspace
+                                )
+                            else:
+                                response = _chat_via_gateway(prompt)
 
                             if response.startswith("DRAFT:"):
                                 st.warning("System Learning Detected (Confidence 70-90%)")

@@ -211,6 +211,21 @@ class TelegramBot:
             self._handle_voice(voice, sender_chat_id, sender_name)
             return
 
+        # V14: Check for photo messages
+        photo = msg.get("photo")
+        if photo:
+            caption = msg.get("caption", "What's in this image?")
+            largest = photo[-1]  # Highest resolution
+            self._handle_photo(largest["file_id"], caption, sender_chat_id, sender_name)
+            return
+
+        # V14: Check for document messages
+        document = msg.get("document")
+        if document:
+            caption = msg.get("caption", "Please analyze this document.")
+            self._handle_document(document, caption, sender_chat_id, sender_name)
+            return
+
         text = msg.get("text", "")
         if not text:
             return
@@ -302,3 +317,63 @@ class TelegramBot:
                 f"Error processing voice note: {e}",
                 chat_id,
             )
+
+    def _handle_photo(self, file_id: str, caption: str, chat_id: str, sender_name: str):
+        """V14: Handle a photo — download → send to Gemini vision → respond."""
+        logger.info("TelegramBot: Photo from [%s] caption='%s'", sender_name, caption[:50])
+
+        if not self.orchestrator:
+            self.send_message("Lancelot orchestrator is not available.", chat_id)
+            return
+
+        try:
+            image_bytes = self._download_file(file_id)
+            logger.info("TelegramBot: Downloaded photo (%d bytes)", len(image_bytes))
+
+            from orchestrator import ChatAttachment
+            attachment = ChatAttachment(
+                filename="telegram_photo.jpg",
+                mime_type="image/jpeg",
+                data=image_bytes,
+            )
+
+            response = self.orchestrator.chat(caption, attachments=[attachment])
+            if response:
+                response = self._sanitize_for_telegram(response)
+                self.send_message(response, chat_id)
+
+        except Exception as e:
+            logger.error("TelegramBot: Photo processing error: %s", e)
+            self.send_message(f"Error processing photo: {e}", chat_id)
+
+    def _handle_document(self, document: dict, caption: str, chat_id: str, sender_name: str):
+        """V14: Handle a document — download → read/analyze → respond."""
+        file_id = document.get("file_id", "")
+        file_name = document.get("file_name", "unknown")
+        mime_type = document.get("mime_type", "application/octet-stream")
+
+        logger.info("TelegramBot: Document from [%s]: %s (%s)", sender_name, file_name, mime_type)
+
+        if not self.orchestrator:
+            self.send_message("Lancelot orchestrator is not available.", chat_id)
+            return
+
+        try:
+            file_bytes = self._download_file(file_id)
+            logger.info("TelegramBot: Downloaded document (%d bytes)", len(file_bytes))
+
+            from orchestrator import ChatAttachment
+            attachment = ChatAttachment(
+                filename=file_name,
+                mime_type=mime_type,
+                data=file_bytes,
+            )
+
+            response = self.orchestrator.chat(caption, attachments=[attachment])
+            if response:
+                response = self._sanitize_for_telegram(response)
+                self.send_message(response, chat_id)
+
+        except Exception as e:
+            logger.error("TelegramBot: Document processing error: %s", e)
+            self.send_message(f"Error processing document: {e}", chat_id)

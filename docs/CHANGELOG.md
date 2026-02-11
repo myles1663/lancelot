@@ -1,5 +1,66 @@
 # Lancelot Changelog
 
+## v7.0.3 — File/Image Sharing + Shared Workspace (2026-02-11)
+
+### Summary
+
+Added multimodal file and image sharing across all interfaces (War Room, Telegram, Gateway
+API) plus a shared Desktop workspace folder. Users can now upload images for Gemini vision
+analysis, share documents for context, and exchange project files through a shared folder.
+
+### Shared Workspace
+
+A new Docker volume mount maps `C:\Users\...\Desktop\Lancelot Workspace` to
+`/home/lancelot/workspace` inside the container. Both the user and Lancelot can read/write
+files in this folder for seamless project collaboration.
+
+- **`docker-compose.yml`**: Added workspace bind-mount volume
+
+### Multimodal Chat Pipeline
+
+Threaded file/image attachments through all layers: UI/Telegram -> Gateway -> Orchestrator -> Gemini.
+
+- **`src/core/orchestrator.py`**:
+  - Added `ChatAttachment` dataclass (`filename`, `mime_type`, `data`)
+  - Extended `chat()` with `attachments` parameter
+  - Images and PDFs sent to Gemini as `types.Part(inline_data=...)` for native vision
+  - Text documents decoded and appended to context
+  - `_text_only_generate()` and `_agentic_generate()` accept `image_parts` parameter
+  - Vision input forces Gemini routing (skips local model which has no vision)
+  - System instruction updated with workspace awareness
+
+- **`src/core/gateway.py`**:
+  - New `POST /chat/upload` endpoint (multipart/form-data)
+  - Accepts text + files, creates `ChatAttachment` objects
+  - Optional `save_to_workspace` flag copies uploads to shared folder
+  - Request size limit increased to 20MB
+  - Imports: `File`, `UploadFile`, `Form` from FastAPI
+
+### War Room File Upload
+
+- **`src/ui/war_room.py`**:
+  - Added `st.file_uploader()` widget in Command Center (images, PDFs, code, text)
+  - "Save to Workspace folder" checkbox
+  - `_chat_with_files_via_gateway()` helper posts multipart to `/chat/upload`
+  - Attachment names shown in chat history
+
+### Telegram Photo/Document Support
+
+- **`src/integrations/telegram_bot.py`**:
+  - `_handle_photo()`: Downloads photo via existing `_download_file()`, sends to Gemini vision
+  - `_handle_document()`: Downloads document, creates `ChatAttachment`, routes to orchestrator
+  - `_handle_update()` extended to detect `photo` and `document` message types
+
+### Supported File Types
+
+| Category | Types | Processing |
+|---|---|---|
+| Images | PNG, JPG, JPEG, GIF, WebP | Gemini vision (inline_data) |
+| Documents | PDF | Gemini native PDF processing |
+| Text | TXT, MD, PY, JSON, CSV, YAML, XML, HTML, CSS, JS, TS | UTF-8 decode into context |
+
+---
+
 ## v7.0.2 — War Room Cost Tracker Panel (2026-02-10)
 
 ### Summary

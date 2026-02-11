@@ -20,6 +20,15 @@ from planning_pipeline import PlanningPipeline
 from intent_classifier import classify_intent, IntentType
 from plan_builder import EnvContext
 from plan_types import OutcomeType
+from dataclasses import dataclass
+
+# File/image attachment for multimodal chat
+@dataclass
+class ChatAttachment:
+    """A file or image attached to a chat message."""
+    filename: str
+    mime_type: str
+    data: bytes
 
 # Fix Pack V1: New subsystem imports
 try:
@@ -766,10 +775,14 @@ class LancelotOrchestrator:
         """
         return (
             "CRITICAL CONTEXT — What you are:\n"
-            "- You are deployed as a Telegram bot. Users message you via Telegram.\n"
+            "- You are deployed as a Telegram bot and War Room. Users message you via Telegram or the War Room.\n"
             "- You can receive and send voice notes (STT/TTS via Google Cloud).\n"
+            "- You can receive images and documents. When users share images, describe or analyze them.\n"
             "- When the user says 'us', 'we', or 'our', they include YOU.\n"
             "- You have 4 executable skills: command_runner, repo_writer, network_client, service_runner.\n"
+            "- You have a shared workspace at /home/lancelot/workspace that the user can also access on their Desktop.\n"
+            "- Files placed there by you or the user are available to both parties.\n"
+            "- When asked to save, write, or share files, prefer the workspace directory.\n"
             "- You don't tell users to download apps or Google things. You tell them what YOU can do.\n"
             "- You are a governed autonomous system, not a search engine or chatbot."
         )
@@ -1315,6 +1328,7 @@ class LancelotOrchestrator:
         allow_writes: bool = False,
         context_str: str = None,
         force_tool_use: bool = False,
+        image_parts: list = None,
     ) -> str:
         """Core agentic loop: Gemini + function calling via skills.
 
@@ -1339,7 +1353,7 @@ class LancelotOrchestrator:
 
         if not self.skill_executor:
             print("V6: skill_executor not available, falling back to text-only")
-            return self._text_only_generate(prompt, system_instruction, context_str)
+            return self._text_only_generate(prompt, system_instruction, context_str, image_parts=image_parts)
 
         # Build tool declarations and config
         declarations = self._build_tool_declarations()
@@ -1367,10 +1381,14 @@ class LancelotOrchestrator:
             thinking_config=self._get_thinking_config(),
         )
 
-        # Build initial contents
+        # Build initial contents (with optional image/PDF parts for multimodal)
         ctx = context_str or self.context_env.get_context_string()
+        user_parts = []
+        if image_parts:
+            user_parts.extend(image_parts)
+        user_parts.append(types.Part(text=f"{ctx}\n\n{prompt}"))
         contents = [
-            types.Content(role="user", parts=[types.Part(text=f"{ctx}\n\n{prompt}")]),
+            types.Content(role="user", parts=user_parts),
         ]
 
         # Track tool calls for receipts and cost
@@ -1565,8 +1583,9 @@ class LancelotOrchestrator:
         prompt: str,
         system_instruction: str = None,
         context_str: str = None,
+        image_parts: list = None,
     ) -> str:
-        """Standard text-only Gemini call (no tools). Fallback when agentic loop is disabled."""
+        """Standard Gemini call (no tools). Supports multimodal via image_parts."""
         if not self.client:
             return "Error: Gemini client not initialized."
 
@@ -1576,9 +1595,16 @@ class LancelotOrchestrator:
         ctx = context_str or self.context_env.get_context_string()
 
         try:
+            # Build content parts — text, with optional image/PDF parts prepended
+            if image_parts:
+                parts = list(image_parts) + [types.Part(text=f"{ctx}\n\n{prompt}")]
+                contents = [types.Content(role="user", parts=parts)]
+            else:
+                contents = [ctx, prompt]
+
             response = self.client.models.generate_content(
                 model=self._route_model(prompt),
-                contents=[ctx, prompt],
+                contents=contents,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
                     thinking_config=self._get_thinking_config(),
@@ -1904,23 +1930,51 @@ class LancelotOrchestrator:
              
         return self.model_name
 
-    def chat(self, user_message: str, crusader_mode: bool = False) -> str:
+    def chat(self, user_message: str, crusader_mode: bool = False, attachments: list = None) -> str:
         """Sends a message to Gemini with full context.
 
         Uses context caching when available for token savings.
         Applies system instructions via dedicated parameter (not concatenated into prompt).
         Includes thinking config for reasoning-capable models.
+        Supports multimodal attachments (images, PDFs, text files).
         """
         self.wake_up("User Chat")
         start_time = __import__("time").time()
-        
+
         # Governance: Check Token Limit (Estimate)
         est_input_tokens = len(user_message) // 4 + 1000 # Rough estimate
         if not self.governor.check_limit("tokens", est_input_tokens):
              return "GOVERNANCE BLOCK: Daily token limit exceeded."
-        
+
         # SECURITY: Sanitize Input
         user_message = self.sanitizer.sanitize(user_message)
+
+        # ── Process file/image attachments into Gemini-compatible parts ──
+        file_parts = []  # types.Part objects for Gemini multimodal
+        if attachments:
+            for att in attachments:
+                if att.mime_type.startswith("image/") or att.mime_type == "application/pdf":
+                    # Images and PDFs: send as inline_data for Gemini vision
+                    file_parts.append(
+                        types.Part(inline_data=types.Blob(
+                            mime_type=att.mime_type,
+                            data=att.data,
+                        ))
+                    )
+                    user_message += f"\n[Attached: {att.filename}]"
+                else:
+                    # Text-based documents: decode and include as context
+                    try:
+                        text_content = att.data.decode("utf-8", errors="replace")
+                        if len(text_content) > 50000:
+                            text_content = text_content[:50000] + "\n... (truncated)"
+                        user_message += (
+                            f"\n\n--- Attached file: {att.filename} ---\n"
+                            f"{text_content}\n"
+                            f"--- End of {att.filename} ---"
+                        )
+                    except Exception:
+                        user_message += f"\n[Attached: {att.filename} (binary, not readable)]"
 
         # S6: Add to History (Short-term Memory)
         self.context_env.add_history("user", user_message)
@@ -2046,11 +2100,13 @@ class LancelotOrchestrator:
 
             # Fix Pack V6/V8: Agentic loop — tool access for autonomous research
             from feature_flags import FEATURE_AGENTIC_LOOP, FEATURE_LOCAL_AGENTIC
+            # V14: When file_parts present (images/PDFs), skip local model — no vision support
+            has_vision_input = bool(file_parts)
             if FEATURE_AGENTIC_LOOP:
                 # V13: Conversational messages bypass agentic loop entirely
                 # (no tools needed for "call me Myles", "hello", "thanks", etc.)
                 # Route to local model first to save Gemini tokens.
-                if self._is_conversational(user_message):
+                if self._is_conversational(user_message) and not has_vision_input:
                     if FEATURE_LOCAL_AGENTIC and self.local_model and self.local_model.is_healthy():
                         print("V13: Conversational message — routing to local model (no tools)")
                         raw_response = self._local_agentic_generate(
@@ -2065,10 +2121,20 @@ class LancelotOrchestrator:
                             prompt=user_message,
                             system_instruction=system_instruction,
                             context_str=context_str,
+                            image_parts=file_parts,
                         )
                     # V13: Empty response fallback for simple acks
                     if not raw_response or not raw_response.strip():
                         raw_response = "Understood."
+                # V14: Vision input always routes to Gemini (skip local model)
+                elif has_vision_input:
+                    print("V14: Vision input detected — routing to Gemini (multimodal)")
+                    raw_response = self._text_only_generate(
+                        prompt=user_message,
+                        system_instruction=system_instruction,
+                        context_str=context_str,
+                        image_parts=file_parts,
+                    )
                 # V8: Try local model for simple queries to save Gemini tokens
                 elif FEATURE_LOCAL_AGENTIC and self._is_simple_for_local(user_message):
                     print("V8: Routing simple query to local agentic model")
@@ -2094,6 +2160,7 @@ class LancelotOrchestrator:
                         allow_writes=allow_writes,
                         context_str=context_str,
                         force_tool_use=needs_research,
+                        image_parts=file_parts,
                     )
             else:
                 # V5 fallback: text-only Gemini
@@ -2101,6 +2168,7 @@ class LancelotOrchestrator:
                     prompt=user_message,
                     system_instruction=system_instruction,
                     context_str=context_str,
+                    image_parts=file_parts,
                 )
 
             # S10: Sanitize LLM output before parsing

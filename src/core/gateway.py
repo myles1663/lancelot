@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, File, UploadFile, Form
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -28,8 +28,8 @@ LOG_LEVEL = os.getenv("LANCELOT_LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
 logger = logging.getLogger("lancelot.gateway")
 
-# S11: Request size limit (1 MB)
-MAX_REQUEST_SIZE = 1_048_576
+# S11: Request size limit (20 MB for file uploads)
+MAX_REQUEST_SIZE = 20_971_520
 
 # F8: Startup timestamp for uptime tracking
 _startup_time = None
@@ -479,6 +479,86 @@ async def chat_webhook(request: Request):
         }
     except Exception as e:
         logger.error(f"[{request_id}] Chat error: {e}")
+        return error_response(500, "Internal server error", request_id=request_id)
+
+
+@app.post("/chat/upload")
+async def chat_with_files(
+    request: Request,
+    text: str = Form(""),
+    user: str = Form("Commander"),
+    files: list[UploadFile] = File(default=[]),
+    save_to_workspace: bool = Form(default=False),
+):
+    """
+    Chat endpoint with file/image upload support.
+    Accepts multipart/form-data with text + files.
+    Images are sent to Gemini as vision input.
+    Documents are read as text and included in context.
+    """
+    from typing import List
+    request_id = make_request_id()
+
+    if not verify_token(request):
+        return error_response(401, "Unauthorized", request_id=request_id)
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not rate_limiter.check(client_ip):
+        return error_response(429, "Rate limit exceeded.", request_id=request_id)
+
+    try:
+        from orchestrator import ChatAttachment
+
+        attachments = []
+        for f in files:
+            file_bytes = await f.read()
+            mime = f.content_type or "application/octet-stream"
+            attachments.append(ChatAttachment(
+                filename=f.filename or "unknown",
+                mime_type=mime,
+                data=file_bytes,
+            ))
+
+            # Optionally save to shared workspace
+            if save_to_workspace:
+                workspace_path = "/home/lancelot/workspace"
+                os.makedirs(workspace_path, exist_ok=True)
+                safe_name = os.path.basename(f.filename or "upload")
+                save_path = os.path.join(workspace_path, safe_name)
+                with open(save_path, "wb") as wf:
+                    wf.write(file_bytes)
+                logger.info(f"[{request_id}] Saved upload to workspace: {save_path}")
+
+        logger.info(f"[{request_id}] Upload from {user}: text={text[:50]}... files={len(attachments)}")
+
+        # Route through onboarding/crusader/orchestrator
+        onboarding_orch.state = onboarding_orch._determine_state()
+        if onboarding_orch.state != "READY":
+            response_text = onboarding_orch.process(user, text)
+        else:
+            is_trigger, action = crusader_mode.should_intercept(text)
+            if is_trigger:
+                if action == "activate":
+                    response_text = crusader_mode.activate()
+                else:
+                    response_text = crusader_mode.deactivate()
+            elif crusader_mode.is_active:
+                if crusader_adapter.check_auto_pause(text):
+                    response_text = "Authority required.\nThis operation is restricted even in Crusader Mode."
+                else:
+                    response_text = main_orchestrator.chat(text, crusader_mode=True, attachments=attachments)
+                    response_text = crusader_adapter.format_response(response_text)
+            else:
+                response_text = main_orchestrator.chat(text, attachments=attachments)
+
+        return {
+            "response": response_text,
+            "crusader_mode": crusader_mode.is_active,
+            "request_id": request_id,
+            "files_received": len(attachments),
+        }
+    except Exception as e:
+        logger.error(f"[{request_id}] Upload chat error: {e}")
         return error_response(500, "Internal server error", request_id=request_id)
 
 
