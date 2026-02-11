@@ -1,5 +1,53 @@
 # Lancelot Changelog
 
+## v7.5.0 — Capability Upgrade Phase 4: Business Automation PoC (2026-02-11)
+
+End-to-end content repurposing business automation: 6 prompts (P59-P64), 41 tests passing.
+Complete pipeline from content intake through multi-format repurposing, quality verification,
+delivery packaging, and capstone integration test proving all systems work together.
+
+### New Modules
+
+- **`src/business/skills/content_intake.py`** — ContentIntakeSkill
+  - Parses raw text into structured format (title, body, word count, type, topics)
+  - Content type identification: blog_post, transcript, newsletter, article
+  - Keyword extraction via word frequency (stop word filtering)
+  - Quality validation: minimum word count, title detection
+
+- **`src/business/skills/content_repurpose.py`** — ContentRepurposeSkill
+  - generate_tweets: <=280 chars, configurable count
+  - generate_linkedin_posts: 200-500 words, professional format
+  - generate_email_snippets: newsletter-style with CTA
+  - generate_instagram_caption: <=2200 chars with hashtags
+  - repurpose_all: all formats in one call
+
+- **`src/business/skills/quality_verify.py`** — QualityVerifySkill
+  - Per-format verification: length limits, no placeholders, word count ranges
+  - Aggregate QualityResult with score (0.0-1.0) and per-format breakdown
+
+- **`src/business/skills/delivery.py`** — DeliverySkill
+  - format_email_package: EmailConnector-compatible params
+  - create_delivery_schedule: time-spaced posting schedule
+  - prepare_social_posts: platform-specific formatting
+
+- **`src/business/soul_config.py`** — Business Soul Configuration
+  - Stripe operations locked at T3 (financial ops always require approval)
+  - Email to non-verified recipients locked at T3
+  - Trust graduation ceilings per capability
+
+- **`src/business/war_room_business.py`** — Business War Room Dashboard
+  - Pipeline status, trust status, connector health, governance efficiency
+
+### Capstone Integration Test
+
+End-to-end test exercising: skill security pipeline install, full content
+pipeline (intake→repurpose→verify→deliver), trust graduation simulation
+(50 successes→proposal→approve→revoke on failure), Soul enforcement
+(Stripe always T3, email non-verified always T3), and War Room display
+with tier distribution metrics.
+
+---
+
 ## v7.4.0 — Capability Upgrade Phase 3: Skill Security Pipeline (2026-02-11)
 
 6-stage skill security pipeline: 11 prompts (P48-P58), 82 tests passing.
