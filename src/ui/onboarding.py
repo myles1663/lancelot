@@ -15,6 +15,43 @@ class OnboardingOrchestrator:
         self.temp_data = {} # Store transient data like webhook url before verification
         self.snapshot = OnboardingSnapshot(data_dir)
         self.state = self._determine_state()
+        self._sync_snapshot()
+
+    def _sync_snapshot(self):
+        """Sync dynamically determined state to the snapshot file.
+
+        The recovery panel and control plane API read from the snapshot,
+        so it must reflect the actual system state derived by _determine_state().
+        """
+        # Map orchestrator string states to OnboardingState enum values
+        state_map = {
+            "WELCOME": OnboardingState.WELCOME,
+            "HANDSHAKE": OnboardingState.CREDENTIALS_CAPTURE,
+            "COMMS_SELECTION": OnboardingState.COMMS_SELECTION,
+            "READY": OnboardingState.READY,
+        }
+
+        target_state = state_map.get(self.state)
+        if target_state is None:
+            return  # Intermediate state, don't overwrite
+
+        # Respect active cooldowns
+        if self.snapshot.state == OnboardingState.COOLDOWN and self.snapshot.is_in_cooldown():
+            return
+
+        if self.snapshot.state != target_state:
+            updates = {}
+            if self.state == "READY":
+                if os.getenv("GEMINI_API_KEY"):
+                    updates["flagship_provider"] = "gemini"
+                elif os.getenv("OPENAI_API_KEY"):
+                    updates["flagship_provider"] = "openai"
+                elif os.getenv("ANTHROPIC_API_KEY"):
+                    updates["flagship_provider"] = "anthropic"
+                updates["credential_status"] = "verified"
+                updates["local_model_status"] = "verified"
+
+            self.snapshot.transition(target_state, **updates)
 
     def _determine_state(self):
         """Determines current state based on snapshot and file existence."""

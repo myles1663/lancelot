@@ -25,11 +25,26 @@ from being bootstrapped from USER.md.
 - **`lancelot_data/memory/core_blocks.json`**: Auto-fixed by bootstrap on restart —
   `human` block re-synced from USER.md (v22)
 
+### Fix: Setup & Recovery Panel Stuck at WELCOME
+
+The War Room "Setup & Recovery" panel showed onboarding state stuck at `WELCOME` even
+when the system was fully operational. Root cause: `OnboardingOrchestrator` determines
+state dynamically from files/env, but `OnboardingSnapshot` (used by recovery panel and
+API) reads from `onboarding_snapshot.json` which was never written during normal
+onboarding flow.
+
+**Fix:** Added `_sync_snapshot()` to `OnboardingOrchestrator.__init__()` that writes
+the dynamically determined state back to the snapshot file at startup. This ensures the
+recovery panel, control plane API, and health system all reflect the actual system state.
+
+- **`src/ui/onboarding.py`**: Added `_sync_snapshot()` method, called from `__init__`
+
 ### Verification
 
 - Gateway logs confirm: `Memory vNext initialized and wired.`
 - Bootstrap log: `Updated core block human (v22, 22 tokens, by system)`
 - Feature flags: `MEMORY_VNEXT=True`
+- Onboarding API returns `state: READY` with provider and credential info
 
 ---
 
