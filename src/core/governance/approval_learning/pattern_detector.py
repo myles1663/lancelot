@@ -417,18 +417,6 @@ class PatternDetector:
         lines.append(f"Confidence: {pattern.confidence:.1%}.")
         return " ".join(lines)
 
-    def _check_soul_compatibility(
-        self, pattern: ApprovalPattern, never_automate: List[str]
-    ) -> bool:
-        """Check pattern's capability against never_automate list."""
-        if pattern.capability:
-            from fnmatch import fnmatch
-
-            for na in never_automate:
-                if fnmatch(pattern.capability, na):
-                    return False
-        return True
-
     def _serialize_conditions(self, pattern: ApprovalPattern) -> dict:
         """Convert pattern to storable conditions dict. Only non-None fields."""
         conditions: Dict = {}
