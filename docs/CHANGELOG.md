@@ -1,5 +1,47 @@
 # Lancelot Changelog
 
+## v7.0.5 — API Retry Logic + Self-Awareness V16 (2026-02-11)
+
+### 429 Retry with Exponential Backoff
+Added automatic retry with exponential backoff for transient Gemini API errors
+(429 RESOURCE_EXHAUSTED, 503 Service Unavailable). Previously, any 429 error
+immediately returned an error string to the user. Now retries up to 3 times
+with 1s → 2s → 4s delays before giving up.
+
+- **`src/core/orchestrator.py`**:
+  - Added `_is_retryable_error()` static method — detects 429/503/RESOURCE_EXHAUSTED
+  - Added `_gemini_call_with_retry()` — generic retry wrapper with configurable
+    max_retries and base_delay
+  - Wired retry into all 5 Gemini API call sites:
+    - `_agentic_generate()` — main agentic loop
+    - `_text_only_generate()` — text-only generation
+    - `_enrich_plan_with_llm()` — plan enrichment
+    - `_execute_plan_via_llm()` — LLM-backed plan execution
+    - `_summarize_execution_results()` — result summarization
+
+### Self-Awareness V16
+Enhanced `_build_self_awareness()` to provide detailed, accurate descriptions of
+Lancelot's architecture when asked about itself. Fixes issue where Lancelot gave
+generic LLM answers ("as a language model, I don't have recursive memory...") when
+asked about its memory system.
+
+- **`src/core/orchestrator.py`**:
+  - Rewrote `_build_self_awareness()` (V15 → V16):
+    - Added "MANDATORY IDENTITY" directive at the top
+    - Detailed recursive memory explanation (episodic → context → response → new memory loop)
+    - All 5 memory tiers described (Core, Episodic, Working, Archival, File Context)
+    - Added vNext4 Risk-Tiered Governance to architecture section
+    - Explicit instruction for memory/identity questions
+  - Added identity-related keywords to `_is_simple_for_local()` complex_keywords:
+    "tell me about", "describe your", "how do you", "your memory", "your architecture"
+    — ensures identity questions always route to Gemini (not local LLM)
+
+- **`lancelot_data/CAPABILITIES.md`**:
+  - Updated Memory section with recursive memory description
+  - Added Risk-Tiered Governance (vNext4) entry
+
+---
+
 ## vNext4 — Risk-Tiered Governance & Performance Pipeline (2026-02-11)
 
 **Architecture:** docs/architecture/governance.md

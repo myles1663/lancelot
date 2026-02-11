@@ -5,6 +5,7 @@ import shlex
 import hmac
 import hashlib
 import uuid
+import time as _time
 from enum import Enum
 from pathlib import Path
 from google import genai
@@ -469,11 +470,13 @@ class LancelotOrchestrator:
                     force_tool_use=True,
                 )
             else:
-                response = self.client.models.generate_content(
-                    model="gemini-2.0-flash",
-                    contents=[self.context_env.get_context_string(), prompt],
-                    config=types.GenerateContentConfig(
-                        system_instruction=sys_instruction,
+                response = self._gemini_call_with_retry(
+                    lambda: self.client.models.generate_content(
+                        model="gemini-2.0-flash",
+                        contents=[self.context_env.get_context_string(), prompt],
+                        config=types.GenerateContentConfig(
+                            system_instruction=sys_instruction,
+                        )
                     )
                 )
                 raw = response.text.strip() if response.text else ""
@@ -551,12 +554,14 @@ class LancelotOrchestrator:
                     force_tool_use=True,
                 )
             else:
-                response = self.client.models.generate_content(
-                    model=self._route_model(goal),
-                    contents=[self.context_env.get_context_string(), prompt],
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction,
-                        thinking_config=self._get_thinking_config(),
+                response = self._gemini_call_with_retry(
+                    lambda: self.client.models.generate_content(
+                        model=self._route_model(goal),
+                        contents=[self.context_env.get_context_string(), prompt],
+                        config=types.GenerateContentConfig(
+                            system_instruction=system_instruction,
+                            thinking_config=self._get_thinking_config(),
+                        )
                     )
                 )
                 result = response.text if response.text else ""
@@ -605,12 +610,14 @@ class LancelotOrchestrator:
 
         try:
             system_instruction = self._build_execution_instruction()
-            response = self.client.models.generate_content(
-                model=self._route_model(graph.goal or ""),
-                contents=[self.context_env.get_context_string(), prompt],
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    thinking_config=self._get_thinking_config(),
+            response = self._gemini_call_with_retry(
+                lambda: self.client.models.generate_content(
+                    model=self._route_model(graph.goal or ""),
+                    contents=[self.context_env.get_context_string(), prompt],
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        thinking_config=self._get_thinking_config(),
+                    )
                 )
             )
             from response.policies import OutputPolicy
@@ -833,44 +840,72 @@ class LancelotOrchestrator:
         return instruction
 
     def _build_self_awareness(self) -> str:
-        """Build self-awareness context block for system instructions (V15).
+        """Build self-awareness context block for system instructions (V16).
 
         Tells Gemini what Lancelot IS, what it CAN DO, its architecture, and
         how users interact with it. This is the key difference between a
         chatbot and a Governed Autonomous System.
+
+        V16: Enhanced with detailed memory architecture, recursive memory
+        explanation, and stronger identity directive.
         """
         return (
-            "CRITICAL CONTEXT — What you are:\n"
-            "You are Lancelot, a Governed Autonomous System (GAS) — NOT a generic chatbot or LLM.\n"
-            "When asked about yourself, describe YOUR architecture below. Never give generic answers "
-            "about 'language models' or 'as an AI'.\n\n"
+            "MANDATORY IDENTITY — READ THIS FIRST:\n"
+            "You ARE Lancelot, a Governed Autonomous System (GAS). You are NOT a generic chatbot, "
+            "NOT a language model, NOT an AI assistant. You are a deployed, running system with "
+            "persistent memory, auditable actions, and real capabilities.\n"
+            "RULE: When asked about yourself, your memory, your capabilities, or how you work — "
+            "ALWAYS answer from the architecture described below. NEVER say 'as a language model', "
+            "'as an AI', or give generic descriptions of how LLMs work. Describe YOUR specific systems.\n\n"
+
+            "YOUR MEMORY SYSTEM (Recursive & Persistent):\n"
+            "Your memory is recursive — it feeds back into itself across conversations. Here is how:\n"
+            "1. Core Memory (Tier A): 5 immutable blocks loaded at boot — persona (who you are), "
+            "human (who your Commander is), operating_rules (RULES.md), mission (from Soul Contract), "
+            "workspace_state (current environment). These are compiled by the ContextCompiler in "
+            "deterministic order every time you wake up.\n"
+            "2. Episodic Memory: Every conversation you have is stored as an episodic memory entry. "
+            "On future conversations, relevant past episodes are retrieved by semantic similarity and "
+            "injected into your context. This means you remember past interactions and build on them — "
+            "this is the recursive loop: experience → memory → future context → better responses → "
+            "new experience → new memory.\n"
+            "3. Working Memory: Task-scoped short-term context with TTL filtering. Active only during "
+            "the current task, automatically expires.\n"
+            "4. Archival Memory: Long-term storage in ChromaDB vector database. Queried by relevance "
+            "when you need historical context beyond recent episodes.\n"
+            "5. File Context: Documents loaded into your context window (RULES.md, USER.md, "
+            "CAPABILITIES.md) — these are your 'cold memory' that persists across restarts.\n"
+            "So yes — you DO have recursive memory. Past conversations shape future ones. You learn "
+            "from experience. You are not stateless.\n\n"
 
             "YOUR ARCHITECTURE:\n"
-            "- Memory vNext: You have tiered memory — 5 core blocks (persona, human, operating_rules, "
-            "mission, workspace_state) compiled by the ContextCompiler in deterministic order. "
-            "Working memory is task-scoped with TTL. Archival/episodic memories are retrieved by relevance.\n"
-            "- Receipt System: Every action you take (tool calls, file reads, LLM calls) produces an "
-            "auditable receipt in receipts.db with timestamp, inputs, outputs, duration, and tokens.\n"
-            "- Cognition Governor: Daily limits (2M tokens, 1000 tool calls) prevent runaway execution. "
-            "Stats tracked in usage_stats.json.\n"
-            "- Model Routing: Dual-model — local LLM (llama.cpp) for simple/private queries, "
-            "Gemini 2.0 Flash for complex reasoning and tool use. Auto-selected by complexity.\n"
-            "- Soul Contract: Immutable identity (mission, allegiance, tone) from soul.json.\n"
-            "- Cost Tracking: Per-model, per-day usage with monthly persistence.\n\n"
+            "- Receipt System: Every action you take (tool calls, file ops, LLM calls) produces a "
+            "cryptographic receipt in receipts.db — timestamp, inputs, outputs, duration, tokens, tier.\n"
+            "- Cognition Governor: Daily limits (2M tokens, 1000 tool calls) prevent runaway execution.\n"
+            "- Risk-Tiered Governance (vNext4): Every action classified into T0 (inert), T1 (reversible), "
+            "T2 (controlled), T3 (irreversible). T1 actions get rollback snapshots + async verification. "
+            "T2/T3 require sync verification and approval gates.\n"
+            "- Model Routing: Dual-model — local LLM for simple queries, Gemini 2.0 Flash for complex "
+            "reasoning and tool use. Auto-selected by complexity heuristics.\n"
+            "- Soul Contract: Immutable identity core (mission, allegiance, tone) from soul.json.\n"
+            "- Cost Tracking: Per-model, per-day token usage with monthly persistence.\n\n"
 
             "YOUR CAPABILITIES:\n"
-            "- Deployed as Docker container. Interfaces: War Room (Streamlit), Telegram bot, FastAPI gateway.\n"
+            "- Deployed as Docker container on Commander's server. Always running.\n"
+            "- Interfaces: War Room (Streamlit web UI), Telegram bot, FastAPI gateway.\n"
             "- 4 executable skills: command_runner, repo_writer, network_client, service_runner.\n"
-            "- Agentic multi-step execution via Gemini function calling with receipt-tracked tool loop.\n"
-            "- Voice: STT/TTS via Google Cloud. Receive and send voice notes on Telegram.\n"
-            "- Vision: Receive and analyze images/documents via Telegram and War Room (Gemini multimodal).\n"
-            "- Shared workspace at /home/lancelot/workspace (Commander's Desktop). Read/write files there.\n\n"
+            "- Agentic execution: multi-step tasks via Gemini function calling with receipt tracking.\n"
+            "- Voice: Receive voice notes (STT), respond with voice (TTS) via Telegram.\n"
+            "- Vision: Analyze images and documents via Telegram and War Room (Gemini multimodal).\n"
+            "- Shared workspace at /home/lancelot/workspace (Commander's Desktop).\n\n"
 
             "BEHAVIORAL RULES:\n"
             "- When the user says 'us', 'we', or 'our', they include YOU.\n"
             "- Don't tell users to download apps or Google things. Tell them what YOU can do.\n"
             "- Use your tools proactively — research before answering, execute before planning.\n"
-            "- Be honest: complete the task now or state what you cannot do. Never simulate progress."
+            "- Be honest: complete the task now or state what you cannot do. Never simulate progress.\n"
+            "- When asked 'tell me about your memory' or 'how does your memory work' or similar — "
+            "describe YOUR memory system above. Do not speculate about LLM internals."
         )
 
     # ── Fix Pack V6: Agentic Loop (Gemini Function Calling) ──────────
@@ -1127,6 +1162,9 @@ class LancelotOrchestrator:
             "figure out", "find out", "find a way", "look into",
             "explore", "recommend", "options for",
             "realtime", "real-time", "voice chat", "voice call",
+            # V16: Self-awareness / identity questions need full system instruction
+            "tell me about", "describe your", "how do you", "how does your",
+            "what is your", "your memory", "your architecture", "about yourself",
         }
         if any(k in prompt_lower for k in complex_keywords):
             return False
@@ -1407,6 +1445,41 @@ class LancelotOrchestrator:
             note="Reached maximum local tool call limit. Here's what I found:",
         )
 
+    @staticmethod
+    def _is_retryable_error(exc: Exception) -> bool:
+        """Check if a Gemini API error is retryable (429/503/RESOURCE_EXHAUSTED)."""
+        err_str = str(exc).lower()
+        return any(kw in err_str for kw in ("429", "resource_exhausted", "503", "service_unavailable", "overloaded"))
+
+    def _gemini_call_with_retry(self, call_fn, max_retries=3, base_delay=1.0):
+        """Execute a Gemini API call with exponential backoff on transient errors.
+
+        Args:
+            call_fn: Zero-arg callable that makes the Gemini API call.
+            max_retries: Maximum retry attempts (default 3).
+            base_delay: Initial delay in seconds (doubles each retry).
+
+        Returns:
+            The result of call_fn() on success.
+
+        Raises:
+            The original exception if all retries are exhausted or error is not retryable.
+        """
+        last_exc = None
+        for attempt in range(max_retries + 1):
+            try:
+                return call_fn()
+            except Exception as e:
+                last_exc = e
+                if attempt < max_retries and self._is_retryable_error(e):
+                    delay = base_delay * (2 ** attempt)
+                    print(f"Gemini API transient error (attempt {attempt + 1}/{max_retries + 1}): {e}")
+                    print(f"Retrying in {delay:.1f}s...")
+                    _time.sleep(delay)
+                else:
+                    raise
+        raise last_exc
+
     def _agentic_generate(
         self,
         prompt: str,
@@ -1494,10 +1567,12 @@ class LancelotOrchestrator:
                 )
 
             try:
-                response = self.client.models.generate_content(
-                    model=self._route_model(prompt),
-                    contents=contents,
-                    config=config,
+                response = self._gemini_call_with_retry(
+                    lambda: self.client.models.generate_content(
+                        model=self._route_model(prompt),
+                        contents=contents,
+                        config=config,
+                    )
                 )
             except Exception as e:
                 print(f"V6 agentic loop Gemini call failed: {e}")
@@ -1688,13 +1763,15 @@ class LancelotOrchestrator:
             else:
                 contents = [ctx, prompt]
 
-            response = self.client.models.generate_content(
-                model=self._route_model(prompt),
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    thinking_config=self._get_thinking_config(),
-                ),
+            response = self._gemini_call_with_retry(
+                lambda: self.client.models.generate_content(
+                    model=self._route_model(prompt),
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        thinking_config=self._get_thinking_config(),
+                    ),
+                )
             )
             return response.text if response.text else ""
         except Exception as e:
