@@ -1,0 +1,26 @@
+version: "1.0"
+
+detection:
+  min_observations: 20            # Min decisions before proposing a pattern
+  confidence_threshold: 0.85      # Min confidence to generate proposal
+  max_pattern_dimensions: 3       # Max contextual dimensions per pattern
+  analysis_window_days: 30        # Look back this many days for patterns
+  analysis_trigger_interval: 10   # Re-analyze after every N new decisions
+
+rules:
+  max_active_rules: 50
+  max_auto_decisions_per_day: 50  # Circuit breaker per rule
+  max_auto_decisions_total: 500   # Lifetime limit, then re-confirm
+  re_confirmation_interval: 500   # Same as total limit
+  cooldown_after_decline: 30      # Don't re-propose for N decisions
+
+never_automate:
+  - "connector.stripe.charge_customer"
+  - "connector.stripe.refund_charge"
+  - "connector.stripe.create_invoice"
+  - "connector.*.delete_*"
+
+persistence:
+  decision_log_path: "data/apl/decisions.jsonl"
+  rules_path: "data/apl/rules.json"
+  patterns_path: "data/apl/patterns.json"

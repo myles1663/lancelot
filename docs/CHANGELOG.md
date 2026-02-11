@@ -1,5 +1,97 @@
 # Lancelot Changelog
 
+## v7.6.0 — Approval Pattern Learning (APL) (2026-02-11)
+
+Approval Pattern Learning system: 10 prompts (P65-P74), 151 tests passing.
+Observes owner approve/deny decisions, detects repeating patterns, and proposes
+automation rules. Owner confirms rules once — matching actions skip the approval
+gate. Complementary to Trust Ledger: Trust answers "did the action succeed?",
+APL answers "does the owner always say yes?"
+
+### New Module: `src/core/governance/approval_learning/`
+
+- **`config.py`** — APLConfig (Pydantic v2)
+  - DetectionConfig: min_observations, confidence_threshold, max_pattern_dimensions
+  - RulesConfig: max_active_rules, daily/total limits, cooldown_after_decline
+  - PersistenceConfig: JSONL decision log, JSON rules/patterns storage
+  - `is_never_automate()`: wildcard matching against Soul-protected capabilities
+
+- **`models.py`** — All APL data models
+  - DecisionContext: full action context (capability, target, temporal, payload hash)
+  - DecisionRecord: immutable decision entry with timing and auto/manual flag
+  - ApprovalPattern: multi-dimensional pattern with confidence scoring
+  - AutomationRule: lifecycle (proposed → active → paused → revoked) with circuit breakers
+  - RuleCheckResult: auto_approve / auto_deny / ask_owner
+
+- **`decision_log.py`** — DecisionLog (append-only JSONL journal)
+  - Thread-safe recording with persistence on every write
+  - Filtered queries: by capability, target domain, time window
+  - Analysis trigger tracking (count since last analysis)
+
+- **`pattern_detector.py`** — PatternDetector
+  - Single-dimension detection (capability, target_domain, target_category, scope, time, day)
+  - Multi-dimensional extension (up to max_pattern_dimensions)
+  - Specificity-first: proposes narrowest rule the data supports
+  - Confidence = consistency rate x observation factor
+  - Score = confidence x (1 + 0.2 x specificity)
+  - Proposal generation with never_automate filtering
+
+- **`rule_engine.py`** — RuleEngine
+  - Rule lifecycle: add_proposal, activate, decline, pause, resume, revoke
+  - Runtime matching: deny wins over approve, most specific wins
+  - Circuit breakers: daily limit per rule, total limit with re-confirmation
+  - Cooldown tracking for declined patterns
+  - JSON persistence with full roundtrip
+
+- **`analyzer.py`** — APLAnalyzer (periodic analysis trigger)
+  - Runs when decisions since last analysis >= analysis_trigger_interval
+  - Full pipeline: detect_all → generate_proposals → filter declined → add to engine
+
+- **`orchestrator_wiring.py`** — Orchestrator integration helpers
+  - build_decision_context: extracts capability, target, tier from plan steps
+  - ApprovalRecorder: records manual and auto decisions to DecisionLog
+
+- **`war_room_panel.py`** — APL dashboard data
+  - Summary: active/proposed/paused/revoked rules, automation rate
+  - Active rules with usage stats, pending proposals
+  - Circuit breaker and re-confirmation alerts
+  - Recent decisions with auto/manual flag
+
+### Configuration
+
+- **`config/approval_learning.yaml`** — APL defaults
+  - Detection: 20 min observations, 0.85 confidence threshold, 30-day window
+  - Rules: 50 max active, 50/day limit, 500 total before re-confirmation
+  - Never-automate: Stripe charges/refunds/invoices, all delete operations
+
+### Safety Architecture (7 properties)
+
+1. Owner controls everything — rules only activate after explicit confirmation
+2. Deny wins over approve — conservative by default
+3. Circuit breakers — daily limits prevent runaway automation
+4. Rules expire — total limit requires periodic re-confirmation
+5. Full receipt trail — auto-approved actions still emit receipts
+6. Soul overrides APL — never_automate list cannot be bypassed
+7. Instant revocation — any rule can be revoked immediately
+
+### Feature Flag
+
+- `FEATURE_APPROVAL_LEARNING` — default: false
+
+### Tests (151 total)
+
+- test_apl_config.py (14) — Feature flag, YAML loading, never_automate wildcards
+- test_apl_models.py (33) — All data models, confidence, specificity, matching
+- test_decision_log.py (15) — JSONL persistence, queries, restart survival
+- test_apl_orchestrator_wiring.py (12) — Context building, approval recording
+- test_pattern_detector.py (22) — Single/multi-dim detection, scoring, analysis trigger
+- test_rule_proposals.py (11) — Proposal generation, never_automate filtering
+- test_rule_engine.py (20) — Rule lifecycle, matching, circuit breakers, persistence
+- test_apl_integration.py (11) — Full integration, analyzer, lifecycle
+- test_apl_hardening.py (13) — Deny-wins, circuit breaker, re-confirmation, never-automate, cooldown, specificity preference, concurrent safety, persistence survival, time boundaries, full E2E lifecycle
+
+---
+
 ## v7.5.0 — Capability Upgrade Phase 4: Business Automation PoC (2026-02-11)
 
 End-to-end content repurposing business automation: 6 prompts (P59-P64), 41 tests passing.

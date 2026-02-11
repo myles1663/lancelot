@@ -29,6 +29,9 @@ Capability Upgrade Environment variables:
     FEATURE_CONNECTORS               — default: false (external connector system)
     FEATURE_TRUST_LEDGER             — default: false (progressive tier relaxation)
     FEATURE_SKILL_SECURITY_PIPELINE  — default: false (6-stage skill security)
+
+Approval Pattern Learning Environment variables:
+    FEATURE_APPROVAL_LEARNING        — default: false (APL: learn owner decision patterns)
 """
 
 from __future__ import annotations
@@ -85,6 +88,9 @@ FEATURE_CONNECTORS: bool = _env_bool("FEATURE_CONNECTORS", default=False)
 FEATURE_TRUST_LEDGER: bool = _env_bool("FEATURE_TRUST_LEDGER", default=False)
 FEATURE_SKILL_SECURITY_PIPELINE: bool = _env_bool("FEATURE_SKILL_SECURITY_PIPELINE", default=False)
 
+# Approval Pattern Learning flags
+FEATURE_APPROVAL_LEARNING: bool = _env_bool("FEATURE_APPROVAL_LEARNING", default=False)
+
 
 def reload_flags() -> None:
     """Re-read feature flags from environment. Used in tests."""
@@ -98,6 +104,7 @@ def reload_flags() -> None:
     global FEATURE_RISK_TIERED_GOVERNANCE, FEATURE_POLICY_CACHE
     global FEATURE_ASYNC_VERIFICATION, FEATURE_INTENT_TEMPLATES, FEATURE_BATCH_RECEIPTS
     global FEATURE_CONNECTORS, FEATURE_TRUST_LEDGER, FEATURE_SKILL_SECURITY_PIPELINE
+    global FEATURE_APPROVAL_LEARNING
 
     # vNext2 flags
     FEATURE_SOUL = _env_bool("FEATURE_SOUL")
@@ -138,6 +145,9 @@ def reload_flags() -> None:
     FEATURE_TRUST_LEDGER = _env_bool("FEATURE_TRUST_LEDGER", default=False)
     FEATURE_SKILL_SECURITY_PIPELINE = _env_bool("FEATURE_SKILL_SECURITY_PIPELINE", default=False)
 
+    # Approval Pattern Learning flags
+    FEATURE_APPROVAL_LEARNING = _env_bool("FEATURE_APPROVAL_LEARNING", default=False)
+
 
 def log_feature_flags() -> None:
     """Log current feature flag state at startup."""
@@ -173,4 +183,8 @@ def log_feature_flags() -> None:
     logger.info(
         "Capability Upgrade flags: CONNECTORS=%s, TRUST_LEDGER=%s, SKILL_SECURITY=%s",
         FEATURE_CONNECTORS, FEATURE_TRUST_LEDGER, FEATURE_SKILL_SECURITY_PIPELINE,
+    )
+    logger.info(
+        "Approval Pattern Learning flags: APPROVAL_LEARNING=%s",
+        FEATURE_APPROVAL_LEARNING,
     )
