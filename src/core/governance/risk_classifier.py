@@ -25,19 +25,22 @@ class RiskClassifier:
     2. Check scope escalation rules
     3. Check pattern escalation rules (fnmatch)
     4. Check Soul escalation overrides
-    5. Unknown capabilities default to T3 (unknown = dangerous)
+    5. Check Trust Ledger for graduated tiers (can only LOWER, never raise)
+    6. Unknown capabilities default to T3 (unknown = dangerous)
     """
 
-    def __init__(self, config: RiskClassificationConfig, soul=None):
+    def __init__(self, config: RiskClassificationConfig, soul=None, trust_ledger=None):
         """
         Args:
             config: Risk classification config from governance.yaml
             soul: Optional Soul instance for escalation overrides
+            trust_ledger: Optional TrustLedger for progressive tier relaxation
         """
         self._config = config
         self._defaults: dict[str, RiskTier] = {}
         self._soul = soul
         self._soul_escalations: list[dict] = []
+        self._trust_ledger = trust_ledger
 
         # Build default tier lookup
         for capability, tier_int in config.defaults.items():
@@ -89,13 +92,24 @@ class RiskClassifier:
                     if escalate_to > tier:
                         tier = escalate_to
 
-        # Step 3: Soul escalation overrides
+        # Step 3: Soul escalation overrides (Soul floor — can only raise)
         soul_result = self._check_soul_escalation(capability, scope, target)
         if soul_result is not None:
             escalated_tier, reason = soul_result
             if escalated_tier > tier:
                 tier = escalated_tier
                 soul_escalation = reason
+
+        # Step 4: Trust Ledger adjustment (can only LOWER, never raise)
+        if self._trust_ledger is not None:
+            try:
+                from src.core import feature_flags
+                if feature_flags.FEATURE_TRUST_LEDGER:
+                    effective = self._trust_ledger.get_effective_tier(capability, scope)
+                    if effective is not None and effective < tier:
+                        tier = effective
+            except Exception as e:
+                logger.warning("Trust ledger check failed: %s", e)
 
         return ActionRiskProfile(
             tier=tier,

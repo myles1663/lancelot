@@ -1,5 +1,59 @@
 # Lancelot Changelog
 
+## v7.3.0 — Capability Upgrade Phase 2C: Trust Ledger (2026-02-11)
+
+Progressive tier relaxation system: 7 prompts (P41-P47), 69 tests passing.
+Capabilities earn lower risk tiers through consecutive successes, with snap-back on failure.
+
+### New Modules
+
+- **`config/trust_graduation.yaml`** — Graduation thresholds and revocation policy
+  - T3→T2: 50 successes, T2→T1: 100, T1→T0: 200
+  - Failure revocation: reset to default tier, rollback: reset above default
+  - Cooldown: 50 after denial, 25 after revocation
+
+- **`src/core/governance/trust_models.py`** — Trust data models
+  - TrustRecord: per-capability success/failure tracking with graduation history
+  - GraduationProposal: pending tier transition requests
+  - GraduationEvent: audit trail for tier changes
+  - Pydantic config: TrustGraduationConfig, TrustGraduationThresholds, TrustRevocationConfig
+
+- **`src/core/governance/trust_ledger.py`** — Trust Ledger engine
+  - record_success/record_failure: increment counts, check graduation thresholds
+  - check_graduation: propose tier lowering when threshold met
+  - apply_graduation: owner approve/deny with cooldown on denial
+  - revoke_trust: snap-back on failure (reset_to_default) or rollback (reset_above_default)
+  - simulate_timeline: preview graduation events without modifying state
+  - initialize_from_connector: bulk-create trust records from connector operations
+
+### Modified Modules
+
+- **`src/core/governance/risk_classifier.py`** — Added Layer 4 (Trust Adjustment)
+  - After Soul escalation, checks TrustLedger for graduated tiers
+  - Trust can only LOWER tiers, never raise — Soul floor always wins
+  - Gated behind FEATURE_TRUST_LEDGER feature flag
+
+- **`src/connectors/governed_proxy.py`** — Trust Ledger integration
+  - execute_governed records success/failure in trust ledger after HTTP execution
+  - handle_rollback method for recording rollback failures with is_rollback=True
+
+- **`src/core/governance/war_room_panel.py`** — Trust visualization
+  - render_trust_panel: summary, per-connector breakdown, proposals, recent events
+  - format_graduation_proposal: human-readable graduation proposal text
+
+### Security Hardening (P47)
+
+- Tier floor enforcement: soul_minimum prevents graduation past floor
+- Cross-scope isolation: successes in one scope don't affect another
+- Proposal replay protection: denied proposals set cooldown
+- Cooldown enforcement: graduation blocked during cooldown period
+- Rollback severity: rollback failures snap to default+1 (capped at T3)
+- Thread safety: concurrent record_success calls produce correct counts
+- Trust never raises: effective tier only applied when lower than config default
+- No tier skipping: graduation must proceed T3→T2→T1→T0 sequentially
+
+---
+
 ## v7.2.0 — Capability Upgrade Phase 2B: First-Party Connectors (2026-02-11)
 
 Four first-party connectors: 6 prompts (P35-P40), 72 tests passing.

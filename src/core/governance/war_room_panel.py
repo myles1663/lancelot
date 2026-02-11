@@ -2,10 +2,13 @@
 Lancelot vNext4: War Room Governance Panel
 
 Streamlit panel showing governance pipeline metrics:
-policy cache stats, batch receipt counts, async queue depth.
+policy cache stats, batch receipt counts, async queue depth,
+and trust ledger graduation status.
 """
 
 from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
 
 
 def render_governance_panel(streamlit_module=None, gateway_url: str = "http://localhost:8000"):
@@ -103,3 +106,106 @@ def render_governance_panel(streamlit_module=None, gateway_url: str = "http://lo
     # Batch Receipts
     st.subheader("Batch Receipts")
     st.caption("Metrics available after first task execution")
+
+
+# ── Trust Ledger Panel ───────────────────────────────────────────
+
+def render_trust_panel(trust_ledger: Any) -> Dict[str, Any]:
+    """Render trust ledger data for War Room display.
+
+    Returns a structured dict with summary, per-connector breakdown,
+    proposals, and recent events.
+    """
+    if trust_ledger is None:
+        return {
+            "summary": {
+                "total_records": 0,
+                "graduated_records": 0,
+                "pending_proposals": 0,
+                "avg_success_rate": 0.0,
+            },
+            "per_connector": [],
+            "proposals": [],
+            "recent_events": [],
+        }
+
+    records = trust_ledger.list_records()
+    proposals = trust_ledger.pending_proposals()
+
+    # Summary
+    graduated = sum(1 for r in records if r.is_graduated)
+    rates = [r.success_rate for r in records if (r.total_successes + r.total_failures) > 0]
+    avg_rate = sum(rates) / len(rates) if rates else 0.0
+
+    summary = {
+        "total_records": len(records),
+        "graduated_records": graduated,
+        "pending_proposals": len(proposals),
+        "avg_success_rate": round(avg_rate, 4),
+    }
+
+    # Per-connector breakdown
+    connector_map: Dict[str, List[Dict]] = {}
+    for rec in records:
+        # Extract connector_id from capability: "connector.{id}.{op}"
+        parts = rec.capability.split(".")
+        connector_id = parts[1] if len(parts) >= 3 else rec.capability
+        if connector_id not in connector_map:
+            connector_map[connector_id] = []
+        connector_map[connector_id].append({
+            "operation": rec.capability,
+            "scope": rec.scope,
+            "current_tier": rec.current_tier.name,
+            "default_tier": rec.default_tier.name,
+            "is_graduated": rec.is_graduated,
+            "consecutive_successes": rec.consecutive_successes,
+            "success_rate": round(rec.success_rate, 4),
+        })
+
+    per_connector = [
+        {"connector_id": cid, "operations": ops}
+        for cid, ops in connector_map.items()
+    ]
+
+    # Proposals
+    proposal_list = [
+        {
+            "id": p.id,
+            "capability": p.capability,
+            "current_tier": p.current_tier.name,
+            "proposed_tier": p.proposed_tier.name,
+            "consecutive_successes": p.consecutive_successes,
+            "status": p.status,
+        }
+        for p in proposals
+    ]
+
+    # Recent events (last 20 across all records)
+    all_events = []
+    for rec in records:
+        for evt in rec.graduation_history:
+            all_events.append({
+                "timestamp": evt.timestamp,
+                "capability": rec.capability,
+                "event_type": evt.trigger,
+                "from_tier": evt.from_tier.name,
+                "to_tier": evt.to_tier.name,
+            })
+    all_events.sort(key=lambda e: e["timestamp"], reverse=True)
+    recent_events = all_events[:20]
+
+    return {
+        "summary": summary,
+        "per_connector": per_connector,
+        "proposals": proposal_list,
+        "recent_events": recent_events,
+    }
+
+
+def format_graduation_proposal(proposal: Any) -> str:
+    """Format a graduation proposal as a human-readable string."""
+    return (
+        f"{proposal.capability} has succeeded {proposal.consecutive_successes} "
+        f"consecutive times. Propose graduating "
+        f"{proposal.current_tier.name} → {proposal.proposed_tier.name}. Approve?"
+    )

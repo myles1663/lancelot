@@ -167,7 +167,17 @@ class GovernedConnectorProxy:
                 error="Connector returned unexpected type",
             )
 
-        # 5. Emit receipt
+        # 5. Update trust ledger
+        if self._trust_ledger is not None:
+            try:
+                if response.success:
+                    self._trust_ledger.record_success(cap_id, "external")
+                else:
+                    self._trust_ledger.record_failure(cap_id, "external")
+            except KeyError:
+                pass  # No trust record for this capability yet
+
+        # 6. Emit receipt
         receipt = {
             "receipt_id": str(uuid.uuid4()),
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -187,3 +197,16 @@ class GovernedConnectorProxy:
             self._receipt_store.append(receipt)
 
         return response
+
+    def handle_rollback(
+        self, connector_id: str, operation_id: str, scope: str = "external"
+    ) -> None:
+        """Record a rollback failure in the trust ledger."""
+        if self._trust_ledger is None:
+            return
+        try:
+            op = self._registry.get_operation(connector_id, operation_id)
+            cap_id = op.full_capability_id
+            self._trust_ledger.record_failure(cap_id, scope, is_rollback=True)
+        except KeyError:
+            pass
