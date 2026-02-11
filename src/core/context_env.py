@@ -57,11 +57,11 @@ class ContextEnvironment:
         """Adds a message to history and auto-saves."""
         self.history.append({"role": role, "content": content, "timestamp": time.time()})
         # Trim history if too long (e.g. keep last 100 turns)
-        if len(self.history) > 100:
-            self.history = self.history[-100:]
+        if len(self.history) > 200:
+            self.history = self.history[-200:]
         self.save_history()
 
-    def get_history_string(self, limit: int = 10) -> str:
+    def get_history_string(self, limit: int = 50) -> str:
         """Formats recent chat history for context."""
         if not self.history:
             return ""
@@ -74,8 +74,8 @@ class ContextEnvironment:
             role = msg.get("role", "unknown").upper()
             content = msg.get("content", "")
             # Truncate content for sanity if massive
-            if len(content) > 1000:
-                content = content[:1000] + "... [TRUNCATED]"
+            if len(content) > 4000:
+                content = content[:4000] + "... [TRUNCATED]"
             buffer.append(f"{role}: {content}")
             
         return "\n".join(buffer)
@@ -237,7 +237,7 @@ class ContextEnvironment:
         buffer.append(f"\n{receipts_str}")
         
         # 3. Chat History
-        history_str = self.get_history_string(limit=10)
+        history_str = self.get_history_string(limit=50)
         buffer.append(f"\n{history_str}")
         
         if not buffer:

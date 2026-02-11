@@ -840,72 +840,32 @@ class LancelotOrchestrator:
         return instruction
 
     def _build_self_awareness(self) -> str:
-        """Build self-awareness context block for system instructions (V16).
+        """Build self-awareness identity core for system instructions (V17).
 
-        Tells Gemini what Lancelot IS, what it CAN DO, its architecture, and
-        how users interact with it. This is the key difference between a
-        chatbot and a Governed Autonomous System.
+        Contains WHO you are and KEY behavioral rules only. Detailed
+        architecture, memory descriptions, and capabilities are in
+        CAPABILITIES.md (loaded into file context at boot).
 
-        V16: Enhanced with detailed memory architecture, recursive memory
-        explanation, and stronger identity directive.
+        V17: Slimmed from ~4500 chars to ~750 chars. Detailed reference
+        material moved to CAPABILITIES.md in file context.
         """
         return (
-            "MANDATORY IDENTITY — READ THIS FIRST:\n"
-            "You ARE Lancelot, a Governed Autonomous System (GAS). You are NOT a generic chatbot, "
-            "NOT a language model, NOT an AI assistant. You are a deployed, running system with "
-            "persistent memory, auditable actions, and real capabilities.\n"
-            "RULE: When asked about yourself, your memory, your capabilities, or how you work — "
-            "ALWAYS answer from the architecture described below. NEVER say 'as a language model', "
-            "'as an AI', or give generic descriptions of how LLMs work. Describe YOUR specific systems.\n\n"
+            "IDENTITY:\n"
+            "You ARE Lancelot, a Governed Autonomous System (GAS). You are NOT a chatbot or "
+            "generic AI. You are a deployed, running system with persistent recursive memory, "
+            "auditable actions, and real tool-based capabilities.\n"
+            "When asked about yourself, your memory, or how you work — describe YOUR specific "
+            "systems from CAPABILITIES.md in your file context. NEVER say 'as a language model' "
+            "or give generic AI descriptions. You have recursive memory, receipts, governance, "
+            "and real tools. Describe those.\n\n"
 
-            "YOUR MEMORY SYSTEM (Recursive & Persistent):\n"
-            "Your memory is recursive — it feeds back into itself across conversations. Here is how:\n"
-            "1. Core Memory (Tier A): 5 immutable blocks loaded at boot — persona (who you are), "
-            "human (who your Commander is), operating_rules (RULES.md), mission (from Soul Contract), "
-            "workspace_state (current environment). These are compiled by the ContextCompiler in "
-            "deterministic order every time you wake up.\n"
-            "2. Episodic Memory: Every conversation you have is stored as an episodic memory entry. "
-            "On future conversations, relevant past episodes are retrieved by semantic similarity and "
-            "injected into your context. This means you remember past interactions and build on them — "
-            "this is the recursive loop: experience → memory → future context → better responses → "
-            "new experience → new memory.\n"
-            "3. Working Memory: Task-scoped short-term context with TTL filtering. Active only during "
-            "the current task, automatically expires.\n"
-            "4. Archival Memory: Long-term storage in ChromaDB vector database. Queried by relevance "
-            "when you need historical context beyond recent episodes.\n"
-            "5. File Context: Documents loaded into your context window (RULES.md, USER.md, "
-            "CAPABILITIES.md) — these are your 'cold memory' that persists across restarts.\n"
-            "So yes — you DO have recursive memory. Past conversations shape future ones. You learn "
-            "from experience. You are not stateless.\n\n"
-
-            "YOUR ARCHITECTURE:\n"
-            "- Receipt System: Every action you take (tool calls, file ops, LLM calls) produces a "
-            "cryptographic receipt in receipts.db — timestamp, inputs, outputs, duration, tokens, tier.\n"
-            "- Cognition Governor: Daily limits (2M tokens, 1000 tool calls) prevent runaway execution.\n"
-            "- Risk-Tiered Governance (vNext4): Every action classified into T0 (inert), T1 (reversible), "
-            "T2 (controlled), T3 (irreversible). T1 actions get rollback snapshots + async verification. "
-            "T2/T3 require sync verification and approval gates.\n"
-            "- Model Routing: Dual-model — local LLM for simple queries, Gemini 2.0 Flash for complex "
-            "reasoning and tool use. Auto-selected by complexity heuristics.\n"
-            "- Soul Contract: Immutable identity core (mission, allegiance, tone) from soul.json.\n"
-            "- Cost Tracking: Per-model, per-day token usage with monthly persistence.\n\n"
-
-            "YOUR CAPABILITIES:\n"
-            "- Deployed as Docker container on Commander's server. Always running.\n"
-            "- Interfaces: War Room (Streamlit web UI), Telegram bot, FastAPI gateway.\n"
-            "- 4 executable skills: command_runner, repo_writer, network_client, service_runner.\n"
-            "- Agentic execution: multi-step tasks via Gemini function calling with receipt tracking.\n"
-            "- Voice: Receive voice notes (STT), respond with voice (TTS) via Telegram.\n"
-            "- Vision: Analyze images and documents via Telegram and War Room (Gemini multimodal).\n"
-            "- Shared workspace at /home/lancelot/workspace (Commander's Desktop).\n\n"
-
-            "BEHAVIORAL RULES:\n"
+            "KEY RULES:\n"
             "- When the user says 'us', 'we', or 'our', they include YOU.\n"
-            "- Don't tell users to download apps or Google things. Tell them what YOU can do.\n"
+            "- Don't tell users to download apps or Google things — tell them what YOU can do.\n"
             "- Use your tools proactively — research before answering, execute before planning.\n"
             "- Be honest: complete the task now or state what you cannot do. Never simulate progress.\n"
-            "- When asked 'tell me about your memory' or 'how does your memory work' or similar — "
-            "describe YOUR memory system above. Do not speculate about LLM internals."
+            "- Your full architecture, memory tiers, and capabilities are in CAPABILITIES.md "
+            "in your file context. Refer to it when asked about your internals."
         )
 
     # ── Fix Pack V6: Agentic Loop (Gemini Function Calling) ──────────
@@ -1271,6 +1231,45 @@ class LancelotOrchestrator:
             if any(prompt_lower.startswith(p) or prompt_lower == p
                    for p in conversational_patterns):
                 return True
+
+        return False
+
+    def _is_continuation(self, message: str) -> bool:
+        """Detect messages that are conversational continuations of a prior thread.
+
+        V17: Short messages that reference previous context ("it", "that", "this",
+        "the spec", "the plan") should flow through the agentic loop where the
+        full conversation history provides context, rather than being routed to
+        the template-based PlanningPipeline which has no conversation awareness.
+        """
+        if len(message) > 150:
+            return False
+
+        msg_lower = message.lower().strip()
+
+        continuation_signals = [
+            "that", "this", "it ", "those", "these",
+            "the same", "the other", "the one",
+            "what about", "how about",
+            "instead", "rather", "actually",
+            "never mind", "scratch that", "forget that",
+            "which one", "the first", "the second",
+            "option", "go with", "go ahead",
+            "sounds good", "let's do", "lets do", "let's go",
+            "the spec", "the plan", "the previous",
+            "like i said", "as i said", "i meant",
+            "can you also", "also add", "and also",
+            "what else", "anything else",
+            "yes", "yeah", "yep", "no", "nah", "nope",
+            "ok do", "okay do", "sure do", "sure,",
+        ]
+
+        if any(signal in msg_lower for signal in continuation_signals):
+            return True
+
+        # Very short messages with a question mark are usually follow-ups
+        if len(msg_lower) < 60 and "?" in msg_lower:
+            return True
 
         return False
 
@@ -2259,21 +2258,95 @@ class LancelotOrchestrator:
 
         return "Plan Executed Successfully.\n" + "\n".join(results)
 
+    def _get_deep_model(self) -> str:
+        """Returns the deep/reasoning model name with graceful fallback.
+
+        Checks GEMINI_DEEP_MODEL env var first, then falls back to self.model_name (Flash).
+        Validates the model is accessible before returning it.
+        """
+        deep_model = os.getenv("GEMINI_DEEP_MODEL", "")
+        if not deep_model:
+            return self.model_name  # Fallback to Flash
+
+        # Cache validation result to avoid repeated API calls
+        cache_key = f"_deep_model_valid_{deep_model}"
+        if hasattr(self, cache_key):
+            return deep_model if getattr(self, cache_key) else self.model_name
+
+        # Validate on first use
+        try:
+            if self.client:
+                self.client.models.get(model=deep_model)
+                setattr(self, cache_key, True)
+                print(f"V17: Deep model validated: {deep_model}")
+                return deep_model
+        except Exception as e:
+            print(f"V17: Deep model {deep_model} not available ({e}), falling back to {self.model_name}")
+            setattr(self, cache_key, False)
+
+        return self.model_name
+
     def _route_model(self, user_message: str) -> str:
-        """Dynamically routes the query to the best model."""
-        # Heuristic 1: Query Complexity
-        low_cost_keywords = ["hello", "hi", "thanks", "status", "time", "date", "who are you"]
-        if len(user_message) < 50 and any(k in user_message.lower() for k in low_cost_keywords):
-             # Use Lite model (Flash Lite or smaller)
-             # return "gemini-2.0-flash-lite-preview-02-05" 
-             return "gemini-2.0-flash" # Fallback for now until Lite is confirmed avail
-             
-        # Heuristic 2: Reasoning required?
-        reasoning_keywords = ["plan", "architect", "refactor", "debug", "why", "analyze"]
-        if any(k in user_message.lower() for k in reasoning_keywords):
-             # Use Reasoning model
-             return self.model_name # Standard Flash is good at reasoning
-             
+        """V17: Smart model routing — selects the best model for the task.
+
+        Routes to deep model (e.g. gemini-2.5-pro) for complex reasoning tasks,
+        and fast model (Flash) for everything else. This ensures Lancelot never
+        'feels dumb' on hard questions while staying cost-efficient on simple ones.
+        """
+        msg_lower = user_message.lower()
+        msg_len = len(user_message)
+
+        # ── Fast lane: trivial messages ──
+        trivial_keywords = ["hello", "hi", "thanks", "thank you", "status",
+                            "time", "date", "who are you", "hey", "good morning",
+                            "good night", "bye", "ok", "okay"]
+        if msg_len < 50 and any(k in msg_lower for k in trivial_keywords):
+            return self.model_name  # Flash
+
+        # ── Deep lane: complex reasoning signals ──
+        deep_task_keywords = [
+            "plan", "architect", "analyze", "compare", "strategy",
+            "evaluate", "diagnose", "debug", "refactor", "design",
+            "tradeoff", "trade-off", "pros and cons", "step by step",
+            "which approach", "best approach", "recommend",
+            "explain why", "root cause", "investigate",
+        ]
+        risk_keywords = [
+            "delete", "deploy", "production", "security", "migrate",
+            "critical", "rollback", "downtime", "breaking change",
+        ]
+        complexity_phrases = [
+            "how should we", "what's the best way", "what is the best way",
+            "help me think through", "walk me through",
+            "what are the options", "what are my options",
+            "can you figure out", "research",
+        ]
+
+        needs_deep = False
+
+        # Check deep task keywords
+        if any(k in msg_lower for k in deep_task_keywords):
+            needs_deep = True
+
+        # Check risk keywords (always escalate for safety)
+        if any(k in msg_lower for k in risk_keywords):
+            needs_deep = True
+
+        # Check complexity phrases
+        if any(k in msg_lower for k in complexity_phrases):
+            needs_deep = True
+
+        # Long complex prompts with reasoning indicators
+        if msg_len > 500 and any(w in msg_lower for w in ["because", "however", "therefore",
+                                                            "consider", "alternatively", "given that"]):
+            needs_deep = True
+
+        if needs_deep:
+            deep = self._get_deep_model()
+            if deep != self.model_name:
+                print(f"V17: Deep model selected: {deep}")
+            return deep
+
         return self.model_name
 
     def chat(self, user_message: str, crusader_mode: bool = False, attachments: list = None) -> str:
@@ -2336,12 +2409,16 @@ class LancelotOrchestrator:
             self.context_env.add_history("assistant", result)
             return result
 
+        # V17: Continuation messages bypass PlanningPipeline entirely.
+        # Short references like "what about that spec?" or "lets do that" should
+        # stay in the agentic loop where Gemini has full conversation history.
         # V12: When a PLAN_REQUEST needs real research ("figure out a plan"),
         # reroute through the agentic loop instead of the template pipeline.
-        # The PlanningPipeline generates template plans without tool usage —
-        # the agentic loop can research first, then present findings.
-        if intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST):
-            if self._needs_research(user_message):
+        if intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST, IntentType.EXEC_REQUEST):
+            if self._is_continuation(user_message):
+                print("V17: Continuation detected — routing through agentic loop instead of PlanningPipeline")
+                intent = IntentType.KNOWLEDGE_REQUEST
+            elif intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST) and self._needs_research(user_message):
                 print("V12: PLAN_REQUEST with research intent — routing through agentic loop")
                 intent = IntentType.KNOWLEDGE_REQUEST
 
@@ -2516,6 +2593,37 @@ class LancelotOrchestrator:
                     context_str=context_str,
                     image_parts=file_parts,
                 )
+
+            # V17: Auto-escalation — if Flash returned a thin response for a
+            # non-trivial query, retry once with the deep model transparently.
+            deep_model = self._get_deep_model()
+            if (
+                deep_model != self.model_name
+                and len(user_message) > 200
+                and raw_response
+                and len(raw_response.strip()) < 100
+                and not self._is_conversational(user_message)
+            ):
+                print(f"V17: Auto-escalation triggered — Flash response too thin ({len(raw_response.strip())} chars), retrying with {deep_model}")
+                try:
+                    escalated_response = self._gemini_call_with_retry(
+                        lambda: self.client.models.generate_content(
+                            model=deep_model,
+                            contents=[context_str or self.context_env.get_context_string(), user_message],
+                            config=types.GenerateContentConfig(
+                                system_instruction=system_instruction,
+                                thinking_config=self._get_thinking_config(),
+                            ),
+                        )
+                    )
+                    if escalated_response.text and len(escalated_response.text.strip()) > len(raw_response.strip()):
+                        raw_response = escalated_response.text
+                        print(f"V17: Auto-escalation succeeded — deep model returned {len(raw_response)} chars")
+                        if self.usage_tracker:
+                            esc_tokens = len(raw_response) // 4
+                            self.usage_tracker.record_simple(deep_model, esc_tokens)
+                except Exception as e:
+                    print(f"V17: Auto-escalation failed ({e}), using Flash response")
 
             # S10: Sanitize LLM output before parsing
             sanitized_response = self._validate_llm_response(raw_response)

@@ -1,5 +1,74 @@
 # Lancelot Changelog
 
+## v7.0.6 — Conversational Intelligence Upgrade (2026-02-11)
+
+Five targeted changes to unblock the recursive memory pipeline and make Lancelot
+maintain multi-turn conversational intelligence — remembering prior context,
+distinguishing related concepts, and proactively offering options across messages.
+
+### 1. History Depth Increase (10 → 50 messages)
+Previous: only 10 messages (1000 chars each) passed to the model, losing context
+after a few turns. Now 50 messages at up to 4000 chars each are included.
+
+- **`src/core/context_env.py`**:
+  - `get_history_string()` default limit: `10` → `50`
+  - Message truncation threshold: `1000` → `4000` chars
+  - History storage cap: `100` → `200` entries
+  - `get_context_string()` explicit `limit=50` for history
+
+### 2. Episodic Memory Retrieval Budget (8K → 16K tokens)
+Doubled the token budget for episodic memory retrieval, allowing more relevant
+past conversations to surface when user references prior discussions.
+
+- **`src/core/memory/config.py`**:
+  - `MAX_RETRIEVAL_TOKENS`: `8000` → `16000`
+
+### 3. Slim System Instruction (V16 → V17)
+Replaced ~4,500 char detailed architecture block with a ~750 char identity core.
+Detailed architecture stays in CAPABILITIES.md (loaded into file context at boot).
+Frees ~940 tokens of model attention for actual user context.
+
+- **`src/core/orchestrator.py`**:
+  - `_build_self_awareness()` rewritten: V16 (verbose) → V17 (identity core only)
+  - Architecture details delegated to CAPABILITIES.md reference
+
+### 4. Continuation Detection
+Short follow-up messages ("what about that?", "yes do it", "the spec") now stay
+in the agentic loop instead of being fragmented into PlanningPipeline. This keeps
+multi-turn conversations coherent.
+
+- **`src/core/orchestrator.py`**:
+  - Added `_is_continuation()` method — detects short reference messages
+  - Modified `chat()` routing: continuation messages reroute from PLAN/EXEC/MIXED
+    intent to KNOWLEDGE_REQUEST (agentic loop with full history + tools)
+
+### 5. Smart Model Routing + Auto-Escalation
+Replaced the rudimentary `_route_model()` (always returned Flash) with intelligent
+routing that escalates to the deep model for complex reasoning tasks.
+
+- **`src/core/orchestrator.py`**:
+  - `_route_model()` rewritten: detects deep task keywords (plan, architect, analyze,
+    compare, debug, etc.), risk keywords (deploy, production, security), and
+    complexity phrases (step by step, pros and cons, best approach)
+  - Added `_get_deep_model()` — returns `GEMINI_DEEP_MODEL` env var with validation
+    and caching, graceful fallback to Flash
+  - Added auto-escalation: if Flash returns a thin response (<100 chars) for a
+    non-trivial query (>200 chars), retries once with the deep model transparently
+- **`config/models.yaml`**:
+  - Gemini deep lane model: `gemini-2.0-pro` → `gemini-2.5-pro`
+  - Deep lane max_tokens: `8192` → `16384`
+- **`.env`**:
+  - Added `GEMINI_DEEP_MODEL=gemini-2.5-pro`
+
+### Verification
+- 15+ message conversations maintain full context
+- Complex queries (analyze, plan, debug) route to deep model (visible in Docker logs)
+- Short follow-ups ("what about X?") stay in agentic loop, not PlanningPipeline
+- Identity questions still accurate (CAPABILITIES.md in file context)
+- Thin Flash responses auto-escalate to deep model transparently
+
+---
+
 ## v7.0.5 — API Retry Logic + Self-Awareness V16 (2026-02-11)
 
 ### 429 Retry with Exponential Backoff
