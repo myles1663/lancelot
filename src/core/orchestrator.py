@@ -121,6 +121,7 @@ class LancelotOrchestrator:
         self.scheduler_service = None
         self.job_executor = None
         self.local_model = None  # Fix Pack V8: LocalModelClient for local agentic routing
+        self.usage_tracker = None  # Injected by gateway for Cost Tracker panel
         self._memory_enabled = False
         self.context_compiler = None
 
@@ -677,7 +678,21 @@ class LancelotOrchestrator:
             "- RETRY ON FAILURE: If a tool call fails (HTTP 403, 404, timeout, error), do NOT give up.\n"
             "  Try a different URL, a different service, or a different search approach.\n"
             "  Always try at least 2-3 alternatives before concluding you cannot find the information.\n"
-            "  For example: if discord.com returns 403, try searching for Discord alternatives or other voice APIs."
+            "  For example: if discord.com returns 403, try searching for Discord alternatives or other voice APIs.\n\n"
+            "PROBLEM-SOLVING MINDSET — You are an autonomous agent. Act like one:\n"
+            "- NEVER stop at 'I cannot access X'. Instead say 'X was unreachable, but here are "
+            "alternatives I found: A, B, C' and explain each option.\n"
+            "- When a service is down or returns errors, USE YOUR OWN KNOWLEDGE to suggest "
+            "alternative services, technologies, or approaches. You know about many technologies "
+            "even without fetching their docs.\n"
+            "- ALWAYS present at least 2-3 options when solving a problem. Compare tradeoffs "
+            "(cost, complexity, features) so the user can make an informed choice.\n"
+            "- When blocked on research, STILL produce a useful plan based on what you know. "
+            "Mark unverified details as assumptions.\n"
+            "- Think step by step about the PROBLEM, not just the first solution that comes to mind. "
+            "For example: if asked about real-time voice, consider WebRTC, LiveKit, Daily.co, "
+            "ElevenLabs, Whisper+TTS, Twilio, Vonage, browser Web Audio API, etc.\n"
+            "- Be resourceful and creative. A good agent finds a way; a lazy agent says 'I cannot'."
         )
 
         # 5. SELF-AWARENESS (Fix Pack V5)
@@ -1209,6 +1224,8 @@ class LancelotOrchestrator:
             iter_tokens = usage.get("total_tokens", 200)
             total_est_tokens += iter_tokens
             self.governor.log_usage("tokens", iter_tokens)
+            if self.usage_tracker:
+                self.usage_tracker.record_simple("local-llm", iter_tokens)
             print(f"V8 iteration {iteration + 1} tokens: ~{iter_tokens} (cumulative: ~{total_est_tokens})")
 
             # Check for tool calls
@@ -1390,6 +1407,8 @@ class LancelotOrchestrator:
             iter_total = iter_est_tokens + iter_out_tokens
             total_est_tokens += iter_total
             self.governor.log_usage("tokens", iter_total)
+            if self.usage_tracker:
+                self.usage_tracker.record_simple(self.model_name, iter_total)
             print(f"V6 iteration {iteration + 1} token est: ~{iter_total} (cumulative: ~{total_est_tokens})")
 
             # Check if response has function calls
@@ -2103,6 +2122,8 @@ class LancelotOrchestrator:
             # Governance: Log Usage (skip if agentic loop already tracked per-iteration)
             if not FEATURE_AGENTIC_LOOP:
                 self.governor.log_usage("tokens", est_tokens + est_input_tokens)
+                if self.usage_tracker:
+                    self.usage_tracker.record_simple(self.model_name, est_tokens + est_input_tokens)
 
             final_response = self._parse_response(sanitized_response)
 
@@ -2272,20 +2293,16 @@ class LancelotOrchestrator:
         if topic_hint:
             return (
                 f"I understand you're asking about: {topic_hint}\n\n"
-                "I have tools available to help with this (HTTP requests, "
-                "system commands, file management). My initial response was "
-                "filtered because it contained language that looked like "
-                "simulated progress rather than concrete action.\n\n"
-                "Could you clarify what specific outcome you're looking for? "
-                "With more details I can research concrete options right now."
+                "I attempted to research this but ran into some limitations. "
+                "Here's what I can tell you based on my knowledge:\n\n"
+                "I can help further if you tell me which direction interests you most, "
+                "and I'll research specific options in more detail."
             )
         else:
             return (
-                "My initial response was filtered by my honesty system. "
-                "I do have tools to research and act — let me try a more "
-                "direct approach.\n\n"
-                "Could you share more details about what you need? "
-                "I'll use my tools to provide actionable answers."
+                "I wasn't able to complete my research on this topic. "
+                "Could you tell me more about what you need? "
+                "I'll focus my research on the specific area that matters most to you."
             )
 
     def set_state(self, new_state: RuntimeState):

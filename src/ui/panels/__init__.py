@@ -17,6 +17,7 @@ from .tools_panel import (
     reset_tools_panel,
     render_tools_panel,
 )
+from .cost_panel import render_cost_panel
 
 __all__ = [
     # Health Panel
@@ -35,4 +36,6 @@ __all__ = [
     "get_tools_panel",
     "reset_tools_panel",
     "render_tools_panel",
+    # Cost Panel
+    "render_cost_panel",
 ]

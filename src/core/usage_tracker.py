@@ -1,21 +1,27 @@
 """
-UsageTracker — per-lane usage and cost telemetry (Prompt 17).
+UsageTracker — per-lane and per-model usage and cost telemetry (Prompt 17).
 
-Single-owner module that tracks API usage per lane, estimates costs,
-and calculates local-utility savings.  Data is derived from
-RouterDecision records produced by the ModelRouter.
+Single-owner module that tracks API usage per lane *and* per model,
+estimates costs, and calculates local-utility savings.
 
-Cost estimates use approximate $/1K-token rates.  Real billing
-depends on the provider's actual pricing, but these figures are
-close enough for the War Room cost panel.
+Supports two recording paths:
+    1. ``record(decision)``       — from RouterDecision objects (lane-based)
+    2. ``record_simple(model, tokens)`` — lightweight path for direct LLM
+       calls that bypass the ModelRouter (e.g. orchestrator → Gemini).
+
+When a ``UsagePersistence`` is attached via ``set_persistence()``, every
+record is also written to disk for cross-restart survival.
 
 Public API:
-    UsageTracker(model_router)
-    tracker.record(decision)        — record a single routing decision
-    tracker.summary()               → dict   (full usage summary)
-    tracker.lane_breakdown()        → dict   (per-lane counts & cost)
-    tracker.estimated_savings()     → dict   (local-vs-flagship delta)
-    tracker.reset()                 — clear all counters
+    UsageTracker()
+    tracker.set_persistence(persistence)
+    tracker.record(decision)
+    tracker.record_simple(model, tokens)
+    tracker.summary()               → dict
+    tracker.lane_breakdown()        → dict
+    tracker.model_breakdown()       → dict
+    tracker.estimated_savings()     → dict
+    tracker.reset()
 """
 
 import logging
@@ -91,12 +97,21 @@ class LaneUsage:
 # ---------------------------------------------------------------------------
 
 class UsageTracker:
-    """Tracks per-lane usage, estimates costs, calculates savings."""
+    """Tracks per-lane and per-model usage, estimates costs, calculates savings."""
 
     def __init__(self) -> None:
         self._lanes: dict[str, LaneUsage] = defaultdict(LaneUsage)
+        self._models: dict[str, dict] = defaultdict(
+            lambda: {"requests": 0, "tokens": 0, "cost": 0.0}
+        )
         self._started_at: str = datetime.now(timezone.utc).isoformat()
         self._total_requests: int = 0
+        self._persistence = None  # Optional UsagePersistence
+
+    def set_persistence(self, persistence) -> None:
+        """Attach a UsagePersistence instance for disk-backed tracking."""
+        self._persistence = persistence
+        logger.info("UsageTracker: persistence layer attached")
 
     # ------------------------------------------------------------------
     # Recording
@@ -130,7 +145,54 @@ class UsageTracker:
         est_cost = (est_tokens / 1000) * cost_rate
         usage.total_cost_est += est_cost
 
+        # Per-model accumulation
+        m = self._models[model]
+        m["requests"] += 1
+        m["tokens"] += est_tokens
+        m["cost"] = round(m["cost"] + est_cost, 6)
+
         self._total_requests += 1
+
+        # Persist to disk if available
+        if self._persistence:
+            try:
+                self._persistence.record(model, est_tokens, est_cost)
+            except Exception as exc:
+                logger.warning("UsageTracker: persistence write failed: %s", exc)
+
+    def record_simple(self, model: str, tokens: int) -> None:
+        """Record a direct LLM call (no RouterDecision needed).
+
+        Used by the orchestrator after every Gemini/local model call.
+
+        Args:
+            model: Model name (e.g. ``gemini-2.0-flash``).
+            tokens: Estimated token count for this call.
+        """
+        cost_rate = _COST_PER_1K.get(model, 0.001)
+        est_cost = (tokens / 1000) * cost_rate
+
+        # Per-model
+        m = self._models[model]
+        m["requests"] += 1
+        m["tokens"] += tokens
+        m["cost"] = round(m["cost"] + est_cost, 6)
+
+        # Also record in a synthetic "direct" lane for the lane view
+        lane = "local_agentic" if model == "local-llm" else "flagship_fast"
+        usage = self._lanes[lane]
+        usage.requests += 1
+        usage.successes += 1
+        usage.total_tokens_est += tokens
+        usage.total_cost_est += est_cost
+
+        self._total_requests += 1
+
+        if self._persistence:
+            try:
+                self._persistence.record(model, tokens, est_cost)
+            except Exception as exc:
+                logger.warning("UsageTracker: persistence write failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Queries
@@ -139,6 +201,17 @@ class UsageTracker:
     def lane_breakdown(self) -> dict[str, dict]:
         """Per-lane usage breakdown."""
         return {lane: usage.to_dict() for lane, usage in self._lanes.items()}
+
+    def model_breakdown(self) -> dict[str, dict]:
+        """Per-model usage breakdown (requests, tokens, cost)."""
+        return {
+            model: {
+                "requests": info["requests"],
+                "tokens": info["tokens"],
+                "cost": round(info["cost"], 6),
+            }
+            for model, info in sorted(self._models.items())
+        }
 
     def estimated_savings(self) -> dict:
         """Calculate how much was saved by routing to local models.
@@ -194,12 +267,14 @@ class UsageTracker:
                 total_ms / self._total_requests, 2
             ) if self._total_requests else 0.0,
             "by_lane": self.lane_breakdown(),
+            "by_model": self.model_breakdown(),
             "savings": self.estimated_savings(),
         }
 
     def reset(self) -> None:
         """Clear all counters and start a new tracking period."""
         self._lanes.clear()
+        self._models.clear()
         self._total_requests = 0
         self._started_at = datetime.now(timezone.utc).isoformat()
         logger.info("UsageTracker reset")

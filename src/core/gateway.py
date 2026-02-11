@@ -324,6 +324,25 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Control plane initialization failed: {e}")
 
+    # ===== PHASE 6b: USAGE TRACKER + PERSISTENCE =====
+    try:
+        from usage_tracker import UsageTracker
+        from usage_persistence import UsagePersistence
+        from control_plane import set_usage_tracker, set_usage_persistence
+
+        _usage_persistence = UsagePersistence(data_dir="/home/lancelot/data")
+        _usage_tracker = UsageTracker()
+        _usage_tracker.set_persistence(_usage_persistence)
+
+        set_usage_tracker(_usage_tracker)
+        set_usage_persistence(_usage_persistence)
+
+        # Wire into orchestrator so every LLM call is recorded
+        main_orchestrator.usage_tracker = _usage_tracker
+        logger.info("Usage tracker + persistence initialized.")
+    except Exception as e:
+        logger.warning(f"Usage tracker initialization failed: {e}")
+
     # Start Communications Polling
     if telegram_bot:
         telegram_bot.start_polling()
@@ -358,6 +377,14 @@ async def shutdown_event():
         try:
             if 'health_monitor' in dir() and health_monitor:
                 health_monitor.stop_monitor()
+        except Exception:
+            pass
+        # Flush usage persistence to disk
+        try:
+            if hasattr(main_orchestrator, 'usage_tracker') and main_orchestrator.usage_tracker:
+                persistence = getattr(main_orchestrator.usage_tracker, '_persistence', None)
+                if persistence:
+                    persistence.flush()
         except Exception:
             pass
         main_orchestrator.audit_logger.log_event("GATEWAY_SHUTDOWN", "Graceful shutdown initiated")

@@ -1,5 +1,66 @@
 # Lancelot Changelog
 
+## v7.0.2 — War Room Cost Tracker Panel (2026-02-10)
+
+### Summary
+
+Added a real-time token and cost tracking panel to the War Room. Users can now monitor
+monthly API costs, per-model token usage, and estimated savings from local model routing
+without needing to visit provider dashboards.
+
+### New Files
+
+- **`src/core/usage_persistence.py`**: Monthly usage persistence layer. Stores per-model,
+  per-day usage data to `lancelot_data/usage_history.json` so cost data survives container
+  restarts. Thread-safe with periodic flush to disk.
+
+- **`src/ui/panels/cost_panel.py`**: War Room Cost Tracker panel. Displays monthly cost
+  KPIs, per-model breakdown table, daily cost trend bar chart, month selector, and reset
+  controls. Fetches data from `/usage/*` control-plane endpoints.
+
+### Modified Files
+
+- **`src/core/usage_tracker.py`**: Enhanced with per-model tracking (`_models` dict),
+  `record_simple()` method for direct LLM calls, `model_breakdown()` query, persistence
+  hook via `set_persistence()`, and updated `summary()` to include `by_model`.
+
+- **`src/core/control_plane.py`**: Added `set_usage_tracker()` / `get_usage_tracker()`
+  as standalone alternative to model router wiring. Updated all `/usage/*` endpoints to
+  use the standalone tracker. Added `/usage/models` and `/usage/monthly` endpoints.
+
+- **`src/core/gateway.py`**: Phase 6b wires `UsageTracker` + `UsagePersistence` at
+  startup, registers with control plane, injects tracker into orchestrator. Shutdown
+  handler flushes persistence to disk.
+
+- **`src/core/orchestrator.py`**: Added `usage_tracker` attribute. Instrumented all
+  three LLM call paths (V8 local agentic, V6 Gemini agentic, main chat) to call
+  `usage_tracker.record_simple()` alongside existing governor logging.
+
+- **`src/ui/war_room.py`**: Added 5th "Cost Tracker" tab importing and rendering
+  `render_cost_panel`.
+
+- **`src/ui/panels/__init__.py`**: Exported `render_cost_panel`.
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/usage/summary` | GET | Full usage summary (now works without ModelRouter) |
+| `/usage/lanes` | GET | Per-lane breakdown |
+| `/usage/models` | GET | Per-model breakdown |
+| `/usage/savings` | GET | Local model savings estimate |
+| `/usage/monthly` | GET | Persistent monthly data (survives restarts) |
+| `/usage/reset` | POST | Reset in-memory counters |
+
+### Verification
+
+- `curl http://localhost:8000/usage/summary` returns real data
+- `curl http://localhost:8000/usage/monthly` returns monthly breakdown
+- War Room "Cost Tracker" tab shows KPIs, model table, daily chart
+- Data persists across container restarts via `usage_history.json`
+
+---
+
 ## v7.0.1 — Memory vNext Activation + Identity Fix (2026-02-10)
 
 ### Summary

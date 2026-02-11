@@ -25,7 +25,8 @@ router = APIRouter()
 _snapshot: Optional[OnboardingSnapshot] = None
 _startup_time: Optional[float] = None
 _model_router = None  # Set by set_model_router()
-
+_usage_tracker = None  # Set by set_usage_tracker() — standalone tracker
+_usage_persistence = None  # Set by set_usage_persistence()
 
 _token_store = None  # Set by init_control_plane if available
 _war_room_artifacts = []  # In-memory store for War Room artifacts
@@ -65,6 +66,27 @@ def set_model_router(model_router) -> None:
 def get_model_router():
     """Return the active ModelRouter (or None if not set)."""
     return _model_router
+
+
+def set_usage_tracker(tracker) -> None:
+    """Register a standalone UsageTracker for War Room endpoints."""
+    global _usage_tracker
+    _usage_tracker = tracker
+
+
+def get_usage_tracker():
+    """Return the active UsageTracker (standalone or from model router)."""
+    if _usage_tracker is not None:
+        return _usage_tracker
+    if _model_router is not None:
+        return getattr(_model_router, "usage", None)
+    return None
+
+
+def set_usage_persistence(persistence) -> None:
+    """Register the UsagePersistence for monthly endpoints."""
+    global _usage_persistence
+    _usage_persistence = persistence
 
 
 def get_snapshot() -> OnboardingSnapshot:
@@ -258,10 +280,10 @@ async def router_stats():
 async def usage_summary():
     """Full usage and cost summary for the War Room cost panel."""
     try:
-        mr = get_model_router()
-        if mr is None:
-            return {"usage": {}, "message": "Model router not initialised"}
-        return {"usage": mr.usage.summary()}
+        tracker = get_usage_tracker()
+        if tracker is None:
+            return {"usage": {}, "message": "Usage tracker not initialised"}
+        return {"usage": tracker.summary()}
     except Exception as exc:
         logger.error("usage_summary error: %s", exc)
         return _safe_error(500, "Failed to retrieve usage summary")
@@ -271,37 +293,73 @@ async def usage_summary():
 async def usage_lanes():
     """Per-lane usage breakdown."""
     try:
-        mr = get_model_router()
-        if mr is None:
-            return {"lanes": {}, "message": "Model router not initialised"}
-        return {"lanes": mr.usage.lane_breakdown()}
+        tracker = get_usage_tracker()
+        if tracker is None:
+            return {"lanes": {}, "message": "Usage tracker not initialised"}
+        return {"lanes": tracker.lane_breakdown()}
     except Exception as exc:
         logger.error("usage_lanes error: %s", exc)
         return _safe_error(500, "Failed to retrieve lane usage")
+
+
+@router.get("/usage/models")
+async def usage_models():
+    """Per-model usage breakdown."""
+    try:
+        tracker = get_usage_tracker()
+        if tracker is None:
+            return {"models": {}, "message": "Usage tracker not initialised"}
+        return {"models": tracker.model_breakdown()}
+    except Exception as exc:
+        logger.error("usage_models error: %s", exc)
+        return _safe_error(500, "Failed to retrieve model usage")
 
 
 @router.get("/usage/savings")
 async def usage_savings():
     """Estimated savings from local model usage."""
     try:
-        mr = get_model_router()
-        if mr is None:
-            return {"savings": {}, "message": "Model router not initialised"}
-        return {"savings": mr.usage.estimated_savings()}
+        tracker = get_usage_tracker()
+        if tracker is None:
+            return {"savings": {}, "message": "Usage tracker not initialised"}
+        return {"savings": tracker.estimated_savings()}
     except Exception as exc:
         logger.error("usage_savings error: %s", exc)
         return _safe_error(500, "Failed to retrieve savings data")
 
 
+@router.get("/usage/monthly")
+async def usage_monthly(month: str = ""):
+    """Monthly usage data from persistence (survives restarts).
+
+    Query params:
+        month: Optional month key (e.g. ``2026-02``). Defaults to current.
+    """
+    try:
+        if _usage_persistence is None:
+            return {"monthly": {}, "message": "Usage persistence not initialised"}
+        if month:
+            data = _usage_persistence.get_month(month)
+        else:
+            data = _usage_persistence.get_current_month()
+        return {
+            "monthly": data,
+            "available_months": _usage_persistence.get_available_months(),
+        }
+    except Exception as exc:
+        logger.error("usage_monthly error: %s", exc)
+        return _safe_error(500, "Failed to retrieve monthly usage")
+
+
 @router.post("/usage/reset")
 async def usage_reset():
-    """Reset usage counters (starts a new tracking period)."""
+    """Reset in-memory usage counters (starts a new tracking period)."""
     try:
-        mr = get_model_router()
-        if mr is None:
-            return _safe_error(400, "Model router not initialised")
-        mr.usage.reset()
-        return {"message": "Usage counters reset", "usage": mr.usage.summary()}
+        tracker = get_usage_tracker()
+        if tracker is None:
+            return _safe_error(400, "Usage tracker not initialised")
+        tracker.reset()
+        return {"message": "Usage counters reset", "usage": tracker.summary()}
     except Exception as exc:
         logger.error("usage_reset error: %s", exc)
         return _safe_error(500, "Failed to reset usage counters")

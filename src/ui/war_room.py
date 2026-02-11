@@ -8,6 +8,7 @@ from onboarding import OnboardingOrchestrator
 from crusader import CrusaderMode, CrusaderAdapter
 from receipts import get_receipt_service, ReceiptStatus, ActionType
 from panels.tools_panel import get_tools_panel, render_tools_panel
+from panels.cost_panel import render_cost_panel
 
 # Fix Pack V11: Gateway API URL — War Room calls the gateway API instead of
 # creating its own bare orchestrator. This ensures all subsystems (skill_executor,
@@ -171,7 +172,7 @@ with cols[3]:
 st.divider()
 
 # Tabs for Main Interface
-tab_command, tab_recovery, tab_audit, tab_tools = st.tabs(["Command Center", "Setup & Recovery", "Neural Audit", "Tool Fabric"])
+tab_command, tab_recovery, tab_audit, tab_tools, tab_cost = st.tabs(["Command Center", "Setup & Recovery", "Neural Audit", "Tool Fabric", "Cost Tracker"])
 
 with tab_command:
     # Main Header
@@ -319,3 +320,6 @@ with tab_tools:
         panel=st.session_state.tools_panel,
         streamlit_module=st,
     )
+
+with tab_cost:
+    render_cost_panel(streamlit_module=st)
