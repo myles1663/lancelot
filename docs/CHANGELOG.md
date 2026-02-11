@@ -1,5 +1,51 @@
 # Lancelot Changelog
 
+## v7.0.4 — Self-Awareness Fix (2026-02-11)
+
+### Summary
+
+Fixed Lancelot's inability to describe its own architecture. Previously, when asked about
+its memory system or capabilities, Lancelot gave generic LLM answers ("As a large language
+model, I don't have recursive memory...") instead of describing its actual Memory vNext,
+receipt system, cognition governor, and other architectural components.
+
+### Root Cause
+
+Five issues prevented self-awareness:
+1. **Persona core block was empty** — no identity or architecture description in memory
+2. **Operating rules block was empty** — no behavioral principles loaded
+3. **Mission block was "staged"** — never activated, contained placeholder text
+4. **CAPABILITIES.md and RULES.md missing from data root** — files existed in `Technical/`
+   subdirectory but `context_env.py` loads from root `lancelot_data/`
+5. **`_build_self_awareness()` was minimal** — mentioned deployment and skills but nothing
+   about Memory vNext, receipts, governance, model routing, or architecture
+
+### Changes
+
+- **`lancelot_data/memory/core_blocks.json`**:
+  - Populated `persona` block with full architectural identity (Memory vNext, receipts,
+    cognition governor, model routing, tool fabric, soul contract, multimodal, workspace)
+  - Populated `operating_rules` block with core principles (honesty, tool-forward, self-aware
+    responses, governed operation, workspace rules)
+  - Activated `mission` block with real mission statement (was "staged" with placeholder)
+  - Activated `workspace_state` block with current system state
+
+- **`lancelot_data/CAPABILITIES.md`** (CREATED):
+  - Full capabilities document at data root where `context_env.py` expects it
+  - Covers architecture, deployment, communication, skills, agentic execution, limits
+
+- **`lancelot_data/RULES.md`** (CREATED):
+  - Operating rules at data root where `context_env.py` expects it
+  - Core principles, identity rules, security rules, communication rules, workspace rules
+
+- **`src/core/orchestrator.py`**:
+  - Expanded `_build_self_awareness()` with full architecture description
+  - Includes Memory vNext tiers, receipt system, cognition governor, model routing,
+    soul contract, cost tracking, agentic execution, multimodal, workspace
+  - Explicit instruction to never give generic "as an AI" answers about itself
+
+---
+
 ## v7.0.3 — File/Image Sharing + Shared Workspace (2026-02-11)
 
 ### Summary
