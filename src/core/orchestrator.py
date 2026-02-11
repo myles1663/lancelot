@@ -18,6 +18,31 @@ from planner import Planner
 from verifier import Verifier
 from planning_pipeline import PlanningPipeline
 from intent_classifier import classify_intent, IntentType
+
+# vNext4 Governance imports (conditional)
+import logging as _logging
+_gov_logger = _logging.getLogger(__name__)
+
+try:
+    from governance.config import load_governance_config
+    from governance.risk_classifier import RiskClassifier
+    from governance.async_verifier import AsyncVerificationQueue, VerificationJob
+    from governance.rollback import RollbackManager
+    from governance.models import RiskTier
+    from governance.intent_templates import IntentTemplateRegistry
+    import feature_flags as _ff
+    _GOVERNANCE_AVAILABLE = True
+except ImportError:
+    _GOVERNANCE_AVAILABLE = False
+
+# Tool name → governance capability mapping
+_TOOL_CAPABILITY_MAP = {
+    "read_file": "fs.read",
+    "list_workspace": "fs.list",
+    "search_workspace": "fs.read",
+    "write_to_file": "fs.write",
+    "execute_command": "shell.exec",
+}
 from plan_builder import EnvContext
 from plan_types import OutcomeType
 from dataclasses import dataclass
@@ -140,6 +165,46 @@ class LancelotOrchestrator:
         self._load_memory()
         self._init_gemini()
         self._init_context_cache()
+
+        # vNext4: Risk-Tiered Governance subsystems
+        self._risk_classifier = None
+        self._async_queue = None
+        self._rollback_manager = None
+        self._template_registry = None
+        self._init_governance()
+
+    def _init_governance(self):
+        """Initialize vNext4 governance subsystems if feature flags are enabled."""
+        if not _GOVERNANCE_AVAILABLE:
+            return
+        if not _ff.FEATURE_RISK_TIERED_GOVERNANCE:
+            return
+
+        try:
+            gov_config = load_governance_config()
+            self._risk_classifier = RiskClassifier(gov_config.risk_classification)
+            _gov_logger.info("vNext4: RiskClassifier initialized")
+
+            if _ff.FEATURE_ASYNC_VERIFICATION:
+                self._async_queue = AsyncVerificationQueue(
+                    config=gov_config.async_verification,
+                )
+                workspace = os.getenv("LANCELOT_WORKSPACE", "/home/lancelot/workspace")
+                self._rollback_manager = RollbackManager(workspace=workspace)
+                _gov_logger.info("vNext4: AsyncVerificationQueue + RollbackManager initialized")
+
+            if _ff.FEATURE_INTENT_TEMPLATES:
+                self._template_registry = IntentTemplateRegistry(
+                    config=gov_config.intent_templates,
+                    data_dir=os.path.join(self.data_dir, "governance"),
+                )
+                _gov_logger.info("vNext4: IntentTemplateRegistry initialized")
+        except Exception as e:
+            _gov_logger.error("vNext4 governance init failed: %s", e)
+            self._risk_classifier = None
+            self._async_queue = None
+            self._rollback_manager = None
+            self._template_registry = None
 
     def _init_fix_pack_v1(self):
         """Initialize Fix Pack V1 subsystems: execution authority, tasking, response assembler."""
@@ -1890,48 +1955,231 @@ class LancelotOrchestrator:
             
         return self.execute_plan(plan)
 
+    def _execute_step_tool(self, step, params) -> str:
+        """Execute a single plan step's tool and return output string."""
+        if step.tool == "read_file":
+            path = params.get("path")
+            content = self.context_env.read_file(path)
+            return f"Read file {path}. Content length: {len(content) if content else 0}"
+        elif step.tool == "list_workspace":
+            d = params.get("dir", ".")
+            return self.context_env.list_workspace(d)
+        elif step.tool == "search_workspace":
+            q = params.get("query")
+            return str(self.context_env.search_workspace(q))
+        elif step.tool == "execute_command":
+            cmd = params.get("command")
+            return self.execute_command(cmd)
+        elif step.tool == "write_to_file":
+            p = params.get("path")
+            c = params.get("content")
+            success = self.file_ops.write_file(p, c, f"Plan Step {step.id}")
+            return f"Write to {p}: {'Success' if success else 'Failed'}"
+        else:
+            return f"Unknown tool: {step.tool}"
+
+    def _request_approval(self, step, profile) -> bool:
+        """Request Commander approval for T3 actions.
+
+        Override in tests or inject an approval_fn for custom behavior.
+        Production: logs and auto-denies unless approval_fn is set.
+        """
+        if hasattr(self, '_approval_fn') and self._approval_fn is not None:
+            return self._approval_fn(step, profile)
+        _gov_logger.warning("T3 action requires approval: %s (auto-denied)", step.tool)
+        return False
+
     def execute_plan(self, plan) -> str:
-        """S17: Executes a plan autonomously with Verification."""
+        """S17: Executes a plan autonomously with risk-tiered governance.
+
+        vNext4: Full risk-tiered pipeline:
+          T0: Policy cache → Execute → Batch receipt
+          T1: Policy cache → Snapshot → Execute → Async verify → Receipt
+          T2: Flush + Drain → Execute → Sync verify → Receipt
+          T3: Flush + Drain → Approval → Execute → Sync verify → Receipt
+
+        When FEATURE_RISK_TIERED_GOVERNANCE is False, uses legacy behavior.
+        """
         self.wake_up("Plan Execution")
         results = []
-        
-        for step in plan.steps:
+        plan_id = getattr(plan, "plan_id", str(uuid.uuid4()))
+
+        # vNext4: Initialize batch buffer if enabled
+        batch_buffer = None
+        if _GOVERNANCE_AVAILABLE and _ff.FEATURE_RISK_TIERED_GOVERNANCE and _ff.FEATURE_BATCH_RECEIPTS:
+            try:
+                from governance.batch_receipts import BatchReceiptBuffer
+                from governance.config import BatchReceiptConfig
+                batch_buffer = BatchReceiptBuffer(
+                    task_id=plan_id,
+                    data_dir=os.path.join(self.data_dir, "governance"),
+                )
+            except Exception as e:
+                _gov_logger.warning("Batch receipt init failed: %s", e)
+
+        for i, step in enumerate(plan.steps):
             print(f"Executing Step {step.id}: {step.description}")
             params = {p.key: p.value for p in step.params}
-            output = ""
-            
+            capability = _TOOL_CAPABILITY_MAP.get(step.tool, step.tool)
+            target = params.get("path", params.get("dir", ""))
+
+            # ── Legacy path when governance is disabled ─────────────
+            if not _GOVERNANCE_AVAILABLE or not _ff.FEATURE_RISK_TIERED_GOVERNANCE or self._risk_classifier is None:
+                try:
+                    output = self._execute_step_tool(step, params)
+                except Exception as e:
+                    output = f"Execution Error: {e}"
+                verification = self.verifier.verify_step(step.description, output)
+                results.append(f"Step {step.id}: {verification.success} ({verification.reason})")
+                if not verification.success:
+                    return f"Plan Failed at Step {step.id}.\nReason: {verification.reason}\nSuggestion: {verification.correction_suggestion}"
+                continue
+
+            # ── vNext4: Classify risk tier ──────────────────────────
             try:
-                # 1. Execute Tool
-                if step.tool == "read_file":
-                    path = params.get("path")
-                    content = self.context_env.read_file(path)
-                    output = f"Read file {path}. Content length: {len(content) if content else 0}"
-                elif step.tool == "list_workspace":
-                    d = params.get("dir", ".")
-                    output = self.context_env.list_workspace(d)
-                elif step.tool == "search_workspace":
-                    q = params.get("query")
-                    output = str(self.context_env.search_workspace(q))
-                elif step.tool == "execute_command":
-                    cmd = params.get("command")
-                    output = self.execute_command(cmd)
-                elif step.tool == "write_to_file":
-                    p = params.get("path")
-                    c = params.get("content")
-                    success = self.file_ops.write_file(p, c, f"Plan Step {step.id}")
-                    output = f"Write to {p}: {'Success' if success else 'Failed'}"
-                else:
-                    output = f"Unknown tool: {step.tool}"
+                profile = self._risk_classifier.classify(capability, target=target)
             except Exception as e:
-                output = f"Execution Error: {e}"
-                
-            # 2. Verify
-            verification = self.verifier.verify_step(step.description, output)
-            results.append(f"Step {step.id}: {verification.success} ({verification.reason})")
-            
-            if not verification.success:
-                return f"Plan Failed at Step {step.id}.\nReason: {verification.reason}\nSuggestion: {verification.correction_suggestion}"
-                
+                _gov_logger.warning("Risk classification failed for step %s: %s", step.id, e)
+                profile = None
+
+            tier = profile.tier if profile else RiskTier.T3_IRREVERSIBLE
+
+            # ═══════════════════════════════════════════════════════
+            # T0: INERT — Policy cache → Execute → Batch receipt
+            # ═══════════════════════════════════════════════════════
+            if tier == RiskTier.T0_INERT:
+                # Policy cache check
+                if _ff.FEATURE_POLICY_CACHE and hasattr(self, '_policy_cache') and self._policy_cache:
+                    cached = self._policy_cache.lookup(capability, target or "workspace")
+                    if cached and cached.decision == "deny":
+                        results.append(f"Step {step.id}: BLOCKED by policy cache ({capability})")
+                        return f"Plan Blocked at Step {step.id}: Policy denied {capability}"
+
+                try:
+                    output = self._execute_step_tool(step, params)
+                except Exception as e:
+                    output = f"Execution Error: {e}"
+
+                # Batch receipt
+                if batch_buffer:
+                    batch_buffer.append(
+                        capability, step.tool, RiskTier.T0_INERT,
+                        str(params), output, "Error" not in output,
+                    )
+                results.append(f"Step {step.id}: T0 executed ({capability})")
+
+            # ═══════════════════════════════════════════════════════
+            # T1: REVERSIBLE — Snapshot → Execute → Async verify
+            # ═══════════════════════════════════════════════════════
+            elif tier == RiskTier.T1_REVERSIBLE:
+                # Policy cache check
+                if _ff.FEATURE_POLICY_CACHE and hasattr(self, '_policy_cache') and self._policy_cache:
+                    cached = self._policy_cache.lookup(capability, target or "workspace")
+                    if cached and cached.decision == "deny":
+                        results.append(f"Step {step.id}: BLOCKED by policy cache ({capability})")
+                        return f"Plan Blocked at Step {step.id}: Policy denied {capability}"
+
+                snapshot = None
+                if self._rollback_manager:
+                    snapshot = self._rollback_manager.create_snapshot(
+                        task_id=plan_id, step_index=i,
+                        capability=capability, target=target,
+                    )
+
+                try:
+                    output = self._execute_step_tool(step, params)
+                except Exception as e:
+                    output = f"Execution Error: {e}"
+
+                if _ff.FEATURE_ASYNC_VERIFICATION and self._async_queue and snapshot:
+                    rollback_action = self._rollback_manager.get_rollback_action(snapshot.snapshot_id)
+                    self._async_queue.submit(VerificationJob(
+                        task_id=plan_id, step_index=i,
+                        capability=capability, output=output,
+                        rollback_action=rollback_action,
+                    ))
+                    results.append(f"Step {step.id}: T1 async-queued ({capability})")
+                else:
+                    # Sync verify fallback
+                    verification = self.verifier.verify_step(step.description, output)
+                    results.append(f"Step {step.id}: T1 sync-verified {verification.success} ({capability})")
+                    if not verification.success:
+                        if snapshot and self._rollback_manager:
+                            self._rollback_manager.get_rollback_action(snapshot.snapshot_id)()
+                        return f"Plan Failed at Step {step.id}.\nReason: {verification.reason}"
+
+            # ═══════════════════════════════════════════════════════
+            # T2: CONTROLLED — Flush + Drain → Execute → Sync verify
+            # ═══════════════════════════════════════════════════════
+            elif tier == RiskTier.T2_CONTROLLED:
+                # Boundary enforcement: flush batch + drain async queue
+                if batch_buffer:
+                    batch_buffer.flush_if_tier_boundary(RiskTier.T2_CONTROLLED)
+                if _ff.FEATURE_ASYNC_VERIFICATION and self._async_queue:
+                    drain_result = self._async_queue.drain()
+                    if drain_result.failed > 0:
+                        self._async_queue.clear_results()
+                        results.append(f"Step {step.id}: BLOCKED — {drain_result.failed} prior verification failures")
+                        return f"Plan Failed: {drain_result.failed} prior T1 verification failures detected before T2 step {step.id}"
+                    self._async_queue.clear_results()
+
+                try:
+                    output = self._execute_step_tool(step, params)
+                except Exception as e:
+                    output = f"Execution Error: {e}"
+
+                verification = self.verifier.verify_step(step.description, output)
+                results.append(f"Step {step.id}: T2 sync-verified {verification.success} ({capability})")
+                if not verification.success:
+                    return f"Plan Failed at Step {step.id}.\nReason: {verification.reason}\nSuggestion: {verification.correction_suggestion}"
+
+            # ═══════════════════════════════════════════════════════
+            # T3: IRREVERSIBLE — Flush + Drain → Approval → Execute → Sync verify
+            # ═══════════════════════════════════════════════════════
+            elif tier == RiskTier.T3_IRREVERSIBLE:
+                # Boundary enforcement
+                if batch_buffer:
+                    batch_buffer.flush_if_tier_boundary(RiskTier.T3_IRREVERSIBLE)
+                if _ff.FEATURE_ASYNC_VERIFICATION and self._async_queue:
+                    drain_result = self._async_queue.drain()
+                    if drain_result.failed > 0:
+                        self._async_queue.clear_results()
+                        results.append(f"Step {step.id}: BLOCKED — prior verification failures")
+                        return f"Plan Failed: {drain_result.failed} prior T1 verification failures detected before T3 step {step.id}"
+                    self._async_queue.clear_results()
+
+                # Approval gate
+                if not self._request_approval(step, profile):
+                    results.append(f"Step {step.id}: APPROVAL DENIED ({capability})")
+                    return f"Plan Stopped at Step {step.id}: Commander approval denied for {capability}"
+
+                try:
+                    output = self._execute_step_tool(step, params)
+                except Exception as e:
+                    output = f"Execution Error: {e}"
+
+                verification = self.verifier.verify_step(step.description, output)
+                results.append(f"Step {step.id}: T3 sync-verified {verification.success} ({capability})")
+                if not verification.success:
+                    return f"Plan Failed at Step {step.id}.\nReason: {verification.reason}\nSuggestion: {verification.correction_suggestion}"
+
+        # ── End-of-plan cleanup ─────────────────────────────────
+        if batch_buffer:
+            batch_buffer.flush()
+        if _GOVERNANCE_AVAILABLE and self._async_queue is not None:
+            if self._async_queue.depth > 0:
+                drain_result = self._async_queue.drain()
+                if drain_result.failed > 0:
+                    _gov_logger.warning(
+                        "Async verification: %d/%d steps rolled back",
+                        drain_result.failed, drain_result.drained_count,
+                    )
+                    results.append(
+                        f"[vNext4] Async verification: {drain_result.passed} passed, "
+                        f"{drain_result.failed} rolled back"
+                    )
+            self._async_queue.clear_results()
+
         return "Plan Executed Successfully.\n" + "\n".join(results)
 
     def _route_model(self, user_message: str) -> str:

@@ -1,5 +1,5 @@
 """
-Feature Flags — vNext2/vNext3 subsystem kill switches.
+Feature Flags — vNext2/vNext3/vNext4 subsystem kill switches.
 
 Each flag controls whether a subsystem is active. When disabled,
 the system boots without that subsystem.
@@ -17,6 +17,13 @@ Tool Fabric Environment variables:
     FEATURE_TOOLS_ANTIGRAVITY    — default: false (Antigravity providers)
     FEATURE_TOOLS_NETWORK        — default: false (network access in sandbox)
     FEATURE_TOOLS_HOST_EXECUTION — default: false (DANGEROUS: host execution)
+
+vNext4 Governance Environment variables:
+    FEATURE_RISK_TIERED_GOVERNANCE — default: false (master switch)
+    FEATURE_POLICY_CACHE           — default: false (boot-time policy compilation)
+    FEATURE_ASYNC_VERIFICATION     — default: false (async verify for T1 actions)
+    FEATURE_INTENT_TEMPLATES       — default: false (cached plan templates)
+    FEATURE_BATCH_RECEIPTS         — default: false (batched receipt emission)
 """
 
 from __future__ import annotations
@@ -61,6 +68,13 @@ FEATURE_AGENTIC_LOOP: bool = _env_bool("FEATURE_AGENTIC_LOOP", default=False)
 # Fix Pack V8 flags
 FEATURE_LOCAL_AGENTIC: bool = _env_bool("FEATURE_LOCAL_AGENTIC", default=False)
 
+# vNext4 Governance flags
+FEATURE_RISK_TIERED_GOVERNANCE: bool = _env_bool("FEATURE_RISK_TIERED_GOVERNANCE", default=False)
+FEATURE_POLICY_CACHE: bool = _env_bool("FEATURE_POLICY_CACHE", default=False)
+FEATURE_ASYNC_VERIFICATION: bool = _env_bool("FEATURE_ASYNC_VERIFICATION", default=False)
+FEATURE_INTENT_TEMPLATES: bool = _env_bool("FEATURE_INTENT_TEMPLATES", default=False)
+FEATURE_BATCH_RECEIPTS: bool = _env_bool("FEATURE_BATCH_RECEIPTS", default=False)
+
 
 def reload_flags() -> None:
     """Re-read feature flags from environment. Used in tests."""
@@ -71,6 +85,8 @@ def reload_flags() -> None:
     global FEATURE_TASK_GRAPH_EXECUTION, FEATURE_NETWORK_ALLOWLIST, FEATURE_VOICE_NOTES
     global FEATURE_AGENTIC_LOOP
     global FEATURE_LOCAL_AGENTIC
+    global FEATURE_RISK_TIERED_GOVERNANCE, FEATURE_POLICY_CACHE
+    global FEATURE_ASYNC_VERIFICATION, FEATURE_INTENT_TEMPLATES, FEATURE_BATCH_RECEIPTS
 
     # vNext2 flags
     FEATURE_SOUL = _env_bool("FEATURE_SOUL")
@@ -99,6 +115,13 @@ def reload_flags() -> None:
     # Fix Pack V8 flags
     FEATURE_LOCAL_AGENTIC = _env_bool("FEATURE_LOCAL_AGENTIC", default=False)
 
+    # vNext4 Governance flags
+    FEATURE_RISK_TIERED_GOVERNANCE = _env_bool("FEATURE_RISK_TIERED_GOVERNANCE", default=False)
+    FEATURE_POLICY_CACHE = _env_bool("FEATURE_POLICY_CACHE", default=False)
+    FEATURE_ASYNC_VERIFICATION = _env_bool("FEATURE_ASYNC_VERIFICATION", default=False)
+    FEATURE_INTENT_TEMPLATES = _env_bool("FEATURE_INTENT_TEMPLATES", default=False)
+    FEATURE_BATCH_RECEIPTS = _env_bool("FEATURE_BATCH_RECEIPTS", default=False)
+
 
 def log_feature_flags() -> None:
     """Log current feature flag state at startup."""
@@ -124,4 +147,10 @@ def log_feature_flags() -> None:
     logger.info(
         "Fix Pack V8 flags: LOCAL_AGENTIC=%s",
         FEATURE_LOCAL_AGENTIC,
+    )
+    logger.info(
+        "vNext4 Governance flags: RISK_TIERED=%s, POLICY_CACHE=%s, ASYNC_VERIFY=%s, TEMPLATES=%s, BATCH_RECEIPTS=%s",
+        FEATURE_RISK_TIERED_GOVERNANCE, FEATURE_POLICY_CACHE,
+        FEATURE_ASYNC_VERIFICATION, FEATURE_INTENT_TEMPLATES,
+        FEATURE_BATCH_RECEIPTS,
     )

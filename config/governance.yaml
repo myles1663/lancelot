@@ -1,0 +1,57 @@
+version: "1.0"
+
+risk_classification:
+  defaults:
+    fs.read: 0        # T0_INERT
+    fs.list: 0
+    git.status: 0
+    git.log: 0
+    git.diff: 0
+    memory.read: 0
+    fs.write: 1       # T1_REVERSIBLE
+    git.commit: 1
+    git.branch: 1
+    memory.write: 1
+    shell.exec: 2     # T2_CONTROLLED
+    net.fetch: 2
+    docker.run: 2
+    net.post: 3       # T3_IRREVERSIBLE
+
+  scope_escalations:
+    - capability: "fs.write"
+      scope: "outside_workspace"
+      escalate_to: 3
+      reason: "Writes outside workspace are irreversible"
+    - capability: "shell.exec"
+      scope: "unscoped"
+      escalate_to: 3
+      reason: "Unscoped shell execution is irreversible"
+    - capability: "fs.write"
+      pattern: "*.env"
+      escalate_to: 3
+      reason: "Environment files may contain secrets"
+
+policy_cache:
+  enabled: true
+  recompile_on_soul_change: true
+  validate_soul_version: true
+
+async_verification:
+  enabled: true
+  max_workers: 2
+  queue_max_depth: 10
+  fallback_to_sync_on_full: true
+  drain_timeout_seconds: 30
+
+intent_templates:
+  enabled: true
+  promotion_threshold: 3
+  max_template_age_days: 30
+  max_cached_templates: 100
+  max_template_risk_tier: 1   # T1_REVERSIBLE
+
+batch_receipts:
+  enabled: true
+  buffer_size: 20
+  flush_on_tier_boundary: true
+  flush_on_task_complete: true

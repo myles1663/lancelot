@@ -1,5 +1,54 @@
 # Lancelot Changelog
 
+## vNext4 — Risk-Tiered Governance & Performance Pipeline (2026-02-11)
+
+**Architecture:** docs/architecture/governance.md
+**Runbook:** docs/operations/runbooks/governance.md
+
+### Added
+- Risk-tiered governance system (T0-T3) with proportional verification overhead
+- `src/core/governance/` module with 9 submodules:
+  - `models.py` — RiskTier enum, VerificationStatus, ActionRiskProfile data types
+  - `config.py` — Pydantic v2 config loader for governance.yaml
+  - `risk_classifier.py` — Classifier with scope, pattern, and Soul escalation
+  - `policy_cache.py` — Boot-time precomputed policy decisions for T0/T1 (O(1) lookup)
+  - `async_verifier.py` — Background verification queue for T1 actions
+  - `rollback.py` — Pre-execution snapshot system with automatic file rollback
+  - `intent_templates.py` — Cached plan skeleton registry with promotion lifecycle
+  - `batch_receipts.py` — Batched receipt emission with tier boundary flush
+  - `war_room_panel.py` — Streamlit governance metrics panel
+- `config/governance.yaml` — Risk classification defaults (14 capabilities), 3 scope escalations
+- 5 new feature flags (all default false, gated behind master switch):
+  - `FEATURE_RISK_TIERED_GOVERNANCE` (master), `FEATURE_POLICY_CACHE`,
+    `FEATURE_ASYNC_VERIFICATION`, `FEATURE_INTENT_TEMPLATES`, `FEATURE_BATCH_RECEIPTS`
+- 231 governance tests across 15 test files covering:
+  - Unit tests for all modules
+  - T1 pipeline integration tests
+  - Full tiered execution tests
+  - T2/T3 boundary enforcement tests
+  - Security hardening tests (tier downgrade attacks, cache poisoning, template injection)
+  - High-volume stress tests and graceful shutdown
+
+### Changed
+- `src/core/orchestrator.py`:
+  - `execute_plan()` rewritten with full risk-tiered pipeline (T0/T1/T2/T3)
+  - Added `_init_governance()` for subsystem initialization
+  - Added `_execute_step_tool()` helper and `_request_approval()` for T3 gate
+  - Added governance imports with conditional loading
+  - Legacy path preserved when `FEATURE_RISK_TIERED_GOVERNANCE=false`
+- `src/core/feature_flags.py` — 5 new governance flags with reload and logging support
+
+### Security
+- Soul escalation overrides prevent tier downgrade (only escalates up, never down)
+- Policy cache validates Soul version on every lookup
+- Intent templates cannot contain T2+ actions (enforced at creation)
+- T2/T3 boundary enforcement flushes all pending T0/T1 work before execution
+- Unknown capabilities default to T3 (fail-safe)
+- Rollback is idempotent (double rollback is no-op)
+- SHA-256 integrity hashing on all batch receipt entries
+
+---
+
 ## v7.0.4 — Self-Awareness Fix (2026-02-11)
 
 ### Summary
