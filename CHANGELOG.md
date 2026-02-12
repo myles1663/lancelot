@@ -2,6 +2,23 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.1.3] - 2026-02-12
+
+### Added
+- **Chat History Persistence:** New `GET /api/chat/history` endpoint returns conversation history
+  from the backend. Chat Interface now loads previous messages on mount — conversations survive
+  page navigation and browser refresh
+- **Recent Activity Feed (WR-10):** Command Center now shows live activity from the receipts
+  system. Displays last 8 actions with status dots, action names, types, duration, and timestamps.
+  Auto-refreshes every 15 seconds
+- **Quick Stats — Live Data:** Actions Today and Pending counts now pull from the receipts stats
+  API instead of showing placeholder dashes
+
+### Fixed
+- **Chat history recall:** Lancelot can now recall conversation history. Root cause: the librarian
+  was moving `chat_log.json` out of the data directory into classification subdirectories. Fixed by
+  storing in a dedicated `data/chat/` subdirectory (same pattern used for `scheduler.sqlite`)
+
 ## [8.1.2] - 2026-02-12
 
 ### Added

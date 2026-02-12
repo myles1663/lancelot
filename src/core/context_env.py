@@ -34,19 +34,25 @@ class ContextEnvironment:
         self.current_tokens = 0
         self._load_history()
         
+    def _chat_dir(self) -> str:
+        """Return (and create) a dedicated chat subdirectory the librarian won't move."""
+        d = os.path.join(self.data_dir, "chat")
+        os.makedirs(d, exist_ok=True)
+        return d
+
     def _load_history(self):
         """Loads chat history from JSON."""
-        history_path = os.path.join(self.data_dir, "chat_log.json")
+        history_path = os.path.join(self._chat_dir(), "chat_log.json")
         if os.path.exists(history_path):
             try:
                 with open(history_path, "r", encoding="utf-8") as f:
                     self.history = json.load(f)
             except Exception as e:
                 print(f"Error loading chat history: {e}")
-                
+
     def save_history(self):
         """Persists chat history to JSON."""
-        history_path = os.path.join(self.data_dir, "chat_log.json")
+        history_path = os.path.join(self._chat_dir(), "chat_log.json")
         try:
             with open(history_path, "w", encoding="utf-8") as f:
                 json.dump(self.history, f, indent=2)

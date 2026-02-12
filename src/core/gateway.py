@@ -515,6 +515,24 @@ class ChatMessage(BaseModel):
     user: str = "Unknown"
 
 
+@app.get("/api/chat/history")
+async def chat_history(request: Request, limit: int = 50):
+    """Return recent conversation history for War Room persistence."""
+    if not verify_token(request):
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+    history = main_orchestrator.context_env.history or []
+    recent = history[-limit:] if limit < len(history) else history
+    messages = [
+        {
+            "role": h.get("role", "user"),
+            "content": h.get("content", ""),
+            "timestamp": h.get("timestamp", 0),
+        }
+        for h in recent
+    ]
+    return {"messages": messages, "total": len(history)}
+
+
 @app.post("/chat")
 async def chat_webhook(request: Request):
     """

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { sendMessage, sendMessageWithFiles } from '@/api'
+import { fetchChatHistory } from '@/api/chat'
 import { ChatMessage } from './ChatMessage'
 
 interface Message {
@@ -16,6 +17,7 @@ export function ChatInterface() {
   const [input, setInput] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const [sending, setSending] = useState(false)
+  const [historyLoaded, setHistoryLoaded] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -24,6 +26,29 @@ export function ChatInterface() {
   }, [])
 
   useEffect(scrollToBottom, [messages, scrollToBottom])
+
+  // Load conversation history from backend on mount
+  useEffect(() => {
+    if (historyLoaded) return
+    fetchChatHistory(50)
+      .then((data) => {
+        if (data.messages.length > 0) {
+          const loaded: Message[] = data.messages.map((m, i) => ({
+            id: `history-${i}`,
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+            timestamp: m.timestamp
+              ? new Date(m.timestamp * 1000).toLocaleTimeString('en-US', { hour12: false })
+              : '',
+          }))
+          setMessages(loaded)
+        }
+      })
+      .catch(() => {
+        // Silently ignore — fresh session
+      })
+      .finally(() => setHistoryLoaded(true))
+  }, [historyLoaded])
 
   const timestamp = () => new Date().toLocaleTimeString('en-US', { hour12: false })
 
