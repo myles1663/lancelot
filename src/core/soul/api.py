@@ -30,11 +30,12 @@ from src.core.soul.store import (
 )
 from src.core.soul.amendments import (
     ProposalStatus,
+    create_proposal,
     list_proposals,
     get_proposal,
     save_proposals,
 )
-from src.core.soul.linter import lint_or_raise
+from src.core.soul.linter import lint, lint_or_raise
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,90 @@ async def soul_status():
             "pending_proposals": pending,
         }
     except SoulStoreError as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# GET /soul/content — full parsed soul document
+# ---------------------------------------------------------------------------
+
+@router.get("/content")
+async def soul_content():
+    """Return the full active soul document as structured JSON."""
+    try:
+        from src.core.soul.store import load_active_soul, _resolve_soul_dir
+        soul = load_active_soul(_SOUL_DIR)
+        d = _resolve_soul_dir(_SOUL_DIR)
+        version_file = d / "soul_versions" / f"soul_{soul.version}.yaml"
+        raw_yaml = version_file.read_text(encoding="utf-8") if version_file.exists() else ""
+        return {
+            "soul": soul.model_dump(),
+            "raw_yaml": raw_yaml,
+        }
+    except SoulStoreError as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# POST /soul/propose — create amendment proposal from edited YAML
+# ---------------------------------------------------------------------------
+
+@router.post("/propose")
+async def propose_amendment(request: Request):
+    """Create a soul amendment proposal from edited YAML.
+
+    Body: {"proposed_yaml": "<full yaml text>", "author": "Commander"}
+    """
+    if not _verify_owner(request):
+        raise HTTPException(status_code=403, detail="Owner identity required")
+
+    try:
+        body = await request.json()
+        proposed_yaml = body.get("proposed_yaml", "")
+        author = body.get("author", "Commander")
+
+        if not proposed_yaml.strip():
+            raise HTTPException(status_code=400, detail="proposed_yaml is required")
+
+        # Validate the YAML parses and passes schema
+        proposed_dict = yaml.safe_load(proposed_yaml)
+        soul = Soul(**proposed_dict)
+
+        # Run linter — return warnings but don't block
+        issues = lint(soul)
+        warnings = [{"rule": i.rule, "severity": i.severity.value, "message": i.message}
+                    for i in issues]
+
+        # Check for critical issues
+        critical = [w for w in warnings if w["severity"] == "critical"]
+        if critical:
+            return JSONResponse(status_code=422, content={
+                "error": "Critical linter issues found",
+                "issues": warnings,
+            })
+
+        # Create proposal
+        current_version = get_active_version(_SOUL_DIR)
+        proposal = create_proposal(
+            from_version=current_version,
+            proposed_yaml_text=proposed_yaml,
+            author=author,
+            soul_dir=_SOUL_DIR,
+        )
+
+        return {
+            "proposal_id": proposal.id,
+            "proposed_version": proposal.proposed_version,
+            "diff_summary": proposal.diff_summary,
+            "warnings": warnings,
+            "status": proposal.status.value,
+        }
+    except HTTPException:
+        raise
+    except SoulStoreError as exc:
+        return JSONResponse(status_code=422, content={"error": str(exc)})
+    except Exception as exc:
+        logger.error("propose_amendment error: %s", exc)
         return JSONResponse(status_code=500, content={"error": str(exc)})
 
 

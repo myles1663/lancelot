@@ -2,6 +2,24 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.0.4] - 2026-02-12
+
+### Added
+- **Soul Inspector — Constitution Viewer:** Full structured view of the active soul document with
+  collapsible sections for Mission & Identity, Autonomy Posture (level badge, allowed/requires lists),
+  Risk Rules (enforced/disabled status), Approval Rules, Tone Invariants, Memory Ethics, and
+  Scheduling Boundaries
+- **Soul Inspector — YAML Editor:** Tab-based view/edit interface. YAML editor creates amendment
+  proposals validated by the soul linter. Proposals must be approved then activated (two-stage workflow)
+- **Soul Inspector — Proposal Actions:** Approve and Activate buttons on pending proposals with
+  confirmation dialogs, diff summary badges (added/changed/removed), author/timestamp display
+- **Soul API — content endpoint:** `GET /soul/content` returns full parsed soul document as JSON
+  plus raw YAML text
+- **Soul API — propose endpoint:** `POST /soul/propose` creates amendment proposals from edited YAML
+  with linter validation (rejects critical issues, surfaces warnings)
+
+---
+
 ## [8.0.3] - 2026-02-12
 
 ### Added

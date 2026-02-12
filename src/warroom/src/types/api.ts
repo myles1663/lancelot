@@ -117,8 +117,13 @@ export interface OnboardingCommandResponse {
 
 export interface SoulProposal {
   proposal_id: string
+  id?: string
+  proposed_version?: string
+  diff_summary?: string[]
+  author?: string
+  created_at?: string
   status: string
-  [key: string]: unknown
+  proposed_yaml?: string
 }
 
 export interface SoulStatusResponse {
@@ -131,6 +136,58 @@ export interface SoulProposalActionResponse {
   status: string
   proposal_id: string
   active_version?: string
+}
+
+export interface SoulAutonomyPosture {
+  level: string
+  description: string
+  allowed_autonomous: string[]
+  requires_approval: string[]
+}
+
+export interface SoulRiskRule {
+  name: string
+  description: string
+  enforced: boolean
+}
+
+export interface SoulApprovalRules {
+  default_timeout_seconds: number
+  escalation_on_timeout: string
+  channels: string[]
+}
+
+export interface SoulSchedulingBoundaries {
+  max_concurrent_jobs: number
+  max_job_duration_seconds: number
+  no_autonomous_irreversible: boolean
+  require_ready_state: boolean
+  description: string
+}
+
+export interface SoulDocument {
+  version: string
+  mission: string
+  allegiance: string
+  autonomy_posture: SoulAutonomyPosture
+  risk_rules: SoulRiskRule[]
+  approval_rules: SoulApprovalRules
+  tone_invariants: string[]
+  memory_ethics: string[]
+  scheduling_boundaries: SoulSchedulingBoundaries
+}
+
+export interface SoulContentResponse {
+  soul: SoulDocument
+  raw_yaml: string
+}
+
+export interface SoulProposeResponse {
+  proposal_id: string
+  proposed_version: string
+  diff_summary: string[]
+  warnings: { rule: string; severity: string; message: string }[]
+  status: string
 }
 
 // ------------------------------------------------------------------
