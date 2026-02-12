@@ -1,7 +1,8 @@
 """
 Flags API — /api/flags
 
-Exposes current feature flag values for the War Room Kill Switches page.
+Exposes current feature flag values and allows runtime toggling
+for the War Room Kill Switches page.
 """
 
 import logging
@@ -16,32 +17,62 @@ router = APIRouter(prefix="/api/flags", tags=["flags"])
 
 @router.get("")
 async def get_flags():
-    """Return all feature flag values."""
+    """Return all feature flag values and metadata."""
     try:
         import feature_flags as ff
-        flags = {
-            # Core subsystems
-            "FEATURE_SOUL": ff.FEATURE_SOUL,
-            "FEATURE_SKILLS": ff.FEATURE_SKILLS,
-            "FEATURE_HEALTH_MONITOR": ff.FEATURE_HEALTH_MONITOR,
-            "FEATURE_SCHEDULER": ff.FEATURE_SCHEDULER,
-            "FEATURE_MEMORY_VNEXT": ff.FEATURE_MEMORY_VNEXT,
-            # Tool Fabric
-            "FEATURE_TOOLS_FABRIC": ff.FEATURE_TOOLS_FABRIC,
-            "FEATURE_TOOLS_CLI_PROVIDERS": ff.FEATURE_TOOLS_CLI_PROVIDERS,
-            "FEATURE_TOOLS_ANTIGRAVITY": ff.FEATURE_TOOLS_ANTIGRAVITY,
-            "FEATURE_TOOLS_NETWORK": ff.FEATURE_TOOLS_NETWORK,
-            "FEATURE_TOOLS_HOST_EXECUTION": ff.FEATURE_TOOLS_HOST_EXECUTION,
-        }
+        flags = {}
 
-        # Add any additional flags that exist
-        for attr in dir(ff):
-            if attr.startswith("FEATURE_") and attr not in flags:
+        for attr in sorted(dir(ff)):
+            if attr.startswith("FEATURE_"):
                 val = getattr(ff, attr, None)
                 if isinstance(val, bool):
-                    flags[attr] = val
+                    flags[attr] = {
+                        "enabled": val,
+                        "restart_required": attr in ff.RESTART_REQUIRED_FLAGS,
+                    }
 
         return {"flags": flags}
     except Exception as exc:
         logger.error("get_flags error: %s", exc)
         return JSONResponse(status_code=500, content={"error": "Failed to read flags"})
+
+
+@router.post("/{name}/toggle")
+async def toggle_flag(name: str):
+    """Toggle a feature flag at runtime."""
+    try:
+        import feature_flags as ff
+        new_val = ff.toggle_flag(name)
+        restart_needed = name in ff.RESTART_REQUIRED_FLAGS
+        return {
+            "flag": name,
+            "enabled": new_val,
+            "restart_required": restart_needed,
+            "message": f"{name} set to {new_val}" + (
+                " (restart required for full effect)" if restart_needed else ""
+            ),
+        }
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except Exception as exc:
+        logger.error("toggle_flag error: %s", exc)
+        return JSONResponse(status_code=500, content={"error": "Failed to toggle flag"})
+
+
+@router.post("/{name}/set")
+async def set_flag(name: str, value: bool = True):
+    """Set a feature flag to a specific value."""
+    try:
+        import feature_flags as ff
+        ff.set_flag(name, value)
+        restart_needed = name in ff.RESTART_REQUIRED_FLAGS
+        return {
+            "flag": name,
+            "enabled": value,
+            "restart_required": restart_needed,
+        }
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except Exception as exc:
+        logger.error("set_flag error: %s", exc)
+        return JSONResponse(status_code=500, content={"error": "Failed to set flag"})

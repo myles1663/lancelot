@@ -1,7 +1,20 @@
-import { apiGet } from './client'
+import { apiGet, apiPost } from './client'
+
+export interface FlagInfo {
+  enabled: boolean
+  restart_required: boolean
+}
 
 export interface FlagsResponse {
-  flags: Record<string, boolean>
+  flags: Record<string, FlagInfo>
+}
+
+export interface ToggleFlagResponse {
+  flag: string
+  enabled: boolean
+  restart_required: boolean
+  message: string
 }
 
 export const fetchFlags = () => apiGet<FlagsResponse>('/api/flags')
+export const toggleFlag = (name: string) => apiPost<ToggleFlagResponse>(`/api/flags/${name}/toggle`)

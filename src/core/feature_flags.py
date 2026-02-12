@@ -92,6 +92,45 @@ FEATURE_SKILL_SECURITY_PIPELINE: bool = _env_bool("FEATURE_SKILL_SECURITY_PIPELI
 FEATURE_APPROVAL_LEARNING: bool = _env_bool("FEATURE_APPROVAL_LEARNING", default=False)
 
 
+# Flags that require a container restart to fully take effect when toggled
+RESTART_REQUIRED_FLAGS = frozenset({
+    "FEATURE_SOUL",
+    "FEATURE_SKILLS",
+    "FEATURE_HEALTH_MONITOR",
+    "FEATURE_SCHEDULER",
+    "FEATURE_MEMORY_VNEXT",
+})
+
+
+def toggle_flag(name: str) -> bool:
+    """Toggle a feature flag at runtime. Returns the new value.
+
+    Updates both the module global and os.environ so reload_flags() preserves it.
+    Raises ValueError if the flag name is not recognized.
+    """
+    import feature_flags as _self
+    if not hasattr(_self, name):
+        raise ValueError(f"Unknown flag: {name}")
+    current = getattr(_self, name)
+    if not isinstance(current, bool):
+        raise ValueError(f"{name} is not a boolean flag")
+    new_val = not current
+    setattr(_self, name, new_val)
+    os.environ[name] = "true" if new_val else "false"
+    logger.info("Flag toggled: %s = %s", name, new_val)
+    return new_val
+
+
+def set_flag(name: str, value: bool) -> None:
+    """Set a feature flag to a specific value at runtime."""
+    import feature_flags as _self
+    if not hasattr(_self, name):
+        raise ValueError(f"Unknown flag: {name}")
+    setattr(_self, name, value)
+    os.environ[name] = "true" if value else "false"
+    logger.info("Flag set: %s = %s", name, value)
+
+
 def reload_flags() -> None:
     """Re-read feature flags from environment. Used in tests."""
     global FEATURE_SOUL, FEATURE_SKILLS, FEATURE_HEALTH_MONITOR, FEATURE_SCHEDULER, FEATURE_MEMORY_VNEXT
