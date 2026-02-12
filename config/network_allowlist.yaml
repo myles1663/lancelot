@@ -1,0 +1,7 @@
+domains:
+- api.anthropic.com
+- api.github.com
+- api.telegram.org
+- generativelanguage.googleapis.com
+- github.com
+- raw.githubusercontent.com

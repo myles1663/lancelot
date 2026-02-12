@@ -6,9 +6,13 @@ and allows runtime toggling for the War Room Kill Switches page.
 """
 
 import logging
+import os
 
+import yaml
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from typing import List
 
 logger = logging.getLogger(__name__)
 
@@ -78,11 +82,11 @@ FLAG_META = {
         "warning": "Requires TOOLS_FABRIC. Needs a running browser instance (Playwright). Increases resource usage.",
     },
     "FEATURE_TOOLS_NETWORK": {
-        "description": "Allows network access from within the Docker sandbox during tool execution. By default, sandboxed code runs with no network.",
+        "description": "Allows network access from within the Docker sandbox during tool execution. By default, sandboxed code runs with no network. Works with NETWORK_ALLOWLIST to restrict which domains are reachable.",
         "category": "Tool Fabric",
         "requires": ["FEATURE_TOOLS_FABRIC"],
-        "conflicts": ["FEATURE_NETWORK_ALLOWLIST"],
-        "warning": "Security risk: sandboxed code can make outbound network requests. Consider enabling NETWORK_ALLOWLIST to restrict allowed domains.",
+        "conflicts": [],
+        "warning": "Security risk: sandboxed code can make outbound network requests. Enable NETWORK_ALLOWLIST and configure allowed domains to restrict access.",
     },
     "FEATURE_TOOLS_HOST_EXECUTION": {
         "description": "DANGEROUS: Allows tool execution directly on the host machine instead of inside the Docker sandbox. Bypasses container isolation entirely.",
@@ -115,11 +119,12 @@ FLAG_META = {
         "warning": "Disabling falls back to sequential single-step execution. Complex multi-step tasks will not be decomposed.",
     },
     "FEATURE_NETWORK_ALLOWLIST": {
-        "description": "Network allowlist enforcement. Restricts outbound HTTP requests to a configured list of allowed domains. Defense-in-depth for network access.",
+        "description": "Network allowlist enforcement. Restricts outbound HTTP requests to a configured list of allowed domains. Best used alongside TOOLS_NETWORK — enables network access while limiting reachable domains. Edit the allowlist below when enabled.",
         "category": "Runtime",
         "requires": [],
         "conflicts": [],
-        "warning": "When enabled, only allowlisted domains can be reached. If TOOLS_NETWORK is also enabled, this restricts sandbox network access to safe domains.",
+        "warning": "When enabled, only allowlisted domains can be reached. Tokens default to domains from config/network_allowlist.yaml. Keep the list minimal.",
+        "has_editor": "network_allowlist",
     },
     "FEATURE_VOICE_NOTES": {
         "description": "Voice note processing. Enables audio file uploads to be transcribed and processed as text input using the local model.",
@@ -226,7 +231,7 @@ async def get_flags():
                 val = getattr(ff, attr, None)
                 if isinstance(val, bool):
                     meta = FLAG_META.get(attr, {})
-                    flags[attr] = {
+                    entry = {
                         "enabled": val,
                         "restart_required": attr in ff.RESTART_REQUIRED_FLAGS,
                         "description": meta.get("description", ""),
@@ -235,12 +240,78 @@ async def get_flags():
                         "conflicts": meta.get("conflicts", []),
                         "warning": meta.get("warning", ""),
                     }
+                    if meta.get("has_editor"):
+                        entry["has_editor"] = meta["has_editor"]
+                    flags[attr] = entry
 
         return {"flags": flags}
     except Exception as exc:
         logger.error("get_flags error: %s", exc)
         return JSONResponse(status_code=500, content={"error": "Failed to read flags"})
 
+
+# ── Network Allowlist Config ─────────────────────────────────────────
+# NOTE: These routes MUST be defined before /{name}/* routes to avoid
+# FastAPI matching "network-allowlist" as a flag name parameter.
+
+ALLOWLIST_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "config", "network_allowlist.yaml",
+)
+
+
+def _load_allowlist() -> dict:
+    """Load network_allowlist.yaml, returning default structure if missing."""
+    try:
+        with open(ALLOWLIST_PATH, "r") as f:
+            data = yaml.safe_load(f) or {}
+        return data
+    except FileNotFoundError:
+        return {"domains": [], "notes": "No allowlist config found. Create config/network_allowlist.yaml."}
+
+
+def _save_allowlist(data: dict) -> None:
+    """Persist allowlist config to YAML."""
+    os.makedirs(os.path.dirname(ALLOWLIST_PATH), exist_ok=True)
+    with open(ALLOWLIST_PATH, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+
+
+class AllowlistUpdate(BaseModel):
+    domains: List[str]
+
+
+@router.get("/network-allowlist")
+async def get_network_allowlist():
+    """Return current network allowlist config."""
+    try:
+        data = _load_allowlist()
+        return {
+            "domains": data.get("domains", []),
+            "path": ALLOWLIST_PATH,
+        }
+    except Exception as exc:
+        logger.error("get_network_allowlist error: %s", exc)
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+@router.put("/network-allowlist")
+async def update_network_allowlist(body: AllowlistUpdate):
+    """Update the network allowlist domains."""
+    try:
+        data = _load_allowlist()
+        # Clean and deduplicate domains
+        clean = sorted(set(d.strip().lower() for d in body.domains if d.strip()))
+        data["domains"] = clean
+        _save_allowlist(data)
+        logger.info("Network allowlist updated: %d domains", len(clean))
+        return {"domains": clean, "count": len(clean)}
+    except Exception as exc:
+        logger.error("update_network_allowlist error: %s", exc)
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+# ── Flag Toggle/Set Routes ───────────────────────────────────────────
 
 @router.post("/{name}/toggle")
 async def toggle_flag(name: str):

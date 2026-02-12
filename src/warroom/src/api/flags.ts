@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from './client'
+import { apiGet, apiPost, apiPut } from './client'
 
 export interface FlagInfo {
   enabled: boolean
@@ -8,6 +8,7 @@ export interface FlagInfo {
   requires: string[]
   conflicts: string[]
   warning: string
+  has_editor?: string
 }
 
 export interface FlagsResponse {
@@ -21,5 +22,13 @@ export interface ToggleFlagResponse {
   message: string
 }
 
+export interface AllowlistResponse {
+  domains: string[]
+  path?: string
+}
+
 export const fetchFlags = () => apiGet<FlagsResponse>('/api/flags')
 export const toggleFlag = (name: string) => apiPost<ToggleFlagResponse>(`/api/flags/${name}/toggle`)
+export const fetchNetworkAllowlist = () => apiGet<AllowlistResponse>('/api/flags/network-allowlist')
+export const updateNetworkAllowlist = (domains: string[]) =>
+  apiPut<AllowlistResponse>('/api/flags/network-allowlist', { domains })

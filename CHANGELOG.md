@@ -2,6 +2,31 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.0.3] - 2026-02-12
+
+### Added
+- **Network Allowlist Editor:** Inline domain editor in Kill Switches page under FEATURE_NETWORK_ALLOWLIST.
+  Loads/saves `config/network_allowlist.yaml` via new API endpoints. One domain per line, exact match,
+  comment support, save button with dirty detection
+- **Allowlist API:** `GET /api/flags/network-allowlist` and `PUT /api/flags/network-allowlist` for
+  reading/updating the global default domain allowlist
+- **Default allowlist config:** `config/network_allowlist.yaml` with 6 default domains
+  (GitHub, Anthropic, Google AI, Telegram)
+- **apiPut** HTTP method added to the API client layer
+
+### Fixed
+- **False conflict removed:** FEATURE_TOOLS_NETWORK no longer shows conflict with FEATURE_NETWORK_ALLOWLIST.
+  These flags are complementary — TOOLS_NETWORK enables sandbox network access while NETWORK_ALLOWLIST
+  restricts it to safe domains
+- **Route ordering:** Allowlist routes registered before `/{name}/*` pattern routes to prevent
+  FastAPI parameter capture
+
+### Changed
+- FEATURE_NETWORK_ALLOWLIST description updated to reference the inline editor
+- FEATURE_TOOLS_NETWORK warning updated to recommend enabling allowlist alongside it
+
+---
+
 ## [8.0.2] - 2026-02-12
 
 ### Added

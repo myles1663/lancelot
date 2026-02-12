@@ -1,12 +1,92 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { usePolling } from '@/hooks'
 import { fetchSystemStatus, fetchFlags, toggleFlag } from '@/api'
+import { fetchNetworkAllowlist, updateNetworkAllowlist } from '@/api/flags'
 import { StatusDot, ConfirmDialog } from '@/components'
 import type { FlagInfo } from '@/api/flags'
 
 // Category display order
 const CATEGORY_ORDER = ['Core Subsystem', 'Tool Fabric', 'Runtime', 'Governance', 'Capabilities', 'Intelligence', 'Other']
 
+// ── Inline Allowlist Editor ─────────────────────────────────────────
+function AllowlistEditor() {
+  const [domains, setDomains] = useState<string[]>([])
+  const [draft, setDraft] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState(false)
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetchNetworkAllowlist()
+      setDomains(res.domains)
+      setDraft(res.domains.join('\n'))
+      setLoaded(true)
+    } catch {
+      setError('Failed to load allowlist')
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const handleSave = async () => {
+    setSaving(true)
+    setError(null)
+    setSuccess(false)
+    try {
+      const lines = draft
+        .split('\n')
+        .map(l => l.trim())
+        .filter(l => l && !l.startsWith('#'))
+      const res = await updateNetworkAllowlist(lines)
+      setDomains(res.domains)
+      setDraft(res.domains.join('\n'))
+      setSuccess(true)
+      setTimeout(() => setSuccess(false), 3000)
+    } catch {
+      setError('Failed to save allowlist')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const hasChanges = loaded && draft.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#')).sort().join(',') !== [...domains].sort().join(',')
+
+  return (
+    <div className="mt-2 p-3 bg-surface-card rounded-lg border border-border-default">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Allowed Domains</span>
+        <span className="text-[10px] text-text-muted">{domains.length} domain{domains.length !== 1 ? 's' : ''}</span>
+      </div>
+      <textarea
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        placeholder="api.github.com&#10;api.anthropic.com&#10;..."
+        rows={6}
+        className="w-full bg-surface-input border border-border-default rounded px-2 py-1.5 text-xs font-mono text-text-primary placeholder:text-text-muted/50 focus:outline-none focus:border-accent-primary resize-y"
+      />
+      <p className="text-[10px] text-text-muted mt-1 mb-2">One domain per line. Exact match only — no wildcards. Lines starting with # are ignored.</p>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={handleSave}
+          disabled={saving || !hasChanges}
+          className={`px-3 py-1 text-[11px] font-medium rounded transition-colors ${
+            hasChanges
+              ? 'bg-accent-primary text-white hover:bg-accent-primary/80'
+              : 'bg-surface-input text-text-muted cursor-not-allowed'
+          }`}
+        >
+          {saving ? 'Saving...' : 'Save Allowlist'}
+        </button>
+        {success && <span className="text-[10px] text-state-healthy">Saved</span>}
+        {error && <span className="text-[10px] text-state-error">{error}</span>}
+      </div>
+    </div>
+  )
+}
+
+// ── Main Kill Switches Page ─────────────────────────────────────────
 export function KillSwitches() {
   const { data } = usePolling({ fetcher: fetchSystemStatus, interval: 10000 })
   const { data: flagsData, refetch: refetchFlags } = usePolling({ fetcher: fetchFlags, interval: 10000 })
@@ -199,6 +279,9 @@ export function KillSwitches() {
                           </div>
                         </div>
                       )}
+
+                      {/* Inline editor for flags with has_editor */}
+                      {info.has_editor === 'network_allowlist' && <AllowlistEditor />}
                     </div>
                   )}
                 </div>
