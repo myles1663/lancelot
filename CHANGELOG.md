@@ -2,6 +2,41 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.1.0] - 2026-02-12
+
+### Added
+- **Connector Expansion — 6 New Connectors:** Lancelot now supports 8 communication connectors
+  covering every major enterprise and consumer channel:
+  - **TeamsConnector** (10 operations): Microsoft Teams via Graph API v1.0 — list teams/channels,
+    read/post channel messages, read/send chat messages, reply, delete
+  - **DiscordConnector** (9 operations): Discord via REST API v10 — list guilds/channels,
+    read/post/edit/delete messages, add/remove reactions. Includes rate limit group metadata
+  - **WhatsAppConnector** (8 operations): WhatsApp Business via Meta Cloud API — send text/template/
+    media/interactive messages, mark read, get/upload media, get business profile. Template message
+    support with language codes and component parameters
+  - **SMSConnector** (6 operations): Twilio REST API — send SMS/MMS, get/list/delete messages,
+    get media. Supports both From number and MessagingServiceSid routing
+  - **Email Outlook Backend:** EmailConnector now supports `backend="outlook"` via Microsoft Graph
+    API — same 7 operations as Gmail with Outlook-specific URLs and `$search` OData queries
+  - **Email SMTP/IMAP Backend:** EmailConnector now supports `backend="smtp"` for direct SMTP/IMAP
+    using Python stdlib only — produces `protocol://` URL markers for ProtocolAdapter routing
+- **ProtocolAdapter:** New SMTP/IMAP translation layer (`src/connectors/protocol_adapter.py`) that
+  executes `protocol://smtp` and `protocol://imap` ConnectorResults using Python's `smtplib` and
+  `imaplib`. Zero external dependencies. Supports send, reply, list, fetch, search, delete, move
+- **Bot Token Auth:** ConnectorProxy now supports `bot_token` credential type for Discord
+  (`Authorization: Bot {token}`)
+- **Form-Encoded Body Support:** ConnectorProxy detects `Content-Type: application/x-www-form-urlencoded`
+  and sends body as `data=` instead of `json=` (required for Twilio)
+- **Protocol Routing:** ConnectorProxy routes `protocol://` URLs to ProtocolAdapter instead of HTTP,
+  incrementing request count for audit consistency
+- **232 connector tests** across 10 test files covering manifests, operations, execution, auth types,
+  form encoding, protocol routing, credential propagation, and cross-connector integration
+
+### Changed
+- **connectors.yaml** bumped to version 2.0 with entries for teams, discord, whatsapp, and sms
+  connectors including per-connector rate limits
+- **ConnectorProxy** docstring updated to document all 4 auth types and 3 body encodings
+
 ## [8.0.5] - 2026-02-12
 
 ### Added

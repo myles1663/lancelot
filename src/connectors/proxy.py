@@ -5,6 +5,18 @@ ConnectorProxy is the ONLY component that makes outbound HTTP requests
 for connectors. It validates domains against manifests, injects credentials
 from the vault, enforces rate limits, and uses a pooled requests.Session.
 
+Supports four credential types:
+- oauth_token / bearer → ``Authorization: Bearer {token}``
+- api_key → ``X-API-Key: {value}``
+- basic_auth → ``Authorization: Basic {base64}``
+- bot_token → ``Authorization: Bot {token}`` (Discord)
+
+Supports three body encodings:
+- JSON (default) → ``json={body}``
+- Form-encoded → ``data={body}`` when Content-Type is
+  ``application/x-www-form-urlencoded``
+- Protocol → routed to ProtocolAdapter for SMTP/IMAP
+
 All execution is SYNCHRONOUS (requests library, not aiohttp).
 """
 
@@ -18,6 +30,7 @@ from urllib.parse import urlparse
 import requests
 
 from src.connectors.models import ConnectorResponse, ConnectorResult, HTTPMethod
+from src.connectors.protocol_adapter import ProtocolAdapter
 from src.connectors.rate_limiter import RateLimiterRegistry
 from src.connectors.registry import ConnectorRegistry
 from src.connectors.vault import CredentialVault
@@ -60,10 +73,12 @@ class ConnectorProxy:
         registry: ConnectorRegistry,
         vault: CredentialVault,
         rate_limiter_registry: Optional[RateLimiterRegistry] = None,
+        protocol_adapter: Optional[ProtocolAdapter] = None,
     ) -> None:
         self._registry = registry
         self._vault = vault
         self._rate_limiter = rate_limiter_registry
+        self._protocol_adapter = protocol_adapter or ProtocolAdapter()
         self._session = requests.Session()
         self._request_count = 0
 
@@ -102,7 +117,12 @@ class ConnectorProxy:
                 error="Rate limited",
             )
 
-        # 3. Domain validation
+        # 3. Protocol routing — SMTP/IMAP bypass HTTP entirely
+        if result.url.startswith("protocol://"):
+            self._request_count += 1
+            return self._protocol_adapter.execute(result)
+
+        # 4. Domain validation
         if not DomainValidator.is_domain_allowed(result.url, manifest.target_domains):
             domain = DomainValidator.extract_domain(result.url)
             return ConnectorResponse(
@@ -116,7 +136,7 @@ class ConnectorProxy:
                 ),
             )
 
-        # 4. Credential injection
+        # 5. Credential injection
         headers = dict(result.headers)
         if result.credential_vault_key:
             try:
@@ -134,6 +154,8 @@ class ConnectorProxy:
                     headers["X-API-Key"] = cred_value
                 elif cred_type == "basic_auth":
                     headers["Authorization"] = f"Basic {cred_value}"
+                elif cred_type == "bot_token":
+                    headers["Authorization"] = f"Bot {cred_value}"
                 else:
                     headers["Authorization"] = f"Bearer {cred_value}"
             except (KeyError, PermissionError) as e:
@@ -145,7 +167,7 @@ class ConnectorProxy:
                     error=f"Credential error: {e}",
                 )
 
-        # 5. Make HTTP request
+        # 6. Make HTTP request
         status_code, resp_headers, resp_body, elapsed_ms = self._make_request(
             method=result.method.value,
             url=result.url,
@@ -155,7 +177,7 @@ class ConnectorProxy:
         )
         self._request_count += 1
 
-        # 6. Build response
+        # 7. Build response
         success = status_code > 0 and status_code < 400
         return ConnectorResponse(
             operation_id=result.operation_id,
@@ -190,7 +212,11 @@ class ConnectorProxy:
                 "timeout": timeout,
             }
             if body is not None:
-                kwargs["json"] = body
+                # Form-encoded bodies (e.g. Twilio) use data=, not json=
+                if headers.get("Content-Type") == "application/x-www-form-urlencoded":
+                    kwargs["data"] = body
+                else:
+                    kwargs["json"] = body
 
             resp = self._session.request(**kwargs)
             elapsed_ms = (time.time() - start) * 1000
