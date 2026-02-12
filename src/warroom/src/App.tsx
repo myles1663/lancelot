@@ -7,6 +7,12 @@ import {
   TrustLedger,
   AplPanel,
   ReceiptExplorer,
+  ToolFabric,
+  MemoryPanel,
+  SchedulerPanel,
+  SetupRecovery,
+  CostTracker,
+  KillSwitches,
   PlaceholderPage,
 } from '@/pages'
 
@@ -25,17 +31,17 @@ function App() {
 
         {/* OPERATIONS */}
         <Route path="/receipts" element={<ReceiptExplorer />} />
-        <Route path="/tools" element={<PlaceholderPage title="Tool Fabric" />} />
-        <Route path="/memory" element={<PlaceholderPage title="Memory" />} />
-        <Route path="/scheduler" element={<PlaceholderPage title="Scheduler" />} />
+        <Route path="/tools" element={<ToolFabric />} />
+        <Route path="/memory" element={<MemoryPanel />} />
+        <Route path="/scheduler" element={<SchedulerPanel />} />
 
         {/* SYSTEM */}
-        <Route path="/setup" element={<PlaceholderPage title="Setup & Recovery" />} />
-        <Route path="/costs" element={<PlaceholderPage title="Cost Tracker" />} />
-        <Route path="/flags" element={<PlaceholderPage title="Kill Switches" />} />
+        <Route path="/setup" element={<SetupRecovery />} />
+        <Route path="/costs" element={<CostTracker />} />
+        <Route path="/flags" element={<KillSwitches />} />
 
         {/* BUSINESS */}
-        <Route path="/business" element={<PlaceholderPage title="Business Dashboard" />} />
+        <Route path="/business" element={<PlaceholderPage title="Business Dashboard" description="Business Dashboard will be available when BAL (Business Automation Layer) is configured." />} />
 
         {/* Default redirect */}
         <Route path="/" element={<Navigate to="/command" replace />} />
