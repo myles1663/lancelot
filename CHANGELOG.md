@@ -2,6 +2,28 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.0.2] - 2026-02-12
+
+### Added
+- **Kill Switches — Expandable flag details:** Each feature flag now has click-to-expand rows showing
+  full description, warning box, dependency status badges (met/unmet with checkmark/X), and conflict
+  indicators. Flags grouped by category (Core Subsystem, Tool Fabric, Runtime, Governance,
+  Capabilities, Intelligence) with sorted display order
+- **Kill Switches — Toggle switches:** Interactive toggle buttons for all feature flags with
+  confirmation dialog for restart-required flags, restart banner notification, loading states
+- **FLAG_META registry:** Comprehensive metadata for all 26 feature flags in `flags_api.py` —
+  descriptions, categories, dependency lists, conflict lists, and safety warnings
+- **Flags API — toggle endpoint:** `POST /api/flags/{name}/toggle` and `POST /api/flags/{name}/set`
+  for runtime flag manipulation
+- **feature_flags.py — runtime toggle:** `toggle_flag()`, `set_flag()`, and `RESTART_REQUIRED_FLAGS`
+  for safe runtime flag changes with env var sync
+
+### Changed
+- Flags API response now includes description, category, requires, conflicts, and warning metadata
+- FlagInfo TypeScript interface updated with all metadata fields
+
+---
+
 ## [8.0.1] - 2026-02-12
 
 ### Fixed

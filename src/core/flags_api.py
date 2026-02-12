@@ -1,8 +1,8 @@
 """
 Flags API — /api/flags
 
-Exposes current feature flag values and allows runtime toggling
-for the War Room Kill Switches page.
+Exposes current feature flag values, descriptions, dependency info,
+and allows runtime toggling for the War Room Kill Switches page.
 """
 
 import logging
@@ -14,10 +14,209 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/flags", tags=["flags"])
 
+# ── Flag Metadata Registry ───────────────────────────────────────────
+# Each entry: description, category, dependencies, conflicts, warnings
+
+FLAG_META = {
+    # ── Core Subsystems (restart required) ────────────────────────
+    "FEATURE_SOUL": {
+        "description": "Constitutional identity system. Loads soul.yaml with versioned governance rules, amendment workflows, and invariant checks that constrain all agent behavior.",
+        "category": "Core Subsystem",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Disabling removes all constitutional constraints. The agent will operate without governance rules or identity invariants.",
+    },
+    "FEATURE_SKILLS": {
+        "description": "Modular capability system. Manages skill registry, ownership tracking, and the factory pipeline for creating new skills. Required for tool execution and scheduled jobs.",
+        "category": "Core Subsystem",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Disabling breaks tool execution and scheduled job dispatch. SCHEDULER depends on this for running jobs.",
+    },
+    "FEATURE_HEALTH_MONITOR": {
+        "description": "Background health monitoring with liveness/readiness probes. Runs periodic checks on all components and exposes /health/live and /health/ready endpoints.",
+        "category": "Core Subsystem",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Disabling removes /health/live and /health/ready endpoints. The VitalsBar will show partial data.",
+    },
+    "FEATURE_SCHEDULER": {
+        "description": "Cron and interval-based job scheduling. Reads jobs from scheduler.yaml and executes them via the skill executor on configured schedules.",
+        "category": "Core Subsystem",
+        "requires": ["FEATURE_SKILLS"],
+        "conflicts": [],
+        "warning": "Requires SKILLS to be enabled for job execution. Without SKILLS, jobs will be registered but cannot run.",
+    },
+    "FEATURE_MEMORY_VNEXT": {
+        "description": "Tiered memory system (vNext3). Provides 5 core blocks (persona, human, mission, operating_rules, workspace_state), working/episodic/archival storage, context compiler, governed self-edits, and full-text search.",
+        "category": "Core Subsystem",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Disabling reverts to basic file-based context loading. The Memory tab in War Room will show 'disabled'. No governed self-edits or tiered storage.",
+    },
+
+    # ── Tool Fabric ───────────────────────────────────────────────
+    "FEATURE_TOOLS_FABRIC": {
+        "description": "Global enable for the provider-agnostic tool execution layer. Controls the ToolFabric orchestrator, policy engine, and all tool providers.",
+        "category": "Tool Fabric",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Disabling shuts down all tool providers (local_sandbox, ui_templates). No sandboxed code execution or file operations via Tool Fabric.",
+    },
+    "FEATURE_TOOLS_CLI_PROVIDERS": {
+        "description": "Optional CLI adapter providers for Tool Fabric. Adds shell-based tool providers that wrap command-line tools as capabilities.",
+        "category": "Tool Fabric",
+        "requires": ["FEATURE_TOOLS_FABRIC"],
+        "conflicts": [],
+        "warning": "Requires TOOLS_FABRIC. Adds additional attack surface through CLI adapters.",
+    },
+    "FEATURE_TOOLS_ANTIGRAVITY": {
+        "description": "Antigravity UI providers — generative UI scaffolding and vision-based UI control. Enables AntigravityUIProvider and AntigravityVisionProvider.",
+        "category": "Tool Fabric",
+        "requires": ["FEATURE_TOOLS_FABRIC"],
+        "conflicts": [],
+        "warning": "Requires TOOLS_FABRIC. Needs a running browser instance (Playwright). Increases resource usage.",
+    },
+    "FEATURE_TOOLS_NETWORK": {
+        "description": "Allows network access from within the Docker sandbox during tool execution. By default, sandboxed code runs with no network.",
+        "category": "Tool Fabric",
+        "requires": ["FEATURE_TOOLS_FABRIC"],
+        "conflicts": ["FEATURE_NETWORK_ALLOWLIST"],
+        "warning": "Security risk: sandboxed code can make outbound network requests. Consider enabling NETWORK_ALLOWLIST to restrict allowed domains.",
+    },
+    "FEATURE_TOOLS_HOST_EXECUTION": {
+        "description": "DANGEROUS: Allows tool execution directly on the host machine instead of inside the Docker sandbox. Bypasses container isolation entirely.",
+        "category": "Tool Fabric",
+        "requires": ["FEATURE_TOOLS_FABRIC"],
+        "conflicts": [],
+        "warning": "CRITICAL SECURITY RISK. Enables arbitrary command execution on the host OS. Only enable for trusted development environments. Never in production.",
+    },
+
+    # ── Execution & Runtime ───────────────────────────────────────
+    "FEATURE_RESPONSE_ASSEMBLER": {
+        "description": "Response assembly pipeline. Processes raw LLM output through formatting, citation injection, and artifact extraction before returning to the user.",
+        "category": "Runtime",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Disabling returns raw LLM output without post-processing. Artifacts and structured formatting will not be extracted.",
+    },
+    "FEATURE_EXECUTION_TOKENS": {
+        "description": "Execution token system. Generates time-limited, permission-scoped tokens for tool execution. Provides fine-grained authorization control.",
+        "category": "Runtime",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Disabling removes token-based authorization for tool calls. Tools will execute with ambient permissions only.",
+    },
+    "FEATURE_TASK_GRAPH_EXECUTION": {
+        "description": "Task graph execution engine. Enables multi-step task planning with dependency tracking, parallel execution, and progress monitoring.",
+        "category": "Runtime",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Disabling falls back to sequential single-step execution. Complex multi-step tasks will not be decomposed.",
+    },
+    "FEATURE_NETWORK_ALLOWLIST": {
+        "description": "Network allowlist enforcement. Restricts outbound HTTP requests to a configured list of allowed domains. Defense-in-depth for network access.",
+        "category": "Runtime",
+        "requires": [],
+        "conflicts": [],
+        "warning": "When enabled, only allowlisted domains can be reached. If TOOLS_NETWORK is also enabled, this restricts sandbox network access to safe domains.",
+    },
+    "FEATURE_VOICE_NOTES": {
+        "description": "Voice note processing. Enables audio file uploads to be transcribed and processed as text input using the local model.",
+        "category": "Runtime",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Requires a working local model for transcription. No conflicts.",
+    },
+    "FEATURE_AGENTIC_LOOP": {
+        "description": "Multi-step autonomous execution loop. Allows the agent to chain multiple tool calls and reasoning steps without waiting for user input between each step.",
+        "category": "Runtime",
+        "requires": ["FEATURE_SKILLS"],
+        "conflicts": [],
+        "warning": "Increases autonomy — the agent can take multiple actions in sequence. Monitor via receipts. Requires SKILLS for tool execution.",
+    },
+    "FEATURE_LOCAL_AGENTIC": {
+        "description": "Use the local LLM (llama.cpp) for agentic reasoning steps instead of the flagship model. Reduces API costs but may lower quality for complex reasoning.",
+        "category": "Runtime",
+        "requires": ["FEATURE_AGENTIC_LOOP"],
+        "conflicts": [],
+        "warning": "Requires AGENTIC_LOOP. Local model quality is lower — only suitable for simple agentic tasks. Complex plans should use flagship.",
+    },
+
+    # ── Governance (vNext4) ───────────────────────────────────────
+    "FEATURE_RISK_TIERED_GOVERNANCE": {
+        "description": "Master switch for risk-tiered governance. Enables 4-tier risk classification (T0-T3) with escalating approval requirements per tier.",
+        "category": "Governance",
+        "requires": ["FEATURE_SOUL"],
+        "conflicts": [],
+        "warning": "Requires SOUL for governance rules. Enabling adds overhead to every action (risk classification step). All other governance flags depend on this.",
+    },
+    "FEATURE_POLICY_CACHE": {
+        "description": "Boot-time policy compilation. Pre-compiles governance policies into a cache at startup for faster runtime evaluation.",
+        "category": "Governance",
+        "requires": ["FEATURE_RISK_TIERED_GOVERNANCE"],
+        "conflicts": [],
+        "warning": "Requires RISK_TIERED_GOVERNANCE. Increases startup time but improves runtime policy evaluation speed.",
+    },
+    "FEATURE_ASYNC_VERIFICATION": {
+        "description": "Asynchronous verification for Tier 1 actions. Allows low-risk actions to proceed immediately while verification runs in the background.",
+        "category": "Governance",
+        "requires": ["FEATURE_RISK_TIERED_GOVERNANCE"],
+        "conflicts": [],
+        "warning": "Requires RISK_TIERED_GOVERNANCE. T1 actions execute before verification completes — rollback may be needed if verification fails.",
+    },
+    "FEATURE_INTENT_TEMPLATES": {
+        "description": "Cached plan templates. Stores and reuses verified execution plans for common intents, reducing re-planning overhead.",
+        "category": "Governance",
+        "requires": ["FEATURE_RISK_TIERED_GOVERNANCE"],
+        "conflicts": [],
+        "warning": "Requires RISK_TIERED_GOVERNANCE. Templates may become stale if governance rules change — clear cache after soul amendments.",
+    },
+    "FEATURE_BATCH_RECEIPTS": {
+        "description": "Batched receipt emission. Buffers action receipts and writes them in batches instead of one-at-a-time, reducing I/O overhead.",
+        "category": "Governance",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Receipts may be delayed or lost if the process crashes before a batch flush. Trade-off: performance vs auditability.",
+    },
+
+    # ── Capability Upgrades ───────────────────────────────────────
+    "FEATURE_CONNECTORS": {
+        "description": "External connector system. Enables integration with third-party services (APIs, databases, SaaS platforms) through a standardized connector interface.",
+        "category": "Capabilities",
+        "requires": ["FEATURE_TOOLS_FABRIC"],
+        "conflicts": [],
+        "warning": "Requires TOOLS_FABRIC. Each connector adds external dependencies and potential failure points. Audit connectors before enabling.",
+    },
+    "FEATURE_TRUST_LEDGER": {
+        "description": "Progressive trust relaxation. Tracks per-capability trust scores that increase with successful execution, allowing tier requirements to relax over time.",
+        "category": "Capabilities",
+        "requires": ["FEATURE_RISK_TIERED_GOVERNANCE"],
+        "conflicts": [],
+        "warning": "Requires RISK_TIERED_GOVERNANCE. Trust scores accumulate — a capability that earns trust may eventually bypass approval. Review graduation proposals.",
+    },
+    "FEATURE_SKILL_SECURITY_PIPELINE": {
+        "description": "6-stage skill security pipeline. Adds code scanning, manifest validation, sandbox testing, ownership verification, approval, and audit for new skills.",
+        "category": "Capabilities",
+        "requires": ["FEATURE_SKILLS"],
+        "conflicts": [],
+        "warning": "Requires SKILLS. Adds latency to skill registration (each stage runs sequentially). Recommended for production.",
+    },
+
+    # ── Approval Pattern Learning ─────────────────────────────────
+    "FEATURE_APPROVAL_LEARNING": {
+        "description": "Approval Pattern Learning (APL). Learns from owner approval/denial decisions to auto-approve routine actions matching established patterns. Reduces approval fatigue.",
+        "category": "Intelligence",
+        "requires": ["FEATURE_RISK_TIERED_GOVERNANCE"],
+        "conflicts": [],
+        "warning": "Requires RISK_TIERED_GOVERNANCE. The system will auto-approve actions matching learned patterns. Review APL rules regularly — incorrect patterns can bypass intended oversight.",
+    },
+}
+
 
 @router.get("")
 async def get_flags():
-    """Return all feature flag values and metadata."""
+    """Return all feature flag values with descriptions and metadata."""
     try:
         import feature_flags as ff
         flags = {}
@@ -26,9 +225,15 @@ async def get_flags():
             if attr.startswith("FEATURE_"):
                 val = getattr(ff, attr, None)
                 if isinstance(val, bool):
+                    meta = FLAG_META.get(attr, {})
                     flags[attr] = {
                         "enabled": val,
                         "restart_required": attr in ff.RESTART_REQUIRED_FLAGS,
+                        "description": meta.get("description", ""),
+                        "category": meta.get("category", "Other"),
+                        "requires": meta.get("requires", []),
+                        "conflicts": meta.get("conflicts", []),
+                        "warning": meta.get("warning", ""),
                     }
 
         return {"flags": flags}

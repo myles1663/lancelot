@@ -4,21 +4,45 @@ import { fetchSystemStatus, fetchFlags, toggleFlag } from '@/api'
 import { StatusDot, ConfirmDialog } from '@/components'
 import type { FlagInfo } from '@/api/flags'
 
+// Category display order
+const CATEGORY_ORDER = ['Core Subsystem', 'Tool Fabric', 'Runtime', 'Governance', 'Capabilities', 'Intelligence', 'Other']
+
 export function KillSwitches() {
   const { data } = usePolling({ fetcher: fetchSystemStatus, interval: 10000 })
   const { data: flagsData, refetch: refetchFlags } = usePolling({ fetcher: fetchFlags, interval: 10000 })
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [pendingToggle, setPendingToggle] = useState<string | null>(null)
   const [restartBanner, setRestartBanner] = useState<string | null>(null)
   const [toggling, setToggling] = useState<string | null>(null)
 
   const flags = flagsData?.flags ?? {}
 
-  const handleToggle = async (name: string, info: FlagInfo) => {
+  // Group flags by category
+  const grouped: Record<string, [string, FlagInfo][]> = {}
+  for (const [name, info] of Object.entries(flags)) {
+    const cat = info.category || 'Other'
+    if (!grouped[cat]) grouped[cat] = []
+    grouped[cat].push([name, info])
+  }
+
+  const sortedCategories = CATEGORY_ORDER.filter(c => grouped[c]?.length)
+
+  const toggleExpand = (name: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  }
+
+  const handleToggle = (e: React.MouseEvent, name: string, info: FlagInfo) => {
+    e.stopPropagation()
     if (info.restart_required) {
       setPendingToggle(name)
       return
     }
-    await doToggle(name)
+    doToggle(name)
   }
 
   const doToggle = async (name: string) => {
@@ -37,6 +61,10 @@ export function KillSwitches() {
     }
   }
 
+  // Check if a flag's dependencies are met
+  const depsUnmet = (info: FlagInfo): string[] =>
+    info.requires.filter(dep => !flags[dep]?.enabled)
+
   return (
     <div>
       <h2 className="text-lg font-semibold text-text-primary mb-6">Kill Switches</h2>
@@ -44,19 +72,15 @@ export function KillSwitches() {
       {restartBanner && (
         <div className="mb-4 p-3 bg-state-degraded/10 border border-state-degraded/30 rounded-lg flex items-center justify-between">
           <span className="text-sm text-state-degraded">{restartBanner}</span>
-          <button
-            onClick={() => setRestartBanner(null)}
-            className="text-xs text-text-muted hover:text-text-primary ml-4"
-          >
+          <button onClick={() => setRestartBanner(null)} className="text-xs text-text-muted hover:text-text-primary ml-4">
             Dismiss
           </button>
         </div>
       )}
 
+      {/* System State */}
       <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
-        <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-          System State
-        </h3>
+        <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">System State</h3>
         {!data ? (
           <p className="text-sm text-text-muted">Loading...</p>
         ) : (
@@ -80,44 +104,109 @@ export function KillSwitches() {
         )}
       </section>
 
-      <section className="bg-surface-card border border-border-default rounded-lg p-4">
-        <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-          Feature Flags
-        </h3>
-        {Object.keys(flags).length === 0 ? (
-          <p className="text-sm text-text-muted">Loading flags...</p>
-        ) : (
-          <div className="space-y-2">
-            {Object.entries(flags).map(([flag, info]) => (
-              <div key={flag} className="flex items-center justify-between p-3 bg-surface-card-elevated rounded-md">
-                <div className="flex items-center gap-3 min-w-0">
-                  <span className="text-xs font-mono text-text-primary truncate">{flag}</span>
-                  {info.restart_required && (
-                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-state-degraded/15 text-state-degraded whitespace-nowrap">
-                      restart
-                    </span>
+      {/* Feature Flags grouped by category */}
+      {sortedCategories.map(category => (
+        <section key={category} className="bg-surface-card border border-border-default rounded-lg p-4 mb-4">
+          <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">{category}</h3>
+          <div className="space-y-1">
+            {(grouped[category] ?? []).map(([name, info]) => {
+              const isExpanded = expanded.has(name)
+              const unmet = depsUnmet(info)
+              const hasConflict = info.conflicts.some(c => flags[c]?.enabled)
+
+              return (
+                <div key={name} className="bg-surface-card-elevated rounded-md border border-border-default overflow-hidden">
+                  {/* Flag row */}
+                  <div
+                    className="flex items-center justify-between p-3 cursor-pointer hover:bg-surface-input/50 transition-colors"
+                    onClick={() => toggleExpand(name)}
+                  >
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <span className={`text-[10px] transition-transform ${isExpanded ? 'rotate-90' : ''}`}>&#9654;</span>
+                      <span className="text-xs font-mono text-text-primary truncate">{name}</span>
+                      {info.restart_required && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent-primary/15 text-accent-primary whitespace-nowrap">restart</span>
+                      )}
+                      {unmet.length > 0 && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-state-degraded/15 text-state-degraded whitespace-nowrap">deps unmet</span>
+                      )}
+                      {hasConflict && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-state-error/15 text-state-error whitespace-nowrap">conflict</span>
+                      )}
+                    </div>
+                    <button
+                      onClick={(e) => handleToggle(e, name, info)}
+                      disabled={toggling === name}
+                      className={`relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0 ml-3 ${
+                        info.enabled ? 'bg-state-healthy' : 'bg-surface-input border border-border-default'
+                      } ${toggling === name ? 'opacity-50' : 'cursor-pointer'}`}
+                    >
+                      <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 ${
+                        info.enabled ? 'translate-x-5' : 'translate-x-0'
+                      }`} />
+                    </button>
+                  </div>
+
+                  {/* Expanded details */}
+                  {isExpanded && (
+                    <div className="px-3 pb-3 pt-0 border-t border-border-default/50 space-y-2">
+                      {/* Description */}
+                      <p className="text-xs text-text-secondary leading-relaxed mt-2">{info.description}</p>
+
+                      {/* Warning */}
+                      {info.warning && (
+                        <div className="p-2 rounded bg-state-degraded/8 border border-state-degraded/20">
+                          <p className="text-[11px] text-state-degraded leading-relaxed">
+                            <span className="font-semibold">Warning:</span> {info.warning}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Dependencies */}
+                      {info.requires.length > 0 && (
+                        <div className="flex items-start gap-2">
+                          <span className="text-[10px] text-text-muted uppercase tracking-wider pt-0.5 whitespace-nowrap">Requires:</span>
+                          <div className="flex flex-wrap gap-1">
+                            {info.requires.map(dep => {
+                              const met = flags[dep]?.enabled
+                              return (
+                                <span key={dep} className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                                  met ? 'bg-state-healthy/15 text-state-healthy' : 'bg-state-error/15 text-state-error'
+                                }`}>
+                                  {dep.replace('FEATURE_', '')} {met ? '\u2713' : '\u2717'}
+                                </span>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Conflicts */}
+                      {info.conflicts.length > 0 && (
+                        <div className="flex items-start gap-2">
+                          <span className="text-[10px] text-text-muted uppercase tracking-wider pt-0.5 whitespace-nowrap">Conflicts:</span>
+                          <div className="flex flex-wrap gap-1">
+                            {info.conflicts.map(c => {
+                              const active = flags[c]?.enabled
+                              return (
+                                <span key={c} className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                                  active ? 'bg-state-error/15 text-state-error' : 'bg-surface-input text-text-muted'
+                                }`}>
+                                  {c.replace('FEATURE_', '')} {active ? '(active!)' : '(off)'}
+                                </span>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
-                <button
-                  onClick={() => handleToggle(flag, info)}
-                  disabled={toggling === flag}
-                  className={`relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0 ml-3 ${
-                    info.enabled
-                      ? 'bg-state-healthy'
-                      : 'bg-surface-input border border-border-default'
-                  } ${toggling === flag ? 'opacity-50' : 'cursor-pointer'}`}
-                >
-                  <span
-                    className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 ${
-                      info.enabled ? 'translate-x-5' : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-              </div>
-            ))}
+              )
+            })}
           </div>
-        )}
-      </section>
+        </section>
+      ))}
 
       <ConfirmDialog
         open={pendingToggle !== null}

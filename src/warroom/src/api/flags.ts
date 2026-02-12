@@ -3,6 +3,11 @@ import { apiGet, apiPost } from './client'
 export interface FlagInfo {
   enabled: boolean
   restart_required: boolean
+  description: string
+  category: string
+  requires: string[]
+  conflicts: string[]
+  warning: string
 }
 
 export interface FlagsResponse {
