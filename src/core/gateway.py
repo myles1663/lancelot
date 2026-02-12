@@ -1,6 +1,9 @@
+from pathlib import Path
+
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, File, UploadFile, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from onboarding import OnboardingOrchestrator
 from orchestrator import LancelotOrchestrator
@@ -68,7 +71,7 @@ class RateLimiter:
 app = FastAPI()
 
 # S11: CORS middleware
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:8501").split(",")
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:8501,http://localhost:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -885,3 +888,26 @@ async def ucp_confirm(request: Request):
         return {"result": result, "request_id": request_id}
     except Exception as e:
         return error_response(500, "Internal server error", request_id=request_id)
+
+
+# --- War Room React SPA Static Mount ---
+
+_warroom_dist = Path(__file__).resolve().parent.parent / "warroom" / "dist"
+
+if _warroom_dist.is_dir():
+    @app.get("/war-room/{full_path:path}")
+    async def warroom_spa(full_path: str):
+        """Serve War Room SPA — serve static files or fall back to index.html for client-side routing."""
+        file_path = _warroom_dist / full_path
+        if full_path and file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(_warroom_dist / "index.html")
+
+    @app.get("/war-room")
+    async def warroom_root():
+        """Redirect /war-room to /war-room/."""
+        return FileResponse(_warroom_dist / "index.html")
+
+    logger.info("War Room SPA mounted at /war-room/ from %s", _warroom_dist)
+else:
+    logger.info("War Room SPA not found at %s — skipping mount", _warroom_dist)

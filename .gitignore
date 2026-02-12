@@ -62,3 +62,7 @@ local_models/weights/
 # Test outputs
 .coverage
 htmlcov/
+
+# War Room React SPA
+src/warroom/node_modules/
+src/warroom/dist/

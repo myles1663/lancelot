@@ -14,16 +14,19 @@ WORKDIR /home/lancelot/app
 # Install system dependencies
 # build-essential for compiling some python extensions
 # docker-cli so the sandbox provider can spawn sibling containers
+# Node.js 20 for building the War Room React SPA
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     gnupg \
+    ca-certificates \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
     && chmod a+r /etc/apt/keyrings/docker.asc \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get update \
-    && apt-get install -y --no-install-recommends docker-ce-cli \
+    && apt-get install -y --no-install-recommends docker-ce-cli nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements.txt first to leverage Docker cache
@@ -39,6 +42,9 @@ RUN playwright install --with-deps chromium
 
 # Copy the rest of the application code
 COPY . .
+
+# Build War Room React SPA
+RUN cd src/warroom && npm ci && npm run build && rm -rf node_modules
 
 # Change ownership of the application directory to the non-root user
 RUN chown -R lancelot:lancelot /home/lancelot
