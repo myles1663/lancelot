@@ -376,6 +376,23 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"APL API initialization failed: {e}")
 
+    # ===== TOOLS API =====
+    try:
+        from tools_api import router as tools_router, init_tools_api
+        init_tools_api()
+        app.include_router(tools_router)
+        logger.info("Tools API initialized.")
+    except Exception as e:
+        logger.warning(f"Tools API initialization failed: {e}")
+
+    # ===== FLAGS API =====
+    try:
+        from flags_api import router as flags_router
+        app.include_router(flags_router)
+        logger.info("Flags API initialized.")
+    except Exception as e:
+        logger.warning(f"Flags API initialization failed: {e}")
+
     # ===== PHASE 6b: USAGE TRACKER + PERSISTENCE =====
     try:
         from usage_tracker import UsageTracker
@@ -650,12 +667,12 @@ def health_check():
             "orchestrator": "ok" if main_orchestrator.client else "degraded",
             "sentry": "ok",
             "vault": "ok",
-            "chromadb": "ok" if main_orchestrator.memory_collection else "unavailable",
+            "memory": "ok" if getattr(main_orchestrator, '_memory_enabled', False) else "disabled",
         }
         uptime = round(time.time() - _startup_time, 1) if _startup_time else 0
         return {
             "status": "online",
-            "version": "3.0",
+            "version": "8.0",
             "components": components,
             "crusader_mode": crusader_mode.is_active,
             "uptime_seconds": uptime,
@@ -676,9 +693,9 @@ def readiness_check():
         "gateway": "ok",
         "orchestrator": "ok" if main_orchestrator.client else "degraded",
         "sentry": "ok",
-        "chromadb": "ok" if main_orchestrator.memory_collection else "unavailable",
+        "memory": "ok" if getattr(main_orchestrator, '_memory_enabled', False) else "disabled",
     }
-    all_ok = all(v == "ok" for v in components.values())
+    all_ok = all(v in ("ok", "disabled") for v in components.values())
     status_code = 200 if (ready and all_ok) else 503
     return JSONResponse(
         status_code=status_code,

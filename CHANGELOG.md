@@ -2,6 +2,37 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.0.1] - 2026-02-12
+
+### Fixed
+- **Health endpoint crash:** `/health` and `/ready` no longer crash on missing `memory_collection`
+  attribute — uses `getattr()` with `_memory_enabled` flag, treats "disabled" as non-degraded
+- **Cost Tracker field mismatch:** Fixed summary metric cards to match backend field names
+  (`total_requests`, `total_tokens_est`, `total_cost_est`, `avg_elapsed_ms`)
+- **Cost Tracker monthly rendering:** Replaced raw `JSON.stringify` dump with proper formatted tables
+  (monthly totals, by-model breakdown, by-day breakdown)
+- **Cost Tracker fallback data:** Per-lane and per-model sections now fall back to summary/monthly
+  data when dedicated endpoints return empty
+- **Memory Panel disabled state:** Shows clear "Memory vNext Disabled" message with enable
+  instructions when `FEATURE_MEMORY_VNEXT=false`
+- **KillSwitches null safety:** Added optional chaining for onboarding/cooldown data access
+
+### Added
+- **Tools API** (`/api/tools/*`): New backend router exposing Tool Fabric provider health,
+  routing summary, and configuration status — 2 providers discovered (local_sandbox, ui_templates)
+- **Flags API** (`/api/flags`): New endpoint returning all feature flag values from environment
+- **Tool Fabric page:** Enhanced with provider health matrix, fabric configuration panel,
+  and system component status (previously only showed broken health endpoint data)
+- **Kill Switches page:** Now displays real-time feature flag values from `/api/flags` with
+  enabled/disabled status indicators (previously showed static "env-configured" placeholders)
+- TypeScript API clients for tools (`tools.ts`) and flags (`flags.ts`)
+
+### Changed
+- gateway.py: Health check version updated to 8.0, memory component uses `_memory_enabled` flag
+- gateway.py: Tools API and Flags API routers mounted at startup
+
+---
+
 ## [8.0.0] - 2026-02-11
 
 ### Added

@@ -1,12 +1,13 @@
 import { usePolling } from '@/hooks'
-import { fetchSystemStatus } from '@/api'
+import { fetchSystemStatus, fetchFlags } from '@/api'
 import { StatusDot } from '@/components'
 
 export function KillSwitches() {
   const { data } = usePolling({ fetcher: fetchSystemStatus, interval: 10000 })
+  const { data: flagsData } = usePolling({ fetcher: fetchFlags, interval: 30000 })
 
-  // Feature flags are read from /system/status — we display what's available
-  // Future WR-24 will add a dedicated /api/flags endpoint
+  const flags = flagsData?.flags ?? {}
+
   return (
     <div>
       <h2 className="text-lg font-semibold text-text-primary mb-6">Kill Switches</h2>
@@ -21,17 +22,17 @@ export function KillSwitches() {
           <div className="space-y-3">
             <div className="flex items-center justify-between p-3 bg-surface-card-elevated rounded-md">
               <span className="text-sm text-text-primary">Onboarding</span>
-              <StatusDot state={data.onboarding.is_ready ? 'healthy' : 'degraded'} label={data.onboarding.state} />
+              <StatusDot state={data.onboarding?.is_ready ? 'healthy' : 'degraded'} label={data.onboarding?.state ?? 'Unknown'} />
             </div>
             <div className="flex items-center justify-between p-3 bg-surface-card-elevated rounded-md">
               <span className="text-sm text-text-primary">System Ready</span>
-              <StatusDot state={data.onboarding.is_ready ? 'healthy' : 'inactive'} label={data.onboarding.is_ready ? 'Ready' : 'Not Ready'} />
+              <StatusDot state={data.onboarding?.is_ready ? 'healthy' : 'inactive'} label={data.onboarding?.is_ready ? 'Ready' : 'Not Ready'} />
             </div>
             <div className="flex items-center justify-between p-3 bg-surface-card-elevated rounded-md">
               <span className="text-sm text-text-primary">Cooldown</span>
               <StatusDot
-                state={data.cooldown.active ? 'degraded' : 'healthy'}
-                label={data.cooldown.active ? `Active (${Math.round(data.cooldown.remaining_seconds)}s)` : 'Inactive'}
+                state={data.cooldown?.active ? 'degraded' : 'healthy'}
+                label={data.cooldown?.active ? `Active (${Math.round(data.cooldown.remaining_seconds)}s)` : 'Inactive'}
               />
             </div>
           </div>
@@ -42,18 +43,21 @@ export function KillSwitches() {
         <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
           Feature Flags
         </h3>
-        <p className="text-sm text-text-muted">
-          Feature flag management will be available after WR-24 backend implementation.
-          Current flags are configured via environment variables in .env.
-        </p>
-        <div className="mt-3 space-y-2">
-          {['FEATURE_MEMORY_VNEXT', 'FEATURE_SOUL', 'FEATURE_SKILLS', 'FEATURE_SCHEDULER', 'FEATURE_HEALTH_MONITOR', 'FEATURE_LOCAL_AGENTIC'].map((flag) => (
-            <div key={flag} className="flex items-center justify-between p-2 bg-surface-card-elevated rounded text-xs">
-              <span className="font-mono text-text-primary">{flag}</span>
-              <span className="text-text-muted">env-configured</span>
-            </div>
-          ))}
-        </div>
+        {Object.keys(flags).length === 0 ? (
+          <p className="text-sm text-text-muted">Loading flags...</p>
+        ) : (
+          <div className="space-y-2">
+            {Object.entries(flags).map(([flag, enabled]) => (
+              <div key={flag} className="flex items-center justify-between p-2 bg-surface-card-elevated rounded text-xs">
+                <span className="font-mono text-text-primary">{flag}</span>
+                <StatusDot
+                  state={enabled ? 'healthy' : 'inactive'}
+                  label={enabled ? 'Enabled' : 'Disabled'}
+                />
+              </div>
+            ))}
+          </div>
+        )}
       </section>
     </div>
   )

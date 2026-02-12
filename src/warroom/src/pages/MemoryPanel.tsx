@@ -1,14 +1,17 @@
 import { useState } from 'react'
 import { usePolling } from '@/hooks'
 import { fetchCoreBlocks, fetchQuarantine, fetchMemoryStats, searchMemory, promoteItem } from '@/api'
-import { MetricCard } from '@/components'
+import { MetricCard, EmptyState } from '@/components'
 
 export function MemoryPanel() {
-  const { data: blocks } = usePolling({ fetcher: fetchCoreBlocks, interval: 30000 })
-  const { data: quarantine, refetch: refetchQuarantine } = usePolling({ fetcher: fetchQuarantine, interval: 30000 })
+  const { data: blocks, error: blocksError } = usePolling({ fetcher: fetchCoreBlocks, interval: 30000 })
+  const { data: quarantine, error: quarantineError, refetch: refetchQuarantine } = usePolling({ fetcher: fetchQuarantine, interval: 30000 })
   const { data: stats } = usePolling({ fetcher: fetchMemoryStats, interval: 60000 })
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<Array<{ id: string; title: string; content: string; tier: string; confidence: number }>>([])
+
+  // Detect if Memory vNext is disabled (all endpoints return 404)
+  const memoryDisabled = blocksError != null && quarantineError != null
 
   const coreBlocks = blocks?.blocks ?? {}
   const totalTokens = blocks?.total_tokens ?? 0
@@ -16,13 +19,30 @@ export function MemoryPanel() {
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return
-    const res = await searchMemory(searchQuery)
-    setSearchResults(res.results)
+    try {
+      const res = await searchMemory(searchQuery)
+      setSearchResults(res.results)
+    } catch {
+      setSearchResults([])
+    }
   }
 
   const handlePromote = async (itemId: string) => {
     await promoteItem(itemId)
     refetchQuarantine()
+  }
+
+  if (memoryDisabled) {
+    return (
+      <div>
+        <h2 className="text-lg font-semibold text-text-primary mb-6">Memory</h2>
+        <EmptyState
+          title="Memory vNext Disabled"
+          description="The Memory vNext subsystem is not enabled. Set FEATURE_MEMORY_VNEXT=true in your .env file and restart the container to activate tiered memory with core blocks, context compilation, and governed self-edits."
+          icon="&#128451;"
+        />
+      </div>
+    )
   }
 
   return (
@@ -78,29 +98,33 @@ export function MemoryPanel() {
           <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
             Core Blocks
           </h3>
-          <div className="space-y-3">
-            {Object.entries(coreBlocks).map(([type, block]) => (
-              <div key={type} className="p-3 bg-surface-card-elevated rounded-md border border-border-default">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-mono text-text-primary">{type}</span>
-                  <span className="text-xs font-mono text-text-muted">
-                    {block.token_count}/{block.token_budget} tokens
-                  </span>
-                </div>
-                <div className="mt-1 w-full h-1 rounded-full bg-surface-input overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-accent-primary transition-all"
-                    style={{ width: `${Math.min(100, (block.token_count / block.token_budget) * 100)}%` }}
-                  />
-                </div>
-                <div className="flex items-center gap-2 mt-1 text-[10px] text-text-muted">
-                  <span>v{block.version}</span>
-                  <span>{block.status}</span>
-                  <span className="ml-auto">{block.updated_by}</span>
-                </div>
-              </div>
-            ))}
-          </div>
+          {Object.keys(coreBlocks).length === 0 ? (
+            <p className="text-sm text-text-muted">No core blocks loaded</p>
+          ) : (
+            <div className="space-y-3">
+              {Object.entries(coreBlocks).map(([type, block]) => (
+                  <div key={type} className="p-3 bg-surface-card-elevated rounded-md border border-border-default">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-mono text-text-primary">{type}</span>
+                      <span className="text-xs font-mono text-text-muted">
+                        {block.token_count}/{block.token_budget} tokens
+                      </span>
+                    </div>
+                    <div className="mt-1 w-full h-1 rounded-full bg-surface-input overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-accent-primary transition-all"
+                        style={{ width: `${Math.min(100, (block.token_count / block.token_budget) * 100)}%` }}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2 mt-1 text-[10px] text-text-muted">
+                      <span>v{block.version}</span>
+                      <span>{block.status}</span>
+                      <span className="ml-auto">{block.updated_by}</span>
+                    </div>
+                  </div>
+              ))}
+            </div>
+          )}
         </section>
 
         {/* Quarantine */}
