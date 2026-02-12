@@ -75,8 +75,8 @@ class Soul(BaseModel):
     @field_validator("version")
     @classmethod
     def version_must_be_valid(cls, v: str) -> str:
-        if not re.match(r"^v\d+$", v):
-            raise ValueError(f"Version must match 'vN' pattern, got '{v}'")
+        if not re.match(r"^(v\d+|crusader)$", v):
+            raise ValueError(f"Version must match 'vN' or 'crusader' pattern, got '{v}'")
         return v
 
     @field_validator("mission")

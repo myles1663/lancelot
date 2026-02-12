@@ -81,11 +81,20 @@ export interface ChatUploadResponse extends ChatResponse {
 }
 
 // ------------------------------------------------------------------
-// Crusader  (/crusader_status)
+// Crusader  (/crusader_status, /api/crusader/*)
 // ------------------------------------------------------------------
 
 export interface CrusaderStatusResponse {
   crusader_mode: boolean
+  activated_at: string | null
+  flag_overrides: number
+  soul_override: string
+  overridden_flags: string[]
+}
+
+export interface CrusaderActionResponse extends CrusaderStatusResponse {
+  status: string
+  message: string
 }
 
 // ------------------------------------------------------------------

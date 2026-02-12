@@ -1,5 +1,8 @@
 import re
 import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 # --- Trigger patterns ---
 ACTIVATE_PATTERNS = [
@@ -56,35 +59,123 @@ COMMAND_CHAINING_CHARS = {"&&", "||", ";", "|", "`", "$("}
 
 ACTIVATION_RESPONSE = (
     "Crusader Mode engaged.\n"
+    "Soul switched to Crusader constitution. Capabilities elevated.\n"
     "Commands will execute decisively.\n"
     "Type \"stand down\" to exit."
 )
 
-DEACTIVATION_RESPONSE = "Normal mode restored."
+DEACTIVATION_RESPONSE = (
+    "Normal mode restored.\n"
+    "Soul and feature flags reverted to standard configuration."
+)
+
+# --- Crusader Flag Profile ---
+# Balanced: maximize capabilities, keep basic safety nets
+CRUSADER_FLAG_PROFILE = {
+    # Enable maximum capabilities
+    "FEATURE_AGENTIC_LOOP": True,
+    "FEATURE_TASK_GRAPH_EXECUTION": True,
+    "FEATURE_TOOLS_CLI_PROVIDERS": True,
+    "FEATURE_TOOLS_NETWORK": True,
+    "FEATURE_CONNECTORS": True,
+    "FEATURE_LOCAL_AGENTIC": True,
+    # Reduce approval friction
+    "FEATURE_RISK_TIERED_GOVERNANCE": False,
+    "FEATURE_APPROVAL_LEARNING": False,
+}
 
 
 class CrusaderMode:
     """Session-scoped Crusader Mode state manager.
 
     Non-persistent: resets to False on process restart.
+    On activation: snapshots current flags + soul, applies crusader profile.
+    On deactivation: restores original flags + soul.
     """
 
     def __init__(self):
         self._active = False
         self._activated_at = None
+        self._saved_flags = {}
+        self._saved_soul_version = None
 
     @property
     def is_active(self) -> bool:
         return self._active
 
+    @property
+    def flag_overrides_count(self) -> int:
+        """Number of flags that were changed from their original state."""
+        if not self._active:
+            return 0
+        return len(self._saved_flags)
+
+    @property
+    def soul_override(self) -> str:
+        """The soul version that was replaced, or empty if not active."""
+        return self._saved_soul_version or ""
+
     def activate(self) -> str:
+        """Activate Crusader Mode: snapshot state, apply flag profile, switch soul."""
+        if self._active:
+            return "Crusader Mode already active."
+
+        # --- Snapshot current flags ---
+        try:
+            import feature_flags as ff
+            self._saved_flags = {}
+            for flag_name, target_val in CRUSADER_FLAG_PROFILE.items():
+                current = getattr(ff, flag_name, None)
+                if isinstance(current, bool) and current != target_val:
+                    self._saved_flags[flag_name] = current
+                    ff.set_flag(flag_name, target_val)
+                    logger.info("Crusader: %s %s → %s", flag_name, current, target_val)
+            logger.info("Crusader: %d flags overridden", len(self._saved_flags))
+        except Exception as e:
+            logger.error("Crusader flag override failed: %s", e)
+
+        # --- Switch soul to crusader ---
+        try:
+            from src.core.soul.store import get_active_version, set_active_version
+            self._saved_soul_version = get_active_version()
+            set_active_version("crusader")
+            logger.info("Crusader: soul switched from %s to crusader", self._saved_soul_version)
+        except Exception as e:
+            logger.error("Crusader soul switch failed: %s", e)
+            self._saved_soul_version = None
+
         self._active = True
         self._activated_at = datetime.datetime.utcnow().isoformat()
         return ACTIVATION_RESPONSE
 
     def deactivate(self) -> str:
+        """Deactivate Crusader Mode: restore flags and soul."""
+        if not self._active:
+            return "Crusader Mode is not active."
+
+        # --- Restore flags ---
+        try:
+            import feature_flags as ff
+            for flag_name, original_val in self._saved_flags.items():
+                ff.set_flag(flag_name, original_val)
+                logger.info("Crusader restore: %s → %s", flag_name, original_val)
+            logger.info("Crusader: %d flags restored", len(self._saved_flags))
+        except Exception as e:
+            logger.error("Crusader flag restore failed: %s", e)
+
+        # --- Restore soul ---
+        if self._saved_soul_version:
+            try:
+                from src.core.soul.store import set_active_version
+                set_active_version(self._saved_soul_version)
+                logger.info("Crusader: soul restored to %s", self._saved_soul_version)
+            except Exception as e:
+                logger.error("Crusader soul restore failed: %s", e)
+
         self._active = False
         self._activated_at = None
+        self._saved_flags = {}
+        self._saved_soul_version = None
         return DEACTIVATION_RESPONSE
 
     def should_intercept(self, message: str) -> tuple:
@@ -106,6 +197,16 @@ class CrusaderMode:
                 return (True, "deactivate")
 
         return (False, None)
+
+    def get_status(self) -> dict:
+        """Return full crusader mode status for API."""
+        return {
+            "crusader_mode": self._active,
+            "activated_at": self._activated_at,
+            "flag_overrides": self.flag_overrides_count,
+            "soul_override": self.soul_override,
+            "overridden_flags": list(self._saved_flags.keys()) if self._active else [],
+        }
 
 
 class CrusaderPromptModifier:
@@ -179,21 +280,11 @@ class CrusaderAdapter:
 
     @staticmethod
     def _normalize_for_check(message: str) -> str:
-        """Normalizes a message for security checking.
-
-        - Collapses whitespace
-        - Removes zero-width characters
-        - Removes backslash continuations
-        - Lowercases
-        """
-        # Remove zero-width characters
+        """Normalizes a message for security checking."""
         for zw in ("\u200b", "\u200c", "\u200d", "\ufeff"):
             message = message.replace(zw, "")
-        # Remove backslash line continuations (join like shell: su\<newline>do → sudo)
         message = message.replace("\\\n", "").replace("\\", "")
-        # Collapse whitespace
         message = re.sub(r"\s+", " ", message).strip()
-        # Lowercase
         return message.lower()
 
     @staticmethod
@@ -209,7 +300,6 @@ class CrusaderAdapter:
         """Returns True if the message contains an auto-pause pattern or command chaining."""
         normalized = CrusaderAdapter._normalize_for_check(message)
 
-        # Check for command chaining characters
         if CrusaderAdapter._has_chaining_chars(normalized):
             return True
 
@@ -220,13 +310,9 @@ class CrusaderAdapter:
 
     @staticmethod
     def is_in_allowlist(message: str) -> bool:
-        """Returns True if the message starts with an allowed command prefix.
-
-        Also rejects commands containing command chaining characters.
-        """
+        """Returns True if the message starts with an allowed command prefix."""
         msg_lower = message.strip().lower()
 
-        # Reject if command chaining characters are present
         if CrusaderAdapter._has_chaining_chars(msg_lower):
             return False
 

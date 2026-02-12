@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { usePolling } from '@/hooks'
-import { fetchSoulStatus } from '@/api'
+import { fetchSoulStatus, fetchCrusaderStatus } from '@/api'
 import { fetchSoulContent, proposeSoulAmendment, approveSoulProposal, activateSoulProposal } from '@/api/soul'
 import { ConfirmDialog } from '@/components'
-import type { SoulDocument, SoulContentResponse, SoulProposal } from '@/types/api'
+import type { SoulDocument, SoulContentResponse, SoulProposal, CrusaderStatusResponse } from '@/types/api'
 
 // ── Collapsible Section ─────────────────────────────────────────────
 function Section({ title, children, defaultOpen = true }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
@@ -261,12 +261,15 @@ function SoulEditor({ rawYaml, onProposed }: { rawYaml: string; onProposed: () =
 // ── Main Soul Inspector Page ────────────────────────────────────────
 export function SoulInspector() {
   const { data: statusData, refetch: refetchStatus } = usePolling({ fetcher: fetchSoulStatus, interval: 30000 })
+  const { data: crusaderStatus } = usePolling<CrusaderStatusResponse>({ fetcher: fetchCrusaderStatus, interval: 5000 })
   const [content, setContent] = useState<SoulContentResponse | null>(null)
   const [contentLoading, setContentLoading] = useState(true)
   const [tab, setTab] = useState<'view' | 'edit'>('view')
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [confirmAction, setConfirmAction] = useState<{ type: 'approve' | 'activate'; id: string } | null>(null)
   const [actionResult, setActionResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+
+  const crusaderActive = crusaderStatus?.crusader_mode ?? false
 
   const loadContent = useCallback(async () => {
     try {
@@ -319,6 +322,22 @@ export function SoulInspector() {
         )}
       </div>
 
+      {/* Crusader Mode Banner */}
+      {crusaderActive && (
+        <div className="mb-6 p-3 bg-accent-secondary/10 border border-accent-secondary/30 rounded-lg">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="w-2 h-2 rounded-full bg-accent-secondary animate-pulse" />
+            <span className="text-sm font-semibold text-accent-secondary">Crusader Soul Override Active</span>
+          </div>
+          <p className="text-xs text-text-secondary">
+            The Crusader constitution is temporarily active. This is a session-scoped override with expanded autonomy and reduced approval gates.
+            {crusaderStatus?.soul_override && (
+              <> Original soul version <span className="font-mono font-semibold">{crusaderStatus.soul_override}</span> will be restored when Crusader Mode is deactivated.</>
+            )}
+          </p>
+        </div>
+      )}
+
       {contentLoading && !content ? (
         <p className="text-text-muted text-sm">Loading soul data...</p>
       ) : !content ? (
@@ -355,6 +374,11 @@ export function SoulInspector() {
           <section className="bg-surface-card border border-border-default rounded-lg p-4">
             {tab === 'view' ? (
               <SoulViewer soul={content.soul} />
+            ) : crusaderActive ? (
+              <div className="p-4 text-center">
+                <p className="text-sm text-text-muted">Soul editing is disabled while Crusader Mode is active.</p>
+                <p className="text-xs text-text-muted mt-1">Deactivate Crusader Mode to edit the soul constitution.</p>
+              </div>
             ) : (
               <SoulEditor
                 rawYaml={content.raw_yaml}

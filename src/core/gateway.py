@@ -707,7 +707,37 @@ def readiness_check():
 def crusader_status(request: Request):
     if not verify_token(request):
         return error_response(401, "Unauthorized")
-    return {"crusader_mode": crusader_mode.is_active}
+    return crusader_mode.get_status()
+
+
+@app.post("/api/crusader/activate")
+def api_crusader_activate(request: Request):
+    if not verify_token(request):
+        return error_response(401, "Unauthorized")
+    if crusader_mode.is_active:
+        return {"status": "already_active", **crusader_mode.get_status()}
+    response_text = crusader_mode.activate()
+    main_orchestrator.audit_logger.log_event(
+        "CRUSADER_MODE_ACTIVATED",
+        "User activated Crusader Mode via API",
+        "Commander"
+    )
+    return {"status": "activated", "message": response_text, **crusader_mode.get_status()}
+
+
+@app.post("/api/crusader/deactivate")
+def api_crusader_deactivate(request: Request):
+    if not verify_token(request):
+        return error_response(401, "Unauthorized")
+    if not crusader_mode.is_active:
+        return {"status": "already_inactive", **crusader_mode.get_status()}
+    response_text = crusader_mode.deactivate()
+    main_orchestrator.audit_logger.log_event(
+        "CRUSADER_MODE_DEACTIVATED",
+        "User deactivated Crusader Mode via API",
+        "Commander"
+    )
+    return {"status": "deactivated", "message": response_text, **crusader_mode.get_status()}
 
 
 # Visual Receipt Helper (Simulated)

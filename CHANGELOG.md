@@ -2,6 +2,37 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.0.5] - 2026-02-12
+
+### Added
+- **Crusader Mode — Auto Flag Configuration:** Activating Crusader Mode now automatically toggles
+  feature flags to maximize capabilities (AGENTIC_LOOP, TASK_GRAPH_EXECUTION, TOOLS_CLI_PROVIDERS,
+  TOOLS_NETWORK, CONNECTORS, LOCAL_AGENTIC on; RISK_TIERED_GOVERNANCE, APPROVAL_LEARNING off).
+  All flags are snapshotted and restored on deactivation
+- **Crusader Mode — Soul Switching:** Crusader Mode activation switches to a dedicated Crusader soul
+  constitution with autonomous posture, expanded allowed actions, and reduced approval gates. Original
+  soul version is restored on deactivation
+- **Crusader Soul:** New `soul_crusader.yaml` — autonomous constitution with elevated scheduling limits
+  (10 concurrent jobs, 600s max), relaxed risk rules, and auto-approve escalation. Only
+  credential_rotation and financial_transaction still require approval
+- **Crusader API Endpoints:** `POST /api/crusader/activate` and `POST /api/crusader/deactivate` for
+  direct Crusader Mode control with detailed status response (flag overrides count, overridden flag
+  names, soul override version, activation timestamp)
+- **Enhanced Crusader Status:** `GET /crusader_status` now returns full state including flag_overrides,
+  soul_override, overridden_flags list, and activated_at timestamp
+
+### Changed
+- **Controls Panel:** Now calls dedicated API endpoints instead of sending chat messages for
+  Crusader Mode. Shows activation summary (flags changed, soul switched) and live status while active
+- **Kill Switches — Crusader Banner:** Shows alert banner when Crusader Mode is active with list of
+  overridden flags. Overridden toggles are locked with "crusader" badge and cursor-not-allowed state
+- **Soul Inspector — Crusader Banner:** Shows override banner when Crusader soul is active with
+  original version info. YAML editor disabled during Crusader Mode to prevent confusion
+- **CrusaderStatusResponse type** extended with activated_at, flag_overrides, soul_override, and
+  overridden_flags fields. New CrusaderActionResponse type for activate/deactivate endpoints
+
+---
+
 ## [8.0.4] - 2026-02-12
 
 ### Added

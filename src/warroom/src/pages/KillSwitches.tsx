@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { usePolling } from '@/hooks'
-import { fetchSystemStatus, fetchFlags, toggleFlag } from '@/api'
+import { fetchSystemStatus, fetchFlags, toggleFlag, fetchCrusaderStatus } from '@/api'
 import { fetchNetworkAllowlist, updateNetworkAllowlist } from '@/api/flags'
 import { StatusDot, ConfirmDialog } from '@/components'
 import type { FlagInfo } from '@/api/flags'
+import type { CrusaderStatusResponse } from '@/types/api'
 
 // Category display order
 const CATEGORY_ORDER = ['Core Subsystem', 'Tool Fabric', 'Runtime', 'Governance', 'Capabilities', 'Intelligence', 'Other']
@@ -90,10 +91,14 @@ function AllowlistEditor() {
 export function KillSwitches() {
   const { data } = usePolling({ fetcher: fetchSystemStatus, interval: 10000 })
   const { data: flagsData, refetch: refetchFlags } = usePolling({ fetcher: fetchFlags, interval: 10000 })
+  const { data: crusaderStatus } = usePolling<CrusaderStatusResponse>({ fetcher: fetchCrusaderStatus, interval: 5000 })
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [pendingToggle, setPendingToggle] = useState<string | null>(null)
   const [restartBanner, setRestartBanner] = useState<string | null>(null)
   const [toggling, setToggling] = useState<string | null>(null)
+
+  const crusaderActive = crusaderStatus?.crusader_mode ?? false
+  const overriddenFlags = new Set(crusaderStatus?.overridden_flags ?? [])
 
   const flags = flagsData?.flags ?? {}
 
@@ -149,6 +154,28 @@ export function KillSwitches() {
     <div>
       <h2 className="text-lg font-semibold text-text-primary mb-6">Kill Switches</h2>
 
+      {/* Crusader Mode Banner */}
+      {crusaderActive && (
+        <div className="mb-4 p-3 bg-accent-secondary/10 border border-accent-secondary/30 rounded-lg">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="w-2 h-2 rounded-full bg-accent-secondary animate-pulse" />
+            <span className="text-sm font-semibold text-accent-secondary">Crusader Mode Active</span>
+          </div>
+          <p className="text-xs text-text-secondary">
+            {overriddenFlags.size} flag{overriddenFlags.size !== 1 ? 's' : ''} overridden by Crusader Mode. Overridden toggles are locked until Crusader Mode is deactivated.
+          </p>
+          {overriddenFlags.size > 0 && (
+            <div className="flex flex-wrap gap-1 mt-2">
+              {Array.from(overriddenFlags).map(f => (
+                <span key={f} className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-accent-secondary/15 text-accent-secondary">
+                  {f.replace('FEATURE_', '')}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {restartBanner && (
         <div className="mb-4 p-3 bg-state-degraded/10 border border-state-degraded/30 rounded-lg flex items-center justify-between">
           <span className="text-sm text-state-degraded">{restartBanner}</span>
@@ -193,9 +220,13 @@ export function KillSwitches() {
               const isExpanded = expanded.has(name)
               const unmet = depsUnmet(info)
               const hasConflict = info.conflicts.some(c => flags[c]?.enabled)
+              const isCrusaderOverride = overriddenFlags.has(name)
+              const isToggleDisabled = toggling === name || isCrusaderOverride
 
               return (
-                <div key={name} className="bg-surface-card-elevated rounded-md border border-border-default overflow-hidden">
+                <div key={name} className={`bg-surface-card-elevated rounded-md border overflow-hidden ${
+                  isCrusaderOverride ? 'border-accent-secondary/30' : 'border-border-default'
+                }`}>
                   {/* Flag row */}
                   <div
                     className="flex items-center justify-between p-3 cursor-pointer hover:bg-surface-input/50 transition-colors"
@@ -204,6 +235,9 @@ export function KillSwitches() {
                     <div className="flex items-center gap-2 min-w-0 flex-1">
                       <span className={`text-[10px] transition-transform ${isExpanded ? 'rotate-90' : ''}`}>&#9654;</span>
                       <span className="text-xs font-mono text-text-primary truncate">{name}</span>
+                      {isCrusaderOverride && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent-secondary/15 text-accent-secondary whitespace-nowrap">crusader</span>
+                      )}
                       {info.restart_required && (
                         <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent-primary/15 text-accent-primary whitespace-nowrap">restart</span>
                       )}
@@ -215,11 +249,12 @@ export function KillSwitches() {
                       )}
                     </div>
                     <button
-                      onClick={(e) => handleToggle(e, name, info)}
-                      disabled={toggling === name}
+                      onClick={(e) => !isCrusaderOverride && handleToggle(e, name, info)}
+                      disabled={isToggleDisabled}
+                      title={isCrusaderOverride ? 'Locked by Crusader Mode' : undefined}
                       className={`relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0 ml-3 ${
                         info.enabled ? 'bg-state-healthy' : 'bg-surface-input border border-border-default'
-                      } ${toggling === name ? 'opacity-50' : 'cursor-pointer'}`}
+                      } ${isToggleDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
                     >
                       <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 ${
                         info.enabled ? 'translate-x-5' : 'translate-x-0'

@@ -1,61 +1,64 @@
 import { useState } from 'react'
 import { usePolling } from '@/hooks'
-import { sendMessage } from '@/api'
+import { sendMessage, fetchCrusaderStatus, activateCrusader, deactivateCrusader } from '@/api'
 import { ConfirmDialog } from '@/components'
-import type { HealthCheckResponse } from '@/types/api'
-import { fetchHealth } from '@/api'
+import type { CrusaderStatusResponse, CrusaderActionResponse } from '@/types/api'
 
 type ConfirmAction = 'crusader_on' | 'crusader_off' | 'pause' | 'emergency_stop' | null
 
-const ACTION_CONFIG: Record<
-  NonNullable<ConfirmAction>,
-  { title: string; description: string; variant: 'default' | 'destructive'; command: string }
-> = {
+const ACTION_DESCRIPTIONS: Record<NonNullable<ConfirmAction>, { title: string; description: string; variant: 'default' | 'destructive' }> = {
   crusader_on: {
     title: 'Activate Crusader Mode',
     description:
-      'Crusader Mode elevates your authority level, bypassing standard approval gates. Use responsibly.',
+      'Crusader Mode will elevate capabilities: enable agentic loop, task graph, CLI tools, network access, and connectors. Governance gates will be reduced. Soul will switch to Crusader constitution.',
     variant: 'default',
-    command: 'ENGAGE CRUSADER',
   },
   crusader_off: {
     title: 'Deactivate Crusader Mode',
-    description: 'Return to standard operating mode with full governance gates active.',
+    description: 'All feature flags and the soul version will be restored to their previous state.',
     variant: 'default',
-    command: 'STAND DOWN CRUSADER',
   },
   pause: {
     title: 'Pause Agent',
     description: 'Lancelot will stop processing new tasks until resumed. Active tasks will complete.',
     variant: 'default',
-    command: 'PAUSE',
   },
   emergency_stop: {
     title: 'Emergency Stop',
     description:
       'Immediately halt all agent activity. Active tasks will be interrupted. Use only in genuine emergencies.',
     variant: 'destructive',
-    command: 'EMERGENCY STOP',
   },
 }
 
 export function ControlsPanel() {
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null)
   const [executing, setExecuting] = useState(false)
+  const [lastResult, setLastResult] = useState<CrusaderActionResponse | null>(null)
 
-  const { data: health } = usePolling<HealthCheckResponse>({
-    fetcher: fetchHealth,
+  const { data: crusaderStatus } = usePolling<CrusaderStatusResponse>({
+    fetcher: fetchCrusaderStatus,
     interval: 5000,
   })
 
-  const crusaderActive = health?.crusader_mode ?? false
+  const crusaderActive = crusaderStatus?.crusader_mode ?? false
 
   const handleConfirm = async () => {
     if (!confirmAction) return
-    const config = ACTION_CONFIG[confirmAction]
     setExecuting(true)
+    setLastResult(null)
     try {
-      await sendMessage(config.command)
+      if (confirmAction === 'crusader_on') {
+        const res = await activateCrusader()
+        setLastResult(res)
+      } else if (confirmAction === 'crusader_off') {
+        const res = await deactivateCrusader()
+        setLastResult(res)
+      } else if (confirmAction === 'pause') {
+        await sendMessage('PAUSE')
+      } else if (confirmAction === 'emergency_stop') {
+        await sendMessage('EMERGENCY STOP')
+      }
     } finally {
       setExecuting(false)
       setConfirmAction(null)
@@ -92,14 +95,54 @@ export function ControlsPanel() {
         </button>
       </div>
 
+      {/* Crusader Mode Status Summary */}
+      {crusaderActive && crusaderStatus && (
+        <div className="mt-3 p-2.5 bg-accent-secondary/5 border border-accent-secondary/20 rounded-md">
+          <p className="text-[11px] font-medium text-accent-secondary mb-1.5">Crusader Mode Active</p>
+          <div className="space-y-1 text-[10px] text-text-secondary">
+            <p>{crusaderStatus.flag_overrides} flag{crusaderStatus.flag_overrides !== 1 ? 's' : ''} overridden</p>
+            {crusaderStatus.soul_override && (
+              <p>Soul: crusader (was {crusaderStatus.soul_override})</p>
+            )}
+            {crusaderStatus.activated_at && (
+              <p>Since {new Date(crusaderStatus.activated_at).toLocaleTimeString()}</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Action Result Toast */}
+      {lastResult && (
+        <div className={`mt-3 p-2.5 rounded-md border text-[11px] ${
+          lastResult.status === 'activated' || lastResult.status === 'deactivated'
+            ? 'bg-state-healthy/10 border-state-healthy/30 text-state-healthy'
+            : 'bg-state-degraded/10 border-state-degraded/30 text-state-degraded'
+        }`}>
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="font-medium">{lastResult.status === 'activated' ? 'Crusader Mode Engaged' : lastResult.status === 'deactivated' ? 'Crusader Mode Disengaged' : lastResult.status}</p>
+              {lastResult.flag_overrides > 0 && (
+                <p className="mt-0.5">{lastResult.flag_overrides} flag{lastResult.flag_overrides !== 1 ? 's' : ''} changed</p>
+              )}
+              {lastResult.overridden_flags.length > 0 && (
+                <p className="mt-0.5 font-mono text-[9px] text-text-muted">
+                  {lastResult.overridden_flags.map(f => f.replace('FEATURE_', '')).join(', ')}
+                </p>
+              )}
+            </div>
+            <button onClick={() => setLastResult(null)} className="text-text-muted hover:text-text-primary ml-2">&times;</button>
+          </div>
+        </div>
+      )}
+
       {confirmAction && (
         <ConfirmDialog
           open
-          title={ACTION_CONFIG[confirmAction].title}
+          title={ACTION_DESCRIPTIONS[confirmAction].title}
           description={
-            executing ? 'Executing...' : ACTION_CONFIG[confirmAction].description
+            executing ? 'Executing...' : ACTION_DESCRIPTIONS[confirmAction].description
           }
-          variant={ACTION_CONFIG[confirmAction].variant}
+          variant={ACTION_DESCRIPTIONS[confirmAction].variant}
           confirmLabel={executing ? 'Executing...' : 'Confirm'}
           onConfirm={handleConfirm}
           onCancel={() => setConfirmAction(null)}

@@ -188,6 +188,18 @@ def reload_flags() -> None:
     FEATURE_APPROVAL_LEARNING = _env_bool("FEATURE_APPROVAL_LEARNING", default=False)
 
 
+def get_all_flags() -> dict[str, bool]:
+    """Return a snapshot of all feature flag values."""
+    import feature_flags as _self
+    result = {}
+    for attr in sorted(dir(_self)):
+        if attr.startswith("FEATURE_"):
+            val = getattr(_self, attr, None)
+            if isinstance(val, bool):
+                result[attr] = val
+    return result
+
+
 def log_feature_flags() -> None:
     """Log current feature flag state at startup."""
     logger.info(

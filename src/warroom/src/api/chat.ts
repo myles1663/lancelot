@@ -1,5 +1,5 @@
-import { apiPost, apiPostForm } from './client'
-import type { ChatResponse, ChatUploadResponse, CrusaderStatusResponse } from '@/types/api'
+import { apiGet, apiPost, apiPostForm } from './client'
+import type { ChatResponse, ChatUploadResponse, CrusaderStatusResponse, CrusaderActionResponse } from '@/types/api'
 
 /** POST /chat — Send a text message */
 export function sendMessage(text: string, user = 'Commander') {
@@ -23,5 +23,15 @@ export function sendMessageWithFiles(
 
 /** GET /crusader_status — Current Crusader Mode state */
 export function fetchCrusaderStatus() {
-  return apiPost<CrusaderStatusResponse>('/crusader_status')
+  return apiGet<CrusaderStatusResponse>('/crusader_status')
+}
+
+/** POST /api/crusader/activate — Activate Crusader Mode with flag+soul changes */
+export function activateCrusader() {
+  return apiPost<CrusaderActionResponse>('/api/crusader/activate')
+}
+
+/** POST /api/crusader/deactivate — Deactivate Crusader Mode, restore state */
+export function deactivateCrusader() {
+  return apiPost<CrusaderActionResponse>('/api/crusader/deactivate')
 }
