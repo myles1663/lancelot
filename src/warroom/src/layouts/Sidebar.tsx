@@ -41,6 +41,7 @@ const NAV_GROUPS: NavGroup[] = [
     title: 'SYSTEM',
     items: [
       { label: 'Setup & Recovery', path: '/setup' },
+      { label: 'Connectors', path: '/connectors' },
       { label: 'Cost Tracker', path: '/costs' },
       { label: 'Kill Switches', path: '/flags' },
     ],

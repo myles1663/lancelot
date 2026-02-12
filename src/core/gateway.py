@@ -393,6 +393,41 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Flags API initialization failed: {e}")
 
+    # ===== CONNECTORS SUBSYSTEM =====
+    # Always mount the management API so War Room can list/configure connectors.
+    # Connector registration in the runtime registry is gated by FEATURE_CONNECTORS.
+    try:
+        from connectors.registry import ConnectorRegistry
+        from connectors.vault import CredentialVault as ConnectorVault
+        from connectors.credential_api import router as cred_router, init_credential_api
+        from connectors_api import router as connectors_mgmt_router, init_connectors_api
+
+        _connector_registry = ConnectorRegistry(config_path="config/connectors.yaml")
+        _connector_vault = ConnectorVault(config_path="config/vault.yaml")
+
+        # Register enabled connectors if FEATURE_CONNECTORS is on
+        from feature_flags import FEATURE_CONNECTORS
+        if FEATURE_CONNECTORS:
+            _conn_config = _connector_registry._config.get("connectors", {})
+            for _cid, _ccfg in _conn_config.items():
+                if _ccfg.get("enabled", False):
+                    try:
+                        from connectors_api import _instantiate_connector
+                        _conn = _instantiate_connector(_cid, _ccfg)
+                        if _conn:
+                            _connector_registry.register(_conn)
+                            logger.info(f"Connector registered: {_cid}")
+                    except Exception as _e:
+                        logger.warning(f"Failed to register connector {_cid}: {_e}")
+
+        init_credential_api(_connector_registry, _connector_vault)
+        init_connectors_api(_connector_registry, _connector_vault)
+        app.include_router(cred_router)
+        app.include_router(connectors_mgmt_router)
+        logger.info("Connectors subsystem initialized (FEATURE_CONNECTORS=%s).", FEATURE_CONNECTORS)
+    except Exception as e:
+        logger.warning(f"Connectors initialization failed: {e}")
+
     # ===== PHASE 6b: USAGE TRACKER + PERSISTENCE =====
     try:
         from usage_tracker import UsageTracker

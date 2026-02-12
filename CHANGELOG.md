@@ -2,6 +2,39 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.1.1] - 2026-02-12
+
+### Added
+- **War Room Connector Management UI:** New dedicated Connectors page in the War Room for configuring
+  all 8 communication connectors from the browser:
+  - **Connector Cards:** Each connector displayed with name, status indicator, operation count, and
+    expandable details showing target domains and data access summaries (reads/writes/does_not_access)
+  - **Enable/Disable Toggles:** Toggle switches to enable or disable individual connectors, with
+    confirmation dialog for disabling. State persisted to `connectors.yaml`
+  - **Backend Selector:** Dropdown for multi-backend connectors (Email: Gmail/Outlook/SMTP) to switch
+    between provider backends
+  - **Credential Management:** Inline expandable forms for entering, saving, and deleting credentials
+    per connector. Credentials stored in the encrypted vault. Masked password inputs with type badges
+    and required indicators
+  - **Connection Testing:** "Test Connection" button per connector that validates stored credentials
+    against the live service
+  - **Auto-Refresh:** 10-second polling interval keeps connector status current
+  - **Summary Bar:** At-a-glance counts of total, enabled, and configured connectors
+- **Connectors Management API** (`src/core/connectors_api.py`):
+  - `GET /api/connectors` — list all connectors with manifest info, enabled state, credential status,
+    and backend selection
+  - `POST /api/connectors/{id}/enable` — enable a connector
+  - `POST /api/connectors/{id}/disable` — disable a connector
+  - `POST /api/connectors/{id}/backend` — set backend for multi-backend connectors
+- **Credential API mounted:** Pre-existing `credential_api.py` (store/status/delete/validate) now
+  wired into the gateway and accessible from the War Room
+- **`apiDelete` utility:** New DELETE method added to the War Room API client
+
+### Changed
+- **Gateway:** Connector management and credential APIs always mounted regardless of FEATURE_CONNECTORS
+  flag — the flag now only gates runtime connector registration, not configuration access
+- **Sidebar navigation:** Connectors page added to SYSTEM group in War Room sidebar
+
 ## [8.1.0] - 2026-02-12
 
 ### Added

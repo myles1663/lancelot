@@ -13,6 +13,7 @@ import {
   SetupRecovery,
   CostTracker,
   KillSwitches,
+  Connectors,
   PlaceholderPage,
 } from '@/pages'
 
@@ -37,6 +38,7 @@ function App() {
 
         {/* SYSTEM */}
         <Route path="/setup" element={<SetupRecovery />} />
+        <Route path="/connectors" element={<Connectors />} />
         <Route path="/costs" element={<CostTracker />} />
         <Route path="/flags" element={<KillSwitches />} />
 
