@@ -224,6 +224,7 @@ async def startup_event():
     # ===== PHASE 4: SCHEDULER + SKILLS =====
     _scheduler_service = None
     _skill_executor = None
+    job_executor = None
     try:
         from feature_flags import FEATURE_SKILLS
         if FEATURE_SKILLS:
@@ -253,8 +254,8 @@ async def startup_event():
         if FEATURE_SCHEDULER:
             from scheduler.service import SchedulerService
             _scheduler_service = SchedulerService(
-                data_dir="/home/lancelot/data",
-                config_dir="/home/lancelot/config",
+                data_dir="/home/lancelot/data/scheduler",
+                config_dir="config",
             )
             count = _scheduler_service.register_from_config()
             main_orchestrator.scheduler_service = _scheduler_service
@@ -270,6 +271,19 @@ async def startup_event():
                 logger.info("Job executor wired to skill executor.")
     except Exception as e:
         logger.warning(f"Scheduler initialization failed: {e}")
+
+    # ===== SCHEDULER API =====
+    try:
+        from scheduler_api import router as scheduler_router, init_scheduler_api
+        if _scheduler_service:
+            init_scheduler_api(
+                service=_scheduler_service,
+                executor=job_executor,
+            )
+            app.include_router(scheduler_router)
+            logger.info("Scheduler API initialized.")
+    except Exception as e:
+        logger.warning(f"Scheduler API initialization failed: {e}")
 
     # ===== PHASE 4b: LOCAL MODEL CLIENT (V8) =====
     try:

@@ -2,6 +2,32 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.1.2] - 2026-02-12
+
+### Added
+- **War Room Scheduler Management (WR-25):** The Scheduler page now shows live job data instead of
+  "Coming Soon". Full job management from the browser:
+  - **Job Cards:** Expandable cards for each registered job showing name, trigger type/schedule,
+    description, skill, timeout, approval requirements, and run history
+  - **Enable/Disable Toggles:** Toggle switches to enable or disable individual jobs, persisted
+    to SQLite
+  - **Run Now:** Manual trigger button with confirmation dialog. Executes through the full gating
+    pipeline (gates, approvals, skill execution) with result feedback banner
+  - **Summary Metrics:** MetricCard row showing total jobs, enabled count, and scheduler status
+  - **Auto-Refresh:** 10-second polling keeps job status current
+- **Scheduler Management API** (`src/core/scheduler_api.py`):
+  - `GET /api/scheduler/jobs` — list all jobs with enabled count
+  - `GET /api/scheduler/jobs/{id}` — get single job details
+  - `POST /api/scheduler/jobs/{id}/enable` — enable a job
+  - `POST /api/scheduler/jobs/{id}/disable` — disable a job
+  - `POST /api/scheduler/jobs/{id}/trigger` — manually execute a job through JobExecutor
+
+### Fixed
+- **Scheduler config path:** Fixed `config_dir` from absolute `/home/lancelot/config` (didn't exist
+  in container) to relative `config` (resolves to `/home/lancelot/app/config/`)
+- **Scheduler database persistence:** Moved SQLite to dedicated `data/scheduler/` subdirectory to
+  prevent the librarian from relocating the database file
+
 ## [8.1.1] - 2026-02-12
 
 ### Added
