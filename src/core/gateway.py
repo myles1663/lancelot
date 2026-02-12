@@ -739,6 +739,17 @@ async def forge_dispatch(request: Request):
         return error_response(500, "Internal server error", request_id=request_id)
 
 
+# --- War Room WebSocket ---
+
+from warroom_ws import warroom_websocket
+
+
+@app.websocket("/ws/warroom")
+async def ws_warroom(websocket: WebSocket):
+    """War Room real-time event stream."""
+    await warroom_websocket(websocket)
+
+
 # --- Live API (Real-Time Streaming) ---
 
 from live_session import LiveSessionManager

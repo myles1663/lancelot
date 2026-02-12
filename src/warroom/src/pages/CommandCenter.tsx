@@ -1,3 +1,6 @@
+import { ChatInterface } from './command/ChatInterface'
+import { ControlsPanel } from './command/ControlsPanel'
+
 export function CommandCenter() {
   return (
     <div>
@@ -11,27 +14,8 @@ export function CommandCenter() {
             <p className="text-sm text-text-muted">No active task</p>
           </section>
 
-          {/* Chat Interface — WR-7 */}
-          <section className="bg-surface-card border border-border-default rounded-lg p-4 min-h-[300px] flex flex-col">
-            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">Command Interface</h3>
-            <div className="flex-1 flex items-center justify-center text-text-muted text-sm">
-              Chat interface will be wired in WR-7
-            </div>
-            <div className="mt-4 flex gap-2">
-              <input
-                type="text"
-                placeholder="Issue command to Lancelot..."
-                className="flex-1 bg-surface-input border border-border-default rounded-md px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-border-active"
-                disabled
-              />
-              <button
-                disabled
-                className="px-4 py-2 bg-accent-primary text-white text-sm font-medium rounded-md opacity-50 cursor-not-allowed"
-              >
-                Send
-              </button>
-            </div>
-          </section>
+          {/* Chat Interface */}
+          <ChatInterface />
 
           {/* Activity Feed — WR-10 */}
           <section className="bg-surface-card border border-border-default rounded-lg p-4">
@@ -48,30 +32,8 @@ export function CommandCenter() {
             <p className="text-sm text-text-muted">No pending actions</p>
           </section>
 
-          {/* Controls — WR-8 */}
-          <section className="bg-surface-card border border-border-default rounded-lg p-4">
-            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">Controls</h3>
-            <div className="space-y-2">
-              <button
-                disabled
-                className="w-full px-3 py-2 text-sm text-left bg-surface-input border border-border-default rounded-md text-text-muted cursor-not-allowed"
-              >
-                Crusader Mode — Off
-              </button>
-              <button
-                disabled
-                className="w-full px-3 py-2 text-sm text-left bg-surface-input border border-border-default rounded-md text-text-muted cursor-not-allowed"
-              >
-                Pause Agent
-              </button>
-              <button
-                disabled
-                className="w-full px-3 py-2 text-sm text-left bg-surface-input border border-border-default rounded-md text-state-error/50 cursor-not-allowed"
-              >
-                Emergency Stop
-              </button>
-            </div>
-          </section>
+          {/* Controls Panel */}
+          <ControlsPanel />
 
           {/* Quick Stats — WR-11 */}
           <section className="bg-surface-card border border-border-default rounded-lg p-4">

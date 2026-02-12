@@ -1,3 +1,5 @@
+import { VitalsBar } from './VitalsBar'
+
 interface HeaderProps {
   sidebarCollapsed: boolean
   onToggleSidebar: () => void
@@ -19,13 +21,8 @@ export function Header({ sidebarCollapsed, onToggleSidebar }: HeaderProps) {
         </button>
       )}
 
-      {/* Vitals bar placeholder — WR-6 will replace this */}
-      <div className="flex items-center gap-6 flex-1 min-w-0">
-        <VitalPlaceholder label="Identity" value="--" />
-        <VitalPlaceholder label="Armor" value="--" />
-        <VitalPlaceholder label="Connection" value="--" />
-        <VitalPlaceholder label="Defense" value="--" />
-      </div>
+      {/* Live Vitals Bar */}
+      <VitalsBar />
 
       {/* Notification badge placeholder — WR-13 will replace this */}
       <div className="flex items-center gap-2">
@@ -52,14 +49,5 @@ export function Header({ sidebarCollapsed, onToggleSidebar }: HeaderProps) {
         </button>
       </div>
     </header>
-  )
-}
-
-function VitalPlaceholder({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col min-w-[100px]">
-      <span className="text-[10px] uppercase tracking-wider text-text-muted">{label}</span>
-      <span className="text-xs font-medium text-text-secondary font-mono">{value}</span>
-    </div>
   )
 }
