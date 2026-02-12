@@ -1,2 +1,7 @@
 export { CommandCenter } from './CommandCenter'
+export { GovernanceDashboard } from './GovernanceDashboard'
+export { SoulInspector } from './SoulInspector'
+export { TrustLedger } from './TrustLedger'
+export { AplPanel } from './AplPanel'
+export { ReceiptExplorer } from './ReceiptExplorer'
 export { PlaceholderPage } from './Placeholder'

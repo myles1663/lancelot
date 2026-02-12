@@ -1,6 +1,14 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { WarRoomShell } from '@/layouts'
-import { CommandCenter, PlaceholderPage } from '@/pages'
+import {
+  CommandCenter,
+  GovernanceDashboard,
+  SoulInspector,
+  TrustLedger,
+  AplPanel,
+  ReceiptExplorer,
+  PlaceholderPage,
+} from '@/pages'
 
 function App() {
   return (
@@ -10,13 +18,13 @@ function App() {
         <Route path="/command" element={<CommandCenter />} />
 
         {/* GOVERNANCE */}
-        <Route path="/governance" element={<PlaceholderPage title="Governance Dashboard" />} />
-        <Route path="/soul" element={<PlaceholderPage title="Soul Inspector" />} />
-        <Route path="/trust" element={<PlaceholderPage title="Trust Ledger" />} />
-        <Route path="/apl" element={<PlaceholderPage title="Approval Learning" />} />
+        <Route path="/governance" element={<GovernanceDashboard />} />
+        <Route path="/soul" element={<SoulInspector />} />
+        <Route path="/trust" element={<TrustLedger />} />
+        <Route path="/apl" element={<AplPanel />} />
 
         {/* OPERATIONS */}
-        <Route path="/receipts" element={<PlaceholderPage title="Receipt Explorer" />} />
+        <Route path="/receipts" element={<ReceiptExplorer />} />
         <Route path="/tools" element={<PlaceholderPage title="Tool Fabric" />} />
         <Route path="/memory" element={<PlaceholderPage title="Memory" />} />
         <Route path="/scheduler" element={<PlaceholderPage title="Scheduler" />} />

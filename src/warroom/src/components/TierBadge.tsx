@@ -7,19 +7,27 @@ const TIER_CONFIG: Record<RiskTier, { label: string; color: string; bg: string }
   T3: { label: 'T3 IRREVERSIBLE', color: 'text-tier-t3', bg: 'bg-tier-t3/15' },
 }
 
+const TIER_KEYS: RiskTier[] = ['T0', 'T1', 'T2', 'T3']
+
+function toTierKey(tier: RiskTier | number): RiskTier {
+  if (typeof tier === 'number') return TIER_KEYS[Math.min(Math.max(tier, 0), 3)] ?? 'T0'
+  return tier
+}
+
 interface TierBadgeProps {
-  tier: RiskTier
+  tier: RiskTier | number
   compact?: boolean
   className?: string
 }
 
 export function TierBadge({ tier, compact = false, className = '' }: TierBadgeProps) {
-  const config = TIER_CONFIG[tier]
+  const key = toTierKey(tier)
+  const config = TIER_CONFIG[key]
   return (
     <span
       className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${config.color} ${config.bg} ${className}`}
     >
-      {compact ? tier : config.label}
+      {compact ? key : config.label}
     </span>
   )
 }

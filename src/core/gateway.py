@@ -327,6 +327,55 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Control plane initialization failed: {e}")
 
+    # ===== WAR ROOM APIs =====
+    # Receipts API
+    try:
+        from receipts_api import router as receipts_router, init_receipts_api
+        init_receipts_api(data_dir="/home/lancelot/data")
+        app.include_router(receipts_router)
+        logger.info("Receipts API initialized.")
+    except Exception as e:
+        logger.warning(f"Receipts API initialization failed: {e}")
+
+    # Governance + Trust + APL APIs — wire to existing subsystem instances
+    _trust_ledger_inst = getattr(main_orchestrator, 'trust_ledger', None)
+    _rule_engine_inst = None
+    _decision_log_inst = None
+    try:
+        from governance.approval_learning.rule_engine import RuleEngine
+        _rule_engine_inst = getattr(main_orchestrator, 'rule_engine', None)
+        _decision_log_inst = getattr(main_orchestrator, 'decision_log', None)
+    except ImportError:
+        pass
+
+    try:
+        from governance_api import router as gov_router, init_governance_api
+        init_governance_api(
+            trust_ledger=_trust_ledger_inst,
+            rule_engine=_rule_engine_inst,
+            decision_log=_decision_log_inst,
+        )
+        app.include_router(gov_router)
+        logger.info("Governance API initialized.")
+    except Exception as e:
+        logger.warning(f"Governance API initialization failed: {e}")
+
+    try:
+        from trust_api import router as trust_router, init_trust_api
+        init_trust_api(trust_ledger=_trust_ledger_inst)
+        app.include_router(trust_router)
+        logger.info("Trust API initialized.")
+    except Exception as e:
+        logger.warning(f"Trust API initialization failed: {e}")
+
+    try:
+        from apl_api import router as apl_router, init_apl_api
+        init_apl_api(rule_engine=_rule_engine_inst, decision_log=_decision_log_inst)
+        app.include_router(apl_router)
+        logger.info("APL API initialized.")
+    except Exception as e:
+        logger.warning(f"APL API initialization failed: {e}")
+
     # ===== PHASE 6b: USAGE TRACKER + PERSISTENCE =====
     try:
         from usage_tracker import UsageTracker
