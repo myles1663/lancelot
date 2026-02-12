@@ -2,6 +2,40 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.0.0] - 2026-02-11
+
+### Added
+- **War Room React SPA:** Migrated operator interface from Streamlit to React 18 + TypeScript + Tailwind CSS
+  - **Phase 0 — Infrastructure:** Vite project scaffold, Tailwind design system with spec color palette,
+    6 shared components (MetricCard, TierBadge, StatusDot, ProgressBar, ConfirmDialog, EmptyState),
+    typed API client layer covering 40+ existing endpoints, shell layout with 240px collapsible sidebar,
+    56px header, notification tray footer, React Router with 13 routes, keyboard shortcuts (Ctrl+1-9),
+    FastAPI static mount at `/war-room/`, Dockerfile updated with Node.js 20 build step
+  - **Phase 1 — Command Center:** Live VitalsBar polling /health, /health/ready, /soul/status every 5s
+    (Identity Bonded, Armor Integrity, Connection, Defense Posture with Crusader violet pulse),
+    chat interface with file upload and Crusader mode message styling,
+    Controls panel (Crusader toggle, Pause, Emergency Stop) with confirmation dialogs,
+    WebSocket infrastructure (/ws/warroom) with EventBus pub/sub and auto-reconnect hook
+  - **Phase 2 — Governance Visibility:** 4 new backend API routers (receipts_api, governance_api,
+    trust_api, apl_api), Governance Dashboard with metrics + approval queue + decision log,
+    Receipt Explorer with searchable/filterable table and expandable rows,
+    Soul Inspector with version viewer and proposal management,
+    Trust Ledger with per-capability table, graduation proposals, and timeline,
+    APL Panel with rules management (pause/resume/revoke), proposals, circuit breakers, decisions
+  - **Phase 4 — Operational Completeness:** Tool Fabric (component health, provider status),
+    Memory (core blocks, quarantine queue, full-text search), Scheduler (status and job placeholder),
+    Setup & Recovery (onboarding status, 5 recovery commands), Cost Tracker (summary, lanes,
+    models, monthly), Kill Switches (system state, feature flags), Business Dashboard (BAL placeholder)
+  - All 12+ tabs render with live data or appropriate empty states
+  - Build output: 234KB JS + 18KB CSS, 81 modules, TypeScript strict mode
+
+### Changed
+- gateway.py: CORS updated for Vite dev server (localhost:5173), WebSocket /ws/warroom endpoint added
+- Dockerfile: Node.js 20 installed, React SPA built during Docker image build
+- TierBadge component accepts both RiskTier string and numeric tier values
+
+---
+
 ## [7.0.0] - 2026-02-05
 
 ### Added

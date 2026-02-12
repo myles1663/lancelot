@@ -38,7 +38,8 @@ Lancelot is a self-hosted AI assistant that operates as your digital knight. It 
    ```
 
 5. **Open the War Room**
-   - Navigate to `http://localhost:8501`
+   - **React War Room (recommended):** Navigate to `http://localhost:8000/war-room/`
+   - **Legacy Streamlit UI:** Navigate to `http://localhost:8501`
    - Or run `python src/ui/lancelot_gui.py` for the native launcher
 
 ## Architecture
@@ -74,8 +75,14 @@ lancelot/
 │   │   ├── router.py      # Capability-based provider routing
 │   │   ├── receipts.py    # Tool-specific receipt extensions
 │   │   └── providers/     # Local sandbox, UI templates, Antigravity
+│   ├── warroom/           # React SPA (Vite + React 18 + TypeScript + Tailwind)
+│   │   ├── src/api/       # Typed API client layer
+│   │   ├── src/components/# Design system (MetricCard, TierBadge, StatusDot, etc.)
+│   │   ├── src/layouts/   # Shell layout (Sidebar, Header, VitalsBar, NotificationTray)
+│   │   ├── src/pages/     # 12+ tab pages (Command, Governance, Trust, APL, etc.)
+│   │   └── src/hooks/     # usePolling, useWebSocket, useKeyboardShortcuts
 │   ├── agents/            # Planner, Verifier, Crusader
-│   ├── ui/                # War Room, Launcher, Onboarding
+│   ├── ui/                # Legacy Streamlit War Room, Launcher, Onboarding
 │   │   └── panels/        # Soul, Skills, Health, Scheduler, Memory, Tool Fabric panels
 │   ├── integrations/      # Telegram, Google Chat, MCP
 │   └── shared/            # Utilities, logging, receipts
