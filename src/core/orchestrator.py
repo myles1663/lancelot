@@ -2530,8 +2530,8 @@ class LancelotOrchestrator:
             if self._is_continuation(user_message):
                 print("V17: Continuation detected — routing through agentic loop instead of PlanningPipeline")
                 intent = IntentType.KNOWLEDGE_REQUEST
-            elif intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST) and self._needs_research(user_message):
-                print("V12: PLAN_REQUEST with research intent — routing through agentic loop")
+            elif self._needs_research(user_message):
+                print("V18: Tool-action or research intent — routing through agentic loop")
                 intent = IntentType.KNOWLEDGE_REQUEST
 
         if intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST):
