@@ -2,6 +2,22 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.2.9] - 2026-02-13
+
+### Added
+- **Dynamic Job Scheduling** (`schedule_job` skill): New builtin skill that allows creating, listing,
+  and deleting scheduled jobs from chat. Supports cron expressions for recurring tasks like wake-up
+  calls, daily reminders, and automated health checks. Jobs are persisted in SQLite and survive
+  container restarts.
+- **Cron Tick Loop**: Background thread in `JobExecutor` that evaluates cron expressions every 60
+  seconds and fires matching jobs. Supports `*`, specific values, comma-separated lists, and ranges.
+  Includes double-fire prevention (same-minute dedup) and interval-based triggers.
+- **Job Inputs**: Scheduled jobs can now pass inputs to their target skills (e.g., a wake-up call job
+  passes `{"message": "Good morning Commander"}` to `telegram_send`). Added `inputs` column to the
+  scheduler SQLite schema with automatic migration for existing databases.
+- Scheduling keywords added to intent routing (`_needs_research`, `_wants_action`) so "schedule a
+  wake-up call" correctly triggers the agentic loop with `force_tool_use=True`.
+
 ## [8.2.8] - 2026-02-13
 
 ### Added

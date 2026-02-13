@@ -754,6 +754,11 @@ class LancelotOrchestrator:
             "- When you need to check the system, USE command_runner (ls, git status, etc.)\n"
             "- When asked to send a message via Telegram, USE telegram_send immediately — credentials are pre-configured\n"
             "- When asked to send a message to the War Room/dashboard/Command Center, USE warroom_send — it pushes a toast notification\n"
+            "- When asked to schedule, set up a recurring task, alarm, reminder, or wake-up call, USE schedule_job with action='create'. "
+            "Provide the cron expression (5 fields: minute hour day month weekday), the skill to run (e.g. 'telegram_send'), "
+            "and the inputs as a JSON string (e.g. '{\"message\": \"Good morning Commander\"}')\n"
+            "- To list scheduled jobs, USE schedule_job with action='list'\n"
+            "- To cancel/delete a scheduled job, USE schedule_job with action='delete' and the job_id\n"
             "- Do NOT ask the user for search terms — research it yourself using your tools\n"
             "- Do NOT produce plans without researching first when tools are available\n"
             "- When you USE a tool and get results, you CAN say 'I researched X and found Y'\n"
@@ -1033,6 +1038,46 @@ class LancelotOrchestrator:
                     "required": ["message"],
                 },
             ),
+            types.FunctionDeclaration(
+                name="schedule_job",
+                description=(
+                    "Create, list, or delete scheduled jobs. Use this to set up recurring tasks "
+                    "like wake-up calls, reminders, health checks, or any skill on a cron schedule. "
+                    "Action 'create' requires name, skill, and cron expression. "
+                    "Action 'list' shows all jobs. Action 'delete' removes a job by ID."
+                ),
+                parameters_json_schema={
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "description": "The action: 'create', 'list', or 'delete'",
+                            "enum": ["create", "list", "delete"],
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": "Human-readable job name (for create)",
+                        },
+                        "skill": {
+                            "type": "string",
+                            "description": "Skill to execute, e.g. 'telegram_send', 'warroom_send' (for create)",
+                        },
+                        "cron": {
+                            "type": "string",
+                            "description": "Cron expression with 5 fields: minute hour day-of-month month day-of-week. Example: '45 5 * * *' for 5:45am daily",
+                        },
+                        "inputs": {
+                            "type": "string",
+                            "description": "JSON string of inputs to pass to the skill, e.g. '{\"message\": \"Good morning\"}' (for create)",
+                        },
+                        "job_id": {
+                            "type": "string",
+                            "description": "Job ID to delete (for delete action)",
+                        },
+                    },
+                    "required": ["action"],
+                },
+            ),
         ]
 
     def _classify_tool_call_safety(self, skill_name: str, inputs: dict) -> str:
@@ -1067,6 +1112,10 @@ class LancelotOrchestrator:
 
         if skill_name == "warroom_send":
             # Auto-execute: pushes notification to the War Room dashboard
+            return "auto"
+
+        if skill_name == "schedule_job":
+            # Auto-execute: manages scheduled jobs (create/list/delete)
             return "auto"
 
         # repo_writer, service_runner, and anything else → escalate
@@ -1202,6 +1251,28 @@ class LancelotOrchestrator:
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "schedule_job",
+                    "description": (
+                        "Create, list, or delete scheduled jobs. Use for recurring tasks, "
+                        "wake-up calls, reminders, alarms, or any skill on a cron schedule."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string", "description": "'create', 'list', or 'delete'"},
+                            "name": {"type": "string", "description": "Job name (for create)"},
+                            "skill": {"type": "string", "description": "Skill to execute (for create)"},
+                            "cron": {"type": "string", "description": "Cron expression: minute hour day month weekday (for create)"},
+                            "inputs": {"type": "string", "description": "JSON inputs for the skill (for create)"},
+                            "job_id": {"type": "string", "description": "Job ID (for delete)"},
+                        },
+                        "required": ["action"],
+                    },
+                },
+            },
         ]
 
     def _is_simple_for_local(self, prompt: str) -> bool:
@@ -1278,6 +1349,11 @@ class LancelotOrchestrator:
             "send in telegram", "send via telegram", "send on telegram",
             "telegram", "notify me", "message me",
             "war room", "warroom", "command center", "dashboard",
+            # V19: Scheduling triggers
+            "schedule", "alarm", "wake up", "wake-up", "wakeup",
+            "recurring", "every morning", "every day", "every hour",
+            "remind me", "reminder", "cron", "set up a job",
+            "cancel the", "delete the job", "list jobs", "scheduled jobs",
         ]
         if any(phrase in prompt_lower for phrase in research_phrases):
             return True
@@ -1311,6 +1387,7 @@ class LancelotOrchestrator:
             "figure out", "find a way", "get it working",
             "hook up", "wire up", "connect", "enable",
             "send", "notify", "message", "tell",
+            "schedule", "alarm", "remind", "wake up", "cancel",
         ]
         return any(phrase in prompt_lower for phrase in action_phrases)
 
@@ -1754,7 +1831,7 @@ class LancelotOrchestrator:
             # Gemini API requires ALL function responses in a SINGLE Content
             # message when multiple function calls are in one response.
             # V13: Set of declared tool names for hallucination guard
-            _DECLARED_TOOL_NAMES = {"network_client", "command_runner", "repo_writer", "service_runner", "telegram_send", "warroom_send"}
+            _DECLARED_TOOL_NAMES = {"network_client", "command_runner", "repo_writer", "service_runner", "telegram_send", "warroom_send", "schedule_job"}
 
             response_parts = []
             for fc in response.function_calls:

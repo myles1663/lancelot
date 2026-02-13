@@ -20,7 +20,7 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -45,6 +45,7 @@ class JobRecord(BaseModel):
     id: str
     name: str
     skill: str = ""
+    inputs: Dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
     trigger_type: str = "interval"
     trigger_value: str = ""
@@ -94,6 +95,7 @@ class SchedulerService:
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     skill TEXT DEFAULT '',
+                    inputs TEXT DEFAULT '{}',
                     enabled INTEGER DEFAULT 1,
                     trigger_type TEXT DEFAULT 'interval',
                     trigger_value TEXT DEFAULT '',
@@ -107,6 +109,11 @@ class SchedulerService:
                     registered_at TEXT NOT NULL
                 )
             """)
+            # Migration: add inputs column if missing (for existing DBs)
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN inputs TEXT DEFAULT '{}'")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
             conn.commit()
         finally:
             conn.close()
@@ -146,14 +153,15 @@ class SchedulerService:
         try:
             conn.execute(
                 """INSERT INTO jobs
-                   (id, name, skill, enabled, trigger_type, trigger_value,
+                   (id, name, skill, inputs, enabled, trigger_type, trigger_value,
                     requires_ready, requires_approvals, timeout_s,
                     description, registered_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     spec.id,
                     spec.name,
                     spec.skill,
+                    json.dumps(spec.inputs),
                     1 if spec.enabled else 0,
                     spec.trigger.type.value,
                     trigger_value,
@@ -171,10 +179,12 @@ class SchedulerService:
     def _row_to_record(self, row: sqlite3.Row) -> JobRecord:
         """Convert a database row to a JobRecord."""
         approvals = json.loads(row["requires_approvals"]) if row["requires_approvals"] else []
+        inputs = json.loads(row["inputs"]) if row["inputs"] else {}
         return JobRecord(
             id=row["id"],
             name=row["name"],
             skill=row["skill"] or "",
+            inputs=inputs,
             enabled=bool(row["enabled"]),
             trigger_type=row["trigger_type"],
             trigger_value=row["trigger_value"] or "",
@@ -264,3 +274,81 @@ class SchedulerService:
         self._last_tick = now
         logger.info("job_triggered: %s", job_id)
         return self.get_job(job_id)
+
+    def create_job(
+        self,
+        job_id: str,
+        name: str,
+        skill: str,
+        trigger_type: str,
+        trigger_value: str,
+        inputs: Optional[Dict[str, Any]] = None,
+        description: str = "",
+        enabled: bool = True,
+    ) -> JobRecord:
+        """Create a new scheduled job dynamically.
+
+        Args:
+            job_id: Unique lowercase slug (e.g., "daily_wakeup").
+            name: Human-readable name.
+            skill: Skill to execute (e.g., "telegram_send").
+            trigger_type: "cron" or "interval".
+            trigger_value: Cron expression or interval seconds.
+            inputs: Dict of inputs to pass to the skill.
+            description: Optional description.
+            enabled: Whether the job starts enabled.
+
+        Returns:
+            The created JobRecord.
+
+        Raises:
+            SchedulerError if job already exists or validation fails.
+        """
+        if self.get_job(job_id) is not None:
+            raise SchedulerError(f"Job '{job_id}' already exists")
+
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                """INSERT INTO jobs
+                   (id, name, skill, inputs, enabled, trigger_type, trigger_value,
+                    requires_ready, requires_approvals, timeout_s,
+                    description, registered_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    job_id,
+                    name,
+                    skill,
+                    json.dumps(inputs or {}),
+                    1 if enabled else 0,
+                    trigger_type,
+                    trigger_value,
+                    0,  # requires_ready=False for dynamic jobs
+                    "[]",
+                    300,
+                    description,
+                    now,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        logger.info("job_created: %s (skill=%s, trigger=%s %s)", job_id, skill, trigger_type, trigger_value)
+        return self.get_job(job_id)
+
+    def delete_job(self, job_id: str) -> None:
+        """Delete a scheduled job.
+
+        Raises SchedulerError if not found.
+        """
+        if self.get_job(job_id) is None:
+            raise SchedulerError(f"Job '{job_id}' not found")
+        conn = self._get_conn()
+        try:
+            conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            conn.commit()
+        finally:
+            conn.close()
+        logger.info("job_deleted: %s", job_id)

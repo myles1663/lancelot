@@ -19,7 +19,7 @@ import re
 import shutil
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -86,6 +86,7 @@ class JobSpec(BaseModel):
     requires_approvals: List[str] = Field(default_factory=list)
     timeout_s: int = 300
     skill: str = ""
+    inputs: Dict[str, Any] = Field(default_factory=dict)
     description: str = ""
 
     @field_validator("id")

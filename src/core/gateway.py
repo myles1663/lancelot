@@ -128,6 +128,7 @@ forge_dispatcher = PostDispatcher(vault=forge_vault)
 COMMS_TYPE = os.getenv("LANCELOT_COMMS_TYPE", "").lower()
 chat_poller = None
 telegram_bot = None
+scheduler_service = None  # Module-level ref for schedule_job skill
 
 if COMMS_TYPE == "telegram":
     telegram_bot = TelegramBot(orchestrator=main_orchestrator)
@@ -247,7 +248,7 @@ async def startup_event():
             skill_registry = SkillRegistry(data_dir="/home/lancelot/data")
             # Fix Pack V5: Register builtins so executor can find them
             from skills.registry import SkillEntry, SkillOwnership
-            for builtin_name in ("echo", "command_runner", "repo_writer", "service_runner", "network_client", "telegram_send", "warroom_send"):
+            for builtin_name in ("echo", "command_runner", "repo_writer", "service_runner", "network_client", "telegram_send", "warroom_send", "schedule_job"):
                 if not skill_registry.get_skill(builtin_name):
                     skill_registry._skills[builtin_name] = SkillEntry(
                         name=builtin_name, version="1.0.0",
@@ -267,10 +268,12 @@ async def startup_event():
         from feature_flags import FEATURE_SCHEDULER
         if FEATURE_SCHEDULER:
             from scheduler.service import SchedulerService
+            global scheduler_service
             _scheduler_service = SchedulerService(
                 data_dir="/home/lancelot/data/scheduler",
                 config_dir="config",
             )
+            scheduler_service = _scheduler_service  # expose for schedule_job skill
             count = _scheduler_service.register_from_config()
             main_orchestrator.scheduler_service = _scheduler_service
             logger.info(f"Scheduler initialized: {count} jobs registered")
@@ -282,6 +285,7 @@ async def startup_event():
                     skill_execute_fn=lambda name, inputs: _skill_executor.run(name, inputs),
                 )
                 main_orchestrator.job_executor = job_executor
+                job_executor.start_tick_loop()
                 logger.info("Job executor wired to skill executor.")
     except Exception as e:
         logger.warning(f"Scheduler initialization failed: {e}")
