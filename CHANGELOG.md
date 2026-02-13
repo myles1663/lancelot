@@ -2,6 +2,16 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.2.3] - 2026-02-13
+
+### Added
+- **Business Dashboard** (`src/warroom/src/pages/BusinessDashboard.tsx`): Live War Room page replacing
+  the "Coming Soon" placeholder — shows client metrics (total, active, onboarding, paused), filterable
+  client table with status/tier/actions, plan tier breakdown, status overview, and content delivery stats.
+  Includes inline Pause/Resume/Activate actions. Falls back to empty state when BAL is disabled.
+- **Business API Client** (`src/warroom/src/api/business.ts`): TypeScript API module with full client
+  types and fetcher functions for the Business Dashboard
+
 ## [8.2.2] - 2026-02-13
 
 ### Added

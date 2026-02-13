@@ -14,7 +14,7 @@ import {
   CostTracker,
   KillSwitches,
   Connectors,
-  PlaceholderPage,
+  BusinessDashboard,
 } from '@/pages'
 
 function App() {
@@ -43,7 +43,7 @@ function App() {
         <Route path="/flags" element={<KillSwitches />} />
 
         {/* BUSINESS */}
-        <Route path="/business" element={<PlaceholderPage title="Business Dashboard" description="Business Dashboard will be available when BAL (Business Automation Layer) is configured." />} />
+        <Route path="/business" element={<BusinessDashboard />} />
 
         {/* Default redirect */}
         <Route path="/" element={<Navigate to="/command" replace />} />
