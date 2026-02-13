@@ -49,6 +49,7 @@ _CONNECTOR_CLASSES = {
     "whatsapp": ("src.connectors.connectors.whatsapp", "WhatsAppConnector", {"phone_number_id": ""}),
     "sms": ("src.connectors.connectors.sms", "SMSConnector", {"account_sid": ""}),
     "calendar": ("src.connectors.connectors.calendar", "CalendarConnector", {}),
+    "telegram": ("src.connectors.connectors.telegram", "TelegramConnector", {}),
 }
 
 _BACKEND_OPTIONS: Dict[str, List[str]] = {

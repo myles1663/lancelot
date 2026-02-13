@@ -2,6 +2,18 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.2.2] - 2026-02-13
+
+### Added
+- **Telegram Connector** (`src/connectors/connectors/telegram.py`): Full Telegram Bot API connector
+  following the governed connector framework pattern — 8 operations (get_updates, get_me, get_chat,
+  get_file, send_message, send_voice, send_photo, delete_message) with proper ConnectorResult specs,
+  credential vault integration, and risk tier classification
+- **Connector Registry Entry**: Telegram added to `_CONNECTOR_CLASSES` in `connectors_api.py` for
+  automatic discovery and instantiation
+- **Connector Config**: Telegram entry in `config/connectors.yaml` (enabled: true) with rate limits
+  (30 req/min, burst 5)
+
 ## [8.2.1] - 2026-02-13
 
 ### Added
