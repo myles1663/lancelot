@@ -2,6 +2,13 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.2.4] - 2026-02-13
+
+### Fixed
+- **Soul Overlay Merge**: Fixed Pydantic class-identity mismatch when gateway imports models via
+  short paths (`soul.store.RiskRule`) vs full paths (`src.core.soul.store.RiskRule`). Serialize
+  models to dicts before constructing merged Soul. BAL governance overlay now loads successfully.
+
 ## [8.2.3] - 2026-02-13
 
 ### Added

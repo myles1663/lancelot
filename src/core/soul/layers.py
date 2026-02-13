@@ -220,28 +220,31 @@ def merge_soul(base: Soul, overlays: List[SoulOverlay]) -> Soul:
                 f"{overlay.scheduling_boundaries}"
             ).strip()
 
-    # Construct merged Soul — immutable fields preserved from base
+    # Construct merged Soul — immutable fields preserved from base.
+    # Serialize models to dicts before passing to Soul() to avoid Pydantic
+    # class-identity mismatches when modules are imported via different paths
+    # (e.g. "soul.store.RiskRule" vs "src.core.soul.store.RiskRule").
     merged_soul = Soul(
         version=base.version,
         mission=base.mission,
         allegiance=base.allegiance,
-        autonomy_posture=AutonomyPosture(
-            level=base.autonomy_posture.level,
-            description=base.autonomy_posture.description,
-            allowed_autonomous=merged_allowed_autonomous,
-            requires_approval=merged_requires_approval,
-        ),
-        risk_rules=merged_risk_rules,
-        approval_rules=base.approval_rules,
+        autonomy_posture={
+            "level": base.autonomy_posture.level,
+            "description": base.autonomy_posture.description,
+            "allowed_autonomous": merged_allowed_autonomous,
+            "requires_approval": merged_requires_approval,
+        },
+        risk_rules=[r.model_dump() if hasattr(r, "model_dump") else {"name": r.name, "description": r.description, "enforced": r.enforced} for r in merged_risk_rules],
+        approval_rules=base.approval_rules.model_dump() if hasattr(base.approval_rules, "model_dump") else base.approval_rules,
         tone_invariants=merged_tone_invariants,
         memory_ethics=merged_memory_ethics,
-        scheduling_boundaries=SchedulingBoundaries(
-            max_concurrent_jobs=base.scheduling_boundaries.max_concurrent_jobs,
-            max_job_duration_seconds=base.scheduling_boundaries.max_job_duration_seconds,
-            no_autonomous_irreversible=base.scheduling_boundaries.no_autonomous_irreversible,
-            require_ready_state=base.scheduling_boundaries.require_ready_state,
-            description=merged_sched_description,
-        ),
+        scheduling_boundaries={
+            "max_concurrent_jobs": base.scheduling_boundaries.max_concurrent_jobs,
+            "max_job_duration_seconds": base.scheduling_boundaries.max_job_duration_seconds,
+            "no_autonomous_irreversible": base.scheduling_boundaries.no_autonomous_irreversible,
+            "require_ready_state": base.scheduling_boundaries.require_ready_state,
+            "description": merged_sched_description,
+        },
     )
 
     overlay_names = [o.overlay_name for o in overlays]
