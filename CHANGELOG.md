@@ -9,18 +9,26 @@ All notable changes to Project Lancelot will be documented in this file.
   share one orchestrator brain, one chat history, and one user profile — the user is correctly
   identified as "Myles" across all interfaces.
 - **Telegram Send Blocked**: The `telegram_send` tool was classified as "escalate" which caused it
-  to be BLOCKED in most chat paths (where `allow_writes=False`). Changed to "auto" since it only
-  sends to the pre-configured owner chat_id and is explicitly requested by the user.
+  to be BLOCKED in all non-write chat paths. Changed to "auto" since it only sends to the
+  pre-configured owner chat_id. Also added "send"/"telegram"/"notify"/"message" to the routing
+  triggers (`_needs_research`, `_wants_action`) so the agentic loop uses `force_tool_use=True`
+  when telegram_send is clearly intended — Gemini no longer ignores the tool.
 - **User Profile**: Updated USER.md from "Arthur" to "Myles" so Lancelot addresses the owner
   correctly across all channels.
+- **Guardrail Conflict**: Removed the system instruction that told Gemini "call me X is NOT a
+  system modification" — this was preventing name persistence. Now handled programmatically.
 
 ### Added
 - **Channel Context**: `orchestrator.chat()` now accepts a `channel` parameter ("telegram",
   "warroom", or "api"). Channel info is included in the system instruction so Lancelot knows
   which interface the user is communicating through. Chat history entries are tagged with
   `[via telegram]` or `[via warroom]` for context continuity.
+- **Persistent Name Updates** (V18): When the user says "call me X" or "my name is X",
+  the orchestrator detects the pattern and updates USER.md automatically. The change takes
+  effect immediately (context reloaded) and persists across restarts.
 - Telegram bot passes `channel="telegram"` for all message types (text, voice, photo, document)
 - War Room chat endpoints pass `channel="warroom"` for both standard and file upload chats
+- CAPABILITIES.md updated to list `telegram_send` as an available skill
 
 ## [8.2.6] - 2026-02-13
 
