@@ -3,7 +3,7 @@
 // Endpoints for listing, enabling/disabling, and triggering scheduled jobs
 // ============================================================
 
-import { apiGet, apiPost } from './client'
+import { apiGet, apiPost, apiPatch } from './client'
 
 // ── Response Types ──────────────────────────────────────────
 
@@ -14,6 +14,7 @@ export interface SchedulerJob {
   enabled: boolean
   trigger_type: 'interval' | 'cron'
   trigger_value: string
+  timezone: string
   requires_ready: boolean
   requires_approvals: string[]
   timeout_s: number
@@ -33,6 +34,11 @@ export interface JobListResponse {
 export interface JobToggleResponse {
   id: string
   enabled: boolean
+}
+
+export interface JobTimezoneResponse {
+  id: string
+  timezone: string
 }
 
 export interface JobTriggerResponse {
@@ -57,3 +63,6 @@ export const disableSchedulerJob = (jobId: string) =>
 
 export const triggerSchedulerJob = (jobId: string) =>
   apiPost<JobTriggerResponse>(`/api/scheduler/jobs/${jobId}/trigger`)
+
+export const updateSchedulerJobTimezone = (jobId: string, timezone: string) =>
+  apiPatch<JobTimezoneResponse>(`/api/scheduler/jobs/${jobId}/timezone`, { timezone })

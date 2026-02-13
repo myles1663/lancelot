@@ -46,6 +46,7 @@ class JobRecord(BaseModel):
     name: str
     skill: str = ""
     inputs: Dict[str, Any] = Field(default_factory=dict)
+    timezone: str = "UTC"
     enabled: bool = True
     trigger_type: str = "interval"
     trigger_value: str = ""
@@ -96,6 +97,7 @@ class SchedulerService:
                     name TEXT NOT NULL,
                     skill TEXT DEFAULT '',
                     inputs TEXT DEFAULT '{}',
+                    timezone TEXT DEFAULT 'UTC',
                     enabled INTEGER DEFAULT 1,
                     trigger_type TEXT DEFAULT 'interval',
                     trigger_value TEXT DEFAULT '',
@@ -112,6 +114,11 @@ class SchedulerService:
             # Migration: add inputs column if missing (for existing DBs)
             try:
                 conn.execute("ALTER TABLE jobs ADD COLUMN inputs TEXT DEFAULT '{}'")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            # Migration: add timezone column if missing (for existing DBs)
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN timezone TEXT DEFAULT 'UTC'")
             except sqlite3.OperationalError:
                 pass  # Column already exists
             conn.commit()
@@ -153,15 +160,16 @@ class SchedulerService:
         try:
             conn.execute(
                 """INSERT INTO jobs
-                   (id, name, skill, inputs, enabled, trigger_type, trigger_value,
+                   (id, name, skill, inputs, timezone, enabled, trigger_type, trigger_value,
                     requires_ready, requires_approvals, timeout_s,
                     description, registered_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     spec.id,
                     spec.name,
                     spec.skill,
                     json.dumps(spec.inputs),
+                    spec.timezone,
                     1 if spec.enabled else 0,
                     spec.trigger.type.value,
                     trigger_value,
@@ -180,11 +188,17 @@ class SchedulerService:
         """Convert a database row to a JobRecord."""
         approvals = json.loads(row["requires_approvals"]) if row["requires_approvals"] else []
         inputs = json.loads(row["inputs"]) if row["inputs"] else {}
+        tz = "UTC"
+        try:
+            tz = row["timezone"] or "UTC"
+        except (IndexError, KeyError):
+            pass
         return JobRecord(
             id=row["id"],
             name=row["name"],
             skill=row["skill"] or "",
             inputs=inputs,
+            timezone=tz,
             enabled=bool(row["enabled"]),
             trigger_type=row["trigger_type"],
             trigger_value=row["trigger_value"] or "",
@@ -283,6 +297,7 @@ class SchedulerService:
         trigger_type: str,
         trigger_value: str,
         inputs: Optional[Dict[str, Any]] = None,
+        timezone_str: str = "UTC",
         description: str = "",
         enabled: bool = True,
     ) -> JobRecord:
@@ -295,6 +310,7 @@ class SchedulerService:
             trigger_type: "cron" or "interval".
             trigger_value: Cron expression or interval seconds.
             inputs: Dict of inputs to pass to the skill.
+            timezone_str: IANA timezone for cron evaluation (e.g., "America/New_York").
             description: Optional description.
             enabled: Whether the job starts enabled.
 
@@ -312,15 +328,16 @@ class SchedulerService:
         try:
             conn.execute(
                 """INSERT INTO jobs
-                   (id, name, skill, inputs, enabled, trigger_type, trigger_value,
+                   (id, name, skill, inputs, timezone, enabled, trigger_type, trigger_value,
                     requires_ready, requires_approvals, timeout_s,
                     description, registered_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     job_id,
                     name,
                     skill,
                     json.dumps(inputs or {}),
+                    timezone_str,
                     1 if enabled else 0,
                     trigger_type,
                     trigger_value,
@@ -337,6 +354,21 @@ class SchedulerService:
 
         logger.info("job_created: %s (skill=%s, trigger=%s %s)", job_id, skill, trigger_type, trigger_value)
         return self.get_job(job_id)
+
+    def update_job_timezone(self, job_id: str, tz: str) -> None:
+        """Update the timezone of a scheduled job.
+
+        Raises SchedulerError if not found.
+        """
+        if self.get_job(job_id) is None:
+            raise SchedulerError(f"Job '{job_id}' not found")
+        conn = self._get_conn()
+        try:
+            conn.execute("UPDATE jobs SET timezone = ? WHERE id = ?", (tz, job_id))
+            conn.commit()
+        finally:
+            conn.close()
+        logger.info("job_timezone_updated: %s → %s", job_id, tz)
 
     def delete_job(self, job_id: str) -> None:
         """Delete a scheduled job.

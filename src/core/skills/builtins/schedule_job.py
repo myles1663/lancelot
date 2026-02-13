@@ -72,6 +72,7 @@ def _handle_list(service: Any) -> Dict[str, Any]:
             "skill": j.skill,
             "enabled": j.enabled,
             "trigger": f"{j.trigger_type}: {j.trigger_value}",
+            "timezone": j.timezone,
             "last_run": j.last_run_at or "never",
             "run_count": j.run_count,
         })
@@ -88,6 +89,7 @@ def _handle_create(service: Any, inputs: Dict[str, Any]) -> Dict[str, Any]:
     skill = inputs.get("skill", "")
     cron = inputs.get("cron", "")
     skill_inputs = inputs.get("inputs", {})
+    tz = inputs.get("timezone", "America/New_York")
 
     if not name:
         return {"status": "error", "error": "Missing required field: 'name'"}
@@ -95,6 +97,13 @@ def _handle_create(service: Any, inputs: Dict[str, Any]) -> Dict[str, Any]:
         return {"status": "error", "error": "Missing required field: 'skill'"}
     if not cron:
         return {"status": "error", "error": "Missing required field: 'cron'"}
+
+    # Validate timezone
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(tz)
+    except (KeyError, Exception):
+        return {"status": "error", "error": f"Invalid timezone: '{tz}'. Use IANA format like 'America/New_York'."}
 
     # Parse skill_inputs if it's a string
     if isinstance(skill_inputs, str):
@@ -117,15 +126,17 @@ def _handle_create(service: Any, inputs: Dict[str, Any]) -> Dict[str, Any]:
             trigger_type="cron",
             trigger_value=cron,
             inputs=skill_inputs,
+            timezone_str=tz,
             description=f"Created via chat: {name}",
         )
-        logger.info("schedule_job: created '%s' (skill=%s, cron=%s)", job_id, skill, cron)
+        logger.info("schedule_job: created '%s' (skill=%s, cron=%s, tz=%s)", job_id, skill, cron, tz)
         return {
             "status": "created",
             "job_id": record.id,
             "name": record.name,
             "skill": record.skill,
             "cron": cron,
+            "timezone": tz,
             "inputs": skill_inputs,
         }
     except Exception as exc:

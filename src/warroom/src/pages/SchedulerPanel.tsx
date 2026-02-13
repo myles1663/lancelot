@@ -1,8 +1,26 @@
 import { useState } from 'react'
 import { usePolling } from '@/hooks'
 import { fetchHealthReady } from '@/api'
-import { fetchSchedulerJobs, enableSchedulerJob, disableSchedulerJob, triggerSchedulerJob } from '@/api/scheduler'
+import { fetchSchedulerJobs, enableSchedulerJob, disableSchedulerJob, triggerSchedulerJob, updateSchedulerJobTimezone } from '@/api/scheduler'
 import type { SchedulerJob, JobTriggerResponse } from '@/api/scheduler'
+
+// Common IANA timezones for the selector
+const TIMEZONE_OPTIONS = [
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/Anchorage',
+  'Pacific/Honolulu',
+  'UTC',
+  'Europe/London',
+  'Europe/Paris',
+  'Europe/Berlin',
+  'Asia/Tokyo',
+  'Asia/Shanghai',
+  'Asia/Kolkata',
+  'Australia/Sydney',
+]
 import { StatusDot, ConfirmDialog, MetricCard, EmptyState } from '@/components'
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -49,6 +67,7 @@ export function SchedulerPanel() {
   const [triggerResult, setTriggerResult] = useState<JobTriggerResponse | null>(null)
   const [toggling, setToggling] = useState<string | null>(null)
   const [triggering, setTriggering] = useState<string | null>(null)
+  const [updatingTz, setUpdatingTz] = useState<string | null>(null)
 
   // Derived
   const schedulerRunning = healthData?.scheduler_running ?? false
@@ -94,6 +113,16 @@ export function SchedulerPanel() {
       setTimeout(() => setTriggerResult(null), 5000)
     } finally {
       setTriggering(null)
+    }
+  }
+
+  const handleTimezoneChange = async (jobId: string, tz: string) => {
+    setUpdatingTz(jobId)
+    try {
+      await updateSchedulerJobTimezone(jobId, tz)
+      refetch()
+    } finally {
+      setUpdatingTz(null)
     }
   }
 
@@ -197,6 +226,11 @@ export function SchedulerPanel() {
                       <span className="text-[10px] text-text-muted font-mono whitespace-nowrap">
                         {formatTrigger(job.trigger_type, job.trigger_value)}
                       </span>
+                      {job.trigger_type === 'cron' && job.timezone && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-surface-input text-text-muted whitespace-nowrap font-mono">
+                          {job.timezone.replace('America/', '').replace('_', ' ')}
+                        </span>
+                      )}
                       {job.requires_approvals.length > 0 && (
                         <span className="text-[9px] px-1.5 py-0.5 rounded bg-state-degraded/15 text-state-degraded whitespace-nowrap">
                           approval
@@ -258,6 +292,25 @@ export function SchedulerPanel() {
                           <span className="text-[10px] text-text-muted uppercase tracking-wider">Timeout:</span>
                           <span className="text-xs font-mono text-text-primary">{job.timeout_s}s</span>
                         </div>
+                        {job.trigger_type === 'cron' && (
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-text-muted uppercase tracking-wider">Timezone:</span>
+                            <select
+                              value={job.timezone || 'UTC'}
+                              onChange={(e) => handleTimezoneChange(job.id, e.target.value)}
+                              disabled={updatingTz === job.id}
+                              className="text-xs font-mono bg-surface-input border border-border-default rounded px-1.5 py-0.5 text-text-primary cursor-pointer disabled:opacity-50"
+                            >
+                              {TIMEZONE_OPTIONS.map(tz => (
+                                <option key={tz} value={tz}>{tz}</option>
+                              ))}
+                              {/* Show current value if not in predefined list */}
+                              {job.timezone && !TIMEZONE_OPTIONS.includes(job.timezone) && (
+                                <option value={job.timezone}>{job.timezone}</option>
+                              )}
+                            </select>
+                          </div>
+                        )}
                         <div className="flex items-center gap-2">
                           <span className="text-[10px] text-text-muted uppercase tracking-wider">Requires Ready:</span>
                           <span className="text-xs text-text-primary">{job.requires_ready ? 'Yes' : 'No'}</span>

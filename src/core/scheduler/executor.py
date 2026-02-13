@@ -20,6 +20,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Callable, Dict, List, Optional
 
 from src.core.scheduler.service import SchedulerService
@@ -171,7 +172,7 @@ class JobExecutor:
 
     def _tick(self) -> None:
         """Single tick — evaluate all jobs."""
-        now = datetime.now(timezone.utc)
+        now_utc = datetime.now(timezone.utc)
         jobs = self._scheduler.list_jobs()
         fired = 0
 
@@ -182,17 +183,21 @@ class JobExecutor:
             should_run = False
 
             if job.trigger_type == "cron" and job.trigger_value:
-                if _cron_matches(job.trigger_value, now):
+                # Convert UTC to the job's timezone for cron evaluation
+                job_tz = ZoneInfo(job.timezone) if job.timezone and job.timezone != "UTC" else timezone.utc
+                now_local = now_utc.astimezone(job_tz)
+                if _cron_matches(job.trigger_value, now_local):
                     # Prevent double-fire within the same minute
                     if job.last_run_at:
                         try:
                             last = datetime.fromisoformat(job.last_run_at)
+                            last_local = last.astimezone(job_tz) if last.tzinfo else last
                             if (
-                                last.year == now.year
-                                and last.month == now.month
-                                and last.day == now.day
-                                and last.hour == now.hour
-                                and last.minute == now.minute
+                                last_local.year == now_local.year
+                                and last_local.month == now_local.month
+                                and last_local.day == now_local.day
+                                and last_local.hour == now_local.hour
+                                and last_local.minute == now_local.minute
                             ):
                                 continue  # Already ran this minute
                         except (ValueError, TypeError):
@@ -207,7 +212,7 @@ class JobExecutor:
                 if job.last_run_at:
                     try:
                         last = datetime.fromisoformat(job.last_run_at)
-                        elapsed = (now - last).total_seconds()
+                        elapsed = (now_utc - last).total_seconds()
                         if elapsed >= interval_s:
                             should_run = True
                     except (ValueError, TypeError):

@@ -756,7 +756,8 @@ class LancelotOrchestrator:
             "- When asked to send a message to the War Room/dashboard/Command Center, USE warroom_send — it pushes a toast notification\n"
             "- When asked to schedule, set up a recurring task, alarm, reminder, or wake-up call, USE schedule_job with action='create'. "
             "Provide the cron expression (5 fields: minute hour day month weekday), the skill to run (e.g. 'telegram_send'), "
-            "and the inputs as a JSON string (e.g. '{\"message\": \"Good morning Commander\"}')\n"
+            "and the inputs as a JSON string (e.g. '{\"message\": \"Good morning Commander\"}'). "
+            "Always include timezone — the Commander is in Eastern time, so use 'America/New_York' unless told otherwise.\n"
             "- To list scheduled jobs, USE schedule_job with action='list'\n"
             "- To cancel/delete a scheduled job, USE schedule_job with action='delete' and the job_id\n"
             "- Do NOT ask the user for search terms — research it yourself using your tools\n"
@@ -1066,6 +1067,10 @@ class LancelotOrchestrator:
                             "type": "string",
                             "description": "Cron expression with 5 fields: minute hour day-of-month month day-of-week. Example: '45 5 * * *' for 5:45am daily",
                         },
+                        "timezone": {
+                            "type": "string",
+                            "description": "IANA timezone for cron evaluation, e.g. 'America/New_York' for Eastern. Defaults to 'America/New_York'. The cron expression is evaluated in this timezone.",
+                        },
                         "inputs": {
                             "type": "string",
                             "description": "JSON string of inputs to pass to the skill, e.g. '{\"message\": \"Good morning\"}' (for create)",
@@ -1266,6 +1271,7 @@ class LancelotOrchestrator:
                             "name": {"type": "string", "description": "Job name (for create)"},
                             "skill": {"type": "string", "description": "Skill to execute (for create)"},
                             "cron": {"type": "string", "description": "Cron expression: minute hour day month weekday (for create)"},
+                            "timezone": {"type": "string", "description": "IANA timezone e.g. 'America/New_York' (for create, defaults to America/New_York)"},
                             "inputs": {"type": "string", "description": "JSON inputs for the skill (for create)"},
                             "job_id": {"type": "string", "description": "Job ID (for delete)"},
                         },

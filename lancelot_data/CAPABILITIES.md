@@ -34,7 +34,7 @@
 - **service_runner**: Manage Docker services (up, down, health, status)
 - **telegram_send**: Send messages to the owner via Telegram (bot token and chat ID are pre-configured — just provide the message text)
 - **warroom_send**: Push notifications to the War Room dashboard via WebSocket (message appears as a toast and in the notification tray)
-- **schedule_job**: Create, list, and delete scheduled jobs dynamically. Supports cron expressions for recurring tasks (wake-up calls, reminders, health checks). Jobs execute skills on schedule via the built-in cron tick loop.
+- **schedule_job**: Create, list, and delete scheduled jobs dynamically. Supports cron expressions with per-job timezone (IANA, e.g. America/New_York) for recurring tasks (wake-up calls, reminders, health checks). Jobs execute skills on schedule via the built-in cron tick loop. Timezone is configurable from the War Room scheduler dashboard.
 
 ## Agentic Execution
 - Gemini function calling enables multi-step task execution
@@ -49,7 +49,7 @@
 - Manage Docker containers and services
 - Send messages to the owner via Telegram (use telegram_send tool)
 - Push notifications to the War Room dashboard (use warroom_send tool)
-- Schedule recurring tasks like wake-up calls, reminders, and automated jobs (use schedule_job tool with cron expressions)
+- Schedule recurring tasks like wake-up calls, reminders, and automated jobs (use schedule_job tool with cron expressions and IANA timezone)
 - Receive and respond to voice notes via Telegram
 - Analyze images and documents using Gemini vision
 - Read and write files to the shared workspace

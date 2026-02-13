@@ -68,5 +68,15 @@
     "signature_state": "unsigned",
     "installed_at": "2026-02-13T22:30:00.000000+00:00",
     "manifest": null
+  },
+  {
+    "name": "schedule_job",
+    "version": "1.0.0",
+    "enabled": true,
+    "manifest_path": "",
+    "ownership": "system",
+    "signature_state": "unsigned",
+    "installed_at": "2026-02-13T20:34:32.453279+00:00",
+    "manifest": null
   }
 ]

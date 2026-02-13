@@ -2,6 +2,28 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.2.10] - 2026-02-13
+
+### Added
+- **Per-Job Timezone Support**: Each scheduled job now has an IANA timezone field (e.g.,
+  `America/New_York`, `UTC`). Cron expressions are evaluated in the job's configured timezone,
+  so "45 5 * * *" with timezone `America/New_York` fires at 5:45 AM Eastern regardless of
+  server timezone. Uses Python's built-in `zoneinfo` module (no external dependencies).
+- **Timezone Selector in War Room**: The Scheduler dashboard expanded job details now include a
+  timezone dropdown selector. Changes are saved immediately via a new PATCH endpoint
+  (`/api/scheduler/jobs/{id}/timezone`). The job row also displays a compact timezone badge.
+- **`apiPatch` HTTP client**: Added PATCH method to the War Room API client for partial updates.
+- Default timezone for new chat-created jobs is `America/New_York` (Commander's timezone).
+
+### Changed
+- `JobRecord` and `JobSpec` models now include `timezone` field (defaults to `UTC`).
+- `_tick()` in `JobExecutor` converts UTC time to each job's timezone before cron evaluation.
+- `schedule_job` skill accepts optional `timezone` parameter on create action.
+- Gemini and OpenAI tool declarations updated with `timezone` parameter.
+- SQLite schema includes `timezone TEXT DEFAULT 'UTC'` column with automatic migration.
+- `SchedulerService.create_job()` accepts `timezone_str` parameter.
+- New `update_job_timezone()` method on `SchedulerService` for dashboard edits.
+
 ## [8.2.9] - 2026-02-13
 
 ### Added

@@ -87,6 +87,7 @@ class JobSpec(BaseModel):
     timeout_s: int = 300
     skill: str = ""
     inputs: Dict[str, Any] = Field(default_factory=dict)
+    timezone: str = "UTC"
     description: str = ""
 
     @field_validator("id")

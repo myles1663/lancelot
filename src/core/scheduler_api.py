@@ -42,6 +42,7 @@ class JobResponse(BaseModel):
     enabled: bool
     trigger_type: str
     trigger_value: str
+    timezone: str = "UTC"
     requires_ready: bool
     requires_approvals: List[str]
     timeout_s: int
@@ -61,6 +62,15 @@ class JobListResponse(BaseModel):
 class JobToggleResponse(BaseModel):
     id: str
     enabled: bool
+
+
+class JobTimezoneRequest(BaseModel):
+    timezone: str
+
+
+class JobTimezoneResponse(BaseModel):
+    id: str
+    timezone: str
 
 
 class JobTriggerResponse(BaseModel):
@@ -93,6 +103,7 @@ def list_jobs():
                 enabled=r.enabled,
                 trigger_type=r.trigger_type,
                 trigger_value=r.trigger_value,
+                timezone=r.timezone,
                 requires_ready=r.requires_ready,
                 requires_approvals=r.requires_approvals,
                 timeout_s=r.timeout_s,
@@ -133,6 +144,7 @@ def get_job(job_id: str):
         enabled=record.enabled,
         trigger_type=record.trigger_type,
         trigger_value=record.trigger_value,
+        timezone=record.timezone,
         requires_ready=record.requires_ready,
         requires_approvals=record.requires_approvals,
         timeout_s=record.timeout_s,
@@ -219,4 +231,28 @@ def trigger_job(job_id: str):
         )
     except Exception as exc:
         logger.exception("Failed to trigger job %s", job_id)
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+@router.patch("/jobs/{job_id}/timezone", response_model=JobTimezoneResponse)
+def update_job_timezone(job_id: str, body: JobTimezoneRequest):
+    """Update the timezone for a scheduled job."""
+    if _service is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Scheduler service not initialized"},
+        )
+    # Validate timezone
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(body.timezone)
+    except (KeyError, Exception):
+        raise HTTPException(status_code=400, detail=f"Invalid timezone: '{body.timezone}'")
+
+    try:
+        _service.update_job_timezone(job_id, body.timezone)
+        return JobTimezoneResponse(id=job_id, timezone=body.timezone)
+    except Exception as exc:
+        if "not found" in str(exc).lower():
+            raise HTTPException(status_code=404, detail=str(exc))
         return JSONResponse(status_code=500, content={"error": str(exc)})

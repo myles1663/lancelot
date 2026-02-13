@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updated_at": "2026-02-13T19:01:48.878469",
+  "updated_at": "2026-02-13T21:15:51.255262",
   "blocks": {
     "persona": {
       "block_type": "persona",
@@ -26,7 +26,7 @@
       "content": "# User Profile\n- Name: Myles\n- Role: Commander\n- Bonded: True",
       "token_budget": 400,
       "token_count": 15,
-      "updated_at": "2026-02-13T19:01:48.878459",
+      "updated_at": "2026-02-13T21:15:51.255247",
       "updated_by": "system",
       "status": "active",
       "provenance": [
@@ -34,11 +34,11 @@
           "type": "external_doc",
           "ref": "/home/lancelot/data/USER.md",
           "snippet": "# User Profile\n- Name: Myles\n- Role: Commander\n- Bonded: True",
-          "timestamp": "2026-02-13T19:01:48.878435"
+          "timestamp": "2026-02-13T21:15:51.255215"
         }
       ],
       "confidence": 1.0,
-      "version": 70
+      "version": 84
     },
     "mission": {
       "block_type": "mission",
