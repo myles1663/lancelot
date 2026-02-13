@@ -2,6 +2,18 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.2.5] - 2026-02-13
+
+### Added
+- **Soul Inspector Overlay Visibility**: Soul Inspector now shows active governance overlays as a
+  banner below the header — displays overlay name, feature flag, description, and counts of added
+  rules (risk rules, tone invariants, memory ethics, autonomy entries). The `/soul/content` endpoint
+  now returns the fully merged soul (base + overlays) so the Constitution Viewer shows all active
+  governance rules including overlay additions.
+
+### Changed
+- `/soul/status` and `/soul/content` endpoints now include `active_overlays` field with overlay metadata
+
 ## [8.2.4] - 2026-02-13
 
 ### Fixed

@@ -67,23 +67,50 @@ def _verify_owner(request: Request) -> bool:
     return False
 
 
+def _get_active_overlays() -> list:
+    """Return metadata about currently active soul overlays."""
+    try:
+        from src.core.soul.layers import load_overlays
+        overlays = load_overlays(_SOUL_DIR)
+        return [
+            {
+                "name": o.overlay_name,
+                "feature_flag": o.feature_flag,
+                "description": o.description,
+                "risk_rules_count": len(o.risk_rules),
+                "tone_invariants_count": len(o.tone_invariants),
+                "memory_ethics_count": len(o.memory_ethics),
+                "autonomy_additions": len(o.autonomy_posture.allowed_autonomous) + len(o.autonomy_posture.requires_approval),
+            }
+            for o in overlays
+        ]
+    except Exception as exc:
+        logger.debug("Could not load overlays: %s", exc)
+        return []
+
+
 # ---------------------------------------------------------------------------
 # GET /soul/status
 # ---------------------------------------------------------------------------
 
 @router.get("/status")
 async def soul_status():
-    """Return the active soul version and pending proposals."""
+    """Return the active soul version, pending proposals, and active overlays."""
     try:
         version = get_active_version(_SOUL_DIR)
         versions = list_versions(_SOUL_DIR)
         proposals = list_proposals(_SOUL_DIR)
         pending = [p.model_dump() for p in proposals
                    if p.status == ProposalStatus.PENDING]
+
+        # Load active overlays
+        active_overlays = _get_active_overlays()
+
         return {
             "active_version": version,
             "available_versions": versions,
             "pending_proposals": pending,
+            "active_overlays": active_overlays,
         }
     except SoulStoreError as exc:
         return JSONResponse(status_code=500, content={"error": str(exc)})
@@ -95,16 +122,32 @@ async def soul_status():
 
 @router.get("/content")
 async def soul_content():
-    """Return the full active soul document as structured JSON."""
+    """Return the full active soul document (with overlays merged) as structured JSON."""
     try:
         from src.core.soul.store import load_active_soul, _resolve_soul_dir
-        soul = load_active_soul(_SOUL_DIR)
+        from src.core.soul.layers import load_overlays, merge_soul
+
+        base_soul = load_active_soul(_SOUL_DIR)
         d = _resolve_soul_dir(_SOUL_DIR)
-        version_file = d / "soul_versions" / f"soul_{soul.version}.yaml"
+        version_file = d / "soul_versions" / f"soul_{base_soul.version}.yaml"
         raw_yaml = version_file.read_text(encoding="utf-8") if version_file.exists() else ""
+
+        # Apply overlays to show the actual merged soul
+        overlays = load_overlays(_SOUL_DIR)
+        active_overlays = _get_active_overlays()
+
+        if overlays:
+            merged = merge_soul(base_soul, overlays)
+            return {
+                "soul": merged.model_dump(),
+                "raw_yaml": raw_yaml,
+                "active_overlays": active_overlays,
+            }
+
         return {
-            "soul": soul.model_dump(),
+            "soul": base_soul.model_dump(),
             "raw_yaml": raw_yaml,
+            "active_overlays": [],
         }
     except SoulStoreError as exc:
         return JSONResponse(status_code=500, content={"error": str(exc)})

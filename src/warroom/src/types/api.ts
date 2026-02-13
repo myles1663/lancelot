@@ -135,10 +135,21 @@ export interface SoulProposal {
   proposed_yaml?: string
 }
 
+export interface SoulOverlayInfo {
+  name: string
+  feature_flag: string
+  description: string
+  risk_rules_count: number
+  tone_invariants_count: number
+  memory_ethics_count: number
+  autonomy_additions: number
+}
+
 export interface SoulStatusResponse {
   active_version: string
   available_versions: string[]
   pending_proposals: SoulProposal[]
+  active_overlays?: SoulOverlayInfo[]
 }
 
 export interface SoulProposalActionResponse {
@@ -189,6 +200,7 @@ export interface SoulDocument {
 export interface SoulContentResponse {
   soul: SoulDocument
   raw_yaml: string
+  active_overlays?: SoulOverlayInfo[]
 }
 
 export interface SoulProposeResponse {

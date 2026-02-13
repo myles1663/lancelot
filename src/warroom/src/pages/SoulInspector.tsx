@@ -3,7 +3,7 @@ import { usePolling } from '@/hooks'
 import { fetchSoulStatus, fetchCrusaderStatus } from '@/api'
 import { fetchSoulContent, proposeSoulAmendment, approveSoulProposal, activateSoulProposal } from '@/api/soul'
 import { ConfirmDialog } from '@/components'
-import type { SoulDocument, SoulContentResponse, SoulProposal, CrusaderStatusResponse } from '@/types/api'
+import type { SoulDocument, SoulContentResponse, SoulProposal, CrusaderStatusResponse, SoulOverlayInfo } from '@/types/api'
 
 // ── Collapsible Section ─────────────────────────────────────────────
 function Section({ title, children, defaultOpen = true }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
@@ -335,6 +335,32 @@ export function SoulInspector() {
               <> Original soul version <span className="font-mono font-semibold">{crusaderStatus.soul_override}</span> will be restored when Crusader Mode is deactivated.</>
             )}
           </p>
+        </div>
+      )}
+
+      {/* Active Overlays Banner */}
+      {(statusData?.active_overlays ?? []).length > 0 && (
+        <div className="mb-6 space-y-2">
+          {(statusData?.active_overlays ?? []).map((overlay: SoulOverlayInfo) => (
+            <div key={overlay.name} className="p-3 bg-accent-primary/8 border border-accent-primary/20 rounded-lg">
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="w-2 h-2 rounded-full bg-accent-primary" />
+                <span className="text-sm font-semibold text-accent-primary">
+                  Soul Overlay: {overlay.name.toUpperCase()}
+                </span>
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent-primary/15 text-accent-primary font-mono">
+                  {overlay.feature_flag}
+                </span>
+              </div>
+              <p className="text-xs text-text-secondary mb-2">{overlay.description}</p>
+              <div className="flex flex-wrap gap-3 text-[10px] text-text-muted">
+                <span>+{overlay.risk_rules_count} risk rules</span>
+                <span>+{overlay.tone_invariants_count} tone invariants</span>
+                <span>+{overlay.memory_ethics_count} memory ethics</span>
+                <span>+{overlay.autonomy_additions} autonomy entries</span>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
