@@ -977,6 +977,24 @@ class LancelotOrchestrator:
                     "required": ["action"],
                 },
             ),
+            types.FunctionDeclaration(
+                name="telegram_send",
+                description=(
+                    "Send a message to the owner via Telegram. Use this tool when asked to "
+                    "send a Telegram message, notify the owner, or communicate via Telegram. "
+                    "The bot token and chat ID are already configured."
+                ),
+                parameters_json_schema={
+                    "type": "object",
+                    "properties": {
+                        "message": {
+                            "type": "string",
+                            "description": "The message text to send",
+                        },
+                    },
+                    "required": ["message"],
+                },
+            ),
         ]
 
     def _classify_tool_call_safety(self, skill_name: str, inputs: dict) -> str:
@@ -1003,6 +1021,9 @@ class LancelotOrchestrator:
             for safe_prefix in READ_ONLY_COMMANDS:
                 if cmd.startswith(safe_prefix):
                     return "auto"
+            return "escalate"
+
+        if skill_name == "telegram_send":
             return "escalate"
 
         # repo_writer, service_runner, and anything else → escalate
@@ -1095,6 +1116,26 @@ class LancelotOrchestrator:
                             },
                         },
                         "required": ["action"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "telegram_send",
+                    "description": (
+                        "Send a message to the owner via Telegram. "
+                        "The bot token and chat ID are already configured."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "message": {
+                                "type": "string",
+                                "description": "The message text to send",
+                            },
+                        },
+                        "required": ["message"],
                     },
                 },
             },
@@ -1604,7 +1645,7 @@ class LancelotOrchestrator:
             # Gemini API requires ALL function responses in a SINGLE Content
             # message when multiple function calls are in one response.
             # V13: Set of declared tool names for hallucination guard
-            _DECLARED_TOOL_NAMES = {"network_client", "command_runner", "repo_writer", "service_runner"}
+            _DECLARED_TOOL_NAMES = {"network_client", "command_runner", "repo_writer", "service_runner", "telegram_send"}
 
             response_parts = []
             for fc in response.function_calls:

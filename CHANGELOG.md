@@ -2,6 +2,14 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.2.6] - 2026-02-13
+
+### Added
+- **Telegram Send Skill** (`src/core/skills/builtins/telegram_send.py`): New built-in skill enabling
+  the orchestrator to send Telegram messages on demand. Registered as a Gemini and OpenAI function
+  declaration, added to `_DECLARED_TOOL_NAMES`, and classified as an escalation (requires approval).
+  Uses the gateway's TelegramBot instance or falls back to direct API calls via env vars.
+
 ## [8.2.5] - 2026-02-13
 
 ### Added
