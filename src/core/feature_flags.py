@@ -91,6 +91,9 @@ FEATURE_SKILL_SECURITY_PIPELINE: bool = _env_bool("FEATURE_SKILL_SECURITY_PIPELI
 # Approval Pattern Learning flags
 FEATURE_APPROVAL_LEARNING: bool = _env_bool("FEATURE_APPROVAL_LEARNING", default=False)
 
+# Business Automation Layer flags
+FEATURE_BAL: bool = _env_bool("FEATURE_BAL", default=False)
+
 
 # Flags that require a container restart to fully take effect when toggled
 RESTART_REQUIRED_FLAGS = frozenset({
@@ -99,6 +102,7 @@ RESTART_REQUIRED_FLAGS = frozenset({
     "FEATURE_HEALTH_MONITOR",
     "FEATURE_SCHEDULER",
     "FEATURE_MEMORY_VNEXT",
+    "FEATURE_BAL",
 })
 
 
@@ -144,6 +148,7 @@ def reload_flags() -> None:
     global FEATURE_ASYNC_VERIFICATION, FEATURE_INTENT_TEMPLATES, FEATURE_BATCH_RECEIPTS
     global FEATURE_CONNECTORS, FEATURE_TRUST_LEDGER, FEATURE_SKILL_SECURITY_PIPELINE
     global FEATURE_APPROVAL_LEARNING
+    global FEATURE_BAL
 
     # vNext2 flags
     FEATURE_SOUL = _env_bool("FEATURE_SOUL")
@@ -186,6 +191,9 @@ def reload_flags() -> None:
 
     # Approval Pattern Learning flags
     FEATURE_APPROVAL_LEARNING = _env_bool("FEATURE_APPROVAL_LEARNING", default=False)
+
+    # Business Automation Layer flags
+    FEATURE_BAL = _env_bool("FEATURE_BAL", default=False)
 
 
 def get_all_flags() -> dict[str, bool]:
@@ -238,4 +246,8 @@ def log_feature_flags() -> None:
     logger.info(
         "Approval Pattern Learning flags: APPROVAL_LEARNING=%s",
         FEATURE_APPROVAL_LEARNING,
+    )
+    logger.info(
+        "Business Automation Layer flags: BAL=%s",
+        FEATURE_BAL,
     )

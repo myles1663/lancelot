@@ -209,6 +209,20 @@ async def startup_event():
             try:
                 from soul.api import router as soul_router
                 active_soul = load_active_soul()
+
+                # BAL: Apply composable soul overlays if FEATURE_BAL is enabled
+                try:
+                    from feature_flags import FEATURE_BAL
+                    if FEATURE_BAL:
+                        from soul.layers import load_overlays, merge_soul
+                        overlays = load_overlays()
+                        if overlays:
+                            active_soul = merge_soul(active_soul, overlays)
+                            logger.info("Soul overlays applied: %s",
+                                        [o.overlay_name for o in overlays])
+                except Exception as exc:
+                    logger.warning(f"Soul overlay loading failed: {exc} — using base soul")
+
                 main_orchestrator.soul = active_soul
                 app.include_router(soul_router)
                 logger.info(f"Soul loaded: version={active_soul.version}")
@@ -441,6 +455,43 @@ async def startup_event():
         logger.info("Connectors subsystem initialized (FEATURE_CONNECTORS=%s).", FEATURE_CONNECTORS)
     except Exception as e:
         logger.warning(f"Connectors initialization failed: {e}")
+
+    # ===== BUSINESS AUTOMATION LAYER (BAL) =====
+    try:
+        from feature_flags import FEATURE_BAL
+        if FEATURE_BAL:
+            from bal.config import load_bal_config
+            from bal.database import BALDatabase
+            from bal.receipts import emit_bal_receipt
+
+            _bal_config = load_bal_config()
+            _bal_db = BALDatabase(data_dir=_bal_config.bal_data_dir)
+
+            # Attach to orchestrator for later use by BAL subsystems
+            main_orchestrator._bal_config = _bal_config
+            main_orchestrator._bal_db = _bal_db
+
+            # Emit startup receipt
+            emit_bal_receipt(
+                event_type="client",
+                action_name="bal_startup",
+                inputs={
+                    "phase": "1_foundation",
+                    "intake_enabled": _bal_config.bal_intake,
+                    "repurpose_enabled": _bal_config.bal_repurpose,
+                    "delivery_enabled": _bal_config.bal_delivery,
+                    "billing_enabled": _bal_config.bal_billing,
+                },
+            )
+            logger.info(
+                "BAL initialized: intake=%s, repurpose=%s, delivery=%s, billing=%s",
+                _bal_config.bal_intake, _bal_config.bal_repurpose,
+                _bal_config.bal_delivery, _bal_config.bal_billing,
+            )
+        else:
+            logger.info("BAL disabled by feature flag.")
+    except Exception as e:
+        logger.warning(f"BAL initialization failed: {e}")
 
     # ===== PHASE 6b: USAGE TRACKER + PERSISTENCE =====
     try:

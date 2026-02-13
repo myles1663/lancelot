@@ -46,6 +46,12 @@ class ActionType(str, Enum):
     # Fix Pack V1 — Voice Notes
     VOICE_STT = "voice_stt"
     VOICE_TTS = "voice_tts"
+    # Business Automation Layer (BAL)
+    BAL_CLIENT_EVENT = "bal_client_event"
+    BAL_INTAKE_EVENT = "bal_intake_event"
+    BAL_REPURPOSE_EVENT = "bal_repurpose_event"
+    BAL_DELIVERY_EVENT = "bal_delivery_event"
+    BAL_BILLING_EVENT = "bal_billing_event"
 
 
 class ReceiptStatus(str, Enum):

@@ -2,6 +2,42 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.2.0] - 2026-02-13
+
+### Added
+- **Business Automation Layer (BAL) — Phase 1 Foundation:** Core infrastructure for autonomous content
+  repurposing. BAL is a 10-phase system that adds client management, content intake, repurposing,
+  delivery, and billing capabilities to Lancelot
+  - **`FEATURE_BAL` feature flag:** Master toggle for the entire BAL subsystem. Added to
+    `RESTART_REQUIRED_FLAGS`, `reload_flags()`, and `log_feature_flags()`. Default: disabled
+  - **BAL Config** (`src/core/bal/config.py`): Pydantic configuration model with sub-system flags
+    (`BAL_INTAKE`, `BAL_REPURPOSE`, `BAL_DELIVERY`, `BAL_BILLING`), data directory, SMTP/Stripe
+    placeholders, and client/content limits. Loaded from environment variables
+  - **BAL Gates** (`src/core/bal/gates.py`): `bal_gate(subsystem)` helper checks both `FEATURE_BAL`
+    master flag AND the per-subsystem flag before allowing operations
+  - **BAL Database** (`src/core/bal/database.py`): SQLite database with WAL mode, thread-local
+    connections, foreign keys, and schema migration runner. V1 schema creates 6 tables:
+    `bal_schema_version`, `bal_clients`, `bal_intake`, `bal_content`, `bal_deliveries`,
+    `bal_financial_receipts`. Stored at `data/bal/bal.sqlite`
+  - **BAL Receipts** (`src/core/bal/receipts.py`): `emit_bal_receipt()` helper integrating with the
+    shared receipt system. 5 new ActionType values: `BAL_CLIENT_EVENT`, `BAL_INTAKE_EVENT`,
+    `BAL_REPURPOSE_EVENT`, `BAL_DELIVERY_EVENT`, `BAL_BILLING_EVENT`
+  - **Composable Soul Layer System** (`src/core/soul/layers.py`): New architectural pattern for
+    domain-specific governance overlays. Overlays are YAML files in `soul/overlays/` that stack
+    additively on top of the base Soul. Overlays can ONLY append rules — they can NEVER remove,
+    weaken, or override base Soul fields (mission, allegiance, version, scheduling limits).
+    Functions: `load_overlays()`, `merge_soul()`, `load_active_soul_with_overlays()`
+  - **BAL Soul Overlay** (`soul/overlays/bal.yaml`): Domain-specific governance for BAL — 3 risk
+    rules (no_unauthorized_billing, no_spam, content_verification_mandatory), 2 tone invariants,
+    3 memory ethics rules, 6 allowed autonomous actions, 7 requires-approval actions
+  - **BAL Soul Linter Checks** (`src/core/soul/linter.py`): 2 conditional checks that only fire
+    when BAL overlay is loaded — `_check_bal_billing_requires_approval` (CRITICAL) and
+    `_check_bal_no_spam` (CRITICAL). No-ops for non-BAL configurations
+  - **Gateway BAL Integration** (`src/core/gateway.py`): Soul overlay merge in Phase 3 (base Soul
+    + active overlays), BAL initialization block after connectors (config, database, startup receipt)
+  - **38 tests** across 9 test classes covering feature flags, config, gates, database, receipts,
+    overlay loading, soul merge, linter checks, and full integration
+
 ## [8.1.3] - 2026-02-12
 
 ### Added

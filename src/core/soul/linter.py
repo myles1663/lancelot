@@ -152,6 +152,59 @@ def _check_memory_ethics_present(soul: Soul) -> List[LintIssue]:
 
 
 # ---------------------------------------------------------------------------
+# BAL-specific checks (conditional — only fire when BAL overlay is loaded)
+# ---------------------------------------------------------------------------
+
+def _check_bal_billing_requires_approval(soul: Soul) -> List[LintIssue]:
+    """If BAL billing rules are present, billing actions must require approval."""
+    has_bal_billing_rule = any(
+        r.name == "no_unauthorized_billing" for r in soul.risk_rules
+    )
+    if not has_bal_billing_rule:
+        return []  # BAL overlay not loaded; skip this check
+
+    approval_set = {a.lower() for a in soul.autonomy_posture.requires_approval}
+    has_billing_approval = any("billing" in entry for entry in approval_set)
+
+    if not has_billing_approval:
+        return [
+            LintIssue(
+                rule="bal_billing_requires_approval",
+                severity=LintSeverity.CRITICAL,
+                message=(
+                    "BAL overlay loaded but requires_approval does not include "
+                    "any billing-related entries. Billing actions must require approval."
+                ),
+            )
+        ]
+    return []
+
+
+def _check_bal_no_spam(soul: Soul) -> List[LintIssue]:
+    """If BAL delivery rules are present, anti-spam rule must exist."""
+    has_bal_delivery = any(
+        "bal_delivery" in a or "bal_mass_delivery" in a
+        for a in soul.autonomy_posture.requires_approval
+    )
+    if not has_bal_delivery:
+        return []  # BAL overlay not loaded; skip this check
+
+    has_no_spam = any(r.name == "no_spam" for r in soul.risk_rules)
+    if not has_no_spam:
+        return [
+            LintIssue(
+                rule="bal_no_spam_rule_required",
+                severity=LintSeverity.CRITICAL,
+                message=(
+                    "BAL overlay loaded but risk_rules does not include the "
+                    "'no_spam' rule. Anti-spam protection is mandatory for delivery."
+                ),
+            )
+        ]
+    return []
+
+
+# ---------------------------------------------------------------------------
 # Registry of all checks
 # ---------------------------------------------------------------------------
 
@@ -161,6 +214,9 @@ _CHECKS = [
     _check_scheduling_no_autonomous_irreversible,
     _check_approval_channels_exist,
     _check_memory_ethics_present,
+    # BAL-specific checks (conditional — only fire when BAL overlay is loaded)
+    _check_bal_billing_requires_approval,
+    _check_bal_no_spam,
 ]
 
 
