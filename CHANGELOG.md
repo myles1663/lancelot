@@ -2,6 +2,30 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.2.8] - 2026-02-13
+
+### Added
+- **War Room Send Skill** (`warroom_send`): New built-in skill that pushes notifications to the War
+  Room dashboard via EventBus → WebSocket broadcast. Messages appear as slide-in toast notifications
+  and persist in the notification tray. Supports `message` (required) and `priority` ("normal"|"high")
+  parameters. Registered in executor, orchestrator (Gemini + OpenAI declarations), gateway, and
+  skills registry.
+- **Toast Notifications** (`Toast.tsx`): Auto-dismissing slide-in notification component for the War
+  Room. High-priority messages show a red accent border; normal messages use the theme accent color.
+  Toasts auto-dismiss after 5 seconds with manual dismiss option.
+- **Live Notification Tray**: NotificationTray now displays real-time notifications received via
+  WebSocket. Shows unread count badge, expandable notification list with timestamps, and "Clear all"
+  button. High-priority notifications are visually distinguished with red borders.
+- **WebSocket Integration in WarRoomShell**: Shell now connects to `/ws/warroom` via the `useWebSocket`
+  hook, listens for `warroom_notification` events, and manages notification + toast state.
+
+### Changed
+- **Channel-Aware Messaging**: System instruction now tells Lancelot which cross-channel tools are
+  available depending on the current channel — e.g., when on Telegram, it knows to use `warroom_send`
+  for the War Room; when on the War Room, it knows to use `telegram_send` for Telegram.
+- CAPABILITIES.md updated to list `warroom_send` as an available skill and document War Room push
+  notification capability.
+
 ## [8.2.7] - 2026-02-13
 
 ### Fixed

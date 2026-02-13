@@ -1,12 +1,52 @@
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { Outlet } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
 import { Header } from './Header'
 import { NotificationTray } from './NotificationTray'
+import { Toast } from '@/components/Toast'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
+import { useWebSocket, WsEvent } from '@/hooks/useWebSocket'
+
+export interface Notification {
+  id: string
+  message: string
+  priority: 'normal' | 'high'
+  timestamp: number
+  read: boolean
+}
 
 export function WarRoomShell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [notifications, setNotifications] = useState<Notification[]>([])
+  const [toasts, setToasts] = useState<Notification[]>([])
+
+  const handleWsEvent = useCallback((event: WsEvent) => {
+    if (event.type === 'warroom_notification') {
+      const notif: Notification = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        message: (event.payload.message as string) || 'New notification',
+        priority: (event.payload.priority as 'normal' | 'high') || 'normal',
+        timestamp: event.timestamp || Date.now() / 1000,
+        read: false,
+      }
+      setNotifications(prev => [notif, ...prev].slice(0, 50))
+      setToasts(prev => [...prev, notif])
+    }
+  }, [])
+
+  useWebSocket({
+    url: '/ws/warroom',
+    enabled: true,
+    onMessage: handleWsEvent,
+  })
+
+  const dismissToast = useCallback((id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id))
+  }, [])
+
+  const clearNotifications = useCallback(() => {
+    setNotifications([])
+  }, [])
 
   useKeyboardShortcuts()
 
@@ -33,7 +73,24 @@ export function WarRoomShell() {
         </div>
       </main>
 
-      <NotificationTray sidebarCollapsed={sidebarCollapsed} />
+      {/* Toast notifications — top right */}
+      <div className="fixed top-16 right-4 z-50 flex flex-col gap-2">
+        {toasts.map(t => (
+          <Toast
+            key={t.id}
+            id={t.id}
+            message={t.message}
+            priority={t.priority}
+            onDismiss={dismissToast}
+          />
+        ))}
+      </div>
+
+      <NotificationTray
+        sidebarCollapsed={sidebarCollapsed}
+        notifications={notifications}
+        onClear={clearNotifications}
+      />
     </div>
   )
 }

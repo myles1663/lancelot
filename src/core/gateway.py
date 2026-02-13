@@ -247,7 +247,7 @@ async def startup_event():
             skill_registry = SkillRegistry(data_dir="/home/lancelot/data")
             # Fix Pack V5: Register builtins so executor can find them
             from skills.registry import SkillEntry, SkillOwnership
-            for builtin_name in ("echo", "command_runner", "repo_writer", "service_runner", "network_client", "telegram_send"):
+            for builtin_name in ("echo", "command_runner", "repo_writer", "service_runner", "network_client", "telegram_send", "warroom_send"):
                 if not skill_registry.get_skill(builtin_name):
                     skill_registry._skills[builtin_name] = SkillEntry(
                         name=builtin_name, version="1.0.0",

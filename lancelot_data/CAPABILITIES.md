@@ -16,7 +16,7 @@
 
 ## Deployment
 - Docker container on Commander's server (Docker Desktop)
-- Primary channels: War Room (Streamlit web UI on port 8501), Telegram bot
+- Primary channels: War Room (React web UI on port 8501), Telegram bot
 - FastAPI gateway on port 8000 handles all API routing
 - Local LLM server on port 8080 (llama.cpp)
 
@@ -32,6 +32,8 @@
 - **repo_writer**: Create, edit, and delete files in the workspace
 - **network_client**: Make HTTP requests (GET, POST, PUT, DELETE) to external APIs
 - **service_runner**: Manage Docker services (up, down, health, status)
+- **telegram_send**: Send messages to the owner via Telegram (bot token and chat ID are pre-configured — just provide the message text)
+- **warroom_send**: Push notifications to the War Room dashboard via WebSocket (message appears as a toast and in the notification tray)
 
 ## Agentic Execution
 - Gemini function calling enables multi-step task execution
@@ -44,6 +46,8 @@
 - Make API calls to external services
 - Create and edit code, configuration, and documentation files
 - Manage Docker containers and services
+- Send messages to the owner via Telegram (use telegram_send tool)
+- Push notifications to the War Room dashboard (use warroom_send tool)
 - Receive and respond to voice notes via Telegram
 - Analyze images and documents using Gemini vision
 - Read and write files to the shared workspace

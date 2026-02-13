@@ -66,9 +66,9 @@ def _load_builtin_execute(module_name: str) -> SkillExecuteFunc:
     """Lazily load execute function from a builtins module."""
     def _wrapper(context: SkillContext, inputs: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            from src.core.skills.builtins import repo_writer, command_runner, service_runner, network_client, telegram_send
+            from src.core.skills.builtins import repo_writer, command_runner, service_runner, network_client, telegram_send, warroom_send
         except ImportError:
-            from skills.builtins import repo_writer, command_runner, service_runner, network_client, telegram_send
+            from skills.builtins import repo_writer, command_runner, service_runner, network_client, telegram_send, warroom_send
 
         module_map = {
             "repo_writer": repo_writer,
@@ -76,6 +76,7 @@ def _load_builtin_execute(module_name: str) -> SkillExecuteFunc:
             "service_runner": service_runner,
             "network_client": network_client,
             "telegram_send": telegram_send,
+            "warroom_send": warroom_send,
         }
         mod = module_map.get(module_name)
         if mod is None:
@@ -91,6 +92,7 @@ _BUILTIN_SKILLS: Dict[str, SkillExecuteFunc] = {
     "service_runner": _load_builtin_execute("service_runner"),
     "network_client": _load_builtin_execute("network_client"),
     "telegram_send": _load_builtin_execute("telegram_send"),
+    "warroom_send": _load_builtin_execute("warroom_send"),
 }
 
 

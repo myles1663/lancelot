@@ -1,11 +1,15 @@
 import { useState } from 'react'
+import type { Notification } from './WarRoomShell'
 
 interface NotificationTrayProps {
   sidebarCollapsed: boolean
+  notifications: Notification[]
+  onClear: () => void
 }
 
-export function NotificationTray({ sidebarCollapsed }: NotificationTrayProps) {
+export function NotificationTray({ sidebarCollapsed, notifications, onClear }: NotificationTrayProps) {
   const [expanded, setExpanded] = useState(false)
+  const unread = notifications.filter(n => !n.read).length
 
   return (
     <footer
@@ -30,9 +34,12 @@ export function NotificationTray({ sidebarCollapsed }: NotificationTrayProps) {
           </svg>
           <span className="text-xs">Notifications</span>
 
-          {/* Placeholder badges — WR-13 will populate */}
-          <span className="px-1.5 py-0.5 text-[10px] font-mono rounded bg-surface-input text-text-muted">
-            0 pending
+          <span className={`px-1.5 py-0.5 text-[10px] font-mono rounded ${
+            unread > 0
+              ? 'bg-accent/20 text-accent'
+              : 'bg-surface-input text-text-muted'
+          }`}>
+            {unread > 0 ? `${unread} new` : '0 pending'}
           </span>
         </div>
 
@@ -47,10 +54,43 @@ export function NotificationTray({ sidebarCollapsed }: NotificationTrayProps) {
         </svg>
       </button>
 
-      {/* Expanded panel — WR-13 will populate */}
+      {/* Expanded panel */}
       {expanded && (
-        <div className="px-4 py-3 overflow-y-auto h-48 text-sm text-text-muted flex items-center justify-center">
-          No notifications
+        <div className="px-4 py-2 overflow-y-auto h-48">
+          {notifications.length === 0 ? (
+            <div className="text-sm text-text-muted flex items-center justify-center h-full">
+              No notifications
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-text-muted">{notifications.length} notification{notifications.length !== 1 ? 's' : ''}</span>
+                <button
+                  onClick={onClear}
+                  className="text-xs text-text-muted hover:text-accent transition-colors"
+                >
+                  Clear all
+                </button>
+              </div>
+              <div className="space-y-1.5">
+                {notifications.map(n => (
+                  <div
+                    key={n.id}
+                    className={`text-sm px-3 py-2 rounded border ${
+                      n.priority === 'high'
+                        ? 'border-red-500/30 bg-red-500/5'
+                        : 'border-border-default bg-surface-input/50'
+                    }`}
+                  >
+                    <p className="text-text-primary">{n.message}</p>
+                    <p className="text-[10px] text-text-muted mt-0.5 font-mono">
+                      {new Date(n.timestamp * 1000).toLocaleTimeString()}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
     </footer>

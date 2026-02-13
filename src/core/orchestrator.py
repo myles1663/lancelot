@@ -753,6 +753,7 @@ class LancelotOrchestrator:
             "- When you need information, USE network_client to fetch it (GET requests to APIs, docs, etc.)\n"
             "- When you need to check the system, USE command_runner (ls, git status, etc.)\n"
             "- When asked to send a message via Telegram, USE telegram_send immediately — credentials are pre-configured\n"
+            "- When asked to send a message to the War Room/dashboard/Command Center, USE warroom_send — it pushes a toast notification\n"
             "- Do NOT ask the user for search terms — research it yourself using your tools\n"
             "- Do NOT produce plans without researching first when tools are available\n"
             "- When you USE a tool and get results, you CAN say 'I researched X and found Y'\n"
@@ -787,12 +788,14 @@ class LancelotOrchestrator:
             channel_note = (
                 "\nCHANNEL: This message arrived via Telegram. "
                 "You can reply directly — the response will be sent back to Telegram. "
-                "You also have a telegram_send tool for proactive outbound messages."
+                "To send a message to the War Room dashboard, use the warroom_send tool. "
+                "To send another Telegram message, use the telegram_send tool."
             )
         elif channel == "warroom":
             channel_note = (
                 "\nCHANNEL: This message arrived via the War Room web interface. "
-                "The user is interacting through the Command Center dashboard."
+                "To send a message to Telegram, use the telegram_send tool. "
+                "To push a notification to this dashboard, use the warroom_send tool."
             )
 
         instruction = f"{persona}\n\n{self_awareness}\n\n{rules}\n\n{guardrails}\n\n{honesty}{channel_note}"
@@ -1012,6 +1015,24 @@ class LancelotOrchestrator:
                     "required": ["message"],
                 },
             ),
+            types.FunctionDeclaration(
+                name="warroom_send",
+                description=(
+                    "Push a notification message to the War Room dashboard. Use this tool when "
+                    "asked to send a message to the War Room, Command Center, or dashboard. "
+                    "The message appears as a toast notification in the browser."
+                ),
+                parameters_json_schema={
+                    "type": "object",
+                    "properties": {
+                        "message": {
+                            "type": "string",
+                            "description": "The notification message to display",
+                        },
+                    },
+                    "required": ["message"],
+                },
+            ),
         ]
 
     def _classify_tool_call_safety(self, skill_name: str, inputs: dict) -> str:
@@ -1042,6 +1063,10 @@ class LancelotOrchestrator:
 
         if skill_name == "telegram_send":
             # Auto-execute: only sends to the pre-configured owner chat_id
+            return "auto"
+
+        if skill_name == "warroom_send":
+            # Auto-execute: pushes notification to the War Room dashboard
             return "auto"
 
         # repo_writer, service_runner, and anything else → escalate
@@ -1157,6 +1182,26 @@ class LancelotOrchestrator:
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "warroom_send",
+                    "description": (
+                        "Push a notification to the War Room dashboard. "
+                        "The message appears as a toast notification in the browser."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "message": {
+                                "type": "string",
+                                "description": "The notification message to display",
+                            },
+                        },
+                        "required": ["message"],
+                    },
+                },
+            },
         ]
 
     def _is_simple_for_local(self, prompt: str) -> bool:
@@ -1232,6 +1277,7 @@ class LancelotOrchestrator:
             "send a message", "send me", "send a telegram",
             "send in telegram", "send via telegram", "send on telegram",
             "telegram", "notify me", "message me",
+            "war room", "warroom", "command center", "dashboard",
         ]
         if any(phrase in prompt_lower for phrase in research_phrases):
             return True
@@ -1708,7 +1754,7 @@ class LancelotOrchestrator:
             # Gemini API requires ALL function responses in a SINGLE Content
             # message when multiple function calls are in one response.
             # V13: Set of declared tool names for hallucination guard
-            _DECLARED_TOOL_NAMES = {"network_client", "command_runner", "repo_writer", "service_runner", "telegram_send"}
+            _DECLARED_TOOL_NAMES = {"network_client", "command_runner", "repo_writer", "service_runner", "telegram_send", "warroom_send"}
 
             response_parts = []
             for fc in response.function_calls:
@@ -2476,6 +2522,7 @@ class LancelotOrchestrator:
         # SECURITY: Sanitize Input
         user_message = self.sanitizer.sanitize(user_message)
 
+
         # ── V18: Detect and persist name preferences ──
         self._check_name_update(user_message)
 
@@ -2513,6 +2560,7 @@ class LancelotOrchestrator:
         # ── Honest Closure: Intent Classification + Pipeline Routing ──
         intent = classify_intent(user_message)
         print(f"Intent Classifier: {intent.value}")
+
 
         # Fix Pack V1: Check for "Proceed" / "Approve" messages first
         if self._is_proceed_message(user_message) and self.task_store:
