@@ -2,6 +2,32 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.2.1] - 2026-02-13
+
+### Added
+- **BAL Phase 2 — Client Manager:** Full client lifecycle management with CRUD API, state machine,
+  and receipt emission
+  - **Client Models** (`src/core/bal/clients/models.py`): 6 enums (ClientStatus, PlanTier,
+    PaymentStatus, TonePreference, HashtagPolicy, EmojiPolicy) and 6 Pydantic models (Client,
+    ClientCreate, ClientUpdate, ClientBilling, ClientPreferences, ContentHistory) with email
+    validation, UUID generation, and JSON round-trip support
+  - **Client Repository** (`src/core/bal/clients/repository.py`): Full CRUD against `bal_clients`
+    table — create, get_by_id, get_by_email, list_all (with status filter), update (partial),
+    update_status, update_billing, update_content_history, soft delete (sets status to CHURNED)
+  - **Client State Machine** (`src/core/bal/clients/state_machine.py`): Deterministic lifecycle
+    transitions — ONBOARDING->[ACTIVE,CHURNED], ACTIVE->[PAUSED,CHURNED], PAUSED->[ACTIVE,CHURNED],
+    CHURNED->[] (terminal). Raises `InvalidTransitionError` for invalid transitions
+  - **Client Events** (`src/core/bal/clients/events.py`): Receipt emission for all lifecycle events
+    (onboarded, preferences_updated, status_changed, plan_changed, paused, churned) via BAL receipt
+    system
+  - **Client REST API** (`src/core/bal/clients/api.py`): 7 endpoints at `/api/v1/clients` — POST
+    create (201), GET list, GET by id, PATCH update, POST pause/resume/activate. Feature-flag gated,
+    409 on duplicate email, 422 on invalid transitions
+  - **Schema V2 Migration**: Added `memory_block_id` column and unique email constraint to
+    `bal_clients` table
+  - **97 new tests** (25 models + 28 repository + 20 state machine + 6 events + 18 API) all passing
+    with real SQLite databases
+
 ## [8.2.0] - 2026-02-13
 
 ### Added

@@ -471,12 +471,22 @@ async def startup_event():
             main_orchestrator._bal_config = _bal_config
             main_orchestrator._bal_db = _bal_db
 
+            # Client Manager API
+            from bal.clients.api import router as bal_client_router, init_client_api
+            from bal.clients.repository import ClientRepository
+
+            _bal_client_repo = ClientRepository(_bal_db)
+            init_client_api(_bal_client_repo)
+            app.include_router(bal_client_router)
+            main_orchestrator._bal_client_repo = _bal_client_repo
+            logger.info("BAL Client Manager API mounted at /api/v1/clients")
+
             # Emit startup receipt
             emit_bal_receipt(
                 event_type="client",
                 action_name="bal_startup",
                 inputs={
-                    "phase": "1_foundation",
+                    "phase": "2_client_manager",
                     "intake_enabled": _bal_config.bal_intake,
                     "repurpose_enabled": _bal_config.bal_repurpose,
                     "delivery_enabled": _bal_config.bal_delivery,

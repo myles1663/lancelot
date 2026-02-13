@@ -206,7 +206,7 @@ class TestBALDatabase:
         conn = db._get_connection()
         cursor = conn.execute("SELECT MAX(version) FROM bal_schema_version")
         version = cursor.fetchone()[0]
-        assert version == 1
+        assert version == db.CURRENT_SCHEMA_VERSION
         db.close()
 
     def test_all_tables_created(self, tmp_path):
@@ -251,7 +251,7 @@ class TestBALDatabase:
         conn = db2._get_connection()
         cursor = conn.execute("SELECT COUNT(*) FROM bal_schema_version")
         count = cursor.fetchone()[0]
-        assert count == 1  # Only one migration record
+        assert count == db2.CURRENT_SCHEMA_VERSION  # One record per migration
         db2.close()
 
     def test_transaction_rollback(self, tmp_path):

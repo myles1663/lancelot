@@ -117,10 +117,20 @@ CREATE INDEX IF NOT EXISTS idx_bal_financial_client ON bal_financial_receipts(cl
 """
 
 
+SCHEMA_V2 = """
+-- BAL Schema Version 2: Client Manager enhancements
+ALTER TABLE bal_clients ADD COLUMN memory_block_id TEXT;
+
+-- Enforce email uniqueness (replaces non-unique index from V1)
+DROP INDEX IF EXISTS idx_bal_clients_email;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bal_clients_email ON bal_clients(email);
+"""
+
+
 class BALDatabase:
     """Thread-safe SQLite database for BAL persistence."""
 
-    CURRENT_SCHEMA_VERSION = 1
+    CURRENT_SCHEMA_VERSION = 2
 
     def __init__(self, data_dir: str = "/home/lancelot/data/bal"):
         self._data_dir = data_dir
@@ -183,6 +193,7 @@ class BALDatabase:
         """Apply schema migrations from from_version to CURRENT_SCHEMA_VERSION."""
         migrations = {
             1: SCHEMA_V1,
+            2: SCHEMA_V2,
         }
 
         conn = self._get_connection()
