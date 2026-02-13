@@ -779,7 +779,22 @@ class LancelotOrchestrator:
         # 5. SELF-AWARENESS (Fix Pack V5)
         self_awareness = self._build_self_awareness()
 
-        instruction = f"{persona}\n\n{self_awareness}\n\n{rules}\n\n{guardrails}\n\n{honesty}"
+        # 6. CHANNEL CONTEXT — helps Lancelot know where the message came from
+        channel = getattr(self, "_current_channel", "api")
+        channel_note = ""
+        if channel == "telegram":
+            channel_note = (
+                "\nCHANNEL: This message arrived via Telegram. "
+                "You can reply directly — the response will be sent back to Telegram. "
+                "You also have a telegram_send tool for proactive outbound messages."
+            )
+        elif channel == "warroom":
+            channel_note = (
+                "\nCHANNEL: This message arrived via the War Room web interface. "
+                "The user is interacting through the Command Center dashboard."
+            )
+
+        instruction = f"{persona}\n\n{self_awareness}\n\n{rules}\n\n{guardrails}\n\n{honesty}{channel_note}"
 
         # Crusader Mode overlay
         if crusader_mode:
@@ -1024,7 +1039,8 @@ class LancelotOrchestrator:
             return "escalate"
 
         if skill_name == "telegram_send":
-            return "escalate"
+            # Auto-execute: only sends to the pre-configured owner chat_id
+            return "auto"
 
         # repo_writer, service_runner, and anything else → escalate
         return "escalate"
@@ -2390,15 +2406,19 @@ class LancelotOrchestrator:
 
         return self.model_name
 
-    def chat(self, user_message: str, crusader_mode: bool = False, attachments: list = None) -> str:
+    def chat(self, user_message: str, crusader_mode: bool = False, attachments: list = None, channel: str = "api") -> str:
         """Sends a message to Gemini with full context.
 
         Uses context caching when available for token savings.
         Applies system instructions via dedicated parameter (not concatenated into prompt).
         Includes thinking config for reasoning-capable models.
         Supports multimodal attachments (images, PDFs, text files).
+
+        Args:
+            channel: Source channel — "telegram", "warroom", or "api" (default).
         """
         self.wake_up("User Chat")
+        self._current_channel = channel
         start_time = __import__("time").time()
 
         # Governance: Check Token Limit (Estimate)
@@ -2436,8 +2456,9 @@ class LancelotOrchestrator:
                     except Exception:
                         user_message += f"\n[Attached: {att.filename} (binary, not readable)]"
 
-        # S6: Add to History (Short-term Memory)
-        self.context_env.add_history("user", user_message)
+        # S6: Add to History (Short-term Memory) — tag with source channel
+        channel_tag = f"[via {channel}] " if channel != "api" else ""
+        self.context_env.add_history("user", f"{channel_tag}{user_message}")
 
         # ── Honest Closure: Intent Classification + Pipeline Routing ──
         intent = classify_intent(user_message)

@@ -237,7 +237,7 @@ class TelegramBot:
             return
 
         try:
-            response = self.orchestrator.chat(text)
+            response = self.orchestrator.chat(text, channel="telegram")
             if response:
                 response = self._sanitize_for_telegram(response)
                 self.send_message(response, sender_chat_id)
@@ -292,7 +292,7 @@ class TelegramBot:
                 )
                 return
 
-            response = self.orchestrator.chat(transcribed_text)
+            response = self.orchestrator.chat(transcribed_text, channel="telegram")
             if not response:
                 return
 
@@ -337,7 +337,7 @@ class TelegramBot:
                 data=image_bytes,
             )
 
-            response = self.orchestrator.chat(caption, attachments=[attachment])
+            response = self.orchestrator.chat(caption, attachments=[attachment], channel="telegram")
             if response:
                 response = self._sanitize_for_telegram(response)
                 self.send_message(response, chat_id)
@@ -369,7 +369,7 @@ class TelegramBot:
                 data=file_bytes,
             )
 
-            response = self.orchestrator.chat(caption, attachments=[attachment])
+            response = self.orchestrator.chat(caption, attachments=[attachment], channel="telegram")
             if response:
                 response = self._sanitize_for_telegram(response)
                 self.send_message(response, chat_id)

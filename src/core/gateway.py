@@ -660,14 +660,14 @@ async def chat_webhook(request: Request):
                     )
                 else:
                     response_text = main_orchestrator.chat(
-                        message, crusader_mode=True
+                        message, crusader_mode=True, channel="warroom"
                     )
                     response_text = crusader_adapter.format_response(
                         response_text
                     )
             else:
                 # Standard mode
-                response_text = main_orchestrator.chat(message)
+                response_text = main_orchestrator.chat(message, channel="warroom")
 
         return {
             "response": response_text,
@@ -743,10 +743,10 @@ async def chat_with_files(
                 if crusader_adapter.check_auto_pause(text):
                     response_text = "Authority required.\nThis operation is restricted even in Crusader Mode."
                 else:
-                    response_text = main_orchestrator.chat(text, crusader_mode=True, attachments=attachments)
+                    response_text = main_orchestrator.chat(text, crusader_mode=True, attachments=attachments, channel="warroom")
                     response_text = crusader_adapter.format_response(response_text)
             else:
-                response_text = main_orchestrator.chat(text, attachments=attachments)
+                response_text = main_orchestrator.chat(text, attachments=attachments, channel="warroom")
 
         return {
             "response": response_text,

@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updated_at": "2026-02-11T17:36:18.051197",
+  "updated_at": "2026-02-13T19:01:48.878469",
   "blocks": {
     "persona": {
       "block_type": "persona",
@@ -23,41 +23,34 @@
     },
     "human": {
       "block_type": "human",
-      "content": "# User Profile\n- Name: Myles\n- Role: Commander\n- Bonded: True\n- OnboardingComplete: True",
+      "content": "# User Profile\n- Name: Myles\n- Role: Commander\n- Bonded: True",
       "token_budget": 400,
-      "token_count": 22,
-      "updated_at": "2026-02-11T17:36:18.051184",
+      "token_count": 15,
+      "updated_at": "2026-02-13T19:01:48.878459",
       "updated_by": "system",
       "status": "active",
       "provenance": [
         {
           "type": "external_doc",
           "ref": "/home/lancelot/data/USER.md",
-          "snippet": "# User Profile\n- Name: Myles\n- Role: Commander\n- Bonded: True\n- OnboardingComplete: True",
-          "timestamp": "2026-02-11T17:36:18.051154"
+          "snippet": "# User Profile\n- Name: Myles\n- Role: Commander\n- Bonded: True",
+          "timestamp": "2026-02-13T19:01:48.878435"
         }
       ],
       "confidence": 1.0,
-      "version": 38
+      "version": 70
     },
     "mission": {
       "block_type": "mission",
-      "content": "Serve as Commander's autonomous AI Knight \u2014 protect, execute, and learn. Operate with precision, loyalty, and transparency. Every action receipted, every decision governed, every capability earned.",
+      "content": "Mission content version 2",
       "token_budget": 300,
-      "token_count": 35,
-      "updated_at": "2026-02-11T18:00:00",
-      "updated_by": "system",
-      "status": "active",
-      "provenance": [
-        {
-          "type": "system",
-          "ref": "self_awareness_fix_v15",
-          "snippet": "Activated mission block with real mission statement",
-          "timestamp": "2026-02-11T18:00:00"
-        }
-      ],
-      "confidence": 1.0,
-      "version": 23
+      "token_count": 6,
+      "updated_at": "2026-02-12T19:24:22.339797",
+      "updated_by": "agent",
+      "status": "staged",
+      "provenance": [],
+      "confidence": 0.9,
+      "version": 35
     },
     "operating_rules": {
       "block_type": "operating_rules",
@@ -80,22 +73,15 @@
     },
     "workspace_state": {
       "block_type": "workspace_state",
-      "content": "# Current State\n- Active projects: None pending\n- Shared workspace: /home/lancelot/workspace (mounted to Commander's Desktop)\n- System status: Operational",
+      "content": "Working on unique_searchable_term_xyz",
       "token_budget": 300,
-      "token_count": 30,
-      "updated_at": "2026-02-11T18:00:00",
-      "updated_by": "system",
-      "status": "active",
-      "provenance": [
-        {
-          "type": "system",
-          "ref": "self_awareness_fix_v15",
-          "snippet": "Activated workspace state block",
-          "timestamp": "2026-02-11T18:00:00"
-        }
-      ],
-      "confidence": 1.0,
-      "version": 7
+      "token_count": 9,
+      "updated_at": "2026-02-12T19:24:22.505096",
+      "updated_by": "agent",
+      "status": "staged",
+      "provenance": [],
+      "confidence": 0.9,
+      "version": 10
     }
   }
 }
