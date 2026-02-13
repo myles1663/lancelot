@@ -14,6 +14,11 @@ All notable changes to Project Lancelot will be documented in this file.
 - **Connector Config**: Telegram entry in `config/connectors.yaml` (enabled: true) with rate limits
   (30 req/min, burst 5)
 
+### Fixed
+- **Credential Validation**: Inject vault reference into connector instances during validation so
+  `validate_credentials()` works correctly — previously all connectors returned `valid: false` because
+  the vault was never passed to connector instances created by `_instantiate_connector()`
+
 ## [8.2.1] - 2026-02-13
 
 ### Added
