@@ -168,6 +168,28 @@ class ModelDiscovery:
 
         return assignments
 
+    def set_lane_override(self, lane: str, model_id: str) -> None:
+        """Override a single lane's model assignment at runtime."""
+        self._lane_overrides[lane] = model_id
+        self._lane_assignments[lane] = model_id
+        logger.info("Lane '%s' overridden to %s", lane, model_id)
+
+    def reset_overrides(self) -> None:
+        """Clear all lane overrides and re-run auto-assignment."""
+        self._lane_overrides.clear()
+        self._lane_assignments = self._auto_assign_lanes()
+        logger.info("Lane overrides cleared — auto-assigned: %s", self._lane_assignments)
+
+    def replace_provider(
+        self,
+        new_provider: ProviderClient,
+        lane_overrides: Optional[dict] = None,
+    ) -> None:
+        """Hot-swap the underlying provider and re-run discovery."""
+        self._provider = new_provider
+        self._lane_overrides = lane_overrides or {}
+        self.refresh()
+
     def get_lane_model(self, lane: str) -> Optional[str]:
         """Get the model ID assigned to a specific lane."""
         return self._lane_assignments.get(lane)

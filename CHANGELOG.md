@@ -2,6 +2,36 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.3.1] - 2026-02-14
+
+### Added
+- **Provider Switching UI**: Provider selector dropdown on the Cost Tracker page lets users
+  hot-swap the active LLM provider (Gemini/OpenAI/Anthropic) without restarting the container.
+  Providers without API keys are shown as disabled.
+- **Lane Model Override Controls**: Each lane (Fast/Deep/Cache) now has a model selector dropdown
+  populated from discovered models. Users can override which model is assigned to each lane at
+  runtime. Fast/Deep lanes filter to models with tool support.
+- **Reset to Auto**: Button to clear all lane overrides and re-run automatic model assignment
+  based on capability scoring.
+- **Runtime Config Persistence**: Provider and lane override choices are persisted to
+  `lancelot_data/provider_config.json` and automatically restored on container restart.
+- **4 New API Endpoints**:
+  - `GET /api/v1/providers/available` — list providers with API key availability
+  - `POST /api/v1/providers/switch` — hot-swap active provider
+  - `POST /api/v1/providers/lanes/override` — override a lane's model assignment
+  - `POST /api/v1/providers/lanes/reset` — reset lanes to auto-assignment
+- **Orchestrator Methods**: `switch_provider()` and `set_lane_model()` for runtime provider/model
+  hot-swap. Invalidates context caching and deep model validation on switch.
+- **ModelDiscovery Methods**: `set_lane_override()`, `reset_overrides()`, `replace_provider()`
+  for runtime lane management.
+
+### Changed
+- **Gateway Phase 7**: Now loads persisted provider config at startup, applies saved provider and
+  lane overrides before model discovery runs.
+- **Provider API init**: `init_provider_api()` now accepts orchestrator reference for runtime
+  switching coordination.
+- **Readiness probe**: Fixed remaining `main_orchestrator.client` references to use `.provider`.
+
 ## [8.3.0] - 2026-02-13
 
 ### Added

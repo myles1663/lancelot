@@ -532,10 +532,26 @@ async def startup_event():
     # ===== PHASE 7: MODEL DISCOVERY + PROVIDER API =====
     try:
         from model_discovery import ModelDiscovery
-        from providers.api import router as provider_router, init_provider_api
+        from providers.api import router as provider_router, init_provider_api, load_persisted_config
+
+        # Load persisted provider config (from previous session)
+        _persisted_config = load_persisted_config()
+        _persisted_provider = _persisted_config.get("active_provider")
+        _persisted_lane_overrides = _persisted_config.get("lane_overrides", {})
+
+        # If a persisted provider differs from current, hot-swap
+        if _persisted_provider and main_orchestrator.provider:
+            _current_prov = main_orchestrator.provider.provider_name
+            if _persisted_provider != _current_prov:
+                try:
+                    result_msg = main_orchestrator.switch_provider(_persisted_provider)
+                    logger.info("Restored persisted provider: %s (%s)", _persisted_provider, result_msg)
+                except Exception as _e:
+                    logger.warning("Failed to restore persisted provider '%s': %s — keeping %s",
+                                   _persisted_provider, _e, _current_prov)
 
         if main_orchestrator.provider:
-            # Build lane overrides from models.yaml config
+            # Build lane overrides: start from models.yaml, then apply persisted overrides
             _lane_overrides = {}
             try:
                 from provider_profile import ProfileRegistry
@@ -550,13 +566,24 @@ async def startup_event():
             except Exception:
                 pass
 
+            # Persisted lane overrides take priority
+            _lane_overrides.update(_persisted_lane_overrides)
+
             _model_discovery = ModelDiscovery(
                 provider=main_orchestrator.provider,
                 profiles_path="config/model_profiles.yaml",
                 lane_overrides=_lane_overrides,
             )
             _model_discovery.refresh()
-            init_provider_api(_model_discovery)
+
+            # Apply persisted lane overrides to orchestrator
+            for _lane, _model_id in _persisted_lane_overrides.items():
+                try:
+                    main_orchestrator.set_lane_model(_lane, _model_id)
+                except Exception as _e:
+                    logger.warning("Failed to apply persisted lane override %s=%s: %s", _lane, _model_id, _e)
+
+            init_provider_api(_model_discovery, orchestrator=main_orchestrator)
             app.include_router(provider_router)
             logger.info(
                 "Model discovery: %d models found, lanes: %s",
@@ -564,7 +591,7 @@ async def startup_event():
                 _model_discovery.lane_assignments,
             )
         else:
-            init_provider_api(None)
+            init_provider_api(None, orchestrator=main_orchestrator)
             app.include_router(provider_router)
             logger.warning("Provider not initialized — model discovery skipped")
     except Exception as e:
@@ -840,7 +867,7 @@ def health_check():
     try:
         components = {
             "gateway": "ok",
-            "orchestrator": "ok" if main_orchestrator.client else "degraded",
+            "orchestrator": "ok" if main_orchestrator.provider else "degraded",
             "sentry": "ok",
             "vault": "ok",
             "memory": "ok" if getattr(main_orchestrator, '_memory_enabled', False) else "disabled",
@@ -867,7 +894,7 @@ def readiness_check():
     ready = _startup_time is not None
     components = {
         "gateway": "ok",
-        "orchestrator": "ok" if main_orchestrator.client else "degraded",
+        "orchestrator": "ok" if main_orchestrator.provider else "degraded",
         "sentry": "ok",
         "memory": "ok" if getattr(main_orchestrator, '_memory_enabled', False) else "disabled",
     }

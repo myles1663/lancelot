@@ -709,6 +709,82 @@ class LancelotOrchestrator:
 
         print(f"No API key for {provider_name} (set {api_key_var}). LLM features disabled.")
 
+    def switch_provider(self, provider_name: str) -> str:
+        """Hot-swap the active LLM provider at runtime.
+
+        Called from the Provider API when the user switches providers via the UI.
+        Creates a new ProviderClient, swaps it in, updates model names from
+        ProfileRegistry, and invalidates caches.
+
+        Args:
+            provider_name: One of 'gemini', 'openai', 'anthropic'.
+
+        Returns:
+            Status message string.
+
+        Raises:
+            ValueError: If provider name is unknown or API key is missing.
+        """
+        from providers.factory import create_provider, API_KEY_VARS
+
+        api_key_var = API_KEY_VARS.get(provider_name)
+        if not api_key_var:
+            raise ValueError(f"Unknown provider: {provider_name}")
+
+        api_key = os.getenv(api_key_var, "")
+        if not api_key:
+            raise ValueError(f"No API key configured for {provider_name} (set {api_key_var})")
+
+        # Create new provider
+        new_provider = create_provider(provider_name, api_key)
+
+        # Swap provider reference (atomic under GIL)
+        self.provider = new_provider
+
+        # Update model names from ProfileRegistry
+        try:
+            from provider_profile import ProfileRegistry
+            registry = ProfileRegistry()
+            if registry.has_provider(provider_name):
+                profile = registry.get_profile(provider_name)
+                self.model_name = profile.fast.model
+                self._deep_model_name = profile.deep.model
+                self._cache_model = profile.cache.model if profile.cache else self.model_name
+        except Exception:
+            pass  # Keep current model names
+
+        # Invalidate caches
+        self._cache = None
+        # Clear deep model validation cache
+        for attr in list(vars(self)):
+            if attr.startswith("_deep_model_valid_"):
+                delattr(self, attr)
+
+        print(f"Provider hot-swapped to {provider_name} (model: {self.model_name})")
+        return f"{provider_name.title()} provider active (model: {self.model_name})"
+
+    def set_lane_model(self, lane: str, model_id: str) -> None:
+        """Override the model assigned to a specific lane at runtime.
+
+        Args:
+            lane: One of 'fast', 'deep', 'cache'.
+            model_id: The model identifier to assign.
+        """
+        if lane == "fast":
+            self.model_name = model_id
+        elif lane == "deep":
+            self._deep_model_name = model_id
+            # Clear deep model validation cache for this model
+            for attr in list(vars(self)):
+                if attr.startswith("_deep_model_valid_"):
+                    delattr(self, attr)
+        elif lane == "cache":
+            self._cache_model = model_id
+            self._cache = None  # Invalidate context cache
+        else:
+            raise ValueError(f"Unknown lane: {lane}")
+        print(f"Lane '{lane}' model overridden to {model_id}")
+
     def _build_system_instruction(self, crusader_mode=False):
         """Builds structured system instruction following Gemini 2026 best practices.
 

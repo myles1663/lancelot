@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { usePolling } from '@/hooks'
 import {
   fetchUsageSummary, fetchUsageLanes, fetchUsageModels, fetchUsageMonthly,
   fetchProviderStack, refreshModelDiscovery,
+  fetchAvailableProviders, switchProvider, overrideLane, resetLanes,
 } from '@/api'
-import type { ProviderStackResponse, DiscoveredModel } from '@/api'
+import type { DiscoveredModel, AvailableProvider } from '@/api'
 import { MetricCard } from '@/components'
 
 /** Format context window size for display */
@@ -13,12 +14,6 @@ function formatCtx(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
   if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`
   return String(tokens)
-}
-
-/** Capitalize provider name for display */
-function providerLabel(stack: ProviderStackResponse | null | undefined): string {
-  if (!stack || stack.status === 'unavailable') return 'Not Connected'
-  return stack.provider_display_name || stack.provider?.charAt(0).toUpperCase() + stack.provider?.slice(1) || 'Unknown'
 }
 
 /** Lane display order and labels */
@@ -36,17 +31,93 @@ export function CostTracker() {
   const { data: monthly } = usePolling({ fetcher: () => fetchUsageMonthly(), interval: 60000 })
   const { data: stack, refetch: refetchStack } = usePolling({ fetcher: fetchProviderStack, interval: 60000 })
 
+  const [providers, setProviders] = useState<AvailableProvider[]>([])
   const [refreshing, setRefreshing] = useState(false)
+  const [switching, setSwitching] = useState(false)
+  const [laneLoading, setLaneLoading] = useState<string | null>(null)
+  const [statusMsg, setStatusMsg] = useState<string | null>(null)
+
+  // Fetch available providers on mount
+  useEffect(() => {
+    fetchAvailableProviders()
+      .then(res => setProviders(res.providers ?? []))
+      .catch(() => {})
+  }, [])
+
+  // Re-fetch providers after stack changes (to update active indicator)
+  const refreshProviders = useCallback(() => {
+    fetchAvailableProviders()
+      .then(res => setProviders(res.providers ?? []))
+      .catch(() => {})
+  }, [])
+
+  const showStatus = (msg: string) => {
+    setStatusMsg(msg)
+    setTimeout(() => setStatusMsg(null), 4000)
+  }
 
   const handleRefresh = async () => {
     setRefreshing(true)
     try {
       await refreshModelDiscovery()
       await refetchStack()
+      refreshProviders()
     } catch {
       // silently fail — UI will show stale data
     } finally {
       setRefreshing(false)
+    }
+  }
+
+  const handleSwitchProvider = async (providerName: string) => {
+    setSwitching(true)
+    setStatusMsg(null)
+    try {
+      const res = await switchProvider(providerName)
+      if (res.status === 'ok') {
+        showStatus(res.message || `Switched to ${providerName}`)
+        await refetchStack()
+        refreshProviders()
+      } else {
+        showStatus(res.message || 'Switch failed')
+      }
+    } catch (e) {
+      showStatus('Provider switch failed')
+    } finally {
+      setSwitching(false)
+    }
+  }
+
+  const handleLaneOverride = async (lane: string, modelId: string) => {
+    setLaneLoading(lane)
+    setStatusMsg(null)
+    try {
+      const res = await overrideLane(lane, modelId)
+      if (res.status === 'ok') {
+        showStatus(res.message || `Lane ${lane} updated`)
+        await refetchStack()
+      } else {
+        showStatus(res.message || 'Override failed')
+      }
+    } catch {
+      showStatus('Lane override failed')
+    } finally {
+      setLaneLoading(null)
+    }
+  }
+
+  const handleResetLanes = async () => {
+    setStatusMsg(null)
+    try {
+      const res = await resetLanes()
+      if (res.status === 'ok') {
+        showStatus(res.message || 'Lanes reset to auto')
+        await refetchStack()
+      } else {
+        showStatus(res.message || 'Reset failed')
+      }
+    } catch {
+      showStatus('Lane reset failed')
     }
   }
 
@@ -90,28 +161,65 @@ export function CostTracker() {
     <div>
       <h2 className="text-lg font-semibold text-text-primary mb-6">Cost Tracker</h2>
 
-      {/* ═══ Model Stack Section ═══ */}
+      {/* Status message toast */}
+      {statusMsg && (
+        <div className="mb-4 px-4 py-2 rounded bg-accent-primary/15 text-accent-primary text-sm font-mono">
+          {statusMsg}
+        </div>
+      )}
+
+      {/* ======= Model Stack Section ======= */}
       <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">
             Model Stack
           </h3>
-          <button
-            onClick={handleRefresh}
-            disabled={refreshing}
-            className="text-xs px-3 py-1 rounded border border-border-default text-text-secondary
-                       hover:bg-surface-card-elevated hover:text-text-primary transition-colors
-                       disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {refreshing ? 'Refreshing...' : 'Refresh'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleResetLanes}
+              className="text-xs px-3 py-1 rounded border border-border-default text-text-secondary
+                         hover:bg-surface-card-elevated hover:text-text-primary transition-colors"
+            >
+              Reset to Auto
+            </button>
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="text-xs px-3 py-1 rounded border border-border-default text-text-secondary
+                         hover:bg-surface-card-elevated hover:text-text-primary transition-colors
+                         disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {refreshing ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
         </div>
 
-        {/* Provider status row */}
-        <div className="flex items-center gap-3 mb-4">
-          <span className="text-sm text-text-primary font-medium">
-            Provider: {providerLabel(stack)}
-          </span>
+        {/* Provider selector row */}
+        <div className="flex items-center gap-3 mb-4 flex-wrap">
+          <span className="text-sm text-text-secondary">Provider:</span>
+          <select
+            value={stack?.provider || ''}
+            onChange={(e) => handleSwitchProvider(e.target.value)}
+            disabled={switching || providers.length === 0}
+            className="text-sm font-medium bg-surface-card-elevated border border-border-default
+                       rounded px-3 py-1.5 text-text-primary
+                       focus:outline-none focus:ring-1 focus:ring-accent-primary
+                       disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {providers.length === 0 && stack?.provider && (
+              <option value={stack.provider}>
+                {stack.provider_display_name || stack.provider}
+              </option>
+            )}
+            {providers.map(p => (
+              <option key={p.name} value={p.name} disabled={!p.has_key}>
+                {p.display_name}{!p.has_key ? ' (no key)' : ''}
+              </option>
+            ))}
+          </select>
+          {switching && (
+            <span className="text-xs text-text-muted">Switching...</span>
+          )}
           <span className={`inline-flex items-center gap-1.5 text-xs ${isConnected ? 'text-green-400' : 'text-text-muted'}`}>
             <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-text-muted'}`} />
             {isConnected ? 'Connected' : 'Unavailable'}
@@ -123,7 +231,7 @@ export function CostTracker() {
           )}
         </div>
 
-        {/* Lane assignments table */}
+        {/* Lane assignments table with model selectors */}
         {Object.keys(stackLanes).length > 0 && (
           <div className="overflow-x-auto mb-4">
             <table className="w-full text-xs font-mono">
@@ -139,10 +247,41 @@ export function CostTracker() {
               <tbody className="text-text-primary">
                 {LANE_ORDER.filter(lane => stackLanes[lane]).map(lane => {
                   const l = stackLanes[lane]!
+                  // Filter models for lane: fast/deep need tool support, cache doesn't
+                  const requiresTools = lane === 'fast' || lane === 'deep'
+                  const eligibleModels = discoveredModels.filter(
+                    m => !requiresTools || m.supports_tools
+                  )
+                  const isLoading = laneLoading === lane
                   return (
                     <tr key={lane} className="border-t border-border-default/50">
                       <td className="py-2 pr-4 font-medium">{LANE_LABELS[lane] || lane}</td>
-                      <td className="py-2 pr-4">{l.display_name || l.model}</td>
+                      <td className="py-2 pr-4">
+                        {eligibleModels.length > 0 ? (
+                          <select
+                            value={l.model}
+                            onChange={(e) => handleLaneOverride(lane, e.target.value)}
+                            disabled={isLoading}
+                            className="bg-transparent border border-border-default/50 rounded
+                                       px-2 py-0.5 text-xs text-text-primary w-full max-w-[280px]
+                                       focus:outline-none focus:ring-1 focus:ring-accent-primary
+                                       disabled:opacity-50"
+                          >
+                            {/* Always include the current model even if not in discovered list */}
+                            {!eligibleModels.find(m => m.id === l.model) && (
+                              <option value={l.model}>{l.display_name || l.model}</option>
+                            )}
+                            {eligibleModels.map(m => (
+                              <option key={m.id} value={m.id}>
+                                {m.display_name || m.id}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span>{l.display_name || l.model}</span>
+                        )}
+                        {isLoading && <span className="ml-2 text-text-muted">...</span>}
+                      </td>
                       <td className="py-2 pr-4 text-right">{formatCtx(l.context_window)}</td>
                       <td className="py-2 pr-4 text-right">
                         {l.cost_output_per_1k ? `$${l.cost_output_per_1k.toFixed(4)}` : '--'}

@@ -13,9 +13,12 @@
 ## LLM Provider Support
 - Multi-provider: Supports Google Gemini, OpenAI, and Anthropic as LLM backends
 - Provider is configured via LANCELOT_PROVIDER env var (gemini, openai, anthropic)
+- Hot-swap provider switching: change providers from the War Room UI without restarting
 - Lane-based model routing: fast lane (cheap, quick), deep lane (complex reasoning), cache lane (context caching)
+- Lane model overrides: manually assign specific models to lanes from the War Room UI
 - Dynamic model discovery: queries provider API at startup, auto-assigns models to lanes
-- Model stack visible in War Room Cost Tracker page
+- Model stack visible and controllable in War Room Cost Tracker page
+- Runtime config persistence: provider and lane choices survive container restarts
 
 ## Communication Capabilities
 - Text messages: send and receive via Telegram
