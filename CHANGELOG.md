@@ -2,6 +2,17 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.3.3] - 2026-02-14
+
+### Changed
+- **Antigravity Engine: Provider-Agnostic**: Browser automation agent (`run_agent_task`) now
+  respects `LANCELOT_PROVIDER` and works with Gemini, OpenAI, or Anthropic. Previously hardcoded
+  to Gemini via `langchain-google-genai`. Falls back to any provider with an available API key.
+- **New Dependencies**: Added `langchain-openai>=0.3.0` and `langchain-anthropic>=0.3.0` to
+  `requirements.txt` for full provider coverage in browser automation tasks.
+- **Feature Flag Description**: Updated `FEATURE_TOOLS_ANTIGRAVITY` description to reflect
+  provider-agnostic support.
+
 ## [8.3.2] - 2026-02-14
 
 ### Added

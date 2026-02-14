@@ -215,7 +215,7 @@ class AntigravityEngine:
 
         Args:
             task: Natural language description of the browser task
-            model_name: LLM model to use (defaults to Gemini via env)
+            model_name: LLM model override (defaults to active LANCELOT_PROVIDER)
 
         Returns:
             dict with status, result text, and screenshots
@@ -282,37 +282,85 @@ class AntigravityEngine:
             }
 
     def _get_agent_llm(self, model_name: str = None):
-        """Build an LLM instance for Browser Use agent."""
-        # Browser Use supports langchain-style LLM interfaces
-        # Use Google Gemini via langchain-google-genai
-        api_key = os.getenv("GEMINI_API_KEY", "")
-        model = model_name or os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        """Build a LangChain LLM instance for Browser Use agent.
 
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-            return ChatGoogleGenerativeAI(
-                model=model,
-                google_api_key=api_key,
-            )
-        except ImportError:
-            pass
+        Respects the LANCELOT_PROVIDER env var to select the active provider.
+        Falls back to whichever provider has an API key available.
+        """
+        provider = os.getenv("LANCELOT_PROVIDER", "").lower()
 
-        # Fallback: try OpenAI-compatible
-        openai_key = os.getenv("OPENAI_API_KEY", "")
-        if openai_key:
-            try:
-                from langchain_openai import ChatOpenAI
-                return ChatOpenAI(
-                    model=model_name or "gpt-4o",
-                    api_key=openai_key,
-                )
-            except ImportError:
-                pass
+        # Provider configs: (env_var, default_model, builder)
+        provider_builders = {
+            "gemini": self._build_gemini_llm,
+            "openai": self._build_openai_llm,
+            "anthropic": self._build_anthropic_llm,
+        }
+
+        # Try the configured provider first
+        if provider in provider_builders:
+            llm = provider_builders[provider](model_name)
+            if llm:
+                return llm
+
+        # Fallback: try each provider that has an API key
+        for name, builder in provider_builders.items():
+            if name == provider:
+                continue  # Already tried
+            llm = builder(model_name)
+            if llm:
+                logger.info(f"Antigravity: Using fallback provider '{name}' for agent LLM")
+                return llm
 
         raise RuntimeError(
             "No LLM available for Browser Use agent. "
-            "Install langchain-google-genai or langchain-openai."
+            "Set LANCELOT_PROVIDER and provide an API key "
+            "(GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY)."
         )
+
+    def _build_gemini_llm(self, model_name: str = None):
+        """Build a Gemini LangChain LLM if API key is available."""
+        api_key = os.getenv("GEMINI_API_KEY", "")
+        if not api_key:
+            return None
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            return ChatGoogleGenerativeAI(
+                model=model_name or "gemini-2.0-flash",
+                google_api_key=api_key,
+            )
+        except ImportError:
+            logger.warning("langchain-google-genai not installed")
+            return None
+
+    def _build_openai_llm(self, model_name: str = None):
+        """Build an OpenAI LangChain LLM if API key is available."""
+        api_key = os.getenv("OPENAI_API_KEY", "")
+        if not api_key:
+            return None
+        try:
+            from langchain_openai import ChatOpenAI
+            return ChatOpenAI(
+                model=model_name or "gpt-4o",
+                api_key=api_key,
+            )
+        except ImportError:
+            logger.warning("langchain-openai not installed")
+            return None
+
+    def _build_anthropic_llm(self, model_name: str = None):
+        """Build an Anthropic LangChain LLM if API key is available."""
+        api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return None
+        try:
+            from langchain_anthropic import ChatAnthropic
+            return ChatAnthropic(
+                model=model_name or "claude-sonnet-4-5-20250929",
+                api_key=api_key,
+            )
+        except ImportError:
+            logger.warning("langchain-anthropic not installed")
+            return None
 
     # ------------------------------------------------------------------
     # Bridge Mode Helpers

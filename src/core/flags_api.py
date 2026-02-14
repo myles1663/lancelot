@@ -75,7 +75,7 @@ FLAG_META = {
         "warning": "Requires TOOLS_FABRIC. Adds additional attack surface through CLI adapters.",
     },
     "FEATURE_TOOLS_ANTIGRAVITY": {
-        "description": "Antigravity UI providers — generative UI scaffolding and vision-based UI control. Enables AntigravityUIProvider and AntigravityVisionProvider.",
+        "description": "Antigravity UI providers - generative UI scaffolding, vision-based UI control, and AI browser automation. Provider-agnostic (works with Gemini, OpenAI, or Anthropic).",
         "category": "Tool Fabric",
         "requires": ["FEATURE_TOOLS_FABRIC"],
         "conflicts": [],

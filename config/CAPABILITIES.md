@@ -21,6 +21,15 @@
 - Model stack visible and controllable in War Room Cost Tracker page
 - Runtime config persistence: provider and lane choices survive container restarts
 
+## Browser Automation & Vision (Antigravity)
+- Provider-agnostic: works with Gemini, OpenAI, or Anthropic (uses active LANCELOT_PROVIDER)
+- AI browser tasks: natural language browser automation via browser-use ("go to X and click Y")
+- Vision control: screenshots, element location, click/type/drag actions via Playwright
+- UI scaffolding: template-based and AI-generated UI project generation
+- Dual mode: isolated headless Chromium or bridge to user's Chrome via CDP
+- Session persistence: cookies and localStorage preserved across restarts
+- Visual audit trail: proof-of-work screenshots captured for every browser action
+
 ## Communication Capabilities
 - Text messages: send and receive via Telegram
 - Voice notes: receive user voice (STT via Google Cloud Speech-to-Text), respond with voice (TTS via Google Cloud Text-to-Speech)
