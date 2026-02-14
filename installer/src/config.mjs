@@ -42,6 +42,9 @@ export function generateEnvContent(config) {
     'FEATURE_BAL=true',
     'FEATURE_CONNECTORS=true',
     'FEATURE_LOCAL_AGENTIC=true',
+    'FEATURE_RISK_TIERED_GOVERNANCE=true',
+    'FEATURE_TRUST_LEDGER=true',
+    'FEATURE_APPROVAL_LEARNING=true',
     '',
   ];
 

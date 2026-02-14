@@ -36,6 +36,21 @@ try:
 except ImportError:
     _GOVERNANCE_AVAILABLE = False
 
+try:
+    from governance.trust_ledger import TrustLedger
+    from governance.trust_models import load_trust_config
+    _TRUST_AVAILABLE = True
+except ImportError:
+    _TRUST_AVAILABLE = False
+
+try:
+    from governance.approval_learning.decision_log import DecisionLog
+    from governance.approval_learning.rule_engine import RuleEngine
+    from governance.approval_learning.config import load_apl_config
+    _APL_AVAILABLE = True
+except ImportError:
+    _APL_AVAILABLE = False
+
 # Tool name → governance capability mapping
 _TOOL_CAPABILITY_MAP = {
     "read_file": "fs.read",
@@ -172,10 +187,43 @@ class LancelotOrchestrator:
         self._async_queue = None
         self._rollback_manager = None
         self._template_registry = None
+
+        # Governance subsystem instances (used by Governance API, Trust API, APL API)
+        self.trust_ledger = None
+        self.decision_log = None
+        self.rule_engine = None
+
         self._init_governance()
 
     def _init_governance(self):
         """Initialize vNext4 governance subsystems if feature flags are enabled."""
+        # ── Trust Ledger ──
+        if _TRUST_AVAILABLE:
+            try:
+                import feature_flags as _trust_ff
+                if _trust_ff.FEATURE_TRUST_LEDGER:
+                    trust_config = load_trust_config()
+                    self.trust_ledger = TrustLedger(config=trust_config)
+                    _gov_logger.info("TrustLedger initialized")
+            except Exception as e:
+                _gov_logger.error("TrustLedger init failed: %s", e)
+                self.trust_ledger = None
+
+        # ── Approval Pattern Learning (DecisionLog + RuleEngine) ──
+        if _APL_AVAILABLE:
+            try:
+                import feature_flags as _apl_ff
+                if _apl_ff.FEATURE_APPROVAL_LEARNING:
+                    apl_config = load_apl_config()
+                    self.decision_log = DecisionLog(config=apl_config)
+                    self.rule_engine = RuleEngine(config=apl_config, decision_log=self.decision_log)
+                    _gov_logger.info("DecisionLog + RuleEngine initialized (APL)")
+            except Exception as e:
+                _gov_logger.error("APL init failed: %s", e)
+                self.decision_log = None
+                self.rule_engine = None
+
+        # ── Risk-Tiered Governance (RiskClassifier, AsyncQueue, etc.) ──
         if not _GOVERNANCE_AVAILABLE:
             return
         if not _ff.FEATURE_RISK_TIERED_GOVERNANCE:

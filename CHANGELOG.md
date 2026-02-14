@@ -4,6 +4,14 @@ All notable changes to Project Lancelot will be documented in this file.
 
 ## [8.3.3] - 2026-02-14
 
+### Fixed
+- **Governance Dashboard + Trust Ledger: Wired to backend**: `TrustLedger`, `DecisionLog`, and
+  `RuleEngine` instances were never created in the orchestrator — all three API endpoint groups
+  (`/api/governance/*`, `/api/trust/*`, `/api/apl/*`) were receiving `None` and returning empty data.
+  Now properly initialized in `_init_governance()` when feature flags are enabled.
+- **Feature Flags Enabled**: `FEATURE_TRUST_LEDGER`, `FEATURE_APPROVAL_LEARNING`, and
+  `FEATURE_RISK_TIERED_GOVERNANCE` now enabled by default in `.env` and the installer.
+
 ### Changed
 - **Antigravity Engine: Provider-Agnostic**: Browser automation agent (`run_agent_task`) now
   respects `LANCELOT_PROVIDER` and works with Gemini, OpenAI, or Anthropic. Previously hardcoded
