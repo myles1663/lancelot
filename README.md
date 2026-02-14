@@ -1,158 +1,226 @@
-# Project Lancelot
+# Lancelot
 
-**Your AI-Powered Digital Knight** - An autonomous agent system with constitutional governance, tiered memory, provider-agnostic tool execution, and receipt-based accountability.
+**A Governed Autonomous System** — an AI operator that can plan, act, remember, and recover under explicit constitutional control.
 
 ![Lancelot Logo](static/logo.jpeg)
 
-## What is Lancelot?
+---
 
-Lancelot is a self-hosted AI assistant that operates as your digital knight. It combines multi-provider LLM routing (Gemini, OpenAI, Anthropic) with autonomous execution capabilities, constitutional governance (Soul), governed memory self-edits, and a provider-agnostic tool fabric for sandboxed code and file operations. Think of it as an AI agent that can actually *do* things, not just talk about them.
+Lancelot is a **self-hosted, local-first autonomous AI system** for people who want an AI they can trust to *operate*, not just converse. It executes real actions, maintains structured memory, and produces auditable records of everything it does — all governed by an explicit constitutional document called the **Soul**.
+
+This is not a chatbot. This is not a prompt wrapper. This is not a framework.
+It is a **system**.
+
+## Design Principles (Non-Negotiable)
+
+These principles are enforced in code, not just stated in docs:
+
+1. **Governance over convenience** — Every action passes through policy evaluation
+2. **Verification over speed** — Planner/Verifier pipeline validates outcomes
+3. **Deterministic context over retrieval vibes** — Structured tiered memory, not lossy RAG
+4. **Receipts over "trust me"** — Every action produces an auditable receipt
+5. **Reversibility over irreversible autonomy** — Atomic operations, rollback by default
+
+## Architecture at a Glance
+
+```
+                        ┌─────────────────────────────────────┐
+                        │            War Room (UI)            │
+                        │   Health │ Governance │ Trust │ APL  │
+                        └──────────────┬──────────────────────┘
+                                       │
+                        ┌──────────────▼──────────────────────┐
+                        │         Gateway (FastAPI)           │
+                        │   Intent Classification → Routing   │
+                        └──────────────┬──────────────────────┘
+                                       │
+              ┌────────────────────────▼────────────────────────────┐
+              │                  Orchestrator                        │
+              │  Planner → Policy Engine → Executor → Verifier      │
+              └──┬──────┬──────┬──────┬──────┬──────┬──────┬───────┘
+                 │      │      │      │      │      │      │
+               Soul  Memory  Skills  Tool   Health Sched  Receipts
+                              │     Fabric  │      uler
+                              │      │      │
+                         ┌────▼──────▼──────▼────┐
+                         │     LLM Routing       │
+                         │  Local  │  Cloud APIs  │
+                         └───────────────────────┘
+```
+
+Every subsystem is **independently disableable** via feature flags. If something breaks, kill it — the rest keeps running.
+
+## Key Capabilities
+
+| Subsystem | What It Does | Learn More |
+|-----------|-------------|------------|
+| **Soul** | Constitutional governance — defines what Lancelot can and cannot do | [Governance](docs/governance.md) |
+| **Memory** | Tiered, commit-based memory with quarantine and rollback | [Memory](docs/memory.md) |
+| **Skills** | Modular capabilities with manifest-declared permissions | [Developing Skills](docs/developing-skills.md) |
+| **Tool Fabric** | Provider-agnostic execution with sandboxing and policy gates | [Architecture](docs/architecture.md) |
+| **Receipts** | Auditable record of every action, decision, and outcome | [Receipts](docs/receipts.md) |
+| **Scheduler** | Gated cron/interval automation with approval pipelines | [Configuration](docs/configuration-reference.md) |
+| **War Room** | Operator dashboard for full system observability | [War Room Guide](docs/war-room.md) |
 
 ## Quickstart
 
 ### One-Command Install (Recommended)
 
-The fastest way to get Lancelot running — just have **Docker Desktop** and **Node.js 18+** installed:
+Requires **Docker Desktop** and **Node.js 18+**:
 
 ```bash
 npx create-lancelot
 ```
 
-The installer will guide you through everything: prerequisites check, provider and API key setup, communications configuration, model download, Docker build, and service startup. In about 5 minutes you'll have a fully running Lancelot instance.
+The installer handles everything: prerequisites check, API key setup, model download, Docker build, and startup. You'll have a running instance in about 5 minutes.
 
 Options:
 - `npx create-lancelot --resume` — resume an interrupted install
 - `npx create-lancelot --skip-model` — skip the 5GB local model download
 - `npx create-lancelot --provider gemini` — pre-select a provider
 
-### Manual Installation
-
 <details>
-<summary>Click to expand manual installation steps</summary>
+<summary><strong>Manual Installation</strong></summary>
 
 #### Prerequisites
+
 - Docker Desktop
 - At least one LLM API key (Gemini, OpenAI, or Anthropic)
+- NVIDIA GPU recommended for local model (works without, just slower)
 
 #### Steps
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/myles1663/lancelot.git
-   cd lancelot
-   ```
+```bash
+# Clone
+git clone https://github.com/myles1663/lancelot.git
+cd lancelot
 
-2. **Create your environment file**
-   ```bash
-   cp config/example.env .env
-   ```
+# Configure — the installer creates .env for you, but for manual setup:
+# Add your API keys and settings to .env
 
-3. **Edit `.env` with your settings**
-   - Add your `GEMINI_API_KEY`, `OPENAI_API_KEY`, and/or `ANTHROPIC_API_KEY`
-   - Configure Telegram or Google Chat (optional)
+# Run
+docker-compose up -d
+```
 
-4. **Start Lancelot**
-   ```bash
-   docker-compose up -d
-   ```
+#### Verify
 
-5. **Open the War Room**
-   - **React War Room (recommended):** Navigate to `http://localhost:8000/war-room/`
-   - **Legacy Streamlit UI:** Navigate to `http://localhost:8501`
-   - Or run `python src/ui/lancelot_gui.py` for the native launcher
+```bash
+# Health check
+curl http://localhost:8000/health/live
+
+# Send a test message
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text": "hello"}'
+```
+
+Open the **War Room** at `http://localhost:8000/war-room/` to see the operator dashboard.
+
+For detailed setup including GPU configuration, multi-provider routing, and network hardening, see the [Installation Guide](docs/installation.md).
 
 </details>
 
-## Architecture
+## What Makes Lancelot Different
 
-Lancelot is organized into six major subsystems, each gated by a feature flag:
+Most AI agent frameworks give the model a bag of tools and hope for the best. Lancelot treats the model as **untrusted logic inside a governed, observable, reversible system**.
 
-| Subsystem | Feature Flag | Description |
-|-----------|-------------|-------------|
-| **Soul** | `FEATURE_SOUL` | Constitutional identity, versioned governance, amendment workflow |
-| **Skills** | `FEATURE_SKILLS` | Modular capabilities with manifests, factory pipeline, marketplace |
-| **Heartbeat** | `FEATURE_HEALTH_MONITOR` | Liveness/readiness probes, state transition receipts |
-| **Scheduler** | `FEATURE_SCHEDULER` | Cron/interval job scheduling with gating pipeline |
-| **Memory vNext** | `FEATURE_MEMORY_VNEXT` | Tiered memory (working/episodic/archival), context compiler, governed self-edits |
-| **Tool Fabric** | `FEATURE_TOOLS_FABRIC` | Provider-agnostic tool execution, Docker sandbox, policy engine |
+- **The Soul is law.** The model cannot override its constitutional document. If the Soul forbids an action, it cannot be executed — regardless of prompt, context, or model intent.
+- **Every action has a receipt.** LLM calls, tool executions, file operations, memory edits, scheduler runs, verification steps — all produce durable, auditable records. If there's no receipt, it didn't happen.
+- **Memory is structured, not vibes.** Four tiers (Core, Working, Episodic, Archival) with commit-based editing, quarantine for risky writes, and exact rollback. No vector-search-and-pray.
+- **Verification is mandatory.** The Planner/Executor/Verifier loop means results are checked, not assumed. Failures are surfaced, never hidden.
+- **Everything has a kill switch.** Every subsystem is feature-flagged. Shell execution, networking, scheduling, skill installation, memory writes — all independently disableable.
 
-## Project Structure
+For a detailed comparison with other agent systems, see [How Lancelot Compares](docs/comparison.md).
+
+## Security
+
+Lancelot is **safe by construction**, not by convention:
+
+- Prompt injection detection with 16 patterns + homoglyph normalization
+- Capability-based tool access with default-deny posture
+- Sandboxed execution (Docker containers, workspace boundary enforcement)
+- Symlink-safe path validation, atomic file writes
+- Secrets never stored in memory, never sent to models unless required
+- Local PII redaction before any external API call
+- Feature-flag kill switches for every high-risk subsystem
+- 96 vulnerabilities identified and remediated across two hardening passes
+
+Full details: [Security Posture](docs/security.md)
+
+## Who This Is For
+
+Lancelot is built for people who want **agency with accountability**:
+
+- Developers and DevOps engineers who need an AI that can actually execute
+- Security-conscious operators who won't deploy ungoverned agents
+- Founders and technical leads building AI-powered workflows
+- Anyone who wants an AI they can trust to act — and prove what it did
+
+## Who This Is Not For
+
+- If you want a consumer chatbot, use ChatGPT
+- If you want a lightweight agent demo, use a framework
+- If you want to move fast and break things, Lancelot will slow you down — on purpose
+
+## Project Values
+
+Read the [Anti-Roadmap](docs/anti-roadmap.md) — what we will *not* build, and why. It says more about this project than any feature list.
+
+<details>
+<summary><strong>Project Structure</strong></summary>
 
 ```
 lancelot/
 ├── src/
 │   ├── core/              # Orchestration, routing, security
-│   │   ├── memory/        # Memory vNext: block store, tiered storage, commits, compiler
-│   │   ├── soul/          # Constitutional identity: store, linter, amendments, API
+│   │   ├── memory/        # Tiered memory: block store, commits, compiler
+│   │   ├── soul/          # Constitutional identity: store, linter, amendments
 │   │   ├── skills/        # Modular skills: schema, registry, executor, factory
 │   │   ├── health/        # Heartbeat: health types, monitor, API
 │   │   ├── scheduler/     # Job scheduling: schema, service, executor
 │   │   └── feature_flags.py
-│   ├── tools/             # Tool Fabric
-│   │   ├── contracts.py   # Capability interfaces (7 protocols)
-│   │   ├── fabric.py      # Main orchestrator
-│   │   ├── policies.py    # Security policy engine
-│   │   ├── health.py      # Provider health monitoring
-│   │   ├── router.py      # Capability-based provider routing
-│   │   ├── receipts.py    # Tool-specific receipt extensions
-│   │   └── providers/     # Local sandbox, UI templates, Antigravity
-│   ├── warroom/           # React SPA (Vite + React 18 + TypeScript + Tailwind)
-│   │   ├── src/api/       # Typed API client layer
-│   │   ├── src/components/# Design system (MetricCard, TierBadge, StatusDot, etc.)
-│   │   ├── src/layouts/   # Shell layout (Sidebar, Header, VitalsBar, NotificationTray)
-│   │   ├── src/pages/     # 12+ tab pages (Command, Governance, Trust, APL, etc.)
-│   │   └── src/hooks/     # usePolling, useWebSocket, useKeyboardShortcuts
+│   ├── tools/             # Tool Fabric: contracts, policies, providers
+│   ├── warroom/           # React War Room (Vite + React 18 + TypeScript)
 │   ├── agents/            # Planner, Verifier, Crusader
-│   ├── ui/                # Legacy Streamlit War Room, Launcher, Onboarding
-│   │   └── panels/        # Soul, Skills, Health, Scheduler, Memory, Tool Fabric panels
+│   ├── ui/                # Legacy Streamlit UI, Launcher
 │   ├── integrations/      # Telegram, Google Chat, MCP
 │   └── shared/            # Utilities, logging, receipts
-├── installer/             # create-lancelot CLI installer (npm package)
+├── installer/             # create-lancelot CLI installer (npm)
 ├── config/                # YAML configuration files
 ├── docs/                  # Documentation
-│   ├── specs/             # Product, Functional, and Technical specifications
-│   ├── blueprints/        # Implementation blueprints
-│   └── operations/        # Runbooks
-├── soul/                  # Soul version files (constitutional identity)
+├── soul/                  # Soul version files
 ├── tests/                 # Test suite (1900+ tests)
 └── static/                # UI assets
 ```
 
-## Configuration
-
-All configuration is done through environment variables and YAML files. See [`config/example.env`](config/example.env) for all options.
-
-### Model Configuration
-Models can be configured in `config/models.yaml`. Lancelot supports:
-- **Local Model**: Mandatory GGUF model for utility/redaction tasks
-- **Flagship Fast**: Standard reasoning (Gemini Flash, GPT-4o-mini, Claude Haiku)
-- **Flagship Deep**: Complex reasoning (Gemini Pro, GPT-4o, Claude Sonnet)
-
-### Feature Flags
-All subsystems can be independently enabled or disabled via environment variables. See `src/core/feature_flags.py` for the full list.
+</details>
 
 ## Documentation
 
-- [Product Requirements](docs/specs/Product_Requirements_Document.md) - What Lancelot does and why
-- [Functional Specifications](docs/specs/Functional_Specifications.md) - How each feature works
-- [Technical Specifications](docs/specs/Technical_Specifications.md) - Architecture and component details
-- [Tool Fabric Spec](docs/specs/Lancelot_ToolFabric_Spec.md) - Tool execution subsystem
-- [Memory vNext Spec](docs/specs/Lancelot_vNext3_Spec_Memory_BlockMemory_ContextCompiler.md) - Memory subsystem
-- [Operational Runbooks](docs/operations/runbooks/) - Day-to-day operations guides
-
-## Security
-
-- 96 security vulnerabilities identified and remediated across two hardening passes
-- Symlink-safe workspace boundary enforcement
-- Command denylist with precise token matching (shlex-based)
-- Docker env var sanitization to prevent shell injection
-- Atomic file writes with backup recovery for crash safety
-- Thread-safe singletons with double-checked locking
-- Input sanitization blocking prompt injection (16 patterns + homoglyph normalization)
-- PII redaction via local model before external API calls
-- All secrets stored in `.env` (never committed)
-- Rate limiting and action receipts for every operation
+| Document | Description |
+|----------|-------------|
+| [Quickstart](docs/quickstart.md) | Clone to first governed action in 15 minutes |
+| [Installation Guide](docs/installation.md) | Comprehensive setup for all deployment methods |
+| [Architecture](docs/architecture.md) | Full system walkthrough with diagrams |
+| [Governance Deep Dive](docs/governance.md) | Soul, Policy Engine, Trust Ledger, APL |
+| [Security Posture](docs/security.md) | Threat model, enforcement layers, hardening |
+| [Memory System](docs/memory.md) | Tiered memory, quarantine, rollback |
+| [Receipts](docs/receipts.md) | Audit trail and action tracing |
+| [War Room Guide](docs/war-room.md) | Operator dashboard manual |
+| [Configuration Reference](docs/configuration-reference.md) | Every env var, YAML file, and option |
+| [Developing Connectors](docs/developing-connectors.md) | Build governed integrations |
+| [Developing Skills](docs/developing-skills.md) | Build capabilities that pass the security pipeline |
+| [Authoring Souls](docs/authoring-souls.md) | Customize Lancelot's constitutional governance |
+| [How Lancelot Compares](docs/comparison.md) | Factual comparison with the agent landscape |
+| [Anti-Roadmap](docs/anti-roadmap.md) | What we will not build, and why |
+| [Changelog](CHANGELOG.md) | Version history |
+| [Contributing](CONTRIBUTING.md) | How to contribute |
 
 ## License
 
-MIT License - See [LICENSE](LICENSE) for details.
+MIT — See [LICENSE](LICENSE) for details.
+
+---
+
+> If you want a clever agent demo, use a framework.
+> If you want an AI you can **trust to operate**, use a **Governed Autonomous System**.
