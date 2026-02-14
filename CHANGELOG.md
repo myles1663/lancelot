@@ -2,6 +2,27 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.2.11] - 2026-02-13
+
+### Removed
+- **Dead Streamlit UI process**: Removed `streamlit run src/ui/war_room.py` from docker-compose command.
+  The old Streamlit War Room on port 8501 was still running alongside the React War Room (served by
+  FastAPI on port 8000). Now only uvicorn runs, eliminating wasted resources and port 8501 exposure.
+- **PlaceholderPage component**: Unused React component with no route pointing to it.
+- **14 unused frontend API functions**: fetchRouterDecisions, fetchRouterStats, fetchTokens, fetchToken,
+  revokeToken, fetchArtifacts, fetchArtifact, storeArtifact, fetchReady, fetchHealthLive,
+  fetchToolsRouting, fetchUsageSavings, resetUsage, fetchBalClientsByStatus. Removed from API modules
+  and barrel exports.
+- **Unused `json` import** in scheduler executor.
+
+### Fixed
+- **Toast animation missing**: Added `animate-slide-in` keyframe animation to tailwind.config.ts.
+  Toast notifications now properly slide in from the right.
+- **No health check for lancelot-core**: Added Docker health check (`/health` endpoint, 30s interval)
+  so Docker Desktop can monitor container health.
+- **No restart policy**: Added `restart: unless-stopped` to lancelot-core service so it recovers
+  from crashes automatically.
+
 ## [8.2.10] - 2026-02-13
 
 ### Added

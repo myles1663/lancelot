@@ -51,6 +51,15 @@ const config: Config = {
         'metric': ['1.75rem', { lineHeight: '2rem', fontWeight: '700' }],
         'metric-label': ['0.6875rem', { lineHeight: '1rem', fontWeight: '500', letterSpacing: '0.05em' }],
       },
+      keyframes: {
+        'slide-in': {
+          '0%': { transform: 'translateX(100%)', opacity: '0' },
+          '100%': { transform: 'translateX(0)', opacity: '1' },
+        },
+      },
+      animation: {
+        'slide-in': 'slide-in 0.3s ease-out',
+      },
     },
   },
   plugins: [],

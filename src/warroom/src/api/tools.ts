@@ -16,11 +16,6 @@ export interface ToolsHealthResponse {
   enabled: boolean
 }
 
-export interface ToolsRoutingResponse {
-  routing: Record<string, unknown>
-  enabled: boolean
-}
-
 export interface ToolsConfigResponse {
   enabled: boolean
   safe_mode: boolean
@@ -28,5 +23,4 @@ export interface ToolsConfigResponse {
 }
 
 export const fetchToolsHealth = () => apiGet<ToolsHealthResponse>('/api/tools/health')
-export const fetchToolsRouting = () => apiGet<ToolsRoutingResponse>('/api/tools/routing')
 export const fetchToolsConfig = () => apiGet<ToolsConfigResponse>('/api/tools/config')

@@ -49,9 +49,6 @@ export interface ClientListResponse {
 export const fetchBalClients = () =>
   apiGet<ClientListResponse>('/api/v1/clients')
 
-export const fetchBalClientsByStatus = (status: string) =>
-  apiGet<ClientListResponse>('/api/v1/clients', { status })
-
 export const pauseClient = (clientId: string, reason = '') =>
   apiPost<BalClient>(`/api/v1/clients/${clientId}/pause`, { reason })
 
