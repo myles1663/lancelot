@@ -9,6 +9,13 @@ All notable changes to Project Lancelot will be documented in this file.
   `RuleEngine` instances were never created in the orchestrator — all three API endpoint groups
   (`/api/governance/*`, `/api/trust/*`, `/api/apl/*`) were receiving `None` and returning empty data.
   Now properly initialized in `_init_governance()` when feature flags are enabled.
+- **Governance Execution Pipeline: Data flow wired**: Governance subsystems were initialized but
+  never called during action execution. Added `_record_governance_event()` helper and wired it
+  into all 5 execution paths (legacy, T0, T1, T2, T3). Every tool execution now records
+  success/failure to the Trust Ledger and decisions to the Decision Log.
+- **Trust Ledger Seed Data**: Added `_seed_trust_records()` to populate 10 baseline capability
+  records on startup (fs.read, fs.write, shell.exec, chat.send, memory.write, scheduler.create,
+  skill.install) so the War Room pages display meaningful data from first boot.
 - **Feature Flags Enabled**: `FEATURE_TRUST_LEDGER`, `FEATURE_APPROVAL_LEARNING`, and
   `FEATURE_RISK_TIERED_GOVERNANCE` now enabled by default in `.env` and the installer.
 

@@ -204,6 +204,7 @@ class LancelotOrchestrator:
                 if _trust_ff.FEATURE_TRUST_LEDGER:
                     trust_config = load_trust_config()
                     self.trust_ledger = TrustLedger(config=trust_config)
+                    self._seed_trust_records()
                     _gov_logger.info("TrustLedger initialized")
             except Exception as e:
                 _gov_logger.error("TrustLedger init failed: %s", e)
@@ -254,6 +255,30 @@ class LancelotOrchestrator:
             self._async_queue = None
             self._rollback_manager = None
             self._template_registry = None
+
+    def _seed_trust_records(self):
+        """Seed baseline trust records for core capabilities so the UI has data from day one."""
+        if not self.trust_ledger:
+            return
+        try:
+            from governance.models import RiskTier
+            seed_capabilities = [
+                ("fs.read", "workspace", RiskTier.T0_INERT),
+                ("fs.list", "workspace", RiskTier.T0_INERT),
+                ("fs.write", "workspace", RiskTier.T1_REVERSIBLE),
+                ("shell.exec", "workspace", RiskTier.T2_CONTROLLED),
+                ("chat.send", "telegram", RiskTier.T1_REVERSIBLE),
+                ("chat.send", "google_chat", RiskTier.T1_REVERSIBLE),
+                ("memory.write", "working", RiskTier.T1_REVERSIBLE),
+                ("memory.write", "archival", RiskTier.T2_CONTROLLED),
+                ("scheduler.create", "default", RiskTier.T2_CONTROLLED),
+                ("skill.install", "marketplace", RiskTier.T3_IRREVERSIBLE),
+            ]
+            for cap, scope, tier in seed_capabilities:
+                self.trust_ledger.get_or_create_record(cap, scope, default_tier=tier)
+            _gov_logger.info("Seeded %d baseline trust records", len(seed_capabilities))
+        except Exception as e:
+            _gov_logger.debug("Trust seed failed (non-fatal): %s", e)
 
     def _init_fix_pack_v1(self):
         """Initialize Fix Pack V1 subsystems: execution authority, tasking, response assembler."""
@@ -2463,6 +2488,7 @@ class LancelotOrchestrator:
                 except Exception as e:
                     output = f"Execution Error: {e}"
                 verification = self.verifier.verify_step(step.description, output)
+                self._record_governance_event(capability, target, 0, verification.success)
                 results.append(f"Step {step.id}: {verification.success} ({verification.reason})")
                 if not verification.success:
                     return f"Plan Failed at Step {step.id}.\nReason: {verification.reason}\nSuggestion: {verification.correction_suggestion}"
@@ -2499,6 +2525,7 @@ class LancelotOrchestrator:
                         capability, step.tool, RiskTier.T0_INERT,
                         str(params), output, "Error" not in output,
                     )
+                self._record_governance_event(capability, target, RiskTier.T0_INERT, "Error" not in output)
                 results.append(f"Step {step.id}: T0 executed ({capability})")
 
             # ═══════════════════════════════════════════════════════
@@ -2535,6 +2562,7 @@ class LancelotOrchestrator:
                 else:
                     # Sync verify fallback
                     verification = self.verifier.verify_step(step.description, output)
+                    self._record_governance_event(capability, target, RiskTier.T1_REVERSIBLE, verification.success)
                     results.append(f"Step {step.id}: T1 sync-verified {verification.success} ({capability})")
                     if not verification.success:
                         if snapshot and self._rollback_manager:
@@ -2562,6 +2590,7 @@ class LancelotOrchestrator:
                     output = f"Execution Error: {e}"
 
                 verification = self.verifier.verify_step(step.description, output)
+                self._record_governance_event(capability, target, RiskTier.T2_CONTROLLED, verification.success)
                 results.append(f"Step {step.id}: T2 sync-verified {verification.success} ({capability})")
                 if not verification.success:
                     return f"Plan Failed at Step {step.id}.\nReason: {verification.reason}\nSuggestion: {verification.correction_suggestion}"
@@ -2592,6 +2621,7 @@ class LancelotOrchestrator:
                     output = f"Execution Error: {e}"
 
                 verification = self.verifier.verify_step(step.description, output)
+                self._record_governance_event(capability, target, RiskTier.T3_IRREVERSIBLE, verification.success)
                 results.append(f"Step {step.id}: T3 sync-verified {verification.success} ({capability})")
                 if not verification.success:
                     return f"Plan Failed at Step {step.id}.\nReason: {verification.reason}\nSuggestion: {verification.correction_suggestion}"
@@ -2614,6 +2644,36 @@ class LancelotOrchestrator:
             self._async_queue.clear_results()
 
         return "Plan Executed Successfully.\n" + "\n".join(results)
+
+    def _record_governance_event(self, capability: str, scope: str, tier, success: bool):
+        """Record a tool execution to Trust Ledger and Decision Log for governance tracking."""
+        # Trust Ledger: track per-capability success/failure
+        if self.trust_ledger:
+            try:
+                self.trust_ledger.get_or_create_record(capability, scope or "default", default_tier=tier)
+                if success:
+                    self.trust_ledger.record_success(capability, scope or "default")
+                else:
+                    self.trust_ledger.record_failure(capability, scope or "default")
+            except Exception as e:
+                _gov_logger.debug("Trust ledger record failed: %s", e)
+
+        # Decision Log: record the decision
+        if self.decision_log:
+            try:
+                from governance.approval_learning.models import DecisionContext, RiskTier as APLRiskTier
+                ctx = DecisionContext.from_action(
+                    capability=capability,
+                    target=scope or "",
+                    risk_tier=tier if isinstance(tier, int) else int(tier),
+                )
+                self.decision_log.record(
+                    ctx,
+                    decision="approved" if success else "denied",
+                    reason="auto-execution" if success else "execution-failed",
+                )
+            except Exception as e:
+                _gov_logger.debug("Decision log record failed: %s", e)
 
     def _get_deep_model(self) -> str:
         """Returns the deep/reasoning model name with graceful fallback.
