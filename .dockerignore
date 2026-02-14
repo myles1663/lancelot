@@ -15,6 +15,9 @@ __pycache__/
 # Tests (not needed in production image)
 tests/
 
+# Installer (npm package, not needed in Docker image)
+installer/
+
 # Docs
 docs/
 

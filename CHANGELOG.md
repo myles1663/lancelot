@@ -2,6 +2,22 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.3.2] - 2026-02-14
+
+### Added
+- **`create-lancelot` CLI Installer**: New NPM package (`npx create-lancelot`) provides a guided,
+  single-command installation experience. The installer:
+  - Checks all prerequisites (Node.js, Git, Docker Desktop, Compose, disk space, RAM, GPU)
+  - Prompts for install location, LLM provider, API key (with live validation), and comms channel
+  - Clones the repository, generates `.env`, patches `docker-compose.yml` for the target system
+  - Downloads the local AI model (5GB) with progress bar and resume support
+  - Builds Docker images, starts services, and verifies health
+  - Writes onboarding snapshot to skip the War Room setup wizard
+  - Supports `--resume` for interrupted installations and `--skip-model` for faster setup
+  - Cross-platform: Windows, macOS, and Linux
+- **Installer state persistence**: Interrupted installs save progress to `~/.create-lancelot-state.json`
+  (API keys are never persisted). Resume with `npx create-lancelot --resume`.
+
 ## [8.3.1] - 2026-02-14
 
 ### Added

@@ -10,12 +10,31 @@ Lancelot is a self-hosted AI assistant that operates as your digital knight. It 
 
 ## Quickstart
 
-### Prerequisites
+### One-Command Install (Recommended)
+
+The fastest way to get Lancelot running — just have **Docker Desktop** and **Node.js 18+** installed:
+
+```bash
+npx create-lancelot
+```
+
+The installer will guide you through everything: prerequisites check, provider and API key setup, communications configuration, model download, Docker build, and service startup. In about 5 minutes you'll have a fully running Lancelot instance.
+
+Options:
+- `npx create-lancelot --resume` — resume an interrupted install
+- `npx create-lancelot --skip-model` — skip the 5GB local model download
+- `npx create-lancelot --provider gemini` — pre-select a provider
+
+### Manual Installation
+
+<details>
+<summary>Click to expand manual installation steps</summary>
+
+#### Prerequisites
 - Docker Desktop
-- Python 3.11+
 - At least one LLM API key (Gemini, OpenAI, or Anthropic)
 
-### Installation
+#### Steps
 
 1. **Clone the repository**
    ```bash
@@ -41,6 +60,8 @@ Lancelot is a self-hosted AI assistant that operates as your digital knight. It 
    - **React War Room (recommended):** Navigate to `http://localhost:8000/war-room/`
    - **Legacy Streamlit UI:** Navigate to `http://localhost:8501`
    - Or run `python src/ui/lancelot_gui.py` for the native launcher
+
+</details>
 
 ## Architecture
 
@@ -86,6 +107,7 @@ lancelot/
 │   │   └── panels/        # Soul, Skills, Health, Scheduler, Memory, Tool Fabric panels
 │   ├── integrations/      # Telegram, Google Chat, MCP
 │   └── shared/            # Utilities, logging, receipts
+├── installer/             # create-lancelot CLI installer (npm package)
 ├── config/                # YAML configuration files
 ├── docs/                  # Documentation
 │   ├── specs/             # Product, Functional, and Technical specifications
