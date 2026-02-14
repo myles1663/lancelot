@@ -954,9 +954,11 @@ class LancelotOrchestrator:
         if channel == "telegram":
             channel_note = (
                 "\nCHANNEL: This message arrived via Telegram. "
-                "You can reply directly — the response will be sent back to Telegram. "
-                "To send a message to the War Room dashboard, use the warroom_send tool. "
-                "To send another Telegram message, use the telegram_send tool."
+                "Your response text will be sent back to Telegram automatically — "
+                "do NOT use the telegram_send tool to reply, or the message will be sent twice. "
+                "Only use telegram_send if you need to send a SEPARATE follow-up message. "
+                "To send a file/document to Telegram, use telegram_send with the file_path parameter. "
+                "To send a message to the War Room dashboard, use the warroom_send tool."
             )
         elif channel == "warroom":
             channel_note = (
@@ -1166,20 +1168,24 @@ class LancelotOrchestrator:
             NormalizedToolDeclaration(
                 name="telegram_send",
                 description=(
-                    "Send a message to the owner via Telegram. ALWAYS use this tool when asked to "
-                    "send a Telegram message, notify the owner, or communicate via Telegram. "
+                    "Send a message or file to the owner via Telegram. Use this tool when asked to "
+                    "send a Telegram message, notify the owner, or deliver a file/document via Telegram. "
                     "The bot token and chat ID are already configured — do NOT ask for them. "
-                    "Just call this tool with the message text."
+                    "For text: provide 'message'. For files: provide 'file_path' (workspace-relative path). "
+                    "You can include both to send a file with a caption."
                 ),
                 parameters={
                     "type": "object",
                     "properties": {
                         "message": {
                             "type": "string",
-                            "description": "The message text to send",
+                            "description": "The message text to send (or caption for a file)",
+                        },
+                        "file_path": {
+                            "type": "string",
+                            "description": "Workspace-relative path of a file to send as a document attachment",
                         },
                     },
-                    "required": ["message"],
                 },
             ),
             NormalizedToolDeclaration(
@@ -1250,7 +1256,8 @@ class LancelotOrchestrator:
         """Classify a tool call as 'auto' (safe, read-only) or 'escalate' (needs approval).
 
         Read-only operations execute automatically during research.
-        Write operations require user approval before execution.
+        Write operations within the workspace are auto-approved (T1 risk tier).
+        Sensitive writes (.env, system config) and operations outside workspace escalate.
         """
         READ_ONLY_COMMANDS = (
             "ls", "cat", "grep", "head", "tail", "find", "wc",
@@ -1258,6 +1265,9 @@ class LancelotOrchestrator:
             "echo", "pwd", "whoami", "date", "df", "du",
             "docker ps", "docker logs",
         )
+
+        # Sensitive file patterns that always require approval
+        SENSITIVE_PATTERNS = (".env", ".secret", "credentials", "token", "password", "key.pem")
 
         if skill_name == "network_client":
             method = inputs.get("method", "").upper()
@@ -1284,7 +1294,24 @@ class LancelotOrchestrator:
             # Auto-execute: manages scheduled jobs (create/list/delete)
             return "auto"
 
-        # repo_writer, service_runner, and anything else → escalate
+        if skill_name == "repo_writer":
+            action = inputs.get("action", "").lower()
+            target_path = inputs.get("path", "").lower()
+
+            # Delete operations always need approval
+            if action == "delete":
+                return "escalate"
+
+            # Sensitive files always need approval
+            for pattern in SENSITIVE_PATTERNS:
+                if pattern in target_path:
+                    return "escalate"
+
+            # Workspace create/edit/patch operations are auto-approved (T1 risk)
+            if action in ("create", "edit", "patch"):
+                return "auto"
+
+        # service_runner and anything else → escalate
         return "escalate"
 
     # ------------------------------------------------------------------
@@ -1383,18 +1410,22 @@ class LancelotOrchestrator:
                 "function": {
                     "name": "telegram_send",
                     "description": (
-                        "Send a message to the owner via Telegram. "
-                        "The bot token and chat ID are already configured — do NOT ask for them."
+                        "Send a message or file to the owner via Telegram. "
+                        "For text: provide 'message'. For files: provide 'file_path' (workspace-relative). "
+                        "The bot token and chat ID are already configured."
                     ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "message": {
                                 "type": "string",
-                                "description": "The message text to send",
+                                "description": "The message text to send (or caption for a file)",
+                            },
+                            "file_path": {
+                                "type": "string",
+                                "description": "Workspace-relative path of a file to send as a document",
                             },
                         },
-                        "required": ["message"],
                     },
                 },
             },

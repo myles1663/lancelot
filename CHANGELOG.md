@@ -2,6 +2,25 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.3.4] - 2026-02-14
+
+### Fixed
+- **Duplicate Telegram Messages**: Fixed two duplication paths: (1) voice handler fallback
+  in `_handle_voice()` could send text twice when TTS returned falsy; (2) system prompt
+  told the LLM to use `telegram_send` to reply when the handler already sends the response
+  automatically. Channel note now explicitly warns against double-sending.
+- **Workspace File Writes Blocked by Governance**: `_classify_tool_call_safety()` returned
+  `"escalate"` for ALL `repo_writer` calls regardless of scope, bypassing the risk-tier
+  system that correctly classifies workspace writes as T1 (auto-approved). Now workspace
+  create/edit/patch operations are auto-approved; only deletes and sensitive files (.env,
+  credentials) require explicit approval.
+
+### Added
+- **Telegram File/Document Delivery**: New `send_document()` method on `TelegramBot` class
+  enables file attachments via Telegram's `sendDocument` API. The `telegram_send` skill
+  (now v2.0.0) accepts a `file_path` parameter to deliver workspace files as Telegram
+  document attachments with optional captions. Path traversal protection enforced.
+
 ## [8.3.3] - 2026-02-14
 
 ### Fixed

@@ -148,6 +148,33 @@ class TelegramBot:
                 logger.error(f"TelegramBot: Poll error: {e}")
                 time.sleep(5)
 
+    def send_document(self, file_bytes: bytes, filename: str, chat_id: str = None, caption: str = None):
+        """Sends a document/file to the configured chat."""
+        target = chat_id or self.chat_id
+        if not self.token or not target:
+            logger.warning("TelegramBot: Cannot send document (token or chat_id missing).")
+            return False
+
+        url = TG_API.format(token=self.token, method="sendDocument")
+        try:
+            data = {"chat_id": target}
+            if caption:
+                data["caption"] = caption[:1024]  # Telegram caption limit
+            resp = requests.post(
+                url,
+                data=data,
+                files={"document": (filename, file_bytes, "application/octet-stream")},
+                timeout=60,
+            )
+            if not resp.ok:
+                logger.error("TelegramBot: Send document failed: %s", resp.text[:200])
+                return False
+            logger.info("TelegramBot: Sent document '%s' (%d bytes)", filename, len(file_bytes))
+            return True
+        except Exception as e:
+            logger.error("TelegramBot: Send document error: %s", e)
+            return False
+
     def send_voice(self, audio_bytes: bytes, chat_id: str = None):
         """Sends a voice note (OGG/OPUS) to the configured chat."""
         target = chat_id or self.chat_id
@@ -297,6 +324,8 @@ class TelegramBot:
                 return
 
             # Step 4: TTS — synthesize response as voice
+            response = self._sanitize_for_telegram(response)
+            sent = False
             if self.voice_processor.available:
                 try:
                     audio_reply = self.voice_processor.synthesize_reply(response)
@@ -304,12 +333,13 @@ class TelegramBot:
                         self.send_voice(audio_reply, chat_id)
                         # Also send text version for accessibility
                         self.send_message(response, chat_id)
-                        return
+                        sent = True
                 except Exception as tts_err:
                     logger.warning("TelegramBot: TTS failed, falling back to text: %s", tts_err)
 
-            # Fallback: send text response
-            self.send_message(response, chat_id)
+            # Fallback: send text response (only if not already sent)
+            if not sent:
+                self.send_message(response, chat_id)
 
         except Exception as e:
             logger.error("TelegramBot: Voice processing error: %s", e)
