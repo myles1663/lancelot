@@ -144,8 +144,11 @@ async def startup_event():
     _startup_time = time.time()
 
     # F8: Validate environment on startup
-    if not os.getenv("GEMINI_API_KEY") and not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
-        logger.warning("No GEMINI_API_KEY or GOOGLE_APPLICATION_CREDENTIALS set. LLM features may be unavailable.")
+    _provider = os.getenv("LANCELOT_PROVIDER", "gemini")
+    _key_vars = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
+    _key_var = _key_vars.get(_provider, "GEMINI_API_KEY")
+    if not os.getenv(_key_var) and not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+        logger.warning("No %s set. LLM features may be unavailable.", _key_var)
     if not API_TOKEN:
         logger.warning("LANCELOT_API_TOKEN not set. Running in dev mode (no auth required).")
 
@@ -325,9 +328,9 @@ async def startup_event():
             from health.api import router as health_api_router, set_snapshot_provider
             checks = [
                 HealthCheck(
-                    name="gemini_client",
-                    check_fn=lambda: main_orchestrator.client is not None,
-                    degraded_reason="Gemini client not initialized",
+                    name="llm_provider",
+                    check_fn=lambda: main_orchestrator.provider is not None,
+                    degraded_reason="LLM provider not initialized",
                 ),
                 HealthCheck(
                     name="onboarding_ready",
@@ -525,6 +528,47 @@ async def startup_event():
         logger.info("Usage tracker + persistence initialized.")
     except Exception as e:
         logger.warning(f"Usage tracker initialization failed: {e}")
+
+    # ===== PHASE 7: MODEL DISCOVERY + PROVIDER API =====
+    try:
+        from model_discovery import ModelDiscovery
+        from providers.api import router as provider_router, init_provider_api
+
+        if main_orchestrator.provider:
+            # Build lane overrides from models.yaml config
+            _lane_overrides = {}
+            try:
+                from provider_profile import ProfileRegistry
+                _registry = ProfileRegistry()
+                _prov_name = main_orchestrator.provider.provider_name
+                if _registry.has_provider(_prov_name):
+                    _profile = _registry.get_profile(_prov_name)
+                    _lane_overrides["fast"] = _profile.fast.model
+                    _lane_overrides["deep"] = _profile.deep.model
+                    if _profile.cache:
+                        _lane_overrides["cache"] = _profile.cache.model
+            except Exception:
+                pass
+
+            _model_discovery = ModelDiscovery(
+                provider=main_orchestrator.provider,
+                profiles_path="config/model_profiles.yaml",
+                lane_overrides=_lane_overrides,
+            )
+            _model_discovery.refresh()
+            init_provider_api(_model_discovery)
+            app.include_router(provider_router)
+            logger.info(
+                "Model discovery: %d models found, lanes: %s",
+                len(_model_discovery.discovered_models),
+                _model_discovery.lane_assignments,
+            )
+        else:
+            init_provider_api(None)
+            app.include_router(provider_router)
+            logger.warning("Provider not initialized — model discovery skipped")
+    except Exception as e:
+        logger.warning(f"Model discovery initialization failed: {e}")
 
     # Start Communications Polling
     if telegram_bot:

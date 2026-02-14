@@ -8,9 +8,9 @@ import uuid
 import time as _time
 from enum import Enum
 from pathlib import Path
-from google import genai
-from google.genai import types
-from typing import Optional
+from typing import Any, Optional
+from providers.base import ProviderClient, GenerateResult, ToolCall
+from providers.tool_schema import NormalizedToolDeclaration
 from security import InputSanitizer, AuditLogger, NetworkInterceptor, CognitionGovernor, Sentry
 from receipts import create_receipt, get_receipt_service, ActionType, ReceiptStatus, CognitionTier
 from context_env import ContextEnvironment
@@ -112,7 +112,7 @@ class LancelotOrchestrator:
         self.user_context = ""
         self.rules_context = ""
         self.memory_summary = ""
-        self.client = None
+        self.provider: Optional[ProviderClient] = None
         self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
         self.sentry = None
 
@@ -164,7 +164,7 @@ class LancelotOrchestrator:
         self._init_fix_pack_v1()
 
         self._load_memory()
-        self._init_gemini()
+        self._init_provider()
         self._init_context_cache()
 
         # vNext4: Risk-Tiered Governance subsystems
@@ -431,7 +431,7 @@ class LancelotOrchestrator:
 
         Falls back to the original template steps if Gemini fails.
         """
-        if not self.client:
+        if not self.provider:
             return artifact
 
         self_awareness = self._build_self_awareness()
@@ -470,16 +470,17 @@ class LancelotOrchestrator:
                     force_tool_use=True,
                 )
             else:
-                response = self._gemini_call_with_retry(
-                    lambda: self.client.models.generate_content(
-                        model="gemini-2.0-flash",
-                        contents=[self.context_env.get_context_string(), prompt],
-                        config=types.GenerateContentConfig(
-                            system_instruction=sys_instruction,
-                        )
+                msg = self.provider.build_user_message(
+                    f"{self.context_env.get_context_string()}\n\n{prompt}"
+                )
+                result = self._llm_call_with_retry(
+                    lambda: self.provider.generate(
+                        model=self.model_name,
+                        messages=[msg],
+                        system_instruction=sys_instruction,
                     )
                 )
-                raw = response.text.strip() if response.text else ""
+                raw = result.text.strip() if result.text else ""
 
             # Parse numbered steps
             steps = re.findall(r"^\d+\.\s*(.+)$", raw, re.MULTILINE)
@@ -504,7 +505,7 @@ class LancelotOrchestrator:
 
         Returns the LLM-generated content string, or empty string on failure.
         """
-        if not self.client:
+        if not self.provider:
             return ""
 
         steps_text = "\n".join(
@@ -554,17 +555,18 @@ class LancelotOrchestrator:
                     force_tool_use=True,
                 )
             else:
-                response = self._gemini_call_with_retry(
-                    lambda: self.client.models.generate_content(
+                msg = self.provider.build_user_message(
+                    f"{self.context_env.get_context_string()}\n\n{prompt}"
+                )
+                gen_result = self._llm_call_with_retry(
+                    lambda: self.provider.generate(
                         model=self._route_model(goal),
-                        contents=[self.context_env.get_context_string(), prompt],
-                        config=types.GenerateContentConfig(
-                            system_instruction=system_instruction,
-                            thinking_config=self._get_thinking_config(),
-                        )
+                        messages=[msg],
+                        system_instruction=system_instruction,
+                        config={"thinking": self._get_thinking_config()},
                     )
                 )
-                result = response.text if response.text else ""
+                result = gen_result.text if gen_result.text else ""
 
             # V4: Strip tool scaffolding but bypass honesty gate
             from response.policies import OutputPolicy
@@ -581,7 +583,7 @@ class LancelotOrchestrator:
         Takes a TaskGraph and TaskRunResult, formats the real step outputs,
         and sends to Gemini for a concise user-facing summary.
         """
-        if not self.client:
+        if not self.provider:
             return ""
 
         # Format real step outputs
@@ -610,18 +612,19 @@ class LancelotOrchestrator:
 
         try:
             system_instruction = self._build_execution_instruction()
-            response = self._gemini_call_with_retry(
-                lambda: self.client.models.generate_content(
+            msg = self.provider.build_user_message(
+                f"{self.context_env.get_context_string()}\n\n{prompt}"
+            )
+            gen_result = self._llm_call_with_retry(
+                lambda: self.provider.generate(
                     model=self._route_model(graph.goal or ""),
-                    contents=[self.context_env.get_context_string(), prompt],
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction,
-                        thinking_config=self._get_thinking_config(),
-                    )
+                    messages=[msg],
+                    system_instruction=system_instruction,
+                    config={"thinking": self._get_thinking_config()},
                 )
             )
             from response.policies import OutputPolicy
-            return OutputPolicy.strip_tool_scaffolding(response.text)
+            return OutputPolicy.strip_tool_scaffolding(gen_result.text)
         except Exception as e:
             print(f"Result summarization failed: {e}")
             # Fallback: return raw results
@@ -652,50 +655,59 @@ class LancelotOrchestrator:
 
         print("Memory loaded into ContextEnv.")
 
-    def _init_gemini(self):
-        """Initializes the Gemini API client using the google-genai SDK.
-        Supports both API Key (AI Studio) and ADC (Vertex AI).
-        """
-        api_key = os.getenv("GEMINI_API_KEY")
-        
-        if api_key:
-            self.client = genai.Client(api_key=api_key)
-            print(f"Gemini client initialized via API Key (model: {self.model_name}).")
-            return
+    def _init_provider(self):
+        """Initialize the LLM provider based on environment configuration.
 
-        # Fallback to ADC / OAuth (Generative Language API)
-        print("GEMINI_API_KEY not found. Attempting OAuth (PRO Credits)...")
-        try:
-            import google.auth
-            from google.auth.transport.requests import Request
-            
-            # Request Scopes for both Gemini and Chat
-            SCOPES = [
-                'https://www.googleapis.com/auth/generative-language.retriever',
-                'https://www.googleapis.com/auth/generative-language.tuning',
-                'https://www.googleapis.com/auth/cloud-platform' # Fallback
-            ]
-            creds, project_id = google.auth.default(scopes=SCOPES)
-            
-            # Refresh if needed
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            
-            # Initialize for Generative Language API (NOT Vertex)
-            # Passing 'credentials' allows using User OAuth for standard Gemini API
-            # This consumes the user's "PRO" quota if available
-            # Note: google-genai 0.x might differ, but this is the standard pattern
-            # If the SDK strictly keys off 'api_key', we might need to use 'google-generativeai'
-            # But let's try injecting credentials into the client or http_options.
-            
-            # Assumption: SDK accepts 'credentials' arg.
-            self.client = genai.Client(credentials=creds)
-            
-            print(f"Gemini client initialized via OAuth (User/PRO Credits).")
-            
-        except Exception as e:
-            print(f"Error initializing OAuth GenAI: {e}")
-            print("LLM features will be disabled.")
+        Supports Gemini (default), OpenAI, and Anthropic via the ProviderClient
+        abstraction layer. Provider is selected via LANCELOT_PROVIDER env var.
+        Falls back to Gemini with ADC if no API key is found.
+        """
+        from providers.factory import create_provider, API_KEY_VARS
+
+        provider_name = os.getenv("LANCELOT_PROVIDER", "gemini")
+        api_key_var = API_KEY_VARS.get(provider_name, "")
+        api_key = os.getenv(api_key_var, "")
+
+        if api_key:
+            try:
+                self.provider = create_provider(provider_name, api_key)
+                # Load model names from models.yaml profile if available
+                try:
+                    from provider_profile import ProfileRegistry
+                    registry = ProfileRegistry()
+                    if registry.has_provider(provider_name):
+                        profile = registry.get_profile(provider_name)
+                        self.model_name = profile.fast.model
+                        self._deep_model_name = profile.deep.model
+                        self._cache_model = profile.cache.model if profile.cache else self.model_name
+                except Exception:
+                    pass  # Keep env-var defaults
+                print(f"{provider_name.title()} provider initialized via API key (model: {self.model_name}).")
+                return
+            except Exception as e:
+                print(f"Error initializing {provider_name} provider: {e}")
+
+        # Gemini-only fallback: ADC / OAuth
+        if provider_name == "gemini":
+            print("GEMINI_API_KEY not found. Attempting OAuth (PRO Credits)...")
+            try:
+                import google.auth
+                from google.auth.transport.requests import Request
+                SCOPES = [
+                    'https://www.googleapis.com/auth/generative-language.retriever',
+                    'https://www.googleapis.com/auth/generative-language.tuning',
+                    'https://www.googleapis.com/auth/cloud-platform',
+                ]
+                creds, _project_id = google.auth.default(scopes=SCOPES)
+                if creds and creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
+                self.provider = create_provider("gemini", "", credentials=creds)
+                print("Gemini provider initialized via OAuth (User/PRO Credits).")
+                return
+            except Exception as e:
+                print(f"Error initializing OAuth GenAI: {e}")
+
+        print(f"No API key for {provider_name} (set {api_key_var}). LLM features disabled.")
 
     def _build_system_instruction(self, crusader_mode=False):
         """Builds structured system instruction following Gemini 2026 best practices.
@@ -893,17 +905,17 @@ class LancelotOrchestrator:
             "in your file context. Refer to it when asked about your internals."
         )
 
-    # ── Fix Pack V6: Agentic Loop (Gemini Function Calling) ──────────
+    # ── Fix Pack V6: Agentic Loop (Provider Function Calling) ──────────
 
     def _build_tool_declarations(self):
-        """Build Gemini FunctionDeclaration list for Lancelot's skills.
+        """Build normalized tool declarations for Lancelot's skills.
 
-        Returns a list of types.FunctionDeclaration objects that map
-        directly to the 4 builtin skills: network_client, command_runner,
-        repo_writer, service_runner.
+        Returns a list of NormalizedToolDeclaration objects that map
+        to the builtin skills. Each provider client converts these to
+        its native format (Gemini FunctionDeclaration, OpenAI tools, etc.).
         """
         return [
-            types.FunctionDeclaration(
+            NormalizedToolDeclaration(
                 name="network_client",
                 description=(
                     "Make HTTP requests to external APIs and websites. "
@@ -913,7 +925,7 @@ class LancelotOrchestrator:
                     "If a URL returns 403/404, try alternative URLs or search endpoints. "
                     "Always try at least 2-3 sources before concluding information is unavailable."
                 ),
-                parameters_json_schema={
+                parameters={
                     "type": "object",
                     "properties": {
                         "method": {
@@ -937,14 +949,14 @@ class LancelotOrchestrator:
                     "required": ["method", "url"],
                 },
             ),
-            types.FunctionDeclaration(
+            NormalizedToolDeclaration(
                 name="command_runner",
                 description=(
                     "Execute shell commands on the server. Commands are validated "
                     "against a whitelist. Use for inspecting the system, listing files, "
                     "checking versions, running git commands, etc."
                 ),
-                parameters_json_schema={
+                parameters={
                     "type": "object",
                     "properties": {
                         "command": {
@@ -955,13 +967,13 @@ class LancelotOrchestrator:
                     "required": ["command"],
                 },
             ),
-            types.FunctionDeclaration(
+            NormalizedToolDeclaration(
                 name="repo_writer",
                 description=(
                     "Create, edit, or delete files in the workspace. "
                     "Use for writing code, configuration, or documentation."
                 ),
-                parameters_json_schema={
+                parameters={
                     "type": "object",
                     "properties": {
                         "action": {
@@ -981,12 +993,12 @@ class LancelotOrchestrator:
                     "required": ["action", "path"],
                 },
             ),
-            types.FunctionDeclaration(
+            NormalizedToolDeclaration(
                 name="service_runner",
                 description=(
                     "Manage Docker services — check status, health, start or stop services."
                 ),
-                parameters_json_schema={
+                parameters={
                     "type": "object",
                     "properties": {
                         "action": {
@@ -1002,7 +1014,7 @@ class LancelotOrchestrator:
                     "required": ["action"],
                 },
             ),
-            types.FunctionDeclaration(
+            NormalizedToolDeclaration(
                 name="telegram_send",
                 description=(
                     "Send a message to the owner via Telegram. ALWAYS use this tool when asked to "
@@ -1010,7 +1022,7 @@ class LancelotOrchestrator:
                     "The bot token and chat ID are already configured — do NOT ask for them. "
                     "Just call this tool with the message text."
                 ),
-                parameters_json_schema={
+                parameters={
                     "type": "object",
                     "properties": {
                         "message": {
@@ -1021,14 +1033,14 @@ class LancelotOrchestrator:
                     "required": ["message"],
                 },
             ),
-            types.FunctionDeclaration(
+            NormalizedToolDeclaration(
                 name="warroom_send",
                 description=(
                     "Push a notification message to the War Room dashboard. Use this tool when "
                     "asked to send a message to the War Room, Command Center, or dashboard. "
                     "The message appears as a toast notification in the browser."
                 ),
-                parameters_json_schema={
+                parameters={
                     "type": "object",
                     "properties": {
                         "message": {
@@ -1039,7 +1051,7 @@ class LancelotOrchestrator:
                     "required": ["message"],
                 },
             ),
-            types.FunctionDeclaration(
+            NormalizedToolDeclaration(
                 name="schedule_job",
                 description=(
                     "Create, list, or delete scheduled jobs. Use this to set up recurring tasks "
@@ -1047,7 +1059,7 @@ class LancelotOrchestrator:
                     "Action 'create' requires name, skill, and cron expression. "
                     "Action 'list' shows all jobs. Action 'delete' removes a job by ID."
                 ),
-                parameters_json_schema={
+                parameters={
                     "type": "object",
                     "properties": {
                         "action": {
@@ -1134,7 +1146,8 @@ class LancelotOrchestrator:
         """Build OpenAI-format tool declarations for the local model.
 
         Returns a list of tool dicts in the OpenAI chat completions format,
-        matching the same 4 skills as _build_tool_declarations() for Gemini.
+        matching the same skills as _build_tool_declarations().
+        Used by the local model (Ollama) which speaks OpenAI-compatible format.
         """
         return [
             {
@@ -1285,8 +1298,8 @@ class LancelotOrchestrator:
         """Heuristic: can this request be handled by the local model?
 
         Returns True for simple, short, typically read-only queries.
-        Returns False for complex reasoning that needs Gemini.
-        Conservative — defaults to Gemini.
+        Returns False for complex reasoning that needs the flagship model.
+        Conservative — defaults to flagship.
         """
         if len(prompt) > 500:
             return False
@@ -1320,7 +1333,7 @@ class LancelotOrchestrator:
         if any(k in prompt_lower for k in simple_keywords):
             return True
 
-        return False  # Default: Gemini (conservative)
+        return False  # Default: flagship model (conservative)
 
     def _needs_research(self, prompt: str) -> bool:
         """Detect queries requiring tool-backed research.
@@ -1525,7 +1538,7 @@ class LancelotOrchestrator:
         MAX_LOCAL_ITERATIONS = 5
 
         if not self.local_model:
-            print("V8: local_model not available, falling back to Gemini agentic")
+            print("V8: local_model not available, falling back to flagship agentic")
             return self._agentic_generate(
                 prompt=prompt,
                 system_instruction=system_instruction,
@@ -1534,7 +1547,7 @@ class LancelotOrchestrator:
             )
 
         if not self.local_model.is_healthy():
-            print("V8: local model unhealthy, falling back to Gemini agentic")
+            print("V8: local model unhealthy, falling back to flagship agentic")
             return self._agentic_generate(
                 prompt=prompt,
                 system_instruction=system_instruction,
@@ -1569,8 +1582,8 @@ class LancelotOrchestrator:
                 print(f"V8 local model call failed: {e}")
                 if tool_receipts:
                     return self._format_tool_receipts(tool_receipts, error=str(e))
-                # Fall back to Gemini
-                print("V8: Falling back to Gemini after local model error")
+                # Fall back to flagship model
+                print("V8: Falling back to flagship model after local model error")
                 return self._agentic_generate(
                     prompt=prompt,
                     system_instruction=system_instruction,
@@ -1679,15 +1692,18 @@ class LancelotOrchestrator:
 
     @staticmethod
     def _is_retryable_error(exc: Exception) -> bool:
-        """Check if a Gemini API error is retryable (429/503/RESOURCE_EXHAUSTED)."""
+        """Check if an LLM API error is retryable (429/503/rate limit/overloaded)."""
         err_str = str(exc).lower()
-        return any(kw in err_str for kw in ("429", "resource_exhausted", "503", "service_unavailable", "overloaded"))
+        return any(kw in err_str for kw in (
+            "429", "resource_exhausted", "503", "service_unavailable",
+            "overloaded", "rate_limit", "timeout",
+        ))
 
-    def _gemini_call_with_retry(self, call_fn, max_retries=3, base_delay=1.0):
-        """Execute a Gemini API call with exponential backoff on transient errors.
+    def _llm_call_with_retry(self, call_fn, max_retries=3, base_delay=1.0):
+        """Execute an LLM API call with exponential backoff on transient errors.
 
         Args:
-            call_fn: Zero-arg callable that makes the Gemini API call.
+            call_fn: Zero-arg callable that makes the LLM API call.
             max_retries: Maximum retry attempts (default 3).
             base_delay: Initial delay in seconds (doubles each retry).
 
@@ -1705,7 +1721,7 @@ class LancelotOrchestrator:
                 last_exc = e
                 if attempt < max_retries and self._is_retryable_error(e):
                     delay = base_delay * (2 ** attempt)
-                    print(f"Gemini API transient error (attempt {attempt + 1}/{max_retries + 1}): {e}")
+                    print(f"LLM API transient error (attempt {attempt + 1}/{max_retries + 1}): {e}")
                     print(f"Retrying in {delay:.1f}s...")
                     _time.sleep(delay)
                 else:
@@ -1721,11 +1737,14 @@ class LancelotOrchestrator:
         force_tool_use: bool = False,
         image_parts: list = None,
     ) -> str:
-        """Core agentic loop: Gemini + function calling via skills.
+        """Core agentic loop: LLM + function calling via skills.
 
-        Calls Gemini with tool declarations. When Gemini returns a function_call,
-        executes it via SkillExecutor and feeds the result back. Loops until
-        Gemini returns a text response or max iterations are reached.
+        Calls the active LLM provider with tool declarations. When the model
+        returns a tool call, executes it via SkillExecutor and feeds the result
+        back. Loops until the model returns a text response or max iterations.
+
+        Provider-agnostic — works with Gemini, OpenAI, and Anthropic via
+        the ProviderClient abstraction.
 
         Args:
             prompt: The user's prompt/question
@@ -1733,54 +1752,38 @@ class LancelotOrchestrator:
             allow_writes: If True, write operations auto-execute. If False, escalate.
             context_str: Optional pre-built context string
             force_tool_use: If True, first iteration forces tool call via mode=ANY
+            image_parts: Optional list of (bytes, mime_type) tuples for multimodal
 
         Returns:
-            The final text response from Gemini
+            The final text response from the LLM
         """
         MAX_ITERATIONS = 10
 
-        if not self.client:
-            return "Error: Gemini client not initialized."
+        if not self.provider:
+            return "Error: LLM provider not initialized."
 
         if not self.skill_executor:
             print("V6: skill_executor not available, falling back to text-only")
             return self._text_only_generate(prompt, system_instruction, context_str, image_parts=image_parts)
 
-        # Build tool declarations and config
+        # Build normalized tool declarations (provider converts to native format)
         declarations = self._build_tool_declarations()
-        tool = types.Tool(function_declarations=declarations)
 
         if not system_instruction:
             system_instruction = self._build_system_instruction()
 
         # V7: When force_tool_use=True, first iteration uses mode=ANY
-        # to force Gemini to call at least one tool before returning text.
+        # to force the model to call at least one tool before returning text.
         # After first tool call, switch back to AUTO.
+        current_tool_config = {"mode": "ANY"} if force_tool_use else None
         if force_tool_use:
-            tool_config = types.ToolConfig(
-                function_calling_config=types.FunctionCallingConfig(mode="ANY")
-            )
             print("V7: Forcing tool use on first iteration (mode=ANY)")
-        else:
-            tool_config = None
 
-        config = types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            tools=[tool],
-            tool_config=tool_config,
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-            thinking_config=self._get_thinking_config(),
-        )
-
-        # Build initial contents (with optional image/PDF parts for multimodal)
+        # Build initial message (with optional image/PDF parts for multimodal)
         ctx = context_str or self.context_env.get_context_string()
-        user_parts = []
-        if image_parts:
-            user_parts.extend(image_parts)
-        user_parts.append(types.Part(text=f"{ctx}\n\n{prompt}"))
-        contents = [
-            types.Content(role="user", parts=user_parts),
-        ]
+        full_text = f"{ctx}\n\n{prompt}"
+        initial_msg = self.provider.build_user_message(full_text, images=image_parts)
+        messages = [initial_msg]
 
         # Track tool calls for receipts and cost
         tool_receipts = []
@@ -1789,8 +1792,8 @@ class LancelotOrchestrator:
         for iteration in range(MAX_ITERATIONS):
             print(f"V6 agentic loop iteration {iteration + 1}/{MAX_ITERATIONS}")
 
-            # Cost guard: check governance limit before each Gemini call
-            iter_est_tokens = sum(len(str(c)) for c in contents) // 4
+            # Cost guard: check governance limit before each LLM call
+            iter_est_tokens = sum(len(str(m)) for m in messages) // 4
             if not self.governor.check_limit("tokens", iter_est_tokens):
                 print("V6 agentic loop: governance token limit reached, stopping")
                 return self._format_tool_receipts(
@@ -1799,21 +1802,24 @@ class LancelotOrchestrator:
                 )
 
             try:
-                response = self._gemini_call_with_retry(
-                    lambda: self.client.models.generate_content(
+                result = self._llm_call_with_retry(
+                    lambda: self.provider.generate_with_tools(
                         model=self._route_model(prompt),
-                        contents=contents,
-                        config=config,
+                        messages=messages,
+                        system_instruction=system_instruction,
+                        tools=declarations,
+                        tool_config=current_tool_config,
+                        config={"thinking": self._get_thinking_config()},
                     )
                 )
             except Exception as e:
-                print(f"V6 agentic loop Gemini call failed: {e}")
+                print(f"V6 agentic loop LLM call failed: {e}")
                 if tool_receipts:
                     return self._format_tool_receipts(tool_receipts, error=str(e))
                 return f"Error during agentic generation: {e}"
 
             # Track token usage per iteration
-            resp_text = response.text if response.text else ""
+            resp_text = result.text or ""
             iter_out_tokens = len(resp_text) // 4
             iter_total = iter_est_tokens + iter_out_tokens
             total_est_tokens += iter_total
@@ -1822,27 +1828,28 @@ class LancelotOrchestrator:
                 self.usage_tracker.record_simple(self.model_name, iter_total)
             print(f"V6 iteration {iteration + 1} token est: ~{iter_total} (cumulative: ~{total_est_tokens})")
 
-            # Check if response has function calls
-            if not response.function_calls:
+            # Check if response has tool calls
+            if not result.tool_calls:
                 # Text response — we're done
-                text = response.text if response.text else ""
+                text = result.text or ""
                 if tool_receipts:
                     print(f"V6 agentic loop completed after {len(tool_receipts)} tool calls")
                 return text
 
-            # Append model's response to conversation
-            contents.append(response.candidates[0].content)
+            # Append model's response to conversation (provider-native format)
+            if isinstance(result.raw, list):
+                messages.extend(result.raw)
+            else:
+                messages.append(result.raw)
 
-            # V7: Process ALL function calls and collect results as parts.
-            # Gemini API requires ALL function responses in a SINGLE Content
-            # message when multiple function calls are in one response.
+            # Process ALL tool calls and collect results.
             # V13: Set of declared tool names for hallucination guard
             _DECLARED_TOOL_NAMES = {"network_client", "command_runner", "repo_writer", "service_runner", "telegram_send", "warroom_send", "schedule_job"}
 
-            response_parts = []
-            for fc in response.function_calls:
-                skill_name = fc.name
-                inputs = dict(fc.args) if fc.args else {}
+            tool_results = []  # list of (call_id, fn_name, result_json_str)
+            for tc in result.tool_calls:
+                skill_name = tc.name
+                inputs = tc.args
                 print(f"V6 tool call: {skill_name}({inputs})")
 
                 # V13: Guard against hallucinated tool names
@@ -1858,12 +1865,7 @@ class LancelotOrchestrator:
                         "result": f"REJECTED — undeclared tool '{skill_name}'",
                     })
                     print(f"V13: Rejected hallucinated tool call: {skill_name}")
-                    response_parts.append(
-                        types.Part.from_function_response(
-                            name=skill_name,
-                            response=result_data,
-                        )
-                    )
+                    tool_results.append((tc.id, skill_name, str(result_data)))
                     continue
 
                 # Safety classification
@@ -1884,9 +1886,9 @@ class LancelotOrchestrator:
                     # Execute the skill
                     self.governor.log_usage("tool_calls", 1)
                     try:
-                        result = self.skill_executor.run(skill_name, inputs)
-                        if result.success:
-                            result_data = result.outputs or {"status": "success"}
+                        exec_result = self.skill_executor.run(skill_name, inputs)
+                        if exec_result.success:
+                            result_data = exec_result.outputs or {"status": "success"}
                             result_str = str(result_data)
                             if len(result_str) > 8000:
                                 result_data = {"truncated": result_str[:8000] + "... [truncated]"}
@@ -1897,11 +1899,11 @@ class LancelotOrchestrator:
                                 "outputs": result_data,
                             })
                         else:
-                            result_data = {"error": result.error or "Unknown error"}
+                            result_data = {"error": exec_result.error or "Unknown error"}
                             tool_receipts.append({
                                 "skill": skill_name,
                                 "inputs": inputs,
-                                "result": f"FAILED: {result.error}",
+                                "result": f"FAILED: {exec_result.error}",
                             })
                     except Exception as e:
                         result_data = {"error": str(e)}
@@ -1911,25 +1913,24 @@ class LancelotOrchestrator:
                             "result": f"EXCEPTION: {e}",
                         })
 
-                response_parts.append(
-                    types.Part.from_function_response(
-                        name=skill_name,
-                        response=result_data,
-                    )
-                )
+                tool_results.append((tc.id, skill_name, str(result_data)))
 
-            # Feed ALL results back to Gemini in a single Content message
-            contents.append(types.Content(role="tool", parts=response_parts))
+            # Feed ALL results back via provider's tool response builder
+            tool_response_msg = self.provider.build_tool_response_message(tool_results)
+            if isinstance(tool_response_msg, list):
+                messages.extend(tool_response_msg)
+            else:
+                messages.append(tool_response_msg)
 
             # V7: After first tool call(s), switch from ANY back to AUTO
-            # so Gemini can return text on subsequent iterations.
+            # so the model can return text on subsequent iterations.
             # V12: If tool calls had HTTP errors on iteration 0, keep ANY
             # for one more iteration to encourage retries, then switch to AUTO.
             if force_tool_use and iteration <= 1 and tool_receipts:
                 should_retry = False
                 if iteration == 0:
                     # Check if current batch had HTTP errors
-                    batch = tool_receipts[-len(response.function_calls):]
+                    batch = tool_receipts[-len(result.tool_calls):]
                     has_http_error = any(
                         (isinstance(r.get("result"), str) and "FAILED" in r.get("result", ""))
                         or (isinstance(r.get("outputs"), dict) and r["outputs"].get("error"))
@@ -1940,13 +1941,7 @@ class LancelotOrchestrator:
                         print("V12: Tool call failed — keeping forced tool use for one retry")
 
                 if not should_retry:
-                    config = types.GenerateContentConfig(
-                        system_instruction=system_instruction,
-                        tools=[tool],
-                        tool_config=None,  # Back to AUTO (default)
-                        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-                        thinking_config=self._get_thinking_config(),
-                    )
+                    current_tool_config = None  # Back to AUTO (default)
                     if iteration == 0:
                         print("V7: Switched from ANY to AUTO after first tool call")
                     else:
@@ -1978,34 +1973,30 @@ class LancelotOrchestrator:
         context_str: str = None,
         image_parts: list = None,
     ) -> str:
-        """Standard Gemini call (no tools). Supports multimodal via image_parts."""
-        if not self.client:
-            return "Error: Gemini client not initialized."
+        """Standard LLM call (no tools). Supports multimodal via image_parts."""
+        if not self.provider:
+            return "Error: LLM provider not initialized."
 
         if not system_instruction:
             system_instruction = self._build_system_instruction()
 
         ctx = context_str or self.context_env.get_context_string()
+        full_text = f"{ctx}\n\n{prompt}"
 
         try:
-            # Build content parts — text, with optional image/PDF parts prepended
-            if image_parts:
-                parts = list(image_parts) + [types.Part(text=f"{ctx}\n\n{prompt}")]
-                contents = [types.Content(role="user", parts=parts)]
-            else:
-                contents = [ctx, prompt]
+            # Build message — provider handles multimodal format differences
+            msg = self.provider.build_user_message(full_text, images=image_parts)
+            messages = [msg]
 
-            response = self._gemini_call_with_retry(
-                lambda: self.client.models.generate_content(
+            result = self._llm_call_with_retry(
+                lambda: self.provider.generate(
                     model=self._route_model(prompt),
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction,
-                        thinking_config=self._get_thinking_config(),
-                    ),
+                    messages=messages,
+                    system_instruction=system_instruction,
+                    config={"thinking": self._get_thinking_config()},
                 )
             )
-            return response.text if response.text else ""
+            return result.text if result.text else ""
         except Exception as e:
             print(f"Text-only generate failed: {e}")
             return f"Error generating response: {e}"
@@ -2013,29 +2004,36 @@ class LancelotOrchestrator:
     # ── End Fix Pack V6 ──────────────────────────────────────────────
 
     def _get_thinking_config(self):
-        """Returns ThinkingConfig based on GEMINI_THINKING_LEVEL env var.
+        """Returns thinking config dict based on GEMINI_THINKING_LEVEL env var.
 
-        Options: off, low, medium, high. Models that don't support thinking
-        will ignore this config gracefully.
+        Options: off, low, medium, high. The provider client converts this
+        to the native format (e.g. types.ThinkingConfig for Gemini).
+        Non-Gemini providers will ignore this config gracefully.
         """
         level = os.getenv("GEMINI_THINKING_LEVEL", "off")
         if level == "off":
             return None
-        try:
-            return types.ThinkingConfig(thinking_level=level)
-        except Exception:
-            return None
+        return {"thinking_level": level}
 
     def _init_context_cache(self):
         """Creates a context cache for static memory content (RULES.md, USER.md, MEMORY_SUMMARY.md).
 
         Reduces token costs by 75-90% on repeated requests. Falls back gracefully
         if caching is unavailable (e.g., content too small, model doesn't support it).
+
+        Note: Context caching is currently a Gemini-only feature.
         """
-        if not self.client:
+        if not self.provider:
+            return
+
+        # Context caching is a Gemini-specific feature
+        if self.provider.provider_name != "gemini":
+            print(f"Context caching not supported for {self.provider.provider_name}. Skipping.")
+            self._cache = None
             return
 
         try:
+            from google.genai import types as gemini_types
             system_instruction = self._build_system_instruction()
             cache_contents = (
                 f"Rules:\n{self.rules_context}\n\n"
@@ -2043,9 +2041,11 @@ class LancelotOrchestrator:
                 f"Memory Summary:\n{self.memory_summary}"
             )
 
-            self._cache = self.client.caches.create(
+            # Access the underlying Gemini client for cache creation
+            gemini_client = self.provider._client
+            self._cache = gemini_client.caches.create(
                 model=self._cache_model,
-                config=types.CreateCachedContentConfig(
+                config=gemini_types.CreateCachedContentConfig(
                     contents=[cache_contents],
                     system_instruction=system_instruction,
                     ttl=f"{self._cache_ttl}s",
@@ -2494,12 +2494,13 @@ class LancelotOrchestrator:
     def _get_deep_model(self) -> str:
         """Returns the deep/reasoning model name with graceful fallback.
 
-        Checks GEMINI_DEEP_MODEL env var first, then falls back to self.model_name (Flash).
+        Checks the profile-assigned deep model or GEMINI_DEEP_MODEL env var,
+        then falls back to self.model_name (fast lane).
         Validates the model is accessible before returning it.
         """
-        deep_model = os.getenv("GEMINI_DEEP_MODEL", "")
+        deep_model = getattr(self, '_deep_model_name', '') or os.getenv("GEMINI_DEEP_MODEL", "")
         if not deep_model:
-            return self.model_name  # Fallback to Flash
+            return self.model_name  # Fallback to fast model
 
         # Cache validation result to avoid repeated API calls
         cache_key = f"_deep_model_valid_{deep_model}"
@@ -2508,11 +2509,13 @@ class LancelotOrchestrator:
 
         # Validate on first use
         try:
-            if self.client:
-                self.client.models.get(model=deep_model)
-                setattr(self, cache_key, True)
-                print(f"V17: Deep model validated: {deep_model}")
-                return deep_model
+            if self.provider:
+                if self.provider.validate_model(deep_model):
+                    setattr(self, cache_key, True)
+                    print(f"V17: Deep model validated: {deep_model}")
+                    return deep_model
+                else:
+                    raise ValueError(f"Model {deep_model} not accessible")
         except Exception as e:
             print(f"V17: Deep model {deep_model} not available ({e}), falling back to {self.model_name}")
             setattr(self, cache_key, False)
@@ -2583,10 +2586,10 @@ class LancelotOrchestrator:
         return self.model_name
 
     def chat(self, user_message: str, crusader_mode: bool = False, attachments: list = None, channel: str = "api") -> str:
-        """Sends a message to Gemini with full context.
+        """Sends a message to the LLM provider with full context.
 
-        Uses context caching when available for token savings.
-        Applies system instructions via dedicated parameter (not concatenated into prompt).
+        Uses context caching when available for token savings (Gemini only).
+        Applies system instructions via dedicated parameter.
         Includes thinking config for reasoning-capable models.
         Supports multimodal attachments (images, PDFs, text files).
 
@@ -2609,18 +2612,13 @@ class LancelotOrchestrator:
         # ── V18: Detect and persist name preferences ──
         self._check_name_update(user_message)
 
-        # ── Process file/image attachments into Gemini-compatible parts ──
-        file_parts = []  # types.Part objects for Gemini multimodal
+        # ── Process file/image attachments into provider-agnostic format ──
+        file_parts = []  # list of (bytes, mime_type) tuples for multimodal
         if attachments:
             for att in attachments:
                 if att.mime_type.startswith("image/") or att.mime_type == "application/pdf":
-                    # Images and PDFs: send as inline_data for Gemini vision
-                    file_parts.append(
-                        types.Part(inline_data=types.Blob(
-                            mime_type=att.mime_type,
-                            data=att.data,
-                        ))
-                    )
+                    # Images and PDFs: pass as (bytes, mime_type) for provider handling
+                    file_parts.append((att.data, att.mime_type))
                     user_message += f"\n[Attached: {att.filename}]"
                 else:
                     # Text-based documents: decode and include as context
@@ -2730,7 +2728,7 @@ class LancelotOrchestrator:
             self.context_env.add_history("assistant", resp)
             return resp
 
-        # KNOWLEDGE_REQUEST, AMBIGUOUS, or fallback — route to Gemini LLM
+        # KNOWLEDGE_REQUEST, AMBIGUOUS, or fallback — route to LLM
         # Model Routing
         selected_model = self._route_model(user_message)
         print(f"Model Router: Selected {selected_model}")
@@ -2739,8 +2737,8 @@ class LancelotOrchestrator:
         receipt = create_receipt(ActionType.LLM_CALL, "chat_generation", {"user_message": user_message, "model": selected_model}, tier=CognitionTier.CLASSIFICATION)
         self.receipt_service.create(receipt)
 
-        if not self.client:
-            return "Error: Gemini client not initialized (Missing API Key)."
+        if not self.provider:
+            return "Error: LLM provider not initialized (Missing API Key)."
 
         try:
             # Get Deterministic Context (memory-augmented if enabled)
@@ -2771,7 +2769,7 @@ class LancelotOrchestrator:
             if FEATURE_AGENTIC_LOOP:
                 # V13: Conversational messages bypass agentic loop entirely
                 # (no tools needed for "call me Myles", "hello", "thanks", etc.)
-                # Route to local model first to save Gemini tokens.
+                # Route to local model first to save flagship tokens.
                 if self._is_conversational(user_message) and not has_vision_input:
                     if FEATURE_LOCAL_AGENTIC and self.local_model and self.local_model.is_healthy():
                         print("V13: Conversational message — routing to local model (no tools)")
@@ -2782,7 +2780,7 @@ class LancelotOrchestrator:
                             context_str=context_str,
                         )
                     else:
-                        print("V13: Conversational message — text-only Gemini (no tools)")
+                        print("V13: Conversational message — text-only LLM (no tools)")
                         raw_response = self._text_only_generate(
                             prompt=user_message,
                             system_instruction=system_instruction,
@@ -2792,16 +2790,16 @@ class LancelotOrchestrator:
                     # V13: Empty response fallback for simple acks
                     if not raw_response or not raw_response.strip():
                         raw_response = "Understood."
-                # V14: Vision input always routes to Gemini (skip local model)
+                # V14: Vision input always routes to flagship (skip local model)
                 elif has_vision_input:
-                    print("V14: Vision input detected — routing to Gemini (multimodal)")
+                    print("V14: Vision input detected — routing to flagship LLM (multimodal)")
                     raw_response = self._text_only_generate(
                         prompt=user_message,
                         system_instruction=system_instruction,
                         context_str=context_str,
                         image_parts=file_parts,
                     )
-                # V8: Try local model for simple queries to save Gemini tokens
+                # V8: Try local model for simple queries to save flagship tokens
                 elif FEATURE_LOCAL_AGENTIC and self._is_simple_for_local(user_message):
                     print("V8: Routing simple query to local agentic model")
                     raw_response = self._local_agentic_generate(
@@ -2819,7 +2817,7 @@ class LancelotOrchestrator:
                     if needs_research:
                         print(f"V10: Research query detected — forcing tool use (writes={'enabled' if allow_writes else 'disabled'})")
                     else:
-                        print("V6: Routing KNOWLEDGE_REQUEST through Gemini agentic loop")
+                        print("V6: Routing KNOWLEDGE_REQUEST through agentic loop")
                     raw_response = self._agentic_generate(
                         prompt=user_message,
                         system_instruction=system_instruction,
@@ -2829,7 +2827,7 @@ class LancelotOrchestrator:
                         image_parts=file_parts,
                     )
             else:
-                # V5 fallback: text-only Gemini
+                # V5 fallback: text-only LLM
                 raw_response = self._text_only_generate(
                     prompt=user_message,
                     system_instruction=system_instruction,
@@ -2847,26 +2845,27 @@ class LancelotOrchestrator:
                 and len(raw_response.strip()) < 100
                 and not self._is_conversational(user_message)
             ):
-                print(f"V17: Auto-escalation triggered — Flash response too thin ({len(raw_response.strip())} chars), retrying with {deep_model}")
+                print(f"V17: Auto-escalation triggered — fast model response too thin ({len(raw_response.strip())} chars), retrying with {deep_model}")
                 try:
-                    escalated_response = self._gemini_call_with_retry(
-                        lambda: self.client.models.generate_content(
+                    esc_msg = self.provider.build_user_message(
+                        f"{context_str or self.context_env.get_context_string()}\n\n{user_message}"
+                    )
+                    esc_result = self._llm_call_with_retry(
+                        lambda: self.provider.generate(
                             model=deep_model,
-                            contents=[context_str or self.context_env.get_context_string(), user_message],
-                            config=types.GenerateContentConfig(
-                                system_instruction=system_instruction,
-                                thinking_config=self._get_thinking_config(),
-                            ),
+                            messages=[esc_msg],
+                            system_instruction=system_instruction,
+                            config={"thinking": self._get_thinking_config()},
                         )
                     )
-                    if escalated_response.text and len(escalated_response.text.strip()) > len(raw_response.strip()):
-                        raw_response = escalated_response.text
+                    if esc_result.text and len(esc_result.text.strip()) > len(raw_response.strip()):
+                        raw_response = esc_result.text
                         print(f"V17: Auto-escalation succeeded — deep model returned {len(raw_response)} chars")
                         if self.usage_tracker:
                             esc_tokens = len(raw_response) // 4
                             self.usage_tracker.record_simple(deep_model, esc_tokens)
                 except Exception as e:
-                    print(f"V17: Auto-escalation failed ({e}), using Flash response")
+                    print(f"V17: Auto-escalation failed ({e}), using fast model response")
 
             # S10: Sanitize LLM output before parsing
             sanitized_response = self._validate_llm_response(raw_response)

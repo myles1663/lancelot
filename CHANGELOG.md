@@ -2,6 +2,57 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+## [8.3.0] - 2026-02-13
+
+### Added
+- **Multi-Provider Support**: Lancelot now supports Google Gemini, OpenAI, and Anthropic as LLM
+  backends. Set `LANCELOT_PROVIDER=openai` or `LANCELOT_PROVIDER=anthropic` to switch providers.
+  Gemini remains the default.
+- **ProviderClient Abstraction Layer**: New `providers/` package with abstract `ProviderClient`
+  base class and concrete implementations:
+  - `GeminiProviderClient` — wraps google-genai SDK
+  - `OpenAIProviderClient` — wraps openai SDK
+  - `AnthropicProviderClient` — wraps anthropic SDK
+  - `NormalizedToolDeclaration` — provider-agnostic tool definitions with per-provider converters
+  - Factory function `create_provider()` for provider instantiation
+- **Dynamic Model Discovery**: `ModelDiscovery` service queries the active provider's API at
+  startup to discover available models. Cross-references with `config/model_profiles.yaml` for
+  cost rates, context windows, and capability tiers. Auto-assigns models to lanes (fast/deep/cache).
+- **Model Profiles Database**: New `config/model_profiles.yaml` with static capability data for
+  known models across all three providers (context windows, cost rates, tool support, capability tiers).
+- **Provider Stack API**: Three new REST endpoints:
+  - `GET /api/v1/providers/stack` — current provider, lane assignments, discovered models
+  - `GET /api/v1/providers/models` — all discovered models from provider API
+  - `POST /api/v1/providers/refresh` — re-run model discovery
+  - `GET /api/v1/providers/profiles` — static model profile data
+- **Model Stack UI**: New "Model Stack" section at the top of the Cost Tracker page showing:
+  - Active provider with connection status indicator
+  - Lane-to-model assignments table (Fast/Deep/Cache with context window, cost, tool support)
+  - Collapsible list of all discovered models with capability tiers
+  - Refresh button to re-run model discovery
+  - Last discovery timestamp
+
+### Changed
+- **Orchestrator refactored to provider-agnostic**: All 7 `generate_content()` call sites and the
+  entire agentic loop now use the `ProviderClient` abstraction instead of direct Gemini SDK calls.
+  `_init_gemini()` → `_init_provider()`, `_gemini_call_with_retry()` → `_llm_call_with_retry()`,
+  `_build_tool_declarations()` now returns `NormalizedToolDeclaration` objects.
+- **Dynamic cost rates**: `UsageTracker` now loads cost rates from `config/model_profiles.yaml`
+  with fallback to hardcoded values. Rates update when the profiles file changes.
+- **Health check updated**: Gateway health check now monitors `provider` instead of `client`.
+- **Startup validation**: Gateway startup checks the correct API key env var based on
+  `LANCELOT_PROVIDER` setting (not just `GEMINI_API_KEY`).
+- **Context caching**: Now correctly guarded behind Gemini-only check — other providers skip
+  cache initialization gracefully.
+- **Attachment handling**: Multimodal attachments (images, PDFs) now use provider-agnostic
+  `(bytes, mime_type)` tuple format instead of Gemini-specific `types.Part` objects.
+- **Deep model validation**: `_get_deep_model()` now uses `provider.validate_model()` instead of
+  direct Gemini SDK `client.models.get()`.
+- `CAPABILITIES.md` updated with multi-provider support docs, complete skills list.
+
+### Dependencies
+- Added `openai>=1.0.0` and `anthropic>=0.20.0` to requirements.txt.
+
 ## [8.2.11] - 2026-02-13
 
 ### Removed

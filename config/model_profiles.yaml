@@ -1,0 +1,115 @@
+# ===========================================================================
+# Lancelot v8.3.0 — Model Profiles Database
+# ===========================================================================
+# Static capability database for known models. Cross-referenced with
+# dynamic model discovery from provider APIs. Provides cost rates,
+# context windows, and capability tiers for accurate lane assignment.
+#
+# Unknown models discovered at runtime get sensible defaults.
+# Updated with Lancelot releases but not required for operation.
+#
+# Version: 1.0
+
+version: "1.0"
+
+profiles:
+  # ── Google Gemini ──────────────────────────────────────────────────
+  gemini-2.0-flash:
+    capability_tier: fast
+    context_window: 1048576
+    supports_tools: true
+    cost_input_per_1k: 0.00015
+    cost_output_per_1k: 0.0006
+
+  gemini-2.0-flash-lite:
+    capability_tier: fast
+    context_window: 1048576
+    supports_tools: true
+    cost_input_per_1k: 0.000075
+    cost_output_per_1k: 0.0003
+
+  gemini-2.5-pro:
+    capability_tier: deep
+    context_window: 1048576
+    supports_tools: true
+    cost_input_per_1k: 0.00125
+    cost_output_per_1k: 0.01
+
+  gemini-2.5-flash:
+    capability_tier: fast
+    context_window: 1048576
+    supports_tools: true
+    cost_input_per_1k: 0.00015
+    cost_output_per_1k: 0.0006
+
+  # ── OpenAI ─────────────────────────────────────────────────────────
+  gpt-4o-mini:
+    capability_tier: fast
+    context_window: 128000
+    supports_tools: true
+    cost_input_per_1k: 0.00015
+    cost_output_per_1k: 0.0006
+
+  gpt-4o:
+    capability_tier: deep
+    context_window: 128000
+    supports_tools: true
+    cost_input_per_1k: 0.0025
+    cost_output_per_1k: 0.01
+
+  gpt-4.1:
+    capability_tier: deep
+    context_window: 1048576
+    supports_tools: true
+    cost_input_per_1k: 0.002
+    cost_output_per_1k: 0.008
+
+  gpt-4.1-mini:
+    capability_tier: fast
+    context_window: 1048576
+    supports_tools: true
+    cost_input_per_1k: 0.0004
+    cost_output_per_1k: 0.0016
+
+  gpt-4.1-nano:
+    capability_tier: fast
+    context_window: 1048576
+    supports_tools: true
+    cost_input_per_1k: 0.0001
+    cost_output_per_1k: 0.0004
+
+  o3-mini:
+    capability_tier: deep
+    context_window: 200000
+    supports_tools: true
+    cost_input_per_1k: 0.00113
+    cost_output_per_1k: 0.0045
+
+  o4-mini:
+    capability_tier: deep
+    context_window: 200000
+    supports_tools: true
+    cost_input_per_1k: 0.00113
+    cost_output_per_1k: 0.0045
+
+  # ── Anthropic ──────────────────────────────────────────────────────
+  claude-3-5-haiku-latest:
+    capability_tier: fast
+    context_window: 200000
+    supports_tools: true
+    cost_input_per_1k: 0.0008
+    cost_output_per_1k: 0.004
+
+  claude-sonnet-4-20250514:
+    capability_tier: deep
+    context_window: 200000
+    supports_tools: true
+    cost_input_per_1k: 0.003
+    cost_output_per_1k: 0.015
+
+  claude-opus-4-20250514:
+    capability_tier: deep
+    context_window: 200000
+    supports_tools: true
+    cost_input_per_1k: 0.015
+    cost_output_per_1k: 0.075

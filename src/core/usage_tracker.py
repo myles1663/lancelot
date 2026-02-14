@@ -1,5 +1,5 @@
 """
-UsageTracker — per-lane and per-model usage and cost telemetry (Prompt 17).
+UsageTracker — per-lane and per-model usage and cost telemetry (v8.3.0).
 
 Single-owner module that tracks API usage per lane *and* per model,
 estimates costs, and calculates local-utility savings.
@@ -7,10 +7,13 @@ estimates costs, and calculates local-utility savings.
 Supports two recording paths:
     1. ``record(decision)``       — from RouterDecision objects (lane-based)
     2. ``record_simple(model, tokens)`` — lightweight path for direct LLM
-       calls that bypass the ModelRouter (e.g. orchestrator → Gemini).
+       calls that bypass the ModelRouter.
 
 When a ``UsagePersistence`` is attached via ``set_persistence()``, every
 record is also written to disk for cross-restart survival.
+
+Cost rates are loaded dynamically from config/model_profiles.yaml when
+available, with a built-in fallback dictionary for known models.
 
 Public API:
     UsageTracker()
@@ -30,26 +33,50 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+import yaml
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Approximate cost per 1K tokens (output) by model family.
-# Input tokens are typically cheaper; we use a blended estimate.
+# Cost rates: loaded from model_profiles.yaml with hardcoded fallback.
+# Uses blended output cost per 1K tokens as the primary rate.
 # ---------------------------------------------------------------------------
 
-_COST_PER_1K: dict[str, float] = {
+_FALLBACK_COST_PER_1K: dict[str, float] = {
     # Gemini
-    "gemini-2.0-flash": 0.0004,
-    "gemini-2.0-pro": 0.007,
+    "gemini-2.0-flash": 0.0006,
+    "gemini-2.5-pro": 0.01,
     # OpenAI
     "gpt-4o-mini": 0.0006,
     "gpt-4o": 0.01,
     # Anthropic
-    "claude-3-5-haiku-latest": 0.001,
+    "claude-3-5-haiku-latest": 0.004,
     "claude-sonnet-4-20250514": 0.015,
     # Local (free)
     "local-llm": 0.0,
 }
+
+
+def _load_cost_rates(profiles_path: str = "config/model_profiles.yaml") -> dict[str, float]:
+    """Load cost rates from model_profiles.yaml, falling back to hardcoded values."""
+    rates = dict(_FALLBACK_COST_PER_1K)
+    try:
+        with open(profiles_path, "r") as f:
+            data = yaml.safe_load(f) or {}
+        profiles = data.get("profiles", {})
+        for model_id, profile in profiles.items():
+            cost = profile.get("cost_output_per_1k", 0.0)
+            if cost:
+                rates[model_id] = cost
+        logger.info("UsageTracker: loaded %d cost rates from %s", len(profiles), profiles_path)
+    except FileNotFoundError:
+        logger.info("UsageTracker: %s not found — using fallback cost rates", profiles_path)
+    except Exception as e:
+        logger.warning("UsageTracker: failed to load cost rates: %s", e)
+    return rates
+
+
+_COST_PER_1K = _load_cost_rates()
 
 # Average tokens per request by lane (rough heuristic).
 _AVG_TOKENS: dict[str, int] = {
