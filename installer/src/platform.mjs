@@ -60,3 +60,76 @@ export function getTotalRAM() {
 export function normalizePath(p) {
   return p.replace(/\\/g, '/');
 }
+
+export async function isPortAvailable(port) {
+  const net = await import('node:net');
+  return new Promise((resolve) => {
+    const server = net.default.createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => {
+      server.close();
+      resolve(true);
+    });
+    server.listen(port, '0.0.0.0');
+  });
+}
+
+export async function checkNetworkConnectivity() {
+  try {
+    const res = await fetch('https://api.github.com', {
+      method: 'HEAD',
+      signal: AbortSignal.timeout(5000),
+    });
+    return res.ok || res.status === 403; // 403 = rate-limited but reachable
+  } catch {
+    return false;
+  }
+}
+
+export function canWriteToDir(dir) {
+  const fsp = fs;
+  try {
+    if (!fsp.existsSync(dir)) {
+      // Check parent is writable
+      const parent = path.dirname(path.resolve(dir));
+      fsp.accessSync(parent, fs.constants.W_OK);
+    } else {
+      fsp.accessSync(dir, fs.constants.W_OK);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function getDockerSocketAccessible() {
+  const platform = getPlatform();
+  if (platform === 'windows' || platform === 'macos') {
+    // Docker Desktop handles socket access via VM
+    return { accessible: true, hint: null };
+  }
+  // Linux: check /var/run/docker.sock permissions
+  try {
+    fs.accessSync('/var/run/docker.sock', fs.constants.R_OK | fs.constants.W_OK);
+    return { accessible: true, hint: null };
+  } catch {
+    return {
+      accessible: false,
+      hint: 'Run: sudo usermod -aG docker $USER && newgrp docker',
+    };
+  }
+}
+
+export async function getGpuVram() {
+  try {
+    const { execa } = await import('execa');
+    const result = await execa('nvidia-smi', [
+      '--query-gpu=memory.total',
+      '--format=csv,noheader,nounits',
+    ], { timeout: 5000 });
+    const mb = parseInt(result.stdout.trim().split('\n')[0]);
+    return isNaN(mb) ? null : mb;
+  } catch {
+    return null;
+  }
+}

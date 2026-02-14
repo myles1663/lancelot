@@ -8,6 +8,8 @@ import { showCheck, showError, showWarning, showInfo } from './ui.mjs';
 import {
   getPlatform, getDockerInstallUrl, getDockerStartInstructions,
   getGitInstallHint, checkDiskSpace, getTotalRAM,
+  isPortAvailable, checkNetworkConnectivity, canWriteToDir,
+  getDockerSocketAccessible, getGpuVram,
 } from './platform.mjs';
 import { MIN_DISK_GB, MIN_RAM_GB } from './constants.mjs';
 
@@ -137,11 +139,77 @@ export async function runAllChecks(installDir) {
     results.gpuLayers = 15;
     results.gpuName = gpuName;
     showCheck('GPU', gpuName);
+
+    // GPU VRAM check
+    const vramMb = await getGpuVram();
+    if (vramMb !== null) {
+      const vramGb = (vramMb / 1024).toFixed(1);
+      if (vramMb < 2048) {
+        showWarning(`GPU VRAM is ${vramGb} GB — may be too low for model inference. Falling back to CPU.`);
+        results.hasGpu = false;
+        results.gpuLayers = 0;
+      } else if (vramMb < 4096) {
+        showCheck('GPU VRAM', `${vramGb} GB (minimum — may be slow)`);
+      } else {
+        showCheck('GPU VRAM', `${vramGb} GB`);
+      }
+    }
   } else {
     showInfo('No NVIDIA GPU detected — local model will use CPU (works fine, just slower)');
     results.hasGpu = false;
     results.gpuLayers = 0;
   }
+
+  // Network connectivity
+  const online = await checkNetworkConnectivity();
+  if (!online) {
+    showCheck('Internet', 'not reachable', false);
+    showError(
+      'Internet connection required to clone repository, download model, and validate API keys.',
+      'Check your network connection and try again.'
+    );
+    process.exit(1);
+  }
+  showCheck('Internet', 'connected');
+
+  // Port availability
+  const port8000 = await isPortAvailable(8000);
+  const port8080 = await isPortAvailable(8080);
+  if (!port8000 || !port8080) {
+    const blocked = [];
+    if (!port8000) blocked.push('8000');
+    if (!port8080) blocked.push('8080');
+    showCheck('Ports', `${blocked.join(', ')} in use`, false);
+    showWarning(
+      `Port${blocked.length > 1 ? 's' : ''} ${blocked.join(' and ')} ${blocked.length > 1 ? 'are' : 'is'} already in use. ` +
+      'Lancelot needs these ports. Stop the conflicting service or it will fail to start.'
+    );
+  } else {
+    showCheck('Ports', '8000, 8080 available');
+  }
+
+  // Docker socket access (Linux-specific)
+  const socketCheck = await getDockerSocketAccessible();
+  if (!socketCheck.accessible) {
+    showCheck('Docker socket', 'permission denied', false);
+    showError(
+      'Cannot access Docker socket. Lancelot needs socket access for sandboxed tool execution.',
+      socketCheck.hint
+    );
+    process.exit(1);
+  }
+
+  // Write permissions on install directory
+  const targetDir = installDir || '.';
+  if (!canWriteToDir(targetDir)) {
+    showCheck('Write access', targetDir, false);
+    showError(
+      `Cannot write to ${targetDir}`,
+      'Choose a different directory or fix permissions.'
+    );
+    process.exit(1);
+  }
+  showCheck('Write access', 'OK');
 
   return results;
 }
