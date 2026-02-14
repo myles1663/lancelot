@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" font-family="Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#555"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2d8a4e"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#c0392b"/>
+    </marker>
+  </defs>
+
+  <text x="500" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="#1a1a2e">Figure 6: Trust Ledger — Graduation and Revocation</text>
+  <text x="500" y="50" text-anchor="middle" font-size="11" fill="#666">Progressive trust earned through demonstrated competence, revoked instantly on failure</text>
+
+  <!-- Start: Action Execution -->
+  <rect x="380" y="70" width="240" height="45" rx="22" fill="#1a1a2e" stroke="#333" stroke-width="2"/>
+  <text x="500" y="97" text-anchor="middle" font-size="12" font-weight="bold" fill="#4ade80">ACTION EXECUTED</text>
+
+  <path d="M500 115 L500 145" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Record outcome -->
+  <rect x="370" y="148" width="260" height="45" rx="6" fill="#f0f4ff" stroke="#4a6fa5" stroke-width="2"/>
+  <text x="500" y="168" text-anchor="middle" font-size="11" font-weight="bold" fill="#1a1a2e">Record Outcome per Capability</text>
+  <text x="500" y="183" text-anchor="middle" font-size="9" fill="#444">e.g. email.send, slack.post, file.write</text>
+
+  <path d="M500 193 L500 220" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Diamond: Success? -->
+  <polygon points="500,223 590,260 500,297 410,260" fill="#fff8f0" stroke="#c4762b" stroke-width="2"/>
+  <text x="500" y="256" text-anchor="middle" font-size="11" font-weight="bold" fill="#1a1a2e">Success?</text>
+  <text x="500" y="272" text-anchor="middle" font-size="9" fill="#666">Verified outcome</text>
+
+  <!-- SUCCESS PATH (left) -->
+  <path d="M410 260 L250 260" stroke="#2d8a4e" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="330" y="252" font-size="10" font-weight="bold" fill="#2d8a4e">YES ✓</text>
+
+  <rect x="80" y="240" width="170" height="40" rx="6" fill="#d4edda" stroke="#2d8a4e" stroke-width="1.5"/>
+  <text x="165" y="255" text-anchor="middle" font-size="10" font-weight="bold" fill="#155724">Increment</text>
+  <text x="165" y="270" text-anchor="middle" font-size="10" fill="#155724">Consecutive Successes</text>
+
+  <path d="M165 280 L165 310" stroke="#2d8a4e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+  <!-- Diamond: Threshold met? -->
+  <polygon points="165,313 245,345 165,377 85,345" fill="#f0fff4" stroke="#2d8a4e" stroke-width="1.5"/>
+  <text x="165" y="342" text-anchor="middle" font-size="9" font-weight="bold" fill="#1a1a2e">≥ N</text>
+  <text x="165" y="356" text-anchor="middle" font-size="9" fill="#444">successes?</text>
+
+  <!-- No → continue -->
+  <path d="M85 345 L30 345 L30 260 L78 260" stroke="#888" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="45" y="335" font-size="9" fill="#888">No → Continue</text>
+
+  <!-- Yes → propose graduation -->
+  <path d="M165 377 L165 405" stroke="#2d8a4e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="180" y="395" font-size="9" font-weight="bold" fill="#2d8a4e">Yes</text>
+
+  <rect x="65" y="408" width="200" height="50" rx="6" fill="#d4edda" stroke="#2d8a4e" stroke-width="2"/>
+  <text x="165" y="428" text-anchor="middle" font-size="10" font-weight="bold" fill="#155724">PROPOSE GRADUATION</text>
+  <text x="165" y="448" text-anchor="middle" font-size="9" fill="#444">e.g. email.send: T3 → T2</text>
+
+  <path d="M165 458 L165 485" stroke="#2d8a4e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+  <!-- Owner decision -->
+  <polygon points="165,488 245,520 165,552 85,520" fill="#fff8f0" stroke="#c4762b" stroke-width="1.5"/>
+  <text x="165" y="517" text-anchor="middle" font-size="9" font-weight="bold" fill="#1a1a2e">Owner</text>
+  <text x="165" y="531" text-anchor="middle" font-size="9" fill="#444">Approves?</text>
+
+  <!-- Approved -->
+  <path d="M85 520 L30 520" stroke="#2d8a4e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <rect x="-50" y="505" width="78" height="30" rx="6" fill="#2d8a4e"/>
+  <text x="-11" y="524" text-anchor="middle" font-size="10" font-weight="bold" fill="white">GRADUATE</text>
+
+  <!-- Denied -->
+  <path d="M245 520 L295 520" stroke="#888" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="310" y="524" font-size="9" fill="#888">Denied</text>
+  <text x="330" y="538" font-size="9" fill="#888">Keep current tier</text>
+
+  <!-- FAILURE PATH (right) -->
+  <path d="M590 260 L720 260" stroke="#c0392b" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <text x="660" y="252" font-size="10" font-weight="bold" fill="#c0392b">NO ✗</text>
+
+  <rect x="723" y="235" width="220" height="50" rx="6" fill="#f8d7da" stroke="#c0392b" stroke-width="2"/>
+  <text x="833" y="255" text-anchor="middle" font-size="10" font-weight="bold" fill="#721c24">⚡ INSTANT REVOCATION</text>
+  <text x="833" y="272" text-anchor="middle" font-size="9" fill="#444">Reset to original risk tier</text>
+
+  <path d="M833 285 L833 315" stroke="#c0392b" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+
+  <rect x="723" y="318" width="220" height="40" rx="6" fill="#f8d7da" stroke="#c0392b" stroke-width="1.5"/>
+  <text x="833" y="335" text-anchor="middle" font-size="10" fill="#721c24">Reset consecutive count = 0</text>
+  <text x="833" y="350" text-anchor="middle" font-size="9" fill="#444">Must re-earn all trust</text>
+
+  <path d="M833 358 L833 388" stroke="#c0392b" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+
+  <rect x="723" y="391" width="220" height="40" rx="6" fill="#f8d7da" stroke="#c0392b" stroke-width="1.5"/>
+  <text x="833" y="408" text-anchor="middle" font-size="10" fill="#721c24">Notify Operator</text>
+  <text x="833" y="423" text-anchor="middle" font-size="9" fill="#444">Failure details in audit trail</text>
+
+  <!-- Soul Ceiling box -->
+  <rect x="620" y="470" width="330" height="100" rx="6" fill="#f0f4ff" stroke="#4a6fa5" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="785" y="495" text-anchor="middle" font-size="12" font-weight="bold" fill="#4a6fa5">SOUL-ENFORCED CEILINGS</text>
+  <line x1="650" y1="505" x2="920" y2="505" stroke="#4a6fa5" stroke-width="1"/>
+  <text x="785" y="525" text-anchor="middle" font-size="10" fill="#444">Some capabilities can NEVER graduate</text>
+  <text x="785" y="542" text-anchor="middle" font-size="10" fill="#444">below a defined tier, regardless of</text>
+  <text x="785" y="559" text-anchor="middle" font-size="10" fill="#444">performance history.</text>
+
+  <!-- Example -->
+  <text x="500" y="590" text-anchor="middle" font-size="10" fill="#666" font-style="italic">Example: email.send → 50 consecutive successes → Propose T3→T2 → Owner approves → Single failure → Snap back to T3</text>
+</svg>

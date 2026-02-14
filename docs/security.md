@@ -85,6 +85,20 @@ For the full governance model including risk tiers, Trust Ledger, and APL, see [
 
 ---
 
+## Architecture Diagrams
+
+The following diagrams illustrate the key security enforcement points in the system:
+
+<p align="center">
+  <img src="images/fig5_risk_tiered_pipeline.svg" alt="Risk-Tiered Governance Pipeline" width="900">
+</p>
+
+<p align="center">
+  <img src="images/fig7_governed_connector_proxy.svg" alt="Governed Connector Proxy — all external requests mediated" width="900">
+</p>
+
+---
+
 ## Capability-Based Tool Security
 
 ### Tool Fabric

@@ -10,6 +10,8 @@ The War Room is a React SPA (Vite + React 18 + TypeScript + Tailwind) accessible
 
 The War Room provides full observability into every aspect of Lancelot's operation. It is organized into tabbed panels, each focused on a specific subsystem. The sidebar provides navigation, and the header shows system vitals at a glance.
 
+![War Room — Overview Dashboard](images/war-room-overview-dashboard.png)
+
 **Access:** Local only (localhost). The War Room is not designed for public internet exposure. If you need remote access, add your own authentication layer in front of it.
 
 ---
@@ -30,6 +32,8 @@ The **Notification Tray** in the header shows pending items that need your atten
 ---
 
 ## Command Panel
+
+![War Room — Command Center](images/war-room-command-center.png)
 
 The primary interaction interface — send messages to Lancelot and see governed responses.
 
@@ -76,6 +80,8 @@ System-wide health monitoring with subsystem-level detail.
 
 ## Governance Panel
 
+![War Room — Rule Properties](images/war-room-rule-properties.png)
+
 Risk tier distribution, policy decisions, and the approval queue.
 
 **Displays:**
@@ -102,6 +108,8 @@ Actions: **Approve** (execute the action) or **Deny** (block and receipt the den
 
 ## Trust Panel
 
+![War Room — Trust Ledger](images/war-room-trust-ledger.png)
+
 Per-connector trust scores, graduation history, and revocation alerts.
 
 **Displays:**
@@ -125,6 +133,8 @@ When a connector earns enough trust (e.g., 50 successful T3 actions), a graduati
 ---
 
 ## APL Panel
+
+![War Room — APL Learning](images/war-room-apl-learning.png)
 
 Approval Pattern Learning — detected patterns, active automation rules, and proposals.
 
@@ -171,6 +181,8 @@ Searchable audit trail of every action Lancelot has taken.
 
 ## Connector Status
 
+![War Room — Connectors](images/war-room-connectors.png)
+
 Per-connector health, configuration, and usage metrics.
 
 **Displays:**
@@ -188,6 +200,8 @@ Per-connector health, configuration, and usage metrics.
 ---
 
 ## Scheduler Panel
+
+![War Room — Scheduler](images/war-room-scheduler.png)
 
 Automated job management and execution history.
 
@@ -242,6 +256,8 @@ Actions: **Approve** (promote to active memory) or **Reject** (discard with rece
 ---
 
 ## Kill Switches
+
+![War Room — Service Dashboard with Kill Switches](images/war-room-service-dashboard.png)
 
 Emergency controls for disabling subsystems.
 

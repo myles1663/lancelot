@@ -23,30 +23,9 @@ These principles are enforced in code, not just stated in docs:
 
 ## Architecture at a Glance
 
-```
-                        ┌─────────────────────────────────────┐
-                        │            War Room (UI)            │
-                        │   Health │ Governance │ Trust │ APL  │
-                        └──────────────┬──────────────────────┘
-                                       │
-                        ┌──────────────▼──────────────────────┐
-                        │         Gateway (FastAPI)           │
-                        │   Intent Classification → Routing   │
-                        └──────────────┬──────────────────────┘
-                                       │
-              ┌────────────────────────▼────────────────────────────┐
-              │                  Orchestrator                        │
-              │  Planner → Policy Engine → Executor → Verifier      │
-              └──┬──────┬──────┬──────┬──────┬──────┬──────┬───────┘
-                 │      │      │      │      │      │      │
-               Soul  Memory  Skills  Tool   Health Sched  Receipts
-                              │     Fabric  │      uler
-                              │      │      │
-                         ┌────▼──────▼──────▼────┐
-                         │     LLM Routing       │
-                         │  Local  │  Cloud APIs  │
-                         └───────────────────────┘
-```
+<p align="center">
+  <img src="docs/images/fig1_system_architecture.svg" alt="Lancelot System Architecture" width="900">
+</p>
 
 Every subsystem is **independently disableable** via feature flags. If something breaks, kill it — the rest keeps running.
 
@@ -115,6 +94,8 @@ curl -X POST http://localhost:8000/chat \
 ```
 
 Open the **War Room** at `http://localhost:8000/war-room/` to see the operator dashboard.
+
+![War Room Overview Dashboard](docs/images/war-room-overview-dashboard.png)
 
 For detailed setup including GPU configuration, multi-provider routing, and network hardening, see the [Installation Guide](docs/installation.md).
 

@@ -10,47 +10,9 @@ For how to get the system running, see the [Quickstart](quickstart.md). For the 
 
 Lancelot is composed of independent, kill-switchable subsystems coordinated by a central orchestrator. Every subsystem can be disabled via feature flags without breaking the rest of the system.
 
-```
-                          ┌──────────────────────────────────────┐
-                          │           War Room (UI)              │
-                          │  Health │ Governance │ Trust │ APL   │
-                          └───────────────┬──────────────────────┘
-                                          │ REST API
-                          ┌───────────────▼──────────────────────┐
-                          │        Gateway (FastAPI :8000)       │
-                          │  Rate Limiter → Size Check → Sanitize│
-                          └───────────────┬──────────────────────┘
-                                          │
-     ┌────────────────────────────────────▼──────────────────────────────────────┐
-     │                           Orchestrator                                    │
-     │                                                                           │
-     │   Intent Classifier → Planning Pipeline → Response Governor               │
-     │                                                                           │
-     │   ┌─────────────┐  ┌──────────────┐  ┌──────────────┐                   │
-     │   │   Planner    │→ │   Executor   │→ │   Verifier   │                   │
-     │   └─────────────┘  └──────────────┘  └──────────────┘                   │
-     │                                                                           │
-     └──┬───────┬───────┬───────┬───────┬───────┬───────┬───────┬──────────────┘
-        │       │       │       │       │       │       │       │
-      Soul   Memory  Skills  Tool    Health  Sched  Receipts  Security
-                              Fabric          uler
-                       │       │
-                  ┌────▼───────▼────┐
-                  │  Model Router   │
-                  │ 4-Lane Routing  │
-                  ├─────────────────┤
-                  │ 1. Local Redact │
-                  │ 2. Local Utility│
-                  │ 3. Flagship Fast│
-                  │ 4. Flagship Deep│
-                  └────────┬────────┘
-                           │
-              ┌────────────▼────────────┐
-              │     LLM Providers       │
-              │ Local GGUF │ Gemini │   │
-              │ OpenAI │ Anthropic      │
-              └─────────────────────────┘
-```
+<p align="center">
+  <img src="images/fig1_system_architecture.svg" alt="Lancelot System Architecture — Subsystem Relationships and Data Flows" width="900">
+</p>
 
 ---
 
@@ -112,15 +74,9 @@ For `PLAN_REQUEST` or `MIXED_REQUEST` intents, the Planning Pipeline builds a st
 
 For plans that require execution, the three-agent loop runs:
 
-```
-Planner → generates JSON step list
-  ↓
-Executor → runs steps sequentially via Model Router
-  ↓ (for each step)
-Verifier → analyzes output against success criteria
-  ├─ Success → update context, proceed to next step
-  └─ Failure → suggest correction, retry (max 3 attempts)
-```
+<p align="center">
+  <img src="images/fig9_autonomy_loop.svg" alt="The Autonomy Loop — Plan, Execute, Verify" width="800">
+</p>
 
 Each step generates a receipt linked to the parent plan via `parent_id` and `quest_id`, forming a traceable chain.
 

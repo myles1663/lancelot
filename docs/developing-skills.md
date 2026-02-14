@@ -23,6 +23,14 @@ Define Manifest → Write Execute Module → Submit Proposal → Owner Approves
   → Install → Enable → Execute (governed) → Disable → Uninstall
 ```
 
+### The Six-Stage Security Pipeline
+
+Every skill passes through six mandatory security stages before it can execute:
+
+<p align="center">
+  <img src="images/fig8_skill_security_pipeline.svg" alt="Six-Stage Skill Security Pipeline" width="900">
+</p>
+
 ---
 
 ## Step 1: Write the Manifest

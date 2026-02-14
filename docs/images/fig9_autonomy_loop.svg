@@ -1,0 +1,167 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" font-family="Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#555"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2d8a4e"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#c0392b"/>
+    </marker>
+  </defs>
+
+  <text x="500" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="#1a1a2e">Figure 9: The Autonomy Loop — Plan, Execute, Verify</text>
+  <text x="500" y="50" text-anchor="middle" font-size="11" fill="#666">Every autonomous action passes through a governed three-stage loop with receipt generation</text>
+
+  <!-- ==================== PLAN PHASE ==================== -->
+  <rect x="30" y="75" width="300" height="530" rx="8" fill="#f0f4ff" stroke="#4a6fa5" stroke-width="2.5"/>
+  <rect x="30" y="75" width="300" height="35" rx="8" fill="#4a6fa5"/>
+  <text x="180" y="98" text-anchor="middle" font-size="14" font-weight="bold" fill="white">1. PLAN</text>
+
+  <!-- Plan steps -->
+  <rect x="50" y="125" width="260" height="35" rx="4" fill="#dce8f5" stroke="#4a6fa5" stroke-width="1"/>
+  <text x="180" y="147" text-anchor="middle" font-size="10" fill="#1a1a2e">Agent formulates action</text>
+
+  <path d="M180 160 L180 175" stroke="#4a6fa5" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="50" y="178" width="260" height="35" rx="4" fill="#dce8f5" stroke="#4a6fa5" stroke-width="1"/>
+  <text x="180" y="200" text-anchor="middle" font-size="10" fill="#1a1a2e">Classify risk tier (T0/T1/T2/T3)</text>
+
+  <path d="M180 213 L180 228" stroke="#4a6fa5" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="50" y="231" width="260" height="35" rx="4" fill="#dce8f5" stroke="#4a6fa5" stroke-width="1"/>
+  <text x="180" y="253" text-anchor="middle" font-size="10" fill="#1a1a2e">Validate against Soul constraints</text>
+
+  <path d="M180 266 L180 281" stroke="#4a6fa5" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="50" y="284" width="260" height="35" rx="4" fill="#dce8f5" stroke="#4a6fa5" stroke-width="1"/>
+  <text x="180" y="306" text-anchor="middle" font-size="10" fill="#1a1a2e">Check Network Allowlist (if enabled)</text>
+
+  <path d="M180 319 L180 334" stroke="#4a6fa5" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="50" y="337" width="260" height="35" rx="4" fill="#dce8f5" stroke="#4a6fa5" stroke-width="1"/>
+  <text x="180" y="359" text-anchor="middle" font-size="10" fill="#1a1a2e">Check APL automation rules</text>
+
+  <path d="M180 372 L180 387" stroke="#4a6fa5" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Conditional: T3 approval -->
+  <polygon points="180,390 240,415 180,440 120,415" fill="#fff8f0" stroke="#c4762b" stroke-width="1.5"/>
+  <text x="180" y="413" text-anchor="middle" font-size="9" font-weight="bold" fill="#1a1a2e">T3?</text>
+  <text x="180" y="427" text-anchor="middle" font-size="8" fill="#666">Approval</text>
+
+  <!-- Yes: Owner approval -->
+  <path d="M240 415 L275 415" stroke="#c4762b" stroke-width="1.5"/>
+  <text x="260" y="408" font-size="8" fill="#c4762b">Yes</text>
+  <rect x="50" y="450" width="260" height="35" rx="4" fill="#fff3cd" stroke="#c4762b" stroke-width="1.5"/>
+  <text x="180" y="472" text-anchor="middle" font-size="10" font-weight="bold" fill="#856404">⚠ Request Owner Approval</text>
+
+  <path d="M180 485 L180 500" stroke="#4a6fa5" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="50" y="503" width="260" height="35" rx="4" fill="#dce8f5" stroke="#4a6fa5" stroke-width="1"/>
+  <text x="180" y="525" text-anchor="middle" font-size="10" fill="#1a1a2e">Record in Plan Artifact</text>
+
+  <!-- No path (skip approval) -->
+  <path d="M120 415 L50 415 L50 503 L48 520" stroke="#888" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="75" y="408" font-size="8" fill="#888">No</text>
+
+  <!-- ==================== EXECUTE PHASE ==================== -->
+  <rect x="360" y="75" width="280" height="530" rx="8" fill="#f0fff4" stroke="#2d8a4e" stroke-width="2.5"/>
+  <rect x="360" y="75" width="280" height="35" rx="8" fill="#2d8a4e"/>
+  <text x="500" y="98" text-anchor="middle" font-size="14" font-weight="bold" fill="white">2. EXECUTE</text>
+
+  <!-- Execute steps -->
+  <rect x="380" y="160" width="240" height="55" rx="4" fill="#c8e6c9" stroke="#2d8a4e" stroke-width="1"/>
+  <text x="500" y="180" text-anchor="middle" font-size="10" font-weight="bold" fill="#155724">Local Operations</text>
+  <text x="500" y="198" text-anchor="middle" font-size="9" fill="#444">Tool Fabric (sandboxed,</text>
+  <text x="500" y="210" text-anchor="middle" font-size="9" fill="#444">capability-gated)</text>
+
+  <text x="500" y="240" text-anchor="middle" font-size="10" fill="#888">— OR —</text>
+
+  <rect x="380" y="255" width="240" height="55" rx="4" fill="#c8e6c9" stroke="#2d8a4e" stroke-width="1"/>
+  <text x="500" y="275" text-anchor="middle" font-size="10" font-weight="bold" fill="#155724">External Operations</text>
+  <text x="500" y="293" text-anchor="middle" font-size="9" fill="#444">Governed Connector Proxy</text>
+  <text x="500" y="305" text-anchor="middle" font-size="9" fill="#444">(9-step mediation)</text>
+
+  <path d="M500 310 L500 335" stroke="#2d8a4e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+  <rect x="380" y="338" width="240" height="45" rx="4" fill="#c8e6c9" stroke="#2d8a4e" stroke-width="1"/>
+  <text x="500" y="356" text-anchor="middle" font-size="10" font-weight="bold" fill="#155724">Credential Vault</text>
+  <text x="500" y="372" text-anchor="middle" font-size="9" fill="#444">Encrypted, scoped, never in LLM context</text>
+
+  <path d="M500 383 L500 408" stroke="#2d8a4e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+  <rect x="380" y="411" width="240" height="45" rx="4" fill="#c8e6c9" stroke="#2d8a4e" stroke-width="1"/>
+  <text x="500" y="429" text-anchor="middle" font-size="10" font-weight="bold" fill="#155724">Skill Security</text>
+  <text x="500" y="445" text-anchor="middle" font-size="9" fill="#444">If 3rd-party: sandboxed + enforced</text>
+
+  <!-- Arrow from Plan to Execute -->
+  <path d="M330 520 L358 400" stroke="#555" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- ==================== VERIFY PHASE ==================== -->
+  <rect x="670" y="75" width="300" height="530" rx="8" fill="#fff8f0" stroke="#c4762b" stroke-width="2.5"/>
+  <rect x="670" y="75" width="300" height="35" rx="8" fill="#c4762b"/>
+  <text x="820" y="98" text-anchor="middle" font-size="14" font-weight="bold" fill="white">3. VERIFY</text>
+
+  <!-- Verify steps -->
+  <polygon points="820,145 890,175 820,205 750,175" fill="#fff3cd" stroke="#c4762b" stroke-width="1.5"/>
+  <text x="820" y="172" text-anchor="middle" font-size="9" font-weight="bold" fill="#1a1a2e">Tier?</text>
+  <text x="820" y="186" text-anchor="middle" font-size="8" fill="#666">Verify method</text>
+
+  <!-- T1: Async -->
+  <path d="M750 175 L710 175" stroke="#856404" stroke-width="1.5"/>
+  <text x="725" y="168" font-size="8" fill="#856404">T1</text>
+  <rect x="690" y="215" width="100" height="35" rx="4" fill="#fff3cd" stroke="#856404" stroke-width="1"/>
+  <text x="740" y="237" text-anchor="middle" font-size="9" fill="#856404">Async</text>
+
+  <!-- T2/T3: Sync -->
+  <path d="M890 175 L930 175" stroke="#c4762b" stroke-width="1.5"/>
+  <text x="910" y="168" font-size="8" fill="#c4762b">T2/T3</text>
+  <rect x="870" y="215" width="100" height="35" rx="4" fill="#ffeeba" stroke="#c4762b" stroke-width="1"/>
+  <text x="920" y="237" text-anchor="middle" font-size="9" fill="#c4762b">Sync (blocking)</text>
+
+  <!-- Converge -->
+  <path d="M740 250 L740 275 L820 285" stroke="#555" stroke-width="1"/>
+  <path d="M920 250 L920 275 L820 285" stroke="#555" stroke-width="1"/>
+
+  <!-- Outcome diamond -->
+  <polygon points="820,288 880,315 820,342 760,315" fill="#f8f8f8" stroke="#555" stroke-width="1.5"/>
+  <text x="820" y="312" text-anchor="middle" font-size="9" font-weight="bold" fill="#1a1a2e">Pass?</text>
+
+  <!-- Success path -->
+  <path d="M760 315 L700 315" stroke="#2d8a4e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="730" y="308" font-size="8" fill="#2d8a4e">✓</text>
+
+  <rect x="690" y="355" width="260" height="35" rx="4" fill="#d4edda" stroke="#2d8a4e" stroke-width="1"/>
+  <text x="820" y="377" text-anchor="middle" font-size="10" fill="#2d8a4e">Record success in Trust Ledger</text>
+
+  <path d="M820 390 L820 405" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="690" y="408" width="260" height="35" rx="4" fill="#e8dff5" stroke="#6a4fa5" stroke-width="1"/>
+  <text x="820" y="430" text-anchor="middle" font-size="10" fill="#444">Update APL pattern data</text>
+
+  <path d="M820 443 L820 458" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="690" y="461" width="260" height="35" rx="4" fill="#fff8f0" stroke="#c4762b" stroke-width="1"/>
+  <text x="820" y="483" text-anchor="middle" font-size="10" fill="#444">Generate immutable receipt</text>
+
+  <path d="M820 496 L820 511" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="690" y="514" width="260" height="35" rx="4" fill="#dce8f5" stroke="#4a6fa5" stroke-width="1"/>
+  <text x="820" y="536" text-anchor="middle" font-size="10" fill="#444">Update Plan Artifact</text>
+
+  <!-- Failure path -->
+  <path d="M880 315 L940 315 L940 360" stroke="#c0392b" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+  <text x="915" y="308" font-size="8" fill="#c0392b">✗</text>
+
+  <rect x="690" y="560" width="260" height="35" rx="4" fill="#f8d7da" stroke="#c0392b" stroke-width="1.5"/>
+  <text x="820" y="582" text-anchor="middle" font-size="10" font-weight="bold" fill="#721c24">⚡ Trust Revocation + Notify Operator</text>
+
+  <!-- Arrow from Execute to Verify -->
+  <path d="M640 400 L668 315" stroke="#555" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- Bottom: Both paths produce receipts -->
+  <rect x="250" y="645" width="500" height="40" rx="6" fill="#1a1a2e" stroke="#333" stroke-width="2"/>
+  <text x="500" y="665" text-anchor="middle" font-size="11" font-weight="bold" fill="#4ade80">BOTH SUCCESS AND FAILURE PRODUCE RECEIPTS</text>
+  <text x="500" y="680" text-anchor="middle" font-size="9" fill="#aaa">Failures are surfaced to the operator — never silently swallowed</text>
+</svg>

@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 700" font-family="Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#555"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2d8a4e"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#a54a4a"/>
+    </marker>
+  </defs>
+
+  <text x="550" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="#1a1a2e">Figure 5: Risk-Tiered Governance Pipeline</text>
+  <text x="550" y="50" text-anchor="middle" font-size="11" fill="#666">Proportional governance applied by risk classification (T0–T3)</text>
+
+  <!-- Action Input -->
+  <rect x="430" y="70" width="240" height="50" rx="25" fill="#1a1a2e" stroke="#333" stroke-width="2"/>
+  <text x="550" y="100" text-anchor="middle" font-size="13" font-weight="bold" fill="#4ade80">AGENT ACTION</text>
+
+  <!-- Arrow down -->
+  <path d="M550 120 L550 155" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Risk Classification -->
+  <rect x="400" y="158" width="300" height="55" rx="6" fill="#f0f4ff" stroke="#4a6fa5" stroke-width="2"/>
+  <text x="550" y="178" text-anchor="middle" font-size="12" font-weight="bold" fill="#1a1a2e">RISK CLASSIFICATION</text>
+  <text x="550" y="198" text-anchor="middle" font-size="10" fill="#444">Action type | Target scope | Reversibility | Audience</text>
+
+  <!-- Arrow down to diamond -->
+  <path d="M550 213 L550 240" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Diamond: Tier assignment -->
+  <polygon points="550,243 650,280 550,317 450,280" fill="#fff8f0" stroke="#c4762b" stroke-width="2"/>
+  <text x="550" y="276" text-anchor="middle" font-size="11" font-weight="bold" fill="#1a1a2e">TIER?</text>
+  <text x="550" y="292" text-anchor="middle" font-size="9" fill="#666">Assign Risk Level</text>
+
+  <!-- Four branches -->
+
+  <!-- T0 Branch (leftmost) -->
+  <path d="M450 280 L120 280 L120 350" stroke="#2d8a4e" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <rect x="60" y="250" width="50" height="24" rx="4" fill="#d4edda"/>
+  <text x="85" y="266" text-anchor="middle" font-size="10" font-weight="bold" fill="#155724">T0</text>
+
+  <rect x="30" y="355" width="180" height="45" rx="6" fill="#d4edda" stroke="#2d8a4e" stroke-width="1.5"/>
+  <text x="120" y="375" text-anchor="middle" font-size="10" font-weight="bold" fill="#155724">Policy Cache Lookup</text>
+  <text x="120" y="390" text-anchor="middle" font-size="9" fill="#444">Fast cached approval</text>
+
+  <path d="M120 400 L120 420" stroke="#2d8a4e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+  <rect x="30" y="423" width="180" height="35" rx="6" fill="#d4edda" stroke="#2d8a4e" stroke-width="1.5"/>
+  <text x="120" y="445" text-anchor="middle" font-size="10" font-weight="bold" fill="#155724">Execute</text>
+
+  <path d="M120 458 L120 478" stroke="#2d8a4e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+  <rect x="30" y="481" width="180" height="35" rx="6" fill="#d4edda" stroke="#2d8a4e" stroke-width="1.5"/>
+  <text x="120" y="503" text-anchor="middle" font-size="10" font-weight="bold" fill="#155724">Batch Receipt</text>
+
+  <text x="120" y="540" text-anchor="middle" font-size="9" fill="#666" font-style="italic">~80% of actions</text>
+  <text x="120" y="555" text-anchor="middle" font-size="9" fill="#666">Read file, git status</text>
+
+  <!-- T1 Branch -->
+  <path d="M480 317 L350 350" stroke="#856404" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="280" y="290" width="50" height="24" rx="4" fill="#fff3cd"/>
+  <text x="305" y="306" text-anchor="middle" font-size="10" font-weight="bold" fill="#856404">T1</text>
+
+  <rect x="260" y="355" width="180" height="45" rx="6" fill="#fff3cd" stroke="#856404" stroke-width="1.5"/>
+  <text x="350" y="375" text-anchor="middle" font-size="10" font-weight="bold" fill="#856404">Policy Check</text>
+  <text x="350" y="390" text-anchor="middle" font-size="9" fill="#444">Soul rule evaluation</text>
+
+  <path d="M350 400 L350 420" stroke="#856404" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="260" y="423" width="180" height="35" rx="6" fill="#fff3cd" stroke="#856404" stroke-width="1.5"/>
+  <text x="350" y="445" text-anchor="middle" font-size="10" font-weight="bold" fill="#856404">Execute</text>
+
+  <path d="M350 458 L350 478" stroke="#856404" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="260" y="481" width="180" height="45" rx="6" fill="#fff3cd" stroke="#856404" stroke-width="1.5"/>
+  <text x="350" y="500" text-anchor="middle" font-size="10" font-weight="bold" fill="#856404">Async Verification</text>
+  <text x="350" y="515" text-anchor="middle" font-size="9" fill="#444">Post-execution check</text>
+
+  <text x="350" y="548" text-anchor="middle" font-size="9" fill="#666" font-style="italic">Write workspace, commit</text>
+
+  <!-- T2 Branch -->
+  <path d="M620 317 L710 350" stroke="#b45309" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="640" y="290" width="50" height="24" rx="4" fill="#ffeeba"/>
+  <text x="665" y="306" text-anchor="middle" font-size="10" font-weight="bold" fill="#b45309">T2</text>
+
+  <rect x="620" y="355" width="180" height="45" rx="6" fill="#ffeeba" stroke="#b45309" stroke-width="1.5"/>
+  <text x="710" y="375" text-anchor="middle" font-size="10" font-weight="bold" fill="#b45309">Full Policy Eval</text>
+  <text x="710" y="390" text-anchor="middle" font-size="9" fill="#444">Soul + risk assessment</text>
+
+  <path d="M710 400 L710 420" stroke="#b45309" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="620" y="423" width="180" height="35" rx="6" fill="#ffeeba" stroke="#b45309" stroke-width="1.5"/>
+  <text x="710" y="445" text-anchor="middle" font-size="10" font-weight="bold" fill="#b45309">Execute</text>
+
+  <path d="M710 458 L710 478" stroke="#b45309" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="620" y="481" width="180" height="45" rx="6" fill="#ffeeba" stroke="#b45309" stroke-width="1.5"/>
+  <text x="710" y="500" text-anchor="middle" font-size="10" font-weight="bold" fill="#b45309">Sync Verification</text>
+  <text x="710" y="515" text-anchor="middle" font-size="9" fill="#444">Blocking outcome check</text>
+
+  <path d="M710 526 L710 546" stroke="#b45309" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="620" y="549" width="180" height="35" rx="6" fill="#ffeeba" stroke="#b45309" stroke-width="1.5"/>
+  <text x="710" y="571" text-anchor="middle" font-size="10" font-weight="bold" fill="#b45309">Individual Receipt</text>
+
+  <text x="710" y="608" text-anchor="middle" font-size="9" fill="#666" font-style="italic">Slack post, read API</text>
+
+  <!-- T3 Branch (rightmost) -->
+  <path d="M650 280 L920 280 L920 350" stroke="#a54a4a" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <rect x="900" y="250" width="50" height="24" rx="4" fill="#f8d7da"/>
+  <text x="925" y="266" text-anchor="middle" font-size="10" font-weight="bold" fill="#721c24">T3</text>
+
+  <rect x="830" y="355" width="180" height="45" rx="6" fill="#f8d7da" stroke="#a54a4a" stroke-width="1.5"/>
+  <text x="920" y="375" text-anchor="middle" font-size="10" font-weight="bold" fill="#721c24">Full Policy Eval</text>
+  <text x="920" y="390" text-anchor="middle" font-size="9" fill="#444">Soul + risk assessment</text>
+
+  <path d="M920 400 L920 420" stroke="#a54a4a" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+
+  <rect x="830" y="423" width="180" height="45" rx="6" fill="#f8d7da" stroke="#a54a4a" stroke-width="2"/>
+  <text x="920" y="443" text-anchor="middle" font-size="10" font-weight="bold" fill="#721c24">⚠ OWNER APPROVAL</text>
+  <text x="920" y="458" text-anchor="middle" font-size="9" fill="#444">Human confirms action</text>
+
+  <path d="M920 468 L920 488" stroke="#a54a4a" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+
+  <rect x="830" y="491" width="180" height="35" rx="6" fill="#f8d7da" stroke="#a54a4a" stroke-width="1.5"/>
+  <text x="920" y="513" text-anchor="middle" font-size="10" font-weight="bold" fill="#721c24">Execute</text>
+
+  <path d="M920 526 L920 546" stroke="#a54a4a" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+
+  <rect x="830" y="549" width="180" height="45" rx="6" fill="#f8d7da" stroke="#a54a4a" stroke-width="1.5"/>
+  <text x="920" y="568" text-anchor="middle" font-size="10" font-weight="bold" fill="#721c24">Sync Verification</text>
+  <text x="920" y="583" text-anchor="middle" font-size="9" fill="#444">Blocking outcome check</text>
+
+  <path d="M920 594 L920 614" stroke="#a54a4a" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+
+  <rect x="830" y="617" width="180" height="35" rx="6" fill="#f8d7da" stroke="#a54a4a" stroke-width="1.5"/>
+  <text x="920" y="639" text-anchor="middle" font-size="10" font-weight="bold" fill="#721c24">Detailed Receipt</text>
+
+  <text x="920" y="672" text-anchor="middle" font-size="9" fill="#666" font-style="italic">Send email, Stripe charge</text>
+
+  <!-- All paths → Trust Ledger -->
+  <rect x="350" y="620" width="240" height="50" rx="6" fill="#f0fff8" stroke="#2d8a6e" stroke-width="2"/>
+  <text x="470" y="640" text-anchor="middle" font-size="11" font-weight="bold" fill="#2d8a6e">→ TRUST LEDGER</text>
+  <text x="470" y="657" text-anchor="middle" font-size="9" fill="#444">All outcomes recorded for graduation/revocation</text>
+
+  <path d="M120 516 L120 570 Q120 590 140 600 L348 635" stroke="#2d8a6e" stroke-width="1" stroke-dasharray="4,3"/>
+  <path d="M350 526 L350 570 Q350 590 370 600 L348 635" stroke="#2d8a6e" stroke-width="1" stroke-dasharray="4,3"/>
+</svg>

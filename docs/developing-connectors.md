@@ -24,6 +24,14 @@ Define Manifest → Implement ConnectorBase → Register Credentials
   → Register Connector → Test → Activate
 ```
 
+### Governed Connector Proxy
+
+Connectors never make network calls directly. All external requests are mediated by the Governed Connector Proxy, which enforces governance at every step:
+
+<p align="center">
+  <img src="images/fig7_governed_connector_proxy.svg" alt="Governed Connector Proxy — Data Flow" width="900">
+</p>
+
 ---
 
 ## Step 1: Define the Manifest
@@ -345,6 +353,8 @@ settings:
 ---
 
 ## Connector Registry
+
+![War Room — Connectors Panel](images/war-room-connectors.png)
 
 Registered connectors appear in the War Room Connector Status panel, showing:
 - Enabled/disabled status

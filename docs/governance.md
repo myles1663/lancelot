@@ -84,6 +84,10 @@ The cache invalidates automatically when the Soul changes. T2 and T3 decisions a
 
 Every action Lancelot takes is classified into one of four risk tiers. The governance overhead scales proportionally with the risk.
 
+<p align="center">
+  <img src="images/fig5_risk_tiered_pipeline.svg" alt="Risk-Tiered Governance Pipeline (T0–T3)" width="900">
+</p>
+
 ### T0 — Inert
 
 **Actions:** File reads, directory listings, git status/log/diff, memory reads
@@ -160,6 +164,12 @@ This means the system is always in a clean, verified state before crossing into 
 
 The Trust Ledger tracks how much trust each connector and capability has earned through observed outcomes — not through model confidence or configuration.
 
+<p align="center">
+  <img src="images/fig6_trust_ledger.svg" alt="Trust Ledger — Graduation and Revocation" width="800">
+</p>
+
+![War Room — Trust Ledger Panel](images/war-room-trust-ledger.png)
+
 ### How Trust Is Earned
 
 Trust starts at zero. Every successful governed action increments the trust score for that connector/capability. Every failure, denial, or rollback affects the score.
@@ -194,6 +204,8 @@ The Soul can set maximum trust ceilings for specific capabilities. For example, 
 ## Approval Pattern Learning (APL)
 
 APL detects patterns in owner approval decisions and proposes automation rules. It learns *from the owner*, not from the model.
+
+![War Room — APL Learning Panel](images/war-room-apl-learning.png)
 
 ### How It Works
 
