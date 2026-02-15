@@ -1,109 +1,79 @@
 name: Bug Report
-description: Report a bug or unexpected behavior
-title: "[Bug]: "
-labels: ["bug", "needs-triage"]
+description: Something isn't working as expected
+labels: ["bug", "triage"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting! Please fill out the details below so we can reproduce and fix the issue.
-
+        Thanks for reporting a bug. Please fill out the sections below so we can reproduce and fix it.
   - type: input
     id: version
     attributes:
       label: Lancelot Version
-      description: "Run `docker exec lancelot_core cat /app/VERSION` or check the War Room footer"
-      placeholder: "e.g., 0.1.0"
+      description: "Output of `docker exec lancelot cat /app/VERSION` or commit hash"
+      placeholder: "e.g., 0.9.1 or abc1234"
     validations:
       required: true
-
-  - type: dropdown
-    id: install-method
-    attributes:
-      label: Installation Method
-      options:
-        - "npx create-lancelot (CLI installer)"
-        - "Manual (docker-compose)"
-        - "Manual (Docker build)"
-    validations:
-      required: true
-
-  - type: input
-    id: os
-    attributes:
-      label: Operating System
-      placeholder: "e.g., macOS 15.2, Ubuntu 24.04, Windows 11"
-    validations:
-      required: true
-
-  - type: input
-    id: docker-version
-    attributes:
-      label: Docker Version
-      placeholder: "e.g., Docker Desktop 4.37.1"
-    validations:
-      required: true
-
-  - type: textarea
-    id: description
-    attributes:
-      label: What happened?
-      description: A clear description of the bug.
-    validations:
-      required: true
-
-  - type: textarea
-    id: steps
-    attributes:
-      label: Steps to reproduce
-      description: Minimal steps to reproduce the behavior.
-      value: |
-        1.
-        2.
-        3.
-    validations:
-      required: true
-
-  - type: textarea
-    id: expected
-    attributes:
-      label: Expected behavior
-      description: What did you expect to happen?
-    validations:
-      required: true
-
-  - type: textarea
-    id: receipts
-    attributes:
-      label: Receipt trail (if applicable)
-      description: "If the bug involves an action that produced a receipt, paste the relevant receipt JSON here. Find receipts in the War Room > Receipt Explorer."
-      render: json
-
   - type: dropdown
     id: subsystem
     attributes:
       label: Affected Subsystem
-      description: Which part of Lancelot is affected?
+      description: Which subsystem does this bug affect?
       options:
-        - "Installer"
-        - "Soul / Governance"
-        - "Memory"
-        - "Tool Fabric"
-        - "Connectors"
-        - "Scheduler"
-        - "War Room UI"
-        - "Receipts / Audit"
-        - "Trust Ledger"
-        - "Skills"
-        - "APL (Approval Pattern Learning)"
-        - "Feature Flags / Kill Switches"
-        - "Other / Not sure"
+        - Soul / Constitutional Governance
+        - Risk-Tiered Pipeline (T0-T3)
+        - Trust Ledger
+        - Memory
+        - Tool Fabric
+        - Governed Connectors / Credential Vault
+        - Skill Security Pipeline
+        - Approval Pattern Learning
+        - Receipts / Audit Trail
+        - Scheduler
+        - War Room Dashboard
+        - Installer (create-lancelot)
+        - Kill Switches / Feature Flags
+        - Other / Unknown
     validations:
       required: true
-
   - type: textarea
-    id: logs
+    id: description
     attributes:
-      label: Relevant logs
-      description: "Paste any relevant log output. Run `docker logs lancelot_core` for container logs."
+      label: What happened?
+      description: Clear description of the bug
+      placeholder: "Describe what you expected vs. what actually happened"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to trigger the bug
+      placeholder: |
+        1. Start Lancelot with default config
+        2. Navigate to War Room > Trust Ledger
+        3. Click graduation proposal
+        4. Observe error...
+    validations:
+      required: true
+  - type: textarea
+    id: receipts
+    attributes:
+      label: Relevant receipts or logs
+      description: "Paste any receipt JSON, error logs, or War Room screenshots"
       render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: "OS, Docker version, GPU, provider, browser (if War Room issue)"
+      placeholder: |
+        OS: Ubuntu 22.04
+        Docker: 24.0.5
+        GPU: None (CPU mode)
+        Provider: Anthropic
+        Browser: Chrome 120
+    validations:
+      required: false
