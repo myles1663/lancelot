@@ -1,0 +1,109 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please fill out the details below so we can reproduce and fix the issue.
+
+  - type: input
+    id: version
+    attributes:
+      label: Lancelot Version
+      description: "Run `docker exec lancelot_core cat /app/VERSION` or check the War Room footer"
+      placeholder: "e.g., 0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Installation Method
+      options:
+        - "npx create-lancelot (CLI installer)"
+        - "Manual (docker-compose)"
+        - "Manual (Docker build)"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+      placeholder: "e.g., macOS 15.2, Ubuntu 24.04, Windows 11"
+    validations:
+      required: true
+
+  - type: input
+    id: docker-version
+    attributes:
+      label: Docker Version
+      placeholder: "e.g., Docker Desktop 4.37.1"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to reproduce the behavior.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: receipts
+    attributes:
+      label: Receipt trail (if applicable)
+      description: "If the bug involves an action that produced a receipt, paste the relevant receipt JSON here. Find receipts in the War Room > Receipt Explorer."
+      render: json
+
+  - type: dropdown
+    id: subsystem
+    attributes:
+      label: Affected Subsystem
+      description: Which part of Lancelot is affected?
+      options:
+        - "Installer"
+        - "Soul / Governance"
+        - "Memory"
+        - "Tool Fabric"
+        - "Connectors"
+        - "Scheduler"
+        - "War Room UI"
+        - "Receipts / Audit"
+        - "Trust Ledger"
+        - "Skills"
+        - "APL (Approval Pattern Learning)"
+        - "Feature Flags / Kill Switches"
+        - "Other / Not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: "Paste any relevant log output. Run `docker logs lancelot_core` for container logs."
+      render: shell

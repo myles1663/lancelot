@@ -50,14 +50,23 @@ desktop.ini
 
 # Model Weights (downloaded at runtime, not committed)
 local_models/weights/
+local_models/*.gguf
+local_models/*.bin
+local_models/*.safetensors
+local_models/*.pt
 
 # Docker
 *.tar
+docker-compose.override.yml
 
 # Build artifacts
 *.exe
 *.msi
 *.spec
+
+# Node
+node_modules/
+npm-debug.log*
 
 # Test outputs
 .coverage
@@ -66,3 +75,4 @@ htmlcov/
 # War Room React SPA
 src/warroom/node_modules/
 src/warroom/dist/
+src/warroom/tsconfig.tsbuildinfo

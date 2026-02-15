@@ -1,3 +1,13 @@
+<!--
+  CLAUDE.md — Claude Code Project Configuration
+
+  This file provides project context and development guidelines for Claude Code,
+  the AI development tool used to architect and build Lancelot. Lancelot was built
+  entirely through AI-assisted development — no code was written by hand.
+
+  This file is part of the development methodology, not runtime configuration.
+-->
+
 # CLAUDE.md — Lancelot Development Reference
 
 > **This file is the authoritative coding reference for AI agents working on Lancelot.**

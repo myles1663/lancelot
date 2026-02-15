@@ -2,6 +2,32 @@
 
 All notable changes to Project Lancelot will be documented in this file.
 
+> **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
+> All entries below represent the cumulative development history leading to public launch.
+
+## [0.1.0] - 2026-02-14 (Public Launch)
+
+Initial public release of the Lancelot Governed Autonomous System.
+
+### Highlights
+- Soul constitutional governance with runtime-switchable postures (Crusader Mode)
+- Risk-tiered governance pipeline (T0-T3)
+- Progressive Trust Ledger with graduation and revocation
+- 6-stage Skill Security Pipeline
+- Governed Connector Proxy with Credential Vault
+- Receipt-based audit trails
+- Approval Pattern Learning (APL)
+- Dependency-resolved Kill Switch management
+- War Room operator dashboard (React 18 + TypeScript)
+- One-command CLI installer (`npx create-lancelot`)
+- Multi-provider LLM support (Gemini, OpenAI, Anthropic)
+- Telegram file attachment delivery
+- 1900+ tests
+
+License: AGPL-3.0 | Patent Pending: US Provisional Application #63/982,183
+
+---
+
 ## [8.3.4] - 2026-02-14
 
 ### Fixed

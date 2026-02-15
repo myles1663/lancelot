@@ -1,0 +1,66 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before submitting, please check the [Anti-Roadmap](docs/anti-roadmap.md) to see
+        if this feature has been intentionally excluded and why.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the problem or use case this feature addresses.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How do you envision this working?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: subsystem
+    attributes:
+      label: Related Subsystem
+      options:
+        - "Soul / Governance"
+        - "Memory"
+        - "Tool Fabric"
+        - "Connectors"
+        - "Scheduler"
+        - "War Room UI"
+        - "Receipts / Audit"
+        - "Trust Ledger"
+        - "Skills"
+        - "APL (Approval Pattern Learning)"
+        - "Installer"
+        - "Documentation"
+        - "New Subsystem"
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Have you considered other approaches?
+
+  - type: dropdown
+    id: governance-impact
+    attributes:
+      label: Governance Impact
+      description: Would this feature change how governance works?
+      options:
+        - "No - purely additive, no governance changes"
+        - "Minor - may need new policy rules"
+        - "Major - changes governance model"
+        - "Not sure"
+    validations:
+      required: true

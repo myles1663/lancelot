@@ -1,5 +1,10 @@
 # Lancelot
 
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
+[![Patent Pending](https://img.shields.io/badge/Patent-Pending-orange.svg)](DISCLOSURE.md)
+[![Built with Claude Code](https://img.shields.io/badge/Built%20with-Claude%20Code-blueviolet.svg)](CLAUDE.md)
+[![Tests](https://img.shields.io/badge/Tests-1900%2B%20passing-brightgreen.svg)]()
+
 **A Governed Autonomous System** — an AI operator that can plan, act, remember, and recover under explicit constitutional control.
 
 ![Lancelot Logo](static/logo.jpeg)
@@ -196,10 +201,12 @@ lancelot/
 | [Anti-Roadmap](docs/anti-roadmap.md) | What we will not build, and why |
 | [Changelog](CHANGELOG.md) | Version history |
 | [Contributing](CONTRIBUTING.md) | How to contribute |
+| [Disclosure](DISCLOSURE.md) | Patent status, licensing, development methodology |
+| [Security Policy](SECURITY.md) | Responsible disclosure process |
 
 ## License
 
-MIT — See [LICENSE](LICENSE) for details.
+AGPL-3.0 — See [LICENSE](LICENSE) for details. Commercial licensing available for organizations that cannot comply with AGPL terms.
 
 ---
 
