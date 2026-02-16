@@ -348,7 +348,13 @@ export function CostTracker() {
         <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
           Provider API Keys
         </h3>
+        <p className="text-xs text-text-muted mb-3">
+          Rotate or add API keys for each provider. Keys are validated before saving and persisted to .env.
+        </p>
         <div className="space-y-2">
+          {providerKeys.length === 0 && (
+            <p className="text-sm text-text-muted py-4 text-center">Loading provider keys...</p>
+          )}
           {providerKeys.map(k => (
             <div key={k.provider} className="flex items-center gap-3 p-3 bg-surface-card-elevated rounded-md">
               <div className="flex-1 min-w-0">
