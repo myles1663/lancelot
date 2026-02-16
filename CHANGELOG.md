@@ -5,6 +5,20 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.1.4] - 2026-02-16
+
+### Added
+- **X (Twitter) Connector**: First-party connector for X API v2. Operations: `post_tweet` (T1,
+  reversible via delete), `delete_tweet` (T3, irreversible), `get_me` (T0, read account info).
+  Auth via OAuth 1.0a (4 credentials: API Key, API Key Secret, Access Token, Access Token Secret).
+  Free tier supports ~1,500 tweets/month. Domain `api.x.com` added to network allowlist.
+
+### Fixed
+- **SMTP Email Connector Credentials**: The SMTP backend previously had a single `smtp_credentials`
+  field, making it impossible to configure SMTP from the War Room. Now provides individual fields:
+  `smtp_host`, `smtp_port`, `smtp_username`, `smtp_password`, `smtp_from_address`, `smtp_use_tls`,
+  `imap_host`, and `imap_port`. Each field appears as a separate input in the War Room Connectors page.
+
 ## [0.1.3] - 2026-02-16
 
 ### Added

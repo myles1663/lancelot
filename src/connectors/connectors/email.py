@@ -61,12 +61,56 @@ _BACKEND_CONFIG = {
         "api_base": "protocol://smtp",
         "target_domains": ["protocol.smtp", "protocol.imap"],
         "description": "SMTP/IMAP email via standard protocols",
-        "credential": CredentialSpec(
-            name="smtp_credentials",
-            type="basic_auth",
-            vault_key="email.smtp_credentials",
-            required=True,
-        ),
+        "credentials": [
+            CredentialSpec(
+                name="smtp_host",
+                type="config",
+                vault_key="email.smtp_host",
+                required=True,
+            ),
+            CredentialSpec(
+                name="smtp_port",
+                type="config",
+                vault_key="email.smtp_port",
+                required=True,
+            ),
+            CredentialSpec(
+                name="smtp_username",
+                type="config",
+                vault_key="email.smtp_username",
+                required=True,
+            ),
+            CredentialSpec(
+                name="smtp_password",
+                type="api_key",
+                vault_key="email.smtp_password",
+                required=True,
+            ),
+            CredentialSpec(
+                name="smtp_from_address",
+                type="config",
+                vault_key="email.smtp_from_address",
+                required=True,
+            ),
+            CredentialSpec(
+                name="smtp_use_tls",
+                type="config",
+                vault_key="email.smtp_use_tls",
+                required=False,
+            ),
+            CredentialSpec(
+                name="imap_host",
+                type="config",
+                vault_key="email.imap_host",
+                required=False,
+            ),
+            CredentialSpec(
+                name="imap_port",
+                type="config",
+                vault_key="email.imap_port",
+                required=False,
+            ),
+        ],
         "does_not_access": ["Contact lists", "Calendar", "Email settings"],
     },
 }
@@ -84,6 +128,12 @@ class EmailConnector(ConnectorBase):
         self._backend = backend
         cfg = _BACKEND_CONFIG[backend]
 
+        # SMTP uses multiple credential specs; Gmail/Outlook use a single one
+        if "credentials" in cfg:
+            cred_list = cfg["credentials"]
+        else:
+            cred_list = [cfg["credential"]]
+
         manifest = ConnectorManifest(
             id="email",
             name="Email Integration",
@@ -92,7 +142,7 @@ class EmailConnector(ConnectorBase):
             source="first-party",
             description=cfg["description"],
             target_domains=cfg["target_domains"],
-            required_credentials=[cfg["credential"]],
+            required_credentials=cred_list,
             data_reads=["Email subjects, bodies, senders, timestamps"],
             data_writes=["New emails, replies"],
             does_not_access=cfg["does_not_access"],
@@ -100,7 +150,10 @@ class EmailConnector(ConnectorBase):
         super().__init__(manifest)
         self._vault = vault
         self._api_base = cfg["api_base"]
-        self._cred_key = cfg["credential"].vault_key
+        if "credential" in cfg:
+            self._cred_key = cfg["credential"].vault_key
+        else:
+            self._cred_key = "email.smtp_password"
 
     @property
     def backend(self) -> str:
@@ -496,4 +549,12 @@ class EmailConnector(ConnectorBase):
     def validate_credentials(self) -> bool:
         if self._vault is None:
             return False
+        if self._backend == "smtp":
+            return (
+                self._vault.exists("email.smtp_host")
+                and self._vault.exists("email.smtp_port")
+                and self._vault.exists("email.smtp_username")
+                and self._vault.exists("email.smtp_password")
+                and self._vault.exists("email.smtp_from_address")
+            )
         return self._vault.exists(self._cred_key)

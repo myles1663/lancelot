@@ -33,6 +33,9 @@ rate_limits:
     sms:
       max_requests_per_minute: 30
       burst_limit: 5
+    x:
+      max_requests_per_minute: 15
+      burst_limit: 3
 connectors:
   email:
     enabled: true
@@ -78,3 +81,6 @@ connectors:
     settings:
       from_number: ''
       messaging_service_sid: ''
+  x:
+    enabled: false
+    settings: {}

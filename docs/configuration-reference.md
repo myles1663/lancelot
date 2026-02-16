@@ -234,7 +234,34 @@ connectors:
     enabled: true
     settings:
       chat_id: ''
+  x:
+    enabled: false
+    settings: {}
 ```
+
+**SMTP Email Credentials:**
+
+When using the `smtp` backend for the email connector, the following credential vault keys must be configured:
+
+| Vault Key | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `email.smtp_host` | config | Yes | SMTP server hostname (e.g., `smtp.gmail.com`) |
+| `email.smtp_port` | config | Yes | SMTP server port (e.g., `587` for TLS, `465` for SSL) |
+| `email.smtp_username` | config | Yes | SMTP login username |
+| `email.smtp_password` | api_key | Yes | SMTP password or app password |
+| `email.smtp_from_address` | config | Yes | Sender email address |
+| `email.smtp_use_tls` | config | No | `true` to use STARTTLS (default: true) |
+| `email.imap_host` | config | No | IMAP server hostname for reading email |
+| `email.imap_port` | config | No | IMAP server port (e.g., `993`) |
+
+**X (Twitter) Credentials:**
+
+| Vault Key | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `x.api_key` | api_key | Yes | X API Key (from developer portal) |
+| `x.api_key_secret` | api_key | Yes | X API Key Secret |
+| `x.access_token` | api_key | Yes | X Access Token (OAuth 1.0a) |
+| `x.access_token_secret` | api_key | Yes | X Access Token Secret |
 
 ### `config/scheduler.yaml`
 
@@ -334,6 +361,7 @@ domains:
   - api.anthropic.com
   - api.github.com
   - api.telegram.org
+  - api.x.com
   - generativelanguage.googleapis.com
   - github.com
   - raw.githubusercontent.com
