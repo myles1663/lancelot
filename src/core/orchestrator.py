@@ -1856,9 +1856,11 @@ class LancelotOrchestrator:
                 else:
                     # Execute the skill
                     self.governor.log_usage("tool_calls", 1)
+                    _exec_success = False
                     try:
                         skill_result = self.skill_executor.run(skill_name, inputs)
                         if skill_result.success:
+                            _exec_success = True
                             result_content = str(skill_result.outputs or {"status": "success"})
                             if len(result_content) > 4000:
                                 result_content = result_content[:4000] + "... [truncated]"
@@ -1882,6 +1884,21 @@ class LancelotOrchestrator:
                             "inputs": inputs,
                             "result": f"EXCEPTION: {e}",
                         })
+
+                    # Record governance event for trust ledger tracking
+                    try:
+                        from governance.models import RiskTier as _GovRiskTier
+                        _SKILL_TIER_MAP = {
+                            "network_client": _GovRiskTier.T2_CONTROLLED,
+                            "command_runner": _GovRiskTier.T2_CONTROLLED,
+                            "repo_writer": _GovRiskTier.T1_REVERSIBLE,
+                            "service_runner": _GovRiskTier.T2_CONTROLLED,
+                        }
+                        _gov_tier = _SKILL_TIER_MAP.get(skill_name, _GovRiskTier.T0_INERT)
+                        _gov_scope = str(inputs.get("url", inputs.get("command", inputs.get("path", "default"))))
+                        self._record_governance_event(skill_name, _gov_scope, _gov_tier, _exec_success)
+                    except Exception:
+                        pass
 
                 # Feed tool result back as tool message (OpenAI format)
                 messages.append({
@@ -2114,9 +2131,11 @@ class LancelotOrchestrator:
                 else:
                     # Execute the skill
                     self.governor.log_usage("tool_calls", 1)
+                    _exec_success = False
                     try:
                         exec_result = self.skill_executor.run(skill_name, inputs)
                         if exec_result.success:
+                            _exec_success = True
                             result_data = exec_result.outputs or {"status": "success"}
                             result_str = str(result_data)
                             if len(result_str) > 8000:
@@ -2141,6 +2160,21 @@ class LancelotOrchestrator:
                             "inputs": inputs,
                             "result": f"EXCEPTION: {e}",
                         })
+
+                    # Record governance event for trust ledger tracking
+                    try:
+                        from governance.models import RiskTier as _GovRiskTier
+                        _SKILL_TIER_MAP = {
+                            "network_client": _GovRiskTier.T2_CONTROLLED,
+                            "command_runner": _GovRiskTier.T2_CONTROLLED,
+                            "repo_writer": _GovRiskTier.T1_REVERSIBLE,
+                            "service_runner": _GovRiskTier.T2_CONTROLLED,
+                        }
+                        _gov_tier = _SKILL_TIER_MAP.get(skill_name, _GovRiskTier.T0_INERT)
+                        _gov_scope = str(inputs.get("url", inputs.get("command", inputs.get("path", "default"))))
+                        self._record_governance_event(skill_name, _gov_scope, _gov_tier, _exec_success)
+                    except Exception:
+                        pass
 
                 tool_results.append((tc.id, skill_name, str(result_data)))
 
