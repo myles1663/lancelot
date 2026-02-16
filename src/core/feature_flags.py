@@ -148,15 +148,8 @@ FEATURE_APPROVAL_LEARNING: bool = _env_bool("FEATURE_APPROVAL_LEARNING", default
 FEATURE_BAL: bool = _env_bool("FEATURE_BAL", default=False)
 
 
-# Flags that require a container restart to fully take effect when toggled
-RESTART_REQUIRED_FLAGS = frozenset({
-    "FEATURE_SOUL",
-    "FEATURE_SKILLS",
-    "FEATURE_HEALTH_MONITOR",
-    "FEATURE_SCHEDULER",
-    "FEATURE_MEMORY_VNEXT",
-    "FEATURE_BAL",
-})
+# All flags are now hot-toggleable via SubsystemManager — no restart required.
+RESTART_REQUIRED_FLAGS = frozenset()
 
 
 def toggle_flag(name: str) -> bool:

@@ -264,11 +264,14 @@ Actions: **Approve** (promote to active memory) or **Reject** (discard with rece
 Emergency controls for disabling subsystems.
 
 Each kill switch has a confirmation dialog before activation. Disabling a subsystem:
-- Takes effect immediately
+- Takes effect immediately (hot-toggled — no restart required)
+- Gracefully shuts down the subsystem (stops background threads, closes database connections)
 - Does not destroy data
-- Is reversible (re-enable by toggling the switch back)
+- Is reversible (re-enable by toggling the switch back to lazily reinitialize)
 
 **Persistence:** Kill switch state is persisted to `.flag_state.json` in the Docker data volume. Toggles made in the War Room survive container restarts. The priority order is: persisted state > `.env` values > code defaults.
+
+**Hot-Toggle:** All feature flags are hot-toggleable via the SubsystemManager. Core subsystems (Soul, Skills, Scheduler, Health Monitor, Memory, BAL) are lazily initialized when toggled ON and gracefully shut down when toggled OFF. No container restart is ever required.
 
 | Switch | What It Controls | When to Use |
 |--------|-----------------|-------------|

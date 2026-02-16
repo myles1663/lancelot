@@ -216,6 +216,15 @@ FLAG_META = {
         "conflicts": [],
         "warning": "Requires RISK_TIERED_GOVERNANCE. The system will auto-approve actions matching learned patterns. Review APL rules regularly — incorrect patterns can bypass intended oversight.",
     },
+
+    # ── Business Automation Layer ──────────────────────────────────
+    "FEATURE_BAL": {
+        "description": "Business Automation Layer — client management, intake, delivery, and billing workflows. Provides CRM, content pipeline, and revenue tracking.",
+        "category": "Core Subsystem",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Disabling will stop all BAL client operations and close the database connection. Active client workflows will be interrupted.",
+    },
 }
 
 
@@ -315,17 +324,41 @@ async def update_network_allowlist(body: AllowlistUpdate):
 
 @router.post("/{name}/toggle")
 async def toggle_flag(name: str):
-    """Toggle a feature flag at runtime."""
+    """Toggle a feature flag at runtime. Hot-toggles subsystems automatically."""
     try:
         import feature_flags as ff
+        from subsystem_manager import subsystem_manager
+
         new_val = ff.toggle_flag(name)
-        restart_needed = name in ff.RESTART_REQUIRED_FLAGS
+
+        # Hot-toggle: start or stop subsystem if one is registered for this flag
+        hot_toggled = False
+        subsystem = subsystem_manager.get_by_flag(name)
+        if subsystem:
+            try:
+                if new_val and not subsystem_manager.is_running(subsystem.name):
+                    subsystem_manager.start(subsystem.name)
+                    hot_toggled = True
+                elif not new_val and subsystem_manager.is_running(subsystem.name):
+                    subsystem_manager.stop(subsystem.name)
+                    hot_toggled = True
+            except Exception as exc:
+                logger.error("Hot-toggle failed for %s: %s", name, exc)
+                return {
+                    "flag": name,
+                    "enabled": new_val,
+                    "restart_required": False,
+                    "hot_toggled": False,
+                    "message": f"{name} set to {new_val} but subsystem toggle failed: {exc}",
+                }
+
         return {
             "flag": name,
             "enabled": new_val,
-            "restart_required": restart_needed,
+            "restart_required": False,
+            "hot_toggled": hot_toggled,
             "message": f"{name} set to {new_val}" + (
-                " (restart required for full effect)" if restart_needed else ""
+                " (subsystem hot-toggled)" if hot_toggled else ""
             ),
         }
     except ValueError as exc:
@@ -337,15 +370,32 @@ async def toggle_flag(name: str):
 
 @router.post("/{name}/set")
 async def set_flag(name: str, value: bool = True):
-    """Set a feature flag to a specific value."""
+    """Set a feature flag to a specific value. Hot-toggles subsystems automatically."""
     try:
         import feature_flags as ff
+        from subsystem_manager import subsystem_manager
+
         ff.set_flag(name, value)
-        restart_needed = name in ff.RESTART_REQUIRED_FLAGS
+
+        # Hot-toggle: start or stop subsystem if one is registered for this flag
+        hot_toggled = False
+        subsystem = subsystem_manager.get_by_flag(name)
+        if subsystem:
+            try:
+                if value and not subsystem_manager.is_running(subsystem.name):
+                    subsystem_manager.start(subsystem.name)
+                    hot_toggled = True
+                elif not value and subsystem_manager.is_running(subsystem.name):
+                    subsystem_manager.stop(subsystem.name)
+                    hot_toggled = True
+            except Exception as exc:
+                logger.error("Hot-toggle failed for %s: %s", name, exc)
+
         return {
             "flag": name,
             "enabled": value,
-            "restart_required": restart_needed,
+            "restart_required": False,
+            "hot_toggled": hot_toggled,
         }
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})

@@ -64,7 +64,7 @@ At least one API key is required. You can configure one or more providers. Keys 
 
 ### Feature Flags
 
-All feature flags are boolean: `true`/`1`/`yes` to enable, anything else to disable.
+All feature flags are boolean: `true`/`1`/`yes` to enable, anything else to disable. All flags are **hot-toggleable** — changes take effect immediately without a container restart. Core subsystem flags (Soul, Skills, Scheduler, Health Monitor, Memory, BAL) use the SubsystemManager to lazily initialize or gracefully shut down their subsystems at runtime.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -73,6 +73,7 @@ All feature flags are boolean: `true`/`1`/`yes` to enable, anything else to disa
 | `FEATURE_HEALTH_MONITOR` | `true` | Background health monitoring |
 | `FEATURE_SCHEDULER` | `true` | Automated job scheduling |
 | `FEATURE_MEMORY_VNEXT` | `false` | Tiered memory system |
+| `FEATURE_BAL` | `false` | Business Automation Layer |
 | `FEATURE_TOOLS_FABRIC` | `true` | Tool execution layer |
 | `FEATURE_TOOLS_CLI_PROVIDERS` | `false` | CLI tool adapters |
 | `FEATURE_TOOLS_ANTIGRAVITY` | `false` | Generative UI/Vision providers |

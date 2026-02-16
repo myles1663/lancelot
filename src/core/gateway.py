@@ -79,6 +79,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Subsystem Gate Middleware ---
+# Routes for feature-gated subsystems are always mounted but gated here.
+# When a subsystem's flag is OFF, its routes return 503 instead of crashing.
+import feature_flags as _ff
+
+_SUBSYSTEM_GATES = [
+    ("/memory", "FEATURE_MEMORY_VNEXT"),
+    ("/soul", "FEATURE_SOUL"),
+    ("/api/scheduler", "FEATURE_SCHEDULER"),
+    ("/api/v1/clients", "FEATURE_BAL"),
+]
+
+
+@app.middleware("http")
+async def subsystem_gate_middleware(request: Request, call_next):
+    path = request.url.path
+    for prefix, flag_name in _SUBSYSTEM_GATES:
+        if path == prefix or path.startswith(prefix + "/"):
+            if not getattr(_ff, flag_name, False):
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "subsystem_disabled",
+                        "flag": flag_name,
+                        "message": f"Enable {flag_name} to use this endpoint",
+                    },
+                )
+    return await call_next(request)
+
 # --- API Authentication ---
 API_TOKEN = os.getenv("LANCELOT_API_TOKEN")
 
@@ -138,6 +167,244 @@ else:
     logger.info("Comms backend: Google Chat")
 
 
+# ---------------------------------------------------------------------------
+# Subsystem init / shutdown functions (called by SubsystemManager)
+# ---------------------------------------------------------------------------
+from subsystem_manager import subsystem_manager
+
+
+def _init_memory():
+    """Initialize Memory vNext subsystem."""
+    from memory.store import CoreBlockStore
+    from memory.sqlite_store import MemoryStoreManager
+    from memory.compiler import ContextCompilerService
+
+    mem_data_dir = Path("/home/lancelot/data")
+    core_store = CoreBlockStore(data_dir=mem_data_dir)
+    core_store.initialize()
+    user_md = mem_data_dir / "USER.md"
+    if user_md.exists():
+        core_store.bootstrap_from_user_file(str(user_md))
+
+    store_manager = MemoryStoreManager(data_dir=mem_data_dir)
+    compiler_svc = ContextCompilerService(
+        data_dir=mem_data_dir,
+        core_store=core_store,
+        memory_manager=store_manager,
+    )
+    main_orchestrator._memory_enabled = True
+    main_orchestrator.context_compiler = compiler_svc
+    logger.info("Memory vNext initialized and wired.")
+    return {"core_store": core_store, "store_manager": store_manager, "compiler": compiler_svc}
+
+
+def _shutdown_memory(objects):
+    """Shut down Memory vNext subsystem."""
+    main_orchestrator._memory_enabled = False
+    main_orchestrator.context_compiler = None
+    logger.info("Memory vNext shut down.")
+
+
+def _init_soul():
+    """Initialize Soul subsystem."""
+    from soul.store import load_active_soul, SoulStoreError
+    from soul.api import router as soul_router
+
+    active_soul = load_active_soul()
+
+    # Apply composable soul overlays if BAL is enabled
+    try:
+        from feature_flags import FEATURE_BAL
+        if FEATURE_BAL:
+            from soul.layers import load_overlays, merge_soul
+            overlays = load_overlays()
+            if overlays:
+                active_soul = merge_soul(active_soul, overlays)
+                logger.info("Soul overlays applied: %s", [o.overlay_name for o in overlays])
+    except Exception as exc:
+        logger.warning("Soul overlay loading failed: %s — using base soul", exc)
+
+    main_orchestrator.soul = active_soul
+    logger.info("Soul loaded: version=%s", active_soul.version)
+    return {"soul": active_soul}
+
+
+def _shutdown_soul(objects):
+    """Shut down Soul subsystem."""
+    main_orchestrator.soul = None
+    logger.info("Soul shut down.")
+
+
+def _init_skills():
+    """Initialize Skills subsystem."""
+    from skills.registry import SkillRegistry, SkillEntry, SkillOwnership
+    from skills.executor import SkillExecutor
+
+    skill_registry = SkillRegistry(data_dir="/home/lancelot/data")
+    for builtin_name in ("echo", "command_runner", "repo_writer", "service_runner",
+                         "network_client", "telegram_send", "warroom_send", "schedule_job"):
+        if not skill_registry.get_skill(builtin_name):
+            skill_registry._skills[builtin_name] = SkillEntry(
+                name=builtin_name, version="1.0.0",
+                enabled=True, ownership=SkillOwnership.SYSTEM,
+            )
+    skill_registry._save()
+
+    executor = SkillExecutor(registry=skill_registry)
+    main_orchestrator.skill_executor = executor
+    if main_orchestrator.task_runner:
+        main_orchestrator.task_runner.skill_executor = executor
+    logger.info("Skills initialized: %d skills", len(skill_registry.list_skills()))
+    return {"registry": skill_registry, "executor": executor}
+
+
+def _shutdown_skills(objects):
+    """Shut down Skills subsystem."""
+    main_orchestrator.skill_executor = None
+    if main_orchestrator.task_runner:
+        main_orchestrator.task_runner.skill_executor = None
+    logger.info("Skills shut down.")
+
+
+def _init_scheduler():
+    """Initialize Scheduler subsystem."""
+    global scheduler_service
+    from scheduler.service import SchedulerService
+
+    service = SchedulerService(
+        data_dir="/home/lancelot/data/scheduler",
+        config_dir="config",
+    )
+    scheduler_service = service
+    count = service.register_from_config()
+    main_orchestrator.scheduler_service = service
+    logger.info("Scheduler initialized: %d jobs registered", count)
+
+    # Connect job executor if skills available
+    job_exec = None
+    skill_executor = main_orchestrator.skill_executor
+    if skill_executor:
+        from scheduler.executor import JobExecutor
+        job_exec = JobExecutor(
+            scheduler_service=service,
+            skill_execute_fn=lambda name, inputs: skill_executor.run(name, inputs),
+        )
+        main_orchestrator.job_executor = job_exec
+        job_exec.start_tick_loop()
+        logger.info("Job executor wired to skill executor.")
+
+    # Init scheduler API
+    try:
+        from scheduler_api import init_scheduler_api
+        init_scheduler_api(service=service, executor=job_exec)
+        logger.info("Scheduler API initialized.")
+    except Exception as e:
+        logger.warning("Scheduler API initialization failed: %s", e)
+
+    return {"service": service, "job_executor": job_exec}
+
+
+def _shutdown_scheduler(objects):
+    """Shut down Scheduler subsystem."""
+    global scheduler_service
+    if objects.get("job_executor"):
+        objects["job_executor"].stop()
+        logger.info("Job executor stopped.")
+    main_orchestrator.scheduler_service = None
+    main_orchestrator.job_executor = None
+    scheduler_service = None
+    logger.info("Scheduler shut down.")
+
+
+def _init_health_monitor():
+    """Initialize Health Monitor subsystem."""
+    from health.monitor import HealthMonitor, HealthCheck
+    from health.api import set_snapshot_provider
+
+    checks = [
+        HealthCheck(
+            name="llm_provider",
+            check_fn=lambda: main_orchestrator.provider is not None,
+            degraded_reason="LLM provider not initialized",
+        ),
+        HealthCheck(
+            name="onboarding_ready",
+            check_fn=lambda: onboarding_orch._determine_state() == "READY",
+            degraded_reason="Onboarding not complete",
+        ),
+    ]
+    if main_orchestrator.scheduler_service:
+        checks.append(HealthCheck(
+            name="scheduler",
+            check_fn=lambda: main_orchestrator.scheduler_service is not None,
+            degraded_reason="Scheduler not available",
+        ))
+
+    monitor = HealthMonitor(checks=checks, interval_s=30.0)
+    monitor.start_monitor()
+    set_snapshot_provider(lambda: monitor.latest_snapshot)
+    logger.info("Health monitor started.")
+    return {"monitor": monitor}
+
+
+def _shutdown_health_monitor(objects):
+    """Shut down Health Monitor subsystem."""
+    if objects.get("monitor"):
+        objects["monitor"].stop_monitor()
+    logger.info("Health monitor stopped.")
+
+
+def _init_bal():
+    """Initialize Business Automation Layer (BAL) subsystem."""
+    from bal.config import load_bal_config
+    from bal.database import BALDatabase
+    from bal.receipts import emit_bal_receipt
+    from bal.clients.api import init_client_api
+    from bal.clients.repository import ClientRepository
+
+    bal_config = load_bal_config()
+    bal_db = BALDatabase(data_dir=bal_config.bal_data_dir)
+
+    main_orchestrator._bal_config = bal_config
+    main_orchestrator._bal_db = bal_db
+
+    bal_client_repo = ClientRepository(bal_db)
+    init_client_api(bal_client_repo)
+    main_orchestrator._bal_client_repo = bal_client_repo
+    logger.info("BAL Client Manager API initialized.")
+
+    emit_bal_receipt(
+        event_type="client",
+        action_name="bal_startup",
+        inputs={
+            "phase": "2_client_manager",
+            "intake_enabled": bal_config.bal_intake,
+            "repurpose_enabled": bal_config.bal_repurpose,
+            "delivery_enabled": bal_config.bal_delivery,
+            "billing_enabled": bal_config.bal_billing,
+        },
+    )
+    logger.info(
+        "BAL initialized: intake=%s, repurpose=%s, delivery=%s, billing=%s",
+        bal_config.bal_intake, bal_config.bal_repurpose,
+        bal_config.bal_delivery, bal_config.bal_billing,
+    )
+    return {"config": bal_config, "db": bal_db, "repo": bal_client_repo}
+
+
+def _shutdown_bal(objects):
+    """Shut down BAL subsystem."""
+    if objects.get("db"):
+        try:
+            objects["db"].close()
+        except Exception:
+            pass
+    main_orchestrator._bal_config = None
+    main_orchestrator._bal_db = None
+    main_orchestrator._bal_client_repo = None
+    logger.info("BAL shut down.")
+
+
 @app.on_event("startup")
 async def startup_event():
     global _startup_time
@@ -169,142 +436,80 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Feature flag logging failed: {e}")
 
-    # ===== PHASE 2: MEMORY vNEXT =====
+    # ===== ALWAYS MOUNT SUBSYSTEM ROUTERS =====
+    # Routes are gated by middleware when their flag is OFF.
     try:
-        from feature_flags import FEATURE_MEMORY_VNEXT
-        if FEATURE_MEMORY_VNEXT:
-            from pathlib import Path
-            from memory.store import CoreBlockStore
-            from memory.sqlite_store import MemoryStoreManager
-            from memory.compiler import ContextCompilerService
-            from memory.api import router as memory_router
-
-            mem_data_dir = Path("/home/lancelot/data")
-            core_store = CoreBlockStore(data_dir=mem_data_dir)
-            core_store.initialize()
-            # Bootstrap human block from USER.md if it exists
-            user_md = mem_data_dir / "USER.md"
-            if user_md.exists():
-                core_store.bootstrap_from_user_file(str(user_md))
-
-            store_manager = MemoryStoreManager(data_dir=mem_data_dir)
-            compiler_svc = ContextCompilerService(
-                data_dir=mem_data_dir,
-                core_store=core_store,
-                memory_manager=store_manager,
-            )
-
-            app.include_router(memory_router)
-            # Wire memory into orchestrator
-            main_orchestrator._memory_enabled = True
-            main_orchestrator.context_compiler = compiler_svc
-            logger.info("Memory vNext initialized and wired.")
-        else:
-            logger.info("Memory vNext disabled by feature flag.")
+        from memory.api import router as memory_router
+        app.include_router(memory_router)
     except Exception as e:
-        logger.error(f"Memory vNext initialization failed: {e}")
-        main_orchestrator._memory_enabled = False
+        logger.warning("Memory API router mount failed: %s", e)
 
-    # ===== PHASE 3: SOUL SYSTEM =====
     try:
-        from feature_flags import FEATURE_SOUL
-        if FEATURE_SOUL:
-            from soul.store import load_active_soul, SoulStoreError
-            try:
-                from soul.api import router as soul_router
-                active_soul = load_active_soul()
-
-                # BAL: Apply composable soul overlays if FEATURE_BAL is enabled
-                try:
-                    from feature_flags import FEATURE_BAL
-                    if FEATURE_BAL:
-                        from soul.layers import load_overlays, merge_soul
-                        overlays = load_overlays()
-                        if overlays:
-                            active_soul = merge_soul(active_soul, overlays)
-                            logger.info("Soul overlays applied: %s",
-                                        [o.overlay_name for o in overlays])
-                except Exception as exc:
-                    logger.warning(f"Soul overlay loading failed: {exc} — using base soul")
-
-                main_orchestrator.soul = active_soul
-                app.include_router(soul_router)
-                logger.info(f"Soul loaded: version={active_soul.version}")
-            except SoulStoreError as exc:
-                logger.error(f"Soul load failed: {exc} — running without soul constraints")
-            except Exception as exc:
-                logger.warning(f"Soul subsystem not available: {exc}")
-        else:
-            logger.info("Soul disabled by feature flag.")
-    except ImportError:
-        logger.info("Soul module not available.")
-
-    # ===== PHASE 4: SCHEDULER + SKILLS =====
-    _scheduler_service = None
-    _skill_executor = None
-    job_executor = None
-    try:
-        from feature_flags import FEATURE_SKILLS
-        if FEATURE_SKILLS:
-            from skills.registry import SkillRegistry
-            from skills.executor import SkillExecutor
-            skill_registry = SkillRegistry(data_dir="/home/lancelot/data")
-            # Fix Pack V5: Register builtins so executor can find them
-            from skills.registry import SkillEntry, SkillOwnership
-            for builtin_name in ("echo", "command_runner", "repo_writer", "service_runner", "network_client", "telegram_send", "warroom_send", "schedule_job"):
-                if not skill_registry.get_skill(builtin_name):
-                    skill_registry._skills[builtin_name] = SkillEntry(
-                        name=builtin_name, version="1.0.0",
-                        enabled=True, ownership=SkillOwnership.SYSTEM,
-                    )
-            skill_registry._save()
-            _skill_executor = SkillExecutor(registry=skill_registry)
-            main_orchestrator.skill_executor = _skill_executor
-            # Fix Pack V5: Also wire into TaskRunner (created before gateway sets skill_executor)
-            if main_orchestrator.task_runner:
-                main_orchestrator.task_runner.skill_executor = _skill_executor
-            logger.info(f"Skills initialized: {len(skill_registry.list_skills())} skills")
+        from soul.api import router as soul_router
+        app.include_router(soul_router)
     except Exception as e:
-        logger.warning(f"Skills initialization failed: {e}")
+        logger.warning("Soul API router mount failed: %s", e)
 
     try:
-        from feature_flags import FEATURE_SCHEDULER
-        if FEATURE_SCHEDULER:
-            from scheduler.service import SchedulerService
-            global scheduler_service
-            _scheduler_service = SchedulerService(
-                data_dir="/home/lancelot/data/scheduler",
-                config_dir="config",
-            )
-            scheduler_service = _scheduler_service  # expose for schedule_job skill
-            count = _scheduler_service.register_from_config()
-            main_orchestrator.scheduler_service = _scheduler_service
-            logger.info(f"Scheduler initialized: {count} jobs registered")
-            # Connect job executor if skills available
-            if _skill_executor:
-                from scheduler.executor import JobExecutor
-                job_executor = JobExecutor(
-                    scheduler_service=_scheduler_service,
-                    skill_execute_fn=lambda name, inputs: _skill_executor.run(name, inputs),
-                )
-                main_orchestrator.job_executor = job_executor
-                job_executor.start_tick_loop()
-                logger.info("Job executor wired to skill executor.")
+        from scheduler_api import router as scheduler_router
+        app.include_router(scheduler_router)
     except Exception as e:
-        logger.warning(f"Scheduler initialization failed: {e}")
+        logger.warning("Scheduler API router mount failed: %s", e)
 
-    # ===== SCHEDULER API =====
     try:
-        from scheduler_api import router as scheduler_router, init_scheduler_api
-        if _scheduler_service:
-            init_scheduler_api(
-                service=_scheduler_service,
-                executor=job_executor,
-            )
-            app.include_router(scheduler_router)
-            logger.info("Scheduler API initialized.")
+        from health.api import router as health_api_router
+        app.include_router(health_api_router)
     except Exception as e:
-        logger.warning(f"Scheduler API initialization failed: {e}")
+        logger.warning("Health API router mount failed: %s", e)
+
+    try:
+        from bal.clients.api import router as bal_client_router
+        app.include_router(bal_client_router)
+    except Exception as e:
+        logger.warning("BAL Client API router mount failed: %s", e)
+
+    # ===== REGISTER SUBSYSTEMS WITH HOT-TOGGLE MANAGER =====
+    subsystem_manager.register("memory", "FEATURE_MEMORY_VNEXT", _init_memory, _shutdown_memory, ["/memory"])
+    subsystem_manager.register("soul", "FEATURE_SOUL", _init_soul, _shutdown_soul, ["/soul"])
+    subsystem_manager.register("skills", "FEATURE_SKILLS", _init_skills, _shutdown_skills, [])
+    subsystem_manager.register("scheduler", "FEATURE_SCHEDULER", _init_scheduler, _shutdown_scheduler, ["/api/scheduler"])
+    subsystem_manager.register("health_monitor", "FEATURE_HEALTH_MONITOR", _init_health_monitor, _shutdown_health_monitor, ["/health"])
+    subsystem_manager.register("bal", "FEATURE_BAL", _init_bal, _shutdown_bal, ["/api/v1/clients"])
+
+    # ===== CONDITIONALLY START SUBSYSTEMS =====
+    from feature_flags import (
+        FEATURE_MEMORY_VNEXT, FEATURE_SOUL, FEATURE_SKILLS,
+        FEATURE_SCHEDULER, FEATURE_HEALTH_MONITOR, FEATURE_BAL,
+    )
+
+    if FEATURE_MEMORY_VNEXT:
+        try:
+            subsystem_manager.start("memory")
+        except Exception as e:
+            logger.error("Memory vNext initialization failed: %s", e)
+            main_orchestrator._memory_enabled = False
+    else:
+        logger.info("Memory vNext disabled by feature flag.")
+
+    if FEATURE_SOUL:
+        try:
+            subsystem_manager.start("soul")
+        except Exception as e:
+            logger.warning("Soul initialization failed: %s", e)
+    else:
+        logger.info("Soul disabled by feature flag.")
+
+    if FEATURE_SKILLS:
+        try:
+            subsystem_manager.start("skills")
+        except Exception as e:
+            logger.warning("Skills initialization failed: %s", e)
+
+    if FEATURE_SCHEDULER:
+        try:
+            subsystem_manager.start("scheduler")
+        except Exception as e:
+            logger.warning("Scheduler initialization failed: %s", e)
 
     # ===== PHASE 4b: LOCAL MODEL CLIENT (V8) =====
     try:
@@ -318,39 +523,21 @@ async def startup_event():
             else:
                 logger.warning("Local model client created but not healthy — local agentic disabled")
     except Exception as e:
-        logger.warning(f"Local model client initialization failed: {e}")
+        logger.warning("Local model client initialization failed: %s", e)
 
-    # ===== PHASE 5: HEALTH MONITOR =====
-    try:
-        from feature_flags import FEATURE_HEALTH_MONITOR
-        if FEATURE_HEALTH_MONITOR:
-            from health.monitor import HealthMonitor, HealthCheck
-            from health.api import router as health_api_router, set_snapshot_provider
-            checks = [
-                HealthCheck(
-                    name="llm_provider",
-                    check_fn=lambda: main_orchestrator.provider is not None,
-                    degraded_reason="LLM provider not initialized",
-                ),
-                HealthCheck(
-                    name="onboarding_ready",
-                    check_fn=lambda: onboarding_orch._determine_state() == "READY",
-                    degraded_reason="Onboarding not complete",
-                ),
-            ]
-            if _scheduler_service:
-                checks.append(HealthCheck(
-                    name="scheduler",
-                    check_fn=lambda: _scheduler_service is not None,
-                    degraded_reason="Scheduler not available",
-                ))
-            health_monitor = HealthMonitor(checks=checks, interval_s=30.0)
-            health_monitor.start_monitor()
-            set_snapshot_provider(lambda: health_monitor.latest_snapshot)
-            app.include_router(health_api_router)
-            logger.info("Health monitor started.")
-    except Exception as e:
-        logger.warning(f"Health monitor initialization failed: {e}")
+    if FEATURE_HEALTH_MONITOR:
+        try:
+            subsystem_manager.start("health_monitor")
+        except Exception as e:
+            logger.warning("Health monitor initialization failed: %s", e)
+
+    if FEATURE_BAL:
+        try:
+            subsystem_manager.start("bal")
+        except Exception as e:
+            logger.warning("BAL initialization failed: %s", e)
+    else:
+        logger.info("BAL disabled by feature flag.")
 
     # ===== PHASE 6: CONTROL PLANE =====
     try:
@@ -464,53 +651,6 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Connectors initialization failed: {e}")
 
-    # ===== BUSINESS AUTOMATION LAYER (BAL) =====
-    try:
-        from feature_flags import FEATURE_BAL
-        if FEATURE_BAL:
-            from bal.config import load_bal_config
-            from bal.database import BALDatabase
-            from bal.receipts import emit_bal_receipt
-
-            _bal_config = load_bal_config()
-            _bal_db = BALDatabase(data_dir=_bal_config.bal_data_dir)
-
-            # Attach to orchestrator for later use by BAL subsystems
-            main_orchestrator._bal_config = _bal_config
-            main_orchestrator._bal_db = _bal_db
-
-            # Client Manager API
-            from bal.clients.api import router as bal_client_router, init_client_api
-            from bal.clients.repository import ClientRepository
-
-            _bal_client_repo = ClientRepository(_bal_db)
-            init_client_api(_bal_client_repo)
-            app.include_router(bal_client_router)
-            main_orchestrator._bal_client_repo = _bal_client_repo
-            logger.info("BAL Client Manager API mounted at /api/v1/clients")
-
-            # Emit startup receipt
-            emit_bal_receipt(
-                event_type="client",
-                action_name="bal_startup",
-                inputs={
-                    "phase": "2_client_manager",
-                    "intake_enabled": _bal_config.bal_intake,
-                    "repurpose_enabled": _bal_config.bal_repurpose,
-                    "delivery_enabled": _bal_config.bal_delivery,
-                    "billing_enabled": _bal_config.bal_billing,
-                },
-            )
-            logger.info(
-                "BAL initialized: intake=%s, repurpose=%s, delivery=%s, billing=%s",
-                _bal_config.bal_intake, _bal_config.bal_repurpose,
-                _bal_config.bal_delivery, _bal_config.bal_billing,
-            )
-        else:
-            logger.info("BAL disabled by feature flag.")
-    except Exception as e:
-        logger.warning(f"BAL initialization failed: {e}")
-
     # ===== PHASE 6b: USAGE TRACKER + PERSISTENCE =====
     try:
         from usage_tracker import UsageTracker
@@ -622,18 +762,15 @@ async def shutdown_event():
     """F8: Graceful shutdown."""
     logger.info("Lancelot Gateway shutting down.")
     try:
+        # Stop all hot-toggleable subsystems (scheduler threads, health monitor, BAL DB, etc.)
+        subsystem_manager.stop_all()
+
         librarian.stop()
         await antigravity.stop()
         if telegram_bot:
             telegram_bot.stop_polling()
         if chat_poller:
             chat_poller.stop_polling()
-        # Stop health monitor if running
-        try:
-            if 'health_monitor' in dir() and health_monitor:
-                health_monitor.stop_monitor()
-        except Exception:
-            pass
         # Flush usage persistence to disk
         try:
             if hasattr(main_orchestrator, 'usage_tracker') and main_orchestrator.usage_tracker:

@@ -5,6 +5,31 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.1.3] - 2026-02-16
+
+### Added
+- **Hot-Toggle Feature Flags**: All feature flags are now hot-toggleable at runtime without a
+  container restart. Core subsystems (Soul, Skills, Scheduler, Health Monitor, Memory vNext, BAL)
+  are lazily initialized when toggled ON and gracefully shut down when toggled OFF.
+- **SubsystemManager**: New lifecycle registry (`subsystem_manager.py`) tracks init/shutdown
+  functions for each feature-gated subsystem. Enables start/stop/status operations.
+- **Request-Gating Middleware**: FastAPI middleware gates disabled subsystem routes with HTTP 503
+  responses. Routes are always mounted but only accessible when their flag is ON.
+- **BAL Flag Metadata**: Added `FEATURE_BAL` to the flags API metadata registry so it appears
+  in the War Room Kill Switches page with proper description, category, and warnings.
+
+### Changed
+- `RESTART_REQUIRED_FLAGS` emptied — no flags require restart anymore.
+- Gateway startup refactored: subsystem init/shutdown extracted into standalone functions,
+  all subsystem routers always mounted (gated by middleware).
+- Gateway shutdown uses `subsystem_manager.stop_all()` for clean teardown of all subsystems
+  including the previously missing `job_executor.stop()`.
+- Toggle and set API endpoints now call SubsystemManager to hot-toggle subsystems.
+
+### Fixed
+- **Missing job_executor.stop()**: The scheduler's job executor background thread was never
+  stopped during gateway shutdown. Now handled by SubsystemManager.
+
 ## [0.1.2] - 2026-02-15
 
 ### Added
