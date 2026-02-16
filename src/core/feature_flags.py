@@ -41,14 +41,62 @@ Approval Pattern Learning Environment variables:
 
 from __future__ import annotations
 
+import json
 import os
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Persistent flag state file — survives container restarts via Docker volume.
+# Uses .flag_state.json (dotfile) to avoid being picked up by the librarian.
+_FLAG_STATE_PATH = Path(os.environ.get(
+    "LANCELOT_FLAG_STATE_PATH",
+    "/home/lancelot/data/.flag_state.json",
+))
+_persisted_state: dict[str, bool] = {}
+
+
+def _load_persisted_state() -> dict[str, bool]:
+    """Load previously persisted flag state from disk."""
+    global _persisted_state
+    try:
+        if _FLAG_STATE_PATH.exists():
+            with open(_FLAG_STATE_PATH, "r") as f:
+                _persisted_state = json.load(f)
+                logger.info("Loaded %d persisted flag states from %s", len(_persisted_state), _FLAG_STATE_PATH)
+    except Exception as e:
+        logger.warning("Failed to load persisted flag state: %s", e)
+        _persisted_state = {}
+    return _persisted_state
+
+
+def _save_persisted_state() -> None:
+    """Save current flag overrides to disk for persistence across restarts."""
+    try:
+        _FLAG_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_FLAG_STATE_PATH, "w") as f:
+            json.dump(_persisted_state, f, indent=2)
+    except Exception as e:
+        logger.warning("Failed to save persisted flag state: %s", e)
+
+
+# Load persisted state on module import (before flags are initialized)
+_load_persisted_state()
+
 
 def _env_bool(key: str, default: bool = True) -> bool:
-    """Read a boolean from env. Accepts 'true', '1', 'yes' (case-insensitive)."""
+    """Read a boolean from env, with persisted state taking priority.
+
+    Priority order:
+    1. Persisted state file (flag_state.json) — written by War Room toggles
+    2. Environment variable (.env / docker-compose)
+    3. Hardcoded default
+    """
+    # Check persisted state first (War Room toggles survive restart)
+    if key in _persisted_state:
+        return _persisted_state[key]
+
     val = os.environ.get(key, "").strip().lower()
     if not val:
         return default
@@ -114,7 +162,8 @@ RESTART_REQUIRED_FLAGS = frozenset({
 def toggle_flag(name: str) -> bool:
     """Toggle a feature flag at runtime. Returns the new value.
 
-    Updates both the module global and os.environ so reload_flags() preserves it.
+    Updates the module global, os.environ, and persists to disk so the
+    flag state survives container restarts.
     Raises ValueError if the flag name is not recognized.
     """
     import feature_flags as _self
@@ -126,18 +175,22 @@ def toggle_flag(name: str) -> bool:
     new_val = not current
     setattr(_self, name, new_val)
     os.environ[name] = "true" if new_val else "false"
-    logger.info("Flag toggled: %s = %s", name, new_val)
+    _persisted_state[name] = new_val
+    _save_persisted_state()
+    logger.info("Flag toggled: %s = %s (persisted)", name, new_val)
     return new_val
 
 
 def set_flag(name: str, value: bool) -> None:
-    """Set a feature flag to a specific value at runtime."""
+    """Set a feature flag to a specific value at runtime. Persists to disk."""
     import feature_flags as _self
     if not hasattr(_self, name):
         raise ValueError(f"Unknown flag: {name}")
     setattr(_self, name, value)
     os.environ[name] = "true" if value else "false"
-    logger.info("Flag set: %s = %s", name, value)
+    _persisted_state[name] = value
+    _save_persisted_state()
+    logger.info("Flag set: %s = %s (persisted)", name, value)
 
 
 def reload_flags() -> None:
