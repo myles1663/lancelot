@@ -5,6 +5,19 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.1.5] - 2026-02-16
+
+### Added
+- **Health Dashboard**: New War Room page at `/health` showing full system health detail —
+  component status (gateway, orchestrator, sentry, vault, memory), readiness state (LLM, scheduler,
+  onboarding), degraded reasons list, uptime, version, and Crusader mode status. All data polls
+  live every 5 seconds.
+- **VitalsBar Armor Popover**: Hovering over the Armor vital in the header now shows a popover
+  listing each degraded reason (or "All systems operational" if healthy). Clicking the Armor vital
+  navigates to the Health Dashboard. Users can now immediately see what's wrong instead of just
+  a percentage.
+- **Health link in sidebar**: Added "Health" as first item in the SYSTEM navigation group.
+
 ## [0.1.4] - 2026-02-16
 
 ### Added

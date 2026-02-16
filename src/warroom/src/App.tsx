@@ -15,6 +15,7 @@ import {
   KillSwitches,
   Connectors,
   BusinessDashboard,
+  HealthDashboard,
 } from '@/pages'
 
 function App() {
@@ -37,6 +38,7 @@ function App() {
         <Route path="/scheduler" element={<SchedulerPanel />} />
 
         {/* SYSTEM */}
+        <Route path="/health" element={<HealthDashboard />} />
         <Route path="/setup" element={<SetupRecovery />} />
         <Route path="/connectors" element={<Connectors />} />
         <Route path="/costs" element={<CostTracker />} />

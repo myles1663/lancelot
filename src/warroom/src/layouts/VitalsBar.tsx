@@ -1,3 +1,5 @@
+import { useState, useRef, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { usePolling } from '@/hooks'
 import { fetchHealth, fetchHealthReady, fetchSoulStatus } from '@/api'
 import { ProgressBar } from '@/components'
@@ -48,6 +50,74 @@ function Vital({ label, children, tooltip }: VitalProps) {
   )
 }
 
+interface ArmorPopoverProps {
+  armorPct: number
+  degradedReasons: string[]
+}
+
+function ArmorPopover({ armorPct, degradedReasons }: ArmorPopoverProps) {
+  const navigate = useNavigate()
+  const [open, setOpen] = useState(false)
+  const timeoutRef = useRef<ReturnType<typeof setTimeout>>()
+
+  const handleMouseEnter = () => {
+    clearTimeout(timeoutRef.current)
+    setOpen(true)
+  }
+
+  const handleMouseLeave = () => {
+    timeoutRef.current = setTimeout(() => setOpen(false), 150)
+  }
+
+  useEffect(() => {
+    return () => clearTimeout(timeoutRef.current)
+  }, [])
+
+  return (
+    <div
+      className="flex flex-col min-w-[120px] group relative cursor-pointer"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onClick={() => navigate('/health')}
+    >
+      <span className="text-[10px] uppercase tracking-wider text-text-muted mb-0.5">
+        Armor
+      </span>
+      <span className={`text-xs font-semibold font-mono ${stateColor(armorPct, [70, 90])}`}>
+        {armorPct}%
+      </span>
+      <ProgressBar value={armorPct} color={barColor(armorPct, [70, 90])} className="mt-1" />
+
+      {open && (
+        <div
+          className="absolute top-full left-0 mt-2 w-64 bg-surface-card border border-border-default rounded-lg shadow-lg p-3 z-50"
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
+        >
+          <p className="text-[10px] uppercase tracking-wider text-text-muted mb-2">
+            System Health
+          </p>
+          {degradedReasons.length === 0 ? (
+            <p className="text-xs text-state-healthy">All systems operational</p>
+          ) : (
+            <ul className="space-y-1.5">
+              {degradedReasons.map((reason, i) => (
+                <li key={i} className="flex items-start gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-state-degraded mt-1.5 flex-shrink-0" />
+                  <span className="text-xs text-text-secondary">{reason}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-[10px] text-text-muted mt-2 pt-2 border-t border-border-default">
+            Click to open Health Dashboard
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function VitalsBar() {
   const { data: health } = usePolling<HealthCheckResponse>({
     fetcher: fetchHealth,
@@ -94,16 +164,11 @@ export function VitalsBar() {
         <ProgressBar value={identityPct} color={barColor(identityPct)} className="mt-1" />
       </Vital>
 
-      {/* Armor Integrity */}
-      <Vital
-        label="Armor"
-        tooltip="Governance pipeline health. Policy cache, verification pass rate, receipt chains."
-      >
-        <span className={`text-xs font-semibold font-mono ${stateColor(armorPct, [70, 90])}`}>
-          {armorPct}%
-        </span>
-        <ProgressBar value={armorPct} color={barColor(armorPct, [70, 90])} className="mt-1" />
-      </Vital>
+      {/* Armor Integrity — hover for details, click for Health page */}
+      <ArmorPopover
+        armorPct={armorPct}
+        degradedReasons={ready?.degraded_reasons ?? []}
+      />
 
       {/* Connection */}
       <Vital
