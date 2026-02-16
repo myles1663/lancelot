@@ -22,6 +22,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from update_checker import read_current_version
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ async def system_info():
             pass
 
         return {
-            "version": "8.0",
+            "version": read_current_version(),
             "uptime_seconds": uptime,
             "python_version": platform.python_version(),
             "platform": platform.platform(),
