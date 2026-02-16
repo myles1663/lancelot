@@ -389,6 +389,7 @@ async def startup_event():
             trust_ledger=_trust_ledger_inst,
             rule_engine=_rule_engine_inst,
             decision_log=_decision_log_inst,
+            mcp_sentry=sentry,
         )
         app.include_router(gov_router)
         logger.info("Governance API initialized.")

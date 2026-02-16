@@ -3,6 +3,9 @@ Governance API — /api/governance/*
 
 Exposes governance pipeline stats, decisions, and approval queue
 for the War Room Governance Dashboard.
+
+Includes MCP Sentry T3 action approvals alongside trust graduation
+proposals and APL rule proposals.
 """
 
 import logging
@@ -18,20 +21,43 @@ router = APIRouter(prefix="/api/governance", tags=["governance"])
 _trust_ledger = None
 _rule_engine = None
 _decision_log = None
+_mcp_sentry = None
 
 
-def init_governance_api(trust_ledger=None, rule_engine=None, decision_log=None) -> None:
+def init_governance_api(trust_ledger=None, rule_engine=None, decision_log=None, mcp_sentry=None) -> None:
     """Wire governance subsystem instances."""
-    global _trust_ledger, _rule_engine, _decision_log
+    global _trust_ledger, _rule_engine, _decision_log, _mcp_sentry
     _trust_ledger = trust_ledger
     _rule_engine = rule_engine
     _decision_log = decision_log
-    logger.info("Governance API initialised (trust=%s, rules=%s, decisions=%s)",
-                _trust_ledger is not None, _rule_engine is not None, _decision_log is not None)
+    _mcp_sentry = mcp_sentry
+    logger.info("Governance API initialised (trust=%s, rules=%s, decisions=%s, sentry=%s)",
+                _trust_ledger is not None, _rule_engine is not None,
+                _decision_log is not None, _mcp_sentry is not None)
 
 
 def _safe_error(status_code: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": message, "status": status_code})
+
+
+def _log_sentry_decision(approval_id: str, capability: str, target: str, decision: str, reason: str) -> None:
+    """Record a sentry approval/denial in the decision log for the Recent Decisions panel."""
+    if _decision_log is None:
+        return
+    try:
+        from governance.approval_learning.models import DecisionContext, RiskTier
+        context = DecisionContext.from_action(
+            capability=capability,
+            target=target,
+            risk_tier=RiskTier.T3_IRREVERSIBLE,
+        )
+        _decision_log.record(
+            context=context,
+            decision=decision,
+            reason=reason,
+        )
+    except Exception as exc:
+        logger.warning("Failed to log sentry decision: %s", exc)
 
 
 @router.get("/stats")
@@ -96,10 +122,25 @@ async def governance_decisions(
 
 @router.get("/approvals")
 async def governance_approvals():
-    """Pending graduation proposals and APL proposals requiring action."""
+    """Pending T3 action approvals, graduation proposals, and APL proposals."""
     try:
         pending = []
 
+        # MCP Sentry T3 action approvals
+        if _mcp_sentry:
+            _mcp_sentry._cleanup_expired()
+            for req_id, req in _mcp_sentry.pending_requests.items():
+                if req.get("status") == "PENDING":
+                    pending.append({
+                        "id": req_id,
+                        "type": "sentry",
+                        "capability": req.get("tool", "unknown"),
+                        "params": req.get("params", {}),
+                        "status": "pending",
+                        "created_at": req.get("timestamp", ""),
+                    })
+
+        # Trust graduation proposals
         if _trust_ledger:
             for p in _trust_ledger.pending_proposals():
                 pending.append({
@@ -114,6 +155,7 @@ async def governance_approvals():
                     "created_at": p.created_at,
                 })
 
+        # APL rule proposals
         if _rule_engine:
             for rule in _rule_engine.list_rules(status="proposed"):
                 pending.append({
@@ -134,12 +176,26 @@ async def governance_approvals():
 
 @router.post("/approvals/{approval_id}/approve")
 async def approve_item(approval_id: str, request: Request):
-    """Approve a graduation proposal or APL rule."""
+    """Approve a T3 action, graduation proposal, or APL rule."""
     try:
         data = await request.json() if request.headers.get("content-type") else {}
         reason = data.get("reason", "Approved via War Room")
 
-        # Try graduation proposal first
+        # Try MCP Sentry T3 action first
+        if _mcp_sentry and approval_id in _mcp_sentry.pending_requests:
+            req = _mcp_sentry.pending_requests[approval_id]
+            if _mcp_sentry.approve_request(approval_id):
+                logger.info("Sentry approval granted via War Room: %s (reason: %s)", approval_id, reason)
+                _log_sentry_decision(
+                    approval_id,
+                    capability=req.get("tool", "unknown"),
+                    target=str(req.get("params", {})),
+                    decision="approved",
+                    reason=reason,
+                )
+                return {"status": "approved", "id": approval_id, "type": "sentry"}
+
+        # Try graduation proposal
         if _trust_ledger:
             for p in _trust_ledger.pending_proposals():
                 if p.id == approval_id:
@@ -161,17 +217,33 @@ async def approve_item(approval_id: str, request: Request):
 
 @router.post("/approvals/{approval_id}/deny")
 async def deny_item(approval_id: str, request: Request):
-    """Deny a graduation proposal or APL rule."""
+    """Deny a T3 action, graduation proposal, or APL rule."""
     try:
         data = await request.json() if request.headers.get("content-type") else {}
         reason = data.get("reason", "Denied via War Room")
 
+        # Try MCP Sentry T3 action first
+        if _mcp_sentry and approval_id in _mcp_sentry.pending_requests:
+            req = _mcp_sentry.pending_requests[approval_id]
+            if _mcp_sentry.deny_request(approval_id):
+                logger.info("Sentry approval denied via War Room: %s (reason: %s)", approval_id, reason)
+                _log_sentry_decision(
+                    approval_id,
+                    capability=req.get("tool", "unknown"),
+                    target=str(req.get("params", {})),
+                    decision="denied",
+                    reason=reason,
+                )
+                return {"status": "denied", "id": approval_id, "type": "sentry"}
+
+        # Try graduation proposal
         if _trust_ledger:
             for p in _trust_ledger.pending_proposals():
                 if p.id == approval_id:
                     _trust_ledger.apply_graduation(approval_id, approved=False, reason=reason)
                     return {"status": "denied", "id": approval_id, "type": "graduation"}
 
+        # Try APL rule
         if _rule_engine:
             for rule in _rule_engine.list_rules(status="proposed"):
                 if rule.id == approval_id:

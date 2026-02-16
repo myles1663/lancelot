@@ -53,10 +53,14 @@ export function GovernanceDashboard() {
           ) : (
             <div className="space-y-3">
               {approvals.map((item: ApprovalItem) => (
-                <div key={item.id} className="flex items-center justify-between p-3 bg-surface-card-elevated rounded-md border border-border-default">
+                <div key={item.id} className={`flex items-center justify-between p-3 bg-surface-card-elevated rounded-md border ${item.type === 'sentry' ? 'border-state-warning/50' : 'border-border-default'}`}>
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-mono text-text-muted">{item.type}</span>
+                      {item.type === 'sentry' ? (
+                        <span className="text-xs font-mono px-1.5 py-0.5 bg-state-warning/15 text-state-warning rounded">T3 ACTION</span>
+                      ) : (
+                        <span className="text-xs font-mono text-text-muted">{item.type}</span>
+                      )}
                       {item.current_tier != null && <TierBadge tier={item.current_tier} compact />}
                       {item.proposed_tier != null && (
                         <>
@@ -66,6 +70,9 @@ export function GovernanceDashboard() {
                       )}
                     </div>
                     <p className="text-sm text-text-primary mt-1">{item.name || item.capability || item.id}</p>
+                    {item.type === 'sentry' && item.params && Object.keys(item.params).length > 0 && (
+                      <p className="text-xs text-text-muted mt-0.5 font-mono truncate max-w-xs">{JSON.stringify(item.params)}</p>
+                    )}
                   </div>
                   <div className="flex gap-2">
                     <button

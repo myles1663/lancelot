@@ -1823,13 +1823,35 @@ class LancelotOrchestrator:
 
                 # Safety classification
                 safety = self._classify_tool_call_safety(skill_name, inputs)
+                sentry_req_id = None
+                sentry_blocked = False
 
-                if safety == "escalate" and not allow_writes:
-                    result_content = f"BLOCKED: {skill_name} requires user approval."
+                # MCP Sentry gate: all escalated ops require sentry approval
+                if safety == "escalate":
+                    if hasattr(self, 'sentry') and self.sentry is not None:
+                        try:
+                            from mcp_sentry import MCPSentry
+                            if isinstance(self.sentry, MCPSentry):
+                                perm = self.sentry.check_permission(skill_name, inputs)
+                                sentry_req_id = perm.get("request_id")
+                                if perm["status"] == "APPROVED":
+                                    safety = "auto"
+                                elif perm["status"] == "PENDING":
+                                    sentry_blocked = True
+                        except Exception:
+                            pass
+                    elif not allow_writes:
+                        sentry_blocked = True
+
+                if sentry_blocked:
+                    result_content = f"BLOCKED: {skill_name} requires Commander approval. Approve in War Room."
+                    if sentry_req_id:
+                        result_content += f" (Approval ID: {sentry_req_id})"
                     tool_receipts.append({
                         "skill": skill_name,
                         "inputs": inputs,
-                        "result": "ESCALATED",
+                        "result": "ESCALATED — needs Commander approval",
+                        "approval_id": sentry_req_id,
                     })
                 else:
                     # Execute the skill
@@ -2055,17 +2077,39 @@ class LancelotOrchestrator:
 
                 # Safety classification
                 safety = self._classify_tool_call_safety(skill_name, inputs)
+                sentry_req_id = None
+                sentry_blocked = False
 
-                if safety == "escalate" and not allow_writes:
+                # MCP Sentry gate: all escalated ops require sentry approval
+                if safety == "escalate":
+                    if hasattr(self, 'sentry') and self.sentry is not None:
+                        try:
+                            from mcp_sentry import MCPSentry
+                            if isinstance(self.sentry, MCPSentry):
+                                perm = self.sentry.check_permission(skill_name, inputs)
+                                sentry_req_id = perm.get("request_id")
+                                if perm["status"] == "APPROVED":
+                                    safety = "auto"  # Pre-approved — allow execution
+                                elif perm["status"] == "PENDING":
+                                    sentry_blocked = True
+                        except Exception:
+                            pass
+                    elif not allow_writes:
+                        sentry_blocked = True
+
+                if sentry_blocked:
                     escalation_msg = (
-                        f"BLOCKED: {skill_name} requires user approval. "
-                        "This is a write operation."
+                        f"BLOCKED: {skill_name} requires Commander approval. "
+                        "Approve in the War Room Governance Dashboard."
                     )
+                    if sentry_req_id:
+                        escalation_msg += f" (Approval ID: {sentry_req_id})"
                     result_data = {"error": escalation_msg}
                     tool_receipts.append({
                         "skill": skill_name,
                         "inputs": inputs,
-                        "result": "ESCALATED — needs user approval",
+                        "result": "ESCALATED — needs Commander approval",
+                        "approval_id": sentry_req_id,
                     })
                 else:
                     # Execute the skill
@@ -2476,11 +2520,37 @@ class LancelotOrchestrator:
         """Request Commander approval for T3 actions.
 
         Override in tests or inject an approval_fn for custom behavior.
-        Production: logs and auto-denies unless approval_fn is set.
+        Production: creates a pending approval in the MCP Sentry queue
+        visible from the War Room Governance Dashboard.  Returns False
+        so the plan pauses — the Commander can approve via the War Room
+        and re-issue the command.
         """
         if hasattr(self, '_approval_fn') and self._approval_fn is not None:
             return self._approval_fn(step, profile)
-        _gov_logger.warning("T3 action requires approval: %s (auto-denied)", step.tool)
+
+        # Create a pending approval in the MCP Sentry so it appears
+        # in /api/governance/approvals and the War Room dashboard.
+        capability = getattr(step, 'tool', 'unknown')
+        params = {
+            "step_id": getattr(step, 'id', 'unknown'),
+            "description": getattr(step, 'description', ''),
+            "tool": capability,
+        }
+
+        if hasattr(self, 'sentry') and self.sentry is not None:
+            from mcp_sentry import MCPSentry
+            if isinstance(self.sentry, MCPSentry):
+                perm = self.sentry.check_permission(capability, params)
+                if perm["status"] == "APPROVED":
+                    _gov_logger.info("T3 action pre-approved by sentry: %s", capability)
+                    return True
+                _gov_logger.warning(
+                    "T3 action requires approval: %s (request_id=%s) — visible in War Room",
+                    capability, perm.get("request_id", "?"),
+                )
+                return False
+
+        _gov_logger.warning("T3 action requires approval: %s (auto-denied, no sentry)", step.tool)
         return False
 
     def execute_plan(self, plan) -> str:

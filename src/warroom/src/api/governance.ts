@@ -21,11 +21,12 @@ export interface GovernanceDecision {
 
 export interface ApprovalItem {
   id: string
-  type: 'graduation' | 'apl_rule'
+  type: 'sentry' | 'graduation' | 'apl_rule'
   capability?: string
   scope?: string
   name?: string
   description?: string
+  params?: Record<string, unknown>
   current_tier?: number
   proposed_tier?: number
   pattern_type?: string
