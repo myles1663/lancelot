@@ -407,3 +407,49 @@ export interface RouterStatsResponse {
   stats: Record<string, unknown>
   message?: string
 }
+
+// ------------------------------------------------------------------
+// Setup & Recovery  (/api/setup/*)
+// ------------------------------------------------------------------
+
+export interface SystemInfoResponse {
+  version: string
+  uptime_seconds: number
+  python_version: string
+  platform: string
+  hostname: string
+  data_dir: { path: string; total_mb: number; used_mb: number }
+}
+
+export interface VaultKeyEntry {
+  key: string
+  type: string
+  created_at: string
+}
+
+export interface VaultKeysResponse {
+  keys: VaultKeyEntry[]
+  total: number
+  message?: string
+}
+
+export interface LogsResponse {
+  lines: string[]
+  file: string
+  total_lines: number
+}
+
+export interface SetupActionResponse {
+  status: string
+  message?: string
+}
+
+export interface ConfigReloadResponse {
+  status: string
+  results: Record<string, string>
+}
+
+export interface MemoryPurgeResponse {
+  status: string
+  purged_files: string[]
+}

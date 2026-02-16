@@ -655,6 +655,22 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Connectors initialization failed: {e}")
 
+    # ===== SETUP & RECOVERY API =====
+    try:
+        from setup_api import router as setup_router, init_setup_api
+        from receipts_api import _receipt_service as _setup_receipt_svc
+        init_setup_api(
+            data_dir="/home/lancelot/data",
+            startup_time=_startup_time or time.time(),
+            audit_logger=main_orchestrator.audit_logger,
+            connector_vault=_connector_vault if '_connector_vault' in dir() else None,
+            receipt_service=_setup_receipt_svc,
+        )
+        app.include_router(setup_router)
+        logger.info("Setup API initialized.")
+    except Exception as e:
+        logger.warning(f"Setup API initialization failed: {e}")
+
     # ===== PHASE 6b: USAGE TRACKER + PERSISTENCE =====
     try:
         from usage_tracker import UsageTracker

@@ -5,6 +5,27 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.1.6] - 2026-02-16
+
+### Added
+- **Comprehensive Setup & Recovery Page**: Complete overhaul of the Setup & Recovery page with
+  4-tab navigation (System, Data, Logs & Config, Danger Zone):
+  - **System Tab**: System info metrics (version, uptime, Python version, disk usage), container
+    controls (restart/shutdown with confirmation dialogs), onboarding status, and recovery commands.
+  - **Data Tab**: Vault credential management (list keys with metadata, delete individual keys —
+    values never shown), execution token list with revoke, receipt management with clear all,
+    and usage counter reset.
+  - **Logs & Config Tab**: Terminal-style audit log viewer (last 200 lines, auto-scroll, switchable
+    between audit.log and vault access.log), configuration reload (feature flags, scheduler,
+    connectors), and export/backup download (ZIP of configs, soul, memory, flags, scheduler data).
+  - **Danger Zone Tab**: Red-bordered destructive operations — factory reset (requires typed "RESET"
+    confirmation), memory purge, feature flag reset, and onboarding reset. All with confirmation
+    dialogs.
+- **Setup API Backend** (`/api/setup/*`): New API module with 12 endpoints — system-info, restart,
+  shutdown, logs, vault key listing/deletion, receipt clearing, config reload, export backup (ZIP),
+  factory reset, memory purge, and flag reset. All destructive operations are audit-logged and
+  require `{"confirm": true}` in the request body.
+
 ## [0.1.5] - 2026-02-16
 
 ### Added

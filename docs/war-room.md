@@ -285,6 +285,45 @@ Each kill switch has a confirmation dialog before activation. Disabling a subsys
 
 ---
 
+## Setup & Recovery
+
+The system administration hub — 4 tabs covering all operational and destructive controls.
+
+### System Tab
+
+- **System Info**: Version, uptime, Python version, disk usage (polled live)
+- **Container Controls**: Restart (exit code 0 — Docker auto-restarts) and Shutdown (exit code 1 — stays stopped). Both require confirmation dialogs.
+- **Onboarding Status**: Current state, provider, credentials, local model status, cooldown info
+- **Recovery Commands**: Check Status, Go Back, Restart Step, Resend Code
+
+### Data Tab
+
+- **Vault Credentials**: Lists all credential keys with type and created_at (values are never displayed). Individual keys can be deleted.
+- **Execution Tokens**: Lists active tokens with status. Active tokens can be revoked.
+- **Receipt Management**: Shows total receipt count with a Clear All button.
+- **Usage Counters**: Reset in-memory usage counters for a fresh tracking period.
+
+### Logs & Config Tab
+
+- **Log Viewer**: Terminal-style viewer showing the last 200 lines of the audit log (or vault access log). Supports refresh and auto-scroll to bottom.
+- **Configuration Reload**: Triggers a re-read of YAML configs (feature flags, scheduler, connectors). Shows per-subsystem reload results.
+- **Export/Backup**: Downloads a ZIP file containing configs, soul YAML, memory data, flag state, and scheduler data.
+
+### Danger Zone Tab
+
+Red-bordered destructive operations — all require confirmation:
+
+| Action | What It Does | Confirmation |
+|--------|-------------|-------------|
+| **Factory Reset** | Deletes all data directory contents, resets flags, clears onboarding | Type "RESET" |
+| **Purge Memory** | Deletes core_blocks.json and SQLite memory stores | Confirm dialog |
+| **Reset Feature Flags** | Deletes .flag_state.json, resets all flags to code defaults | Confirm dialog |
+| **Reset Onboarding** | Clears onboarding progress, restarts setup flow | Confirm dialog |
+
+All destructive operations are audit-logged.
+
+---
+
 ## Keyboard Shortcuts
 
 | Shortcut | Action |

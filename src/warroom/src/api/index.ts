@@ -1,5 +1,5 @@
 // Barrel export — all API modules
-export { ApiClientError, apiGet, apiPost, apiPut, apiPostForm } from './client'
+export { ApiClientError, apiGet, apiPost, apiPut, apiDelete, apiPostForm } from './client'
 export * from './health'
 export * from './system'
 export * from './chat'
@@ -17,3 +17,4 @@ export * from './connectors'
 export * from './scheduler'
 export * from './business'
 export * from './providers'
+export * from './setup'
