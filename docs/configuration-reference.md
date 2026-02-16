@@ -25,11 +25,12 @@ The `.env` file is the primary configuration for secrets and runtime settings. I
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GEMINI_API_KEY` | One of three | Google Gemini API key (starts with `AIza...`) |
-| `OPENAI_API_KEY` | One of three | OpenAI API key (starts with `sk-...`) |
-| `ANTHROPIC_API_KEY` | One of three | Anthropic API key (starts with `sk-ant-...`) |
+| `GEMINI_API_KEY` | One of four | Google Gemini API key (starts with `AIza...`) |
+| `OPENAI_API_KEY` | One of four | OpenAI API key (starts with `sk-...`) |
+| `ANTHROPIC_API_KEY` | One of four | Anthropic API key (starts with `sk-ant-...`) |
+| `XAI_API_KEY` | One of four | xAI (Grok) API key (starts with `xai-...`) |
 
-At least one API key is required. You can configure one, two, or all three providers.
+At least one API key is required. You can configure one or more providers. Keys can be rotated from the War Room UI without restarting.
 
 ### Authentication
 

@@ -36,6 +36,16 @@ export const PROVIDERS = {
     validationUrl: 'https://api.anthropic.com/v1/messages',
     signupUrl: 'https://console.anthropic.com/',
   },
+  xai: {
+    name: 'xAI (Grok)',
+    envVar: 'XAI_API_KEY',
+    envProvider: 'xai',
+    recommended: false,
+    description: 'Grok models, pay-as-you-go',
+    keyPrefix: 'xai-',
+    validationUrl: 'https://api.x.ai/v1/models',
+    signupUrl: 'https://console.x.ai/',
+  },
 };
 
 export const COMMS = {

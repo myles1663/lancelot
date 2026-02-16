@@ -53,6 +53,11 @@ class LaneOverrideRequest(BaseModel):
     model_id: str
 
 
+class RotateKeyRequest(BaseModel):
+    provider: str
+    api_key: str
+
+
 # ---------------------------------------------------------------------------
 # Initialization + persistence
 # ---------------------------------------------------------------------------
@@ -122,6 +127,7 @@ def _get_provider_display_names() -> dict:
             "gemini": "Google Gemini",
             "openai": "OpenAI",
             "anthropic": "Anthropic",
+            "xai": "xAI (Grok)",
         }
 
 
@@ -372,3 +378,139 @@ def reset_lanes():
     except Exception as e:
         logger.error("Lane reset failed: %s", e, exc_info=True)
         return {"status": "error", "message": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# API Key Management (v0.1.2) — rotate keys from the War Room
+# ---------------------------------------------------------------------------
+
+def _mask_key(key: str) -> str:
+    """Return a masked preview of an API key (last 4 characters only)."""
+    if not key or len(key) < 5:
+        return "****"
+    return "····" + key[-4:]
+
+
+def _update_env_file(env_var: str, new_value: str) -> bool:
+    """Update or add an env var in the .env file for persistence across restarts."""
+    env_path = Path(os.getenv("LANCELOT_ENV_PATH", ".env"))
+    try:
+        lines = []
+        found = False
+        if env_path.exists():
+            with open(env_path, "r") as f:
+                for line in f:
+                    stripped = line.strip()
+                    if stripped.startswith(f"{env_var}=") or stripped.startswith(f"{env_var} ="):
+                        lines.append(f"{env_var}={new_value}\n")
+                        found = True
+                    else:
+                        lines.append(line)
+        if not found:
+            lines.append(f"{env_var}={new_value}\n")
+        with open(env_path, "w") as f:
+            f.writelines(lines)
+        return True
+    except Exception as e:
+        logger.warning("Failed to update .env file: %s", e)
+        return False
+
+
+@router.get("/keys")
+def get_provider_keys():
+    """List all providers with key status (never returns full keys)."""
+    from providers.factory import API_KEY_VARS
+
+    display_names = _get_provider_display_names()
+    current_provider = _discovery.provider_name if _discovery else None
+
+    keys = []
+    for name, env_var in API_KEY_VARS.items():
+        raw = os.getenv(env_var, "").strip()
+        keys.append({
+            "provider": name,
+            "display_name": display_names.get(name, name.title()),
+            "env_var": env_var,
+            "has_key": bool(raw),
+            "key_preview": _mask_key(raw) if raw else "",
+            "active": name == current_provider,
+        })
+
+    return {"keys": keys}
+
+
+@router.post("/keys/rotate")
+def rotate_provider_key(req: RotateKeyRequest):
+    """Validate and rotate an API key for a provider.
+
+    1. Validates provider name
+    2. Tests the new key against the provider API
+    3. Updates os.environ
+    4. If active provider, hot-swaps the provider instance
+    5. Persists to .env file
+    """
+    from providers.factory import API_KEY_VARS, create_provider
+
+    provider_name = req.provider.lower().strip()
+    new_key = req.api_key.strip()
+
+    if provider_name not in API_KEY_VARS:
+        return {
+            "status": "error",
+            "message": f"Unknown provider: '{provider_name}'. Available: {', '.join(API_KEY_VARS.keys())}",
+        }
+
+    if not new_key or len(new_key) < 10:
+        return {"status": "error", "message": "API key is too short"}
+
+    env_var = API_KEY_VARS[provider_name]
+
+    # Step 1: Validate the new key by creating a provider and listing models
+    try:
+        test_provider = create_provider(provider_name, new_key)
+        models = test_provider.list_models()
+        logger.info("Key validation for %s: discovered %d models", provider_name, len(models))
+    except Exception as e:
+        logger.warning("Key validation failed for %s: %s", provider_name, e)
+        return {
+            "status": "error",
+            "message": f"Key validation failed: {e}",
+        }
+
+    # Step 2: Update os.environ
+    os.environ[env_var] = new_key
+
+    # Step 3: If this is the active provider, hot-swap
+    current_provider = _discovery.provider_name if _discovery else None
+    hot_swapped = False
+
+    if provider_name == current_provider:
+        try:
+            if _orchestrator:
+                _orchestrator.switch_provider(provider_name)
+
+            config = _read_current_config()
+            lane_overrides = config.get("lane_overrides", {})
+
+            if _discovery:
+                new_provider = create_provider(provider_name, new_key)
+                _discovery.replace_provider(new_provider, lane_overrides=lane_overrides)
+
+            hot_swapped = True
+        except Exception as e:
+            logger.error("Hot-swap after key rotation failed: %s", e)
+
+    # Step 4: Persist to .env file
+    persisted = _update_env_file(env_var, new_key)
+
+    return {
+        "status": "ok",
+        "provider": provider_name,
+        "key_preview": _mask_key(new_key),
+        "models_discovered": len(models),
+        "hot_swapped": hot_swapped,
+        "persisted_to_env": persisted,
+        "message": f"API key rotated for {provider_name}" + (
+            " and provider hot-swapped" if hot_swapped else ""
+        ),
+    }

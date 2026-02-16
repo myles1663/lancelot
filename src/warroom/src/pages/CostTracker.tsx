@@ -4,8 +4,9 @@ import {
   fetchUsageSummary, fetchUsageLanes, fetchUsageModels, fetchUsageMonthly,
   fetchProviderStack, refreshModelDiscovery,
   fetchAvailableProviders, switchProvider, overrideLane, resetLanes,
+  fetchProviderKeys, rotateProviderKey,
 } from '@/api'
-import type { DiscoveredModel, AvailableProvider } from '@/api'
+import type { DiscoveredModel, AvailableProvider, ProviderKeyInfo } from '@/api'
 import { MetricCard } from '@/components'
 
 /** Format context window size for display */
@@ -37,10 +38,20 @@ export function CostTracker() {
   const [laneLoading, setLaneLoading] = useState<string | null>(null)
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
 
+  // Key management state
+  const [providerKeys, setProviderKeys] = useState<ProviderKeyInfo[]>([])
+  const [editingKey, setEditingKey] = useState<string | null>(null)
+  const [newKeyValue, setNewKeyValue] = useState('')
+  const [keyLoading, setKeyLoading] = useState(false)
+  const [keyError, setKeyError] = useState<string | null>(null)
+
   // Fetch available providers on mount
   useEffect(() => {
     fetchAvailableProviders()
       .then(res => setProviders(res.providers ?? []))
+      .catch(() => {})
+    fetchProviderKeys()
+      .then(res => setProviderKeys(res.keys ?? []))
       .catch(() => {})
   }, [])
 
@@ -118,6 +129,30 @@ export function CostTracker() {
       }
     } catch {
       showStatus('Lane reset failed')
+    }
+  }
+
+  const handleRotateKey = async (provider: string) => {
+    if (!newKeyValue.trim()) return
+    setKeyLoading(true)
+    setKeyError(null)
+    try {
+      const res = await rotateProviderKey(provider, newKeyValue.trim())
+      if (res.status === 'ok') {
+        showStatus(res.message || `Key rotated for ${provider}`)
+        setEditingKey(null)
+        setNewKeyValue('')
+        // Refresh key list and providers
+        fetchProviderKeys().then(r => setProviderKeys(r.keys ?? [])).catch(() => {})
+        refreshProviders()
+        if (res.hot_swapped) await refetchStack()
+      } else {
+        setKeyError(res.message || 'Rotation failed')
+      }
+    } catch (e) {
+      setKeyError('Key rotation failed — check the key and try again')
+    } finally {
+      setKeyLoading(false)
     }
   }
 
@@ -201,10 +236,11 @@ export function CostTracker() {
             value={stack?.provider || ''}
             onChange={(e) => handleSwitchProvider(e.target.value)}
             disabled={switching || providers.length === 0}
-            className="text-sm font-medium bg-surface-card-elevated border border-border-default
+            className="text-sm font-medium bg-surface-input border border-border-default
                        rounded px-3 py-1.5 text-text-primary
                        focus:outline-none focus:ring-1 focus:ring-accent-primary
-                       disabled:opacity-50 disabled:cursor-not-allowed"
+                       disabled:opacity-50 disabled:cursor-not-allowed
+                       [&>option]:bg-surface-input [&>option]:text-text-primary"
           >
             {providers.length === 0 && stack?.provider && (
               <option value={stack.provider}>
@@ -262,10 +298,11 @@ export function CostTracker() {
                             value={l.model}
                             onChange={(e) => handleLaneOverride(lane, e.target.value)}
                             disabled={isLoading}
-                            className="bg-transparent border border-border-default/50 rounded
+                            className="bg-surface-input border border-border-default/50 rounded
                                        px-2 py-0.5 text-xs text-text-primary w-full max-w-[280px]
                                        focus:outline-none focus:ring-1 focus:ring-accent-primary
-                                       disabled:opacity-50"
+                                       disabled:opacity-50
+                                       [&>option]:bg-surface-input [&>option]:text-text-primary"
                           >
                             {/* Always include the current model even if not in discovered list */}
                             {!eligibleModels.find(m => m.id === l.model) && (
@@ -304,6 +341,86 @@ export function CostTracker() {
         {discoveredModels.length > 0 && (
           <DiscoveredModelsList models={discoveredModels} />
         )}
+      </section>
+
+      {/* ======= Provider Keys Section ======= */}
+      <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
+        <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+          Provider API Keys
+        </h3>
+        <div className="space-y-2">
+          {providerKeys.map(k => (
+            <div key={k.provider} className="flex items-center gap-3 p-3 bg-surface-card-elevated rounded-md">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-text-primary">{k.display_name}</span>
+                  {k.active && (
+                    <span className="text-[10px] px-1.5 py-0.5 bg-accent-primary/15 text-accent-primary rounded font-mono">
+                      ACTIVE
+                    </span>
+                  )}
+                  {k.has_key ? (
+                    <span className="text-[10px] px-1.5 py-0.5 bg-state-healthy/15 text-state-healthy rounded font-mono">
+                      CONFIGURED
+                    </span>
+                  ) : (
+                    <span className="text-[10px] px-1.5 py-0.5 bg-state-error/15 text-state-error rounded font-mono">
+                      NOT SET
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs text-text-muted font-mono">{k.env_var}</span>
+                  {k.key_preview && (
+                    <span className="text-xs text-text-muted font-mono">{k.key_preview}</span>
+                  )}
+                </div>
+              </div>
+              {editingKey === k.provider ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="password"
+                    value={newKeyValue}
+                    onChange={e => { setNewKeyValue(e.target.value); setKeyError(null) }}
+                    placeholder="Paste new API key..."
+                    className="text-xs font-mono bg-surface-base border border-border-default rounded
+                               px-3 py-1.5 text-text-primary w-64
+                               focus:outline-none focus:ring-1 focus:ring-accent-primary
+                               placeholder:text-text-muted"
+                    autoFocus
+                    onKeyDown={e => e.key === 'Escape' && (setEditingKey(null), setNewKeyValue(''), setKeyError(null))}
+                  />
+                  <button
+                    onClick={() => handleRotateKey(k.provider)}
+                    disabled={keyLoading || !newKeyValue.trim()}
+                    className="px-3 py-1.5 text-xs bg-accent-primary/15 text-accent-primary rounded
+                               hover:bg-accent-primary/25 transition-colors
+                               disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                  >
+                    {keyLoading ? 'Validating...' : 'Save'}
+                  </button>
+                  <button
+                    onClick={() => { setEditingKey(null); setNewKeyValue(''); setKeyError(null) }}
+                    className="px-2 py-1.5 text-xs text-text-muted hover:text-text-primary transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => { setEditingKey(k.provider); setNewKeyValue(''); setKeyError(null) }}
+                  className="px-3 py-1.5 text-xs border border-border-default text-text-secondary rounded
+                             hover:bg-surface-card hover:text-text-primary transition-colors whitespace-nowrap"
+                >
+                  {k.has_key ? 'Rotate Key' : 'Add Key'}
+                </button>
+              )}
+            </div>
+          ))}
+          {editingKey && keyError && (
+            <p className="text-xs text-state-error mt-1 px-3">{keyError}</p>
+          )}
+        </div>
       </section>
 
       {/* Summary Metrics */}

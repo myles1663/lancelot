@@ -63,8 +63,9 @@ You need an API key from at least one provider:
 | **Google Gemini** | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | Yes | `AIza...` |
 | **OpenAI** | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | No | `sk-...` |
 | **Anthropic** | [console.anthropic.com](https://console.anthropic.com/) | No | `sk-ant-...` |
+| **xAI (Grok)** | [console.x.ai](https://console.x.ai/) | No | `xai-...` |
 
-You can configure one, two, or all three providers. Lancelot routes between them based on task complexity and provider availability.
+You can configure one or more providers. Lancelot routes between them based on task complexity and provider availability. API keys can be rotated from the War Room UI without restarting the container.
 
 ---
 

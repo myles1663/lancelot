@@ -113,3 +113,25 @@ profiles:
     supports_tools: true
     cost_input_per_1k: 0.015
     cost_output_per_1k: 0.075
+
+  # ── xAI (Grok) ──────────────────────────────────────────────────────
+  grok-3-mini:
+    capability_tier: fast
+    context_window: 131072
+    supports_tools: true
+    cost_input_per_1k: 0.0003
+    cost_output_per_1k: 0.0005
+
+  grok-3:
+    capability_tier: deep
+    context_window: 131072
+    supports_tools: true
+    cost_input_per_1k: 0.003
+    cost_output_per_1k: 0.015
+
+  grok-4-0709:
+    capability_tier: deep
+    context_window: 256000
+    supports_tools: true
+    cost_input_per_1k: 0.003
+    cost_output_per_1k: 0.015

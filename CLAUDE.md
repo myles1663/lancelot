@@ -89,7 +89,7 @@ C:\Users\SSAdministrator\lancelot\
 lancelot-core (:8000 FastAPI, :8501 Streamlit)
     |
     |-- HTTP --> local-llm (:8080 GGUF server)
-    |-- HTTPS --> Gemini API / OpenAI API / Anthropic API
+    |-- HTTPS --> Gemini API / OpenAI API / Anthropic API / xAI API
 ```
 
 Both services on `lancelot_net` bridge network.
@@ -164,8 +164,8 @@ class LancelotOrchestrator:
 |----------|------|---------|
 | 1 | `local_redaction` | PII redaction (always first) |
 | 2 | `local_utility` | classify_intent, extract_json, summarize, redact, rag_rewrite |
-| 3 | `flagship_fast` | Orchestration, tool calls, retries (Gemini Flash / GPT-4o-mini) |
-| 4 | `flagship_deep` | Planning, high-risk, complex reasoning (Gemini Pro / GPT-4o) |
+| 3 | `flagship_fast` | Orchestration, tool calls, retries (Gemini Flash / GPT-4o-mini / Grok-3-mini) |
+| 4 | `flagship_deep` | Planning, high-risk, complex reasoning (Gemini Pro / GPT-4o / Grok-3) |
 
 **Escalation triggers:** risk (high-risk actions), complexity (multi-step), failure (fast-lane fail)
 

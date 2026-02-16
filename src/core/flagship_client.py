@@ -30,12 +30,14 @@ logger = logging.getLogger(__name__)
 _GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 _OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+_XAI_URL = "https://api.x.ai/v1/chat/completions"
 
 # Environment variable names for API keys
 _API_KEY_VARS = {
     "gemini": "GEMINI_API_KEY",
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
+    "xai": "XAI_API_KEY",
 }
 
 
@@ -98,6 +100,8 @@ class FlagshipClient:
             return self._call_openai(prompt, lane_config.model, effective_max, effective_temp, timeout)
         elif self._provider == "anthropic":
             return self._call_anthropic(prompt, lane_config.model, effective_max, effective_temp, timeout)
+        elif self._provider == "xai":
+            return self._call_xai(prompt, lane_config.model, effective_max, effective_temp, timeout)
         else:
             raise FlagshipError(f"Unsupported provider: {self._provider}")
 
@@ -174,6 +178,24 @@ class FlagshipClient:
             return data["content"][0]["text"]
         except (KeyError, IndexError) as exc:
             raise FlagshipError(f"Unexpected Anthropic response: {exc}") from exc
+
+    def _call_xai(
+        self, prompt: str, model: str, max_tokens: int, temperature: float, timeout: float
+    ) -> str:
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+        }
+        data = self._http_post(_XAI_URL, payload, timeout, extra_headers=headers)
+        try:
+            return data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError) as exc:
+            raise FlagshipError(f"Unexpected xAI response: {exc}") from exc
 
     # ------------------------------------------------------------------
     # HTTP helper

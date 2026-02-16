@@ -86,7 +86,7 @@ class ModelInfo:
 class ProviderClient(ABC):
     """Abstract base class for LLM provider adapters.
 
-    Each provider (Gemini, OpenAI, Anthropic) implements this interface
+    Each provider (Gemini, OpenAI, Anthropic, xAI) implements this interface
     so the orchestrator can work with any of them transparently.
     """
 

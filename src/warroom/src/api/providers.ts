@@ -89,3 +89,34 @@ export const overrideLane = (lane: string, model_id: string) =>
 
 export const resetLanes = () =>
   apiPost<LaneResetResponse>('/api/v1/providers/lanes/reset')
+
+// --- API Key Management ---
+
+export interface ProviderKeyInfo {
+  provider: string
+  display_name: string
+  env_var: string
+  has_key: boolean
+  key_preview: string
+  active: boolean
+}
+
+export interface ProviderKeysResponse {
+  keys: ProviderKeyInfo[]
+}
+
+export interface RotateKeyResponse {
+  status: string
+  provider?: string
+  key_preview?: string
+  models_discovered?: number
+  hot_swapped?: boolean
+  persisted_to_env?: boolean
+  message?: string
+}
+
+export const fetchProviderKeys = () =>
+  apiGet<ProviderKeysResponse>('/api/v1/providers/keys')
+
+export const rotateProviderKey = (provider: string, apiKey: string) =>
+  apiPost<RotateKeyResponse>('/api/v1/providers/keys/rotate', { provider, api_key: apiKey })

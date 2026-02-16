@@ -5,6 +5,25 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.1.2] - 2026-02-15
+
+### Added
+- **xAI (Grok) Provider**: Full fourth LLM provider integration. `XAIProviderClient` uses the
+  OpenAI-compatible API at `https://api.x.ai/v1` with the `openai` SDK. Supports all Grok models
+  (grok-3-mini, grok-3, grok-4-0709) with tool calling, model discovery, and lane auto-assignment.
+  Set `LANCELOT_PROVIDER=xai` and `XAI_API_KEY` to use.
+- **API Key Rotation UI**: New "Provider API Keys" section on the Cost Tracker page lets users
+  rotate API keys for any provider from the War Room. Keys are validated against the provider API
+  before being accepted, then hot-swapped (if active provider) and persisted to `.env`.
+  `GET /api/v1/providers/keys` returns masked key previews (last 4 chars only).
+  `POST /api/v1/providers/keys/rotate` validates, applies, and persists a new key.
+
+### Changed
+- Provider factory, gateway, flagship client, antigravity engine, and installer all updated to
+  support 4 providers (Gemini, OpenAI, Anthropic, xAI).
+- Model profiles and lane configs updated with xAI Grok models.
+- All documentation updated to reference 4-provider support.
+
 ## [0.1.1] - 2026-02-15
 
 ### Fixed

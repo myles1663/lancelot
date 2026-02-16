@@ -55,8 +55,8 @@ The Model Router selects the appropriate LLM lane based on task type, risk level
 |----------|------|--------|-----------|
 | 1 | `local_redaction` | Qwen3-8B (local) | PII redaction — always runs locally first |
 | 2 | `local_utility` | Qwen3-8B (local) | Intent classification, summarization, JSON extraction |
-| 3 | `flagship_fast` | Gemini Flash / GPT-4o-mini / Claude Haiku | Standard reasoning, tool calls, orchestration |
-| 4 | `flagship_deep` | Gemini Pro / GPT-4o / Claude Sonnet | Complex planning, high-risk decisions |
+| 3 | `flagship_fast` | Gemini Flash / GPT-4o-mini / Claude Haiku / Grok-3-mini | Standard reasoning, tool calls, orchestration |
+| 4 | `flagship_deep` | Gemini Pro / GPT-4o / Claude Sonnet / Grok-3 | Complex planning, high-risk decisions |
 
 **Escalation triggers:** If the fast lane fails, if risk keywords are detected, or if the task involves multi-step planning, the router automatically escalates to the deep lane. Every routing decision produces a `RouterDecision` record with lane, model, rationale, timing, and outcome.
 
@@ -316,7 +316,7 @@ This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, etc
 | Legacy UI | Streamlit |
 | Data Validation | Pydantic v2 |
 | Configuration | PyYAML |
-| LLM Providers | Google GenAI, OpenAI, Anthropic SDKs |
+| LLM Providers | Google GenAI, OpenAI, Anthropic, xAI SDKs |
 | Local Inference | llama-cpp-python (GGUF format) |
 | Persistence | SQLite (scheduler, memory), JSON (registries, receipts) |
 | Encryption | cryptography library |

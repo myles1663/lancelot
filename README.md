@@ -69,7 +69,7 @@ Options:
 #### Prerequisites
 
 - Docker Desktop
-- At least one LLM API key (Gemini, OpenAI, or Anthropic)
+- At least one LLM API key (Gemini, OpenAI, Anthropic, or xAI)
 - NVIDIA GPU recommended for local model (works without, just slower)
 
 #### Steps

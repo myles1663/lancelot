@@ -145,7 +145,7 @@ async def startup_event():
 
     # F8: Validate environment on startup
     _provider = os.getenv("LANCELOT_PROVIDER", "gemini")
-    _key_vars = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
+    _key_vars = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "xai": "XAI_API_KEY"}
     _key_var = _key_vars.get(_provider, "GEMINI_API_KEY")
     if not os.getenv(_key_var) and not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
         logger.warning("No %s set. LLM features may be unavailable.", _key_var)

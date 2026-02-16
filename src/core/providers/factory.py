@@ -17,6 +17,7 @@ API_KEY_VARS = {
     "gemini": "GEMINI_API_KEY",
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
+    "xai": "XAI_API_KEY",
 }
 
 
@@ -28,7 +29,7 @@ def create_provider(
     """Factory to create the right ProviderClient based on provider name.
 
     Args:
-        provider_name: One of "gemini", "openai", "anthropic".
+        provider_name: One of "gemini", "openai", "anthropic", "xai".
         api_key: The API key for the provider.
         **kwargs: Additional provider-specific options.
 
@@ -49,6 +50,10 @@ def create_provider(
     elif provider_name == "anthropic":
         from providers.anthropic_client import AnthropicProviderClient
         return AnthropicProviderClient(api_key=api_key, **kwargs)
+
+    elif provider_name == "xai":
+        from providers.xai_client import XAIProviderClient
+        return XAIProviderClient(api_key=api_key, **kwargs)
 
     raise ValueError(
         f"Unknown provider: '{provider_name}'. "

@@ -294,6 +294,7 @@ class AntigravityEngine:
             "gemini": self._build_gemini_llm,
             "openai": self._build_openai_llm,
             "anthropic": self._build_anthropic_llm,
+            "xai": self._build_xai_llm,
         }
 
         # Try the configured provider first
@@ -314,7 +315,7 @@ class AntigravityEngine:
         raise RuntimeError(
             "No LLM available for Browser Use agent. "
             "Set LANCELOT_PROVIDER and provide an API key "
-            "(GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY)."
+            "(GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or XAI_API_KEY)."
         )
 
     def _build_gemini_llm(self, model_name: str = None):
@@ -360,6 +361,22 @@ class AntigravityEngine:
             )
         except ImportError:
             logger.warning("langchain-anthropic not installed")
+            return None
+
+    def _build_xai_llm(self, model_name: str = None):
+        """Build an xAI (Grok) LangChain LLM via OpenAI-compatible API."""
+        api_key = os.getenv("XAI_API_KEY", "")
+        if not api_key:
+            return None
+        try:
+            from langchain_openai import ChatOpenAI
+            return ChatOpenAI(
+                model=model_name or "grok-3",
+                api_key=api_key,
+                base_url="https://api.x.ai/v1",
+            )
+        except ImportError:
+            logger.warning("langchain-openai not installed (needed for xAI)")
             return None
 
     # ------------------------------------------------------------------

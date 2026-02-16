@@ -16,6 +16,7 @@ Before you start, make sure you have:
   - [Google Gemini](https://aistudio.google.com/apikey) (recommended — has a free tier)
   - [OpenAI](https://platform.openai.com/api-keys) (pay-as-you-go)
   - [Anthropic](https://console.anthropic.com/) (pay-as-you-go)
+  - [xAI](https://console.x.ai/) (Grok, pay-as-you-go)
 
 ---
 
@@ -31,7 +32,7 @@ The installer walks you through each step interactively:
 
 1. **Prerequisites check** — verifies Docker, Git, disk space, RAM, GPU
 2. **Install location** — where to put Lancelot (default: `./lancelot`)
-3. **LLM provider** — select Gemini, OpenAI, or Anthropic and paste your API key
+3. **LLM provider** — select Gemini, OpenAI, Anthropic, or xAI and paste your API key
 4. **Communications** — optionally configure Telegram or Google Chat (you can skip this)
 5. **Repository clone** — pulls the latest code from GitHub
 6. **Configuration** — generates your `.env` file automatically
