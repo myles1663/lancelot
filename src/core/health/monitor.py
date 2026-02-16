@@ -109,7 +109,7 @@ class HealthMonitor:
         snapshot = HealthSnapshot(
             ready=ready,
             onboarding_state=(
-                ("READY" if results["onboarding_ready"] else "NOT_READY")
+                ("COMPLETE" if results["onboarding_ready"] else "NOT_READY")
                 if "onboarding_ready" in results
                 else "UNKNOWN"
             ),

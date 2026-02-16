@@ -340,6 +340,14 @@ def _init_health_monitor():
             check_fn=lambda: onboarding_orch._determine_state() == "READY",
             degraded_reason="Onboarding not complete",
         ),
+        HealthCheck(
+            name="local_llm",
+            check_fn=lambda: (
+                main_orchestrator.local_model is not None
+                and main_orchestrator.local_model.is_healthy()
+            ),
+            degraded_reason="Local LLM not responding",
+        ),
     ]
     if main_orchestrator.scheduler_service:
         checks.append(HealthCheck(
