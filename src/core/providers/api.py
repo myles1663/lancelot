@@ -149,8 +149,15 @@ def get_provider_stack():
             "status": "unavailable",
         }
 
+    from providers.factory import API_KEY_VARS
+
     stack = _discovery.get_stack()
-    stack["status"] = "connected"
+
+    # Verify the active provider's API key is still present
+    provider_name = stack.get("provider", "")
+    env_var = API_KEY_VARS.get(provider_name, "")
+    has_key = bool(os.getenv(env_var, "").strip()) if env_var else False
+    stack["status"] = "connected" if has_key else "no_key"
     return stack
 
 

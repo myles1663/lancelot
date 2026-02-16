@@ -142,10 +142,10 @@ export function CostTracker() {
         showStatus(res.message || `Key rotated for ${provider}`)
         setEditingKey(null)
         setNewKeyValue('')
-        // Refresh key list and providers
+        // Refresh key list, providers, and stack status
         fetchProviderKeys().then(r => setProviderKeys(r.keys ?? [])).catch(() => {})
         refreshProviders()
-        if (res.hot_swapped) await refetchStack()
+        await refetchStack()
       } else {
         setKeyError(res.message || 'Rotation failed')
       }
@@ -186,6 +186,7 @@ export function CostTracker() {
   const stackLanes = stack?.lanes ?? {}
   const discoveredModels = stack?.discovered_models ?? []
   const isConnected = stack?.status === 'connected'
+  const hasNoKey = stack?.status === 'no_key'
 
   // Format last refresh time
   const lastRefresh = stack?.last_refresh
@@ -256,9 +257,9 @@ export function CostTracker() {
           {switching && (
             <span className="text-xs text-text-muted">Switching...</span>
           )}
-          <span className={`inline-flex items-center gap-1.5 text-xs ${isConnected ? 'text-green-400' : 'text-text-muted'}`}>
-            <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-text-muted'}`} />
-            {isConnected ? 'Connected' : 'Unavailable'}
+          <span className={`inline-flex items-center gap-1.5 text-xs ${isConnected ? 'text-green-400' : hasNoKey ? 'text-state-error' : 'text-text-muted'}`}>
+            <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : hasNoKey ? 'bg-state-error' : 'bg-text-muted'}`} />
+            {isConnected ? 'Connected' : hasNoKey ? 'No API Key' : 'Unavailable'}
           </span>
           {lastRefresh && (
             <span className="text-xs text-text-muted ml-auto">
