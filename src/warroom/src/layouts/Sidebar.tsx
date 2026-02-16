@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
+import logo from '../assets/logo.jpeg'
 
 interface NavItem {
   label: string
@@ -77,9 +78,16 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       {/* Branding */}
       <div className="px-4 py-4 border-b border-border-default">
         <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-sm font-semibold text-text-primary tracking-wide">LANCELOT OS</h1>
-            <span className="text-[10px] text-text-muted font-mono">v7.0</span>
+          <div className="flex items-center gap-2.5">
+            <img
+              src={logo}
+              alt="Lancelot"
+              className="w-8 h-8 rounded-lg object-cover"
+            />
+            <div>
+              <h1 className="text-sm font-semibold text-text-primary tracking-wide">LANCELOT OS</h1>
+              <span className="text-[10px] text-text-muted font-mono">v7.0</span>
+            </div>
           </div>
           <button
             onClick={onToggle}
