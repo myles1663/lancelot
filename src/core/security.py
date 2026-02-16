@@ -127,14 +127,19 @@ class AuditLogger:
             print(f"CRITICAL: Failed to write to audit log: {e}")
 
 class NetworkInterceptor:
-    ALLOW_LIST = [
-        "googleapis.com",
-        "salesforce.com",
+    # Core domains that are always allowed (infrastructure, not user-configurable)
+    _CORE_DOMAINS = [
         "localhost",
         "127.0.0.1",
         "api.projectlancelot.dev",
         "ghcr.io",
     ]
+
+    # Config file path — editable via Kill Switches UI
+    _ALLOWLIST_CONFIG = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "config", "network_allowlist.yaml",
+    )
 
     BLOCKED_IP_RANGES = [
         ipaddress.ip_network("10.0.0.0/8"),
@@ -144,6 +149,30 @@ class NetworkInterceptor:
         ipaddress.ip_network("169.254.0.0/16"),
         ipaddress.ip_network("0.0.0.0/8"),
     ]
+
+    def __init__(self):
+        self.ALLOW_LIST = list(self._CORE_DOMAINS)
+        self._load_config_domains()
+
+    def _load_config_domains(self):
+        """Load domains from config/network_allowlist.yaml and merge with core domains."""
+        try:
+            import yaml
+            with open(self._ALLOWLIST_CONFIG, "r") as f:
+                data = yaml.safe_load(f) or {}
+            config_domains = data.get("domains", [])
+            # Merge: core + config, deduplicated
+            merged = set(self._CORE_DOMAINS)
+            merged.update(d.strip().lower() for d in config_domains if d and d.strip())
+            self.ALLOW_LIST = list(merged)
+        except FileNotFoundError:
+            pass  # No config file — use core domains only
+        except Exception as e:
+            print(f"WARNING: Failed to load network allowlist config: {e}")
+
+    def reload_allowlist(self):
+        """Reload the allowlist from config (called after Kill Switches UI updates)."""
+        self._load_config_domains()
 
     def _is_private_ip(self, hostname: str) -> bool:
         """Resolves hostname and returns True if it points to a private/blocked IP range.

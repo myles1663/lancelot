@@ -1,17 +1,52 @@
+# Network Allowlist — domains Lancelot is permitted to reach.
+# Editable via Kill Switches UI or by editing this file directly.
+# Core infrastructure domains (localhost, ghcr.io, api.projectlancelot.dev)
+# are always allowed regardless of this file.
+
 domains:
+# ── AI / LLM Providers ──────────────────────────────────────
 - api.anthropic.com
-- api.github.com
 - api.openai.com
+- api.x.ai
+- generativelanguage.googleapis.com
+
+# ── Messaging & Social ──────────────────────────────────────
 - api.telegram.org
 - api.twilio.com
 - api.x.com
-- api.x.ai
 - discord.com
-- generativelanguage.googleapis.com
-- github.com
-- gmail.googleapis.com
 - graph.facebook.com
 - graph.microsoft.com
-- raw.githubusercontent.com
+- gmail.googleapis.com
 - slack.com
+
+# ── Developer / Code ────────────────────────────────────────
+- api.github.com
+- github.com
+- raw.githubusercontent.com
+- googleapis.com
 - www.googleapis.com
+
+# ── Web Research ────────────────────────────────────────────
+- google.com
+- www.google.com
+- bing.com
+- www.bing.com
+- duckduckgo.com
+- search.brave.com
+- wikipedia.org
+- en.wikipedia.org
+- reddit.com
+- www.reddit.com
+- stackexchange.com
+- stackoverflow.com
+- medium.com
+- linkedin.com
+- crunchbase.com
+- bloomberg.com
+- reuters.com
+- techcrunch.com
+- news.ycombinator.com
+
+# ── Business / SaaS ────────────────────────────────────────
+- salesforce.com

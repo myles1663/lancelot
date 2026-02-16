@@ -313,6 +313,14 @@ async def update_network_allowlist(body: AllowlistUpdate):
         clean = sorted(set(d.strip().lower() for d in body.domains if d.strip()))
         data["domains"] = clean
         _save_allowlist(data)
+        # Reload the orchestrator's live NetworkInterceptor so changes take effect immediately
+        try:
+            from gateway import main_orchestrator
+            if hasattr(main_orchestrator, 'network_interceptor'):
+                main_orchestrator.network_interceptor.reload_allowlist()
+                logger.info("Live NetworkInterceptor reloaded with %d domains", len(main_orchestrator.network_interceptor.ALLOW_LIST))
+        except Exception as e:
+            logger.warning("Could not reload live NetworkInterceptor: %s", e)
         logger.info("Network allowlist updated: %d domains", len(clean))
         return {"domains": clean, "count": len(clean)}
     except Exception as exc:
