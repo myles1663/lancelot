@@ -53,6 +53,12 @@ class WhatsAppConnector(ConnectorBase):
                     vault_key="whatsapp.access_token",
                     scopes=["whatsapp_business_messaging"],
                 ),
+                CredentialSpec(
+                    name="whatsapp_phone_number_id",
+                    type="config",
+                    vault_key="whatsapp.phone_number_id",
+                    required=True,
+                ),
             ],
             data_reads=[
                 "Message status", "Business profile", "Media downloads",
@@ -338,4 +344,7 @@ class WhatsAppConnector(ConnectorBase):
     def validate_credentials(self) -> bool:
         if self._vault is None:
             return False
-        return self._vault.exists("whatsapp.access_token")
+        return (
+            self._vault.exists("whatsapp.access_token")
+            and self._vault.exists("whatsapp.phone_number_id")
+        )

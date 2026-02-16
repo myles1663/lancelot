@@ -49,10 +49,28 @@ class SMSConnector(ConnectorBase):
             target_domains=["api.twilio.com"],
             required_credentials=[
                 CredentialSpec(
-                    name="twilio_credentials",
-                    type="basic_auth",
-                    vault_key="sms.twilio_credentials",
-                    scopes=[],
+                    name="twilio_account_sid",
+                    type="config",
+                    vault_key="sms.account_sid",
+                    required=True,
+                ),
+                CredentialSpec(
+                    name="twilio_auth_token",
+                    type="api_key",
+                    vault_key="sms.auth_token",
+                    required=True,
+                ),
+                CredentialSpec(
+                    name="twilio_from_number",
+                    type="config",
+                    vault_key="sms.from_number",
+                    required=False,
+                ),
+                CredentialSpec(
+                    name="twilio_messaging_service_sid",
+                    type="config",
+                    vault_key="sms.messaging_service_sid",
+                    required=False,
                 ),
             ],
             data_reads=[
@@ -163,7 +181,7 @@ class SMSConnector(ConnectorBase):
 
     def execute(self, operation_id: str, params: dict) -> ConnectorResult:
         base = self._base_url
-        cred_key = "sms.twilio_credentials"
+        cred_key = "sms.auth_token"
         form_headers = {"Content-Type": "application/x-www-form-urlencoded"}
         json_headers = {"Accept": "application/json"}
 
@@ -171,7 +189,7 @@ class SMSConnector(ConnectorBase):
             form_data = {"To": params["to"], "Body": params["body"]}
             if self._messaging_service_sid:
                 form_data["MessagingServiceSid"] = self._messaging_service_sid
-            else:
+            elif self._from_number:
                 form_data["From"] = self._from_number
             return ConnectorResult(
                 operation_id=operation_id,
@@ -181,7 +199,7 @@ class SMSConnector(ConnectorBase):
                 headers=form_headers,
                 body=urlencode(form_data),
                 credential_vault_key=cred_key,
-                metadata={"billable": True},
+                metadata={"billable": True, "auth_type": "basic_auth"},
             )
 
         elif operation_id == "send_mms":
@@ -192,7 +210,7 @@ class SMSConnector(ConnectorBase):
             }
             if self._messaging_service_sid:
                 form_data["MessagingServiceSid"] = self._messaging_service_sid
-            else:
+            elif self._from_number:
                 form_data["From"] = self._from_number
             return ConnectorResult(
                 operation_id=operation_id,
@@ -202,7 +220,7 @@ class SMSConnector(ConnectorBase):
                 headers=form_headers,
                 body=urlencode(form_data),
                 credential_vault_key=cred_key,
-                metadata={"billable": True},
+                metadata={"billable": True, "auth_type": "basic_auth"},
             )
 
         elif operation_id == "get_message":
@@ -214,6 +232,7 @@ class SMSConnector(ConnectorBase):
                 url=f"{base}/Messages/{sid}.json",
                 headers=json_headers,
                 credential_vault_key=cred_key,
+                metadata={"auth_type": "basic_auth"},
             )
 
         elif operation_id == "list_messages":
@@ -232,6 +251,7 @@ class SMSConnector(ConnectorBase):
                 url=f"{base}/Messages.json{qs}",
                 headers=json_headers,
                 credential_vault_key=cred_key,
+                metadata={"auth_type": "basic_auth"},
             )
 
         elif operation_id == "get_media":
@@ -244,6 +264,7 @@ class SMSConnector(ConnectorBase):
                 url=f"{base}/Messages/{msid}/Media/{media_sid}.json",
                 headers=json_headers,
                 credential_vault_key=cred_key,
+                metadata={"auth_type": "basic_auth"},
             )
 
         elif operation_id == "delete_message":
@@ -255,6 +276,7 @@ class SMSConnector(ConnectorBase):
                 url=f"{base}/Messages/{sid}.json",
                 headers=json_headers,
                 credential_vault_key=cred_key,
+                metadata={"auth_type": "basic_auth"},
             )
 
         else:
@@ -263,4 +285,7 @@ class SMSConnector(ConnectorBase):
     def validate_credentials(self) -> bool:
         if self._vault is None:
             return False
-        return self._vault.exists("sms.twilio_credentials")
+        return (
+            self._vault.exists("sms.account_sid")
+            and self._vault.exists("sms.auth_token")
+        )

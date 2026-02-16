@@ -18,6 +18,12 @@ All notable changes to Project Lancelot will be documented in this file.
   field, making it impossible to configure SMTP from the War Room. Now provides individual fields:
   `smtp_host`, `smtp_port`, `smtp_username`, `smtp_password`, `smtp_from_address`, `smtp_use_tls`,
   `imap_host`, and `imap_port`. Each field appears as a separate input in the War Room Connectors page.
+- **SMS (Twilio) Connector Credentials**: Replaced single `twilio_credentials` basic_auth field with
+  individual fields: `sms.account_sid`, `sms.auth_token`, `sms.from_number`, and
+  `sms.messaging_service_sid`. Account SID and Auth Token are required; From Number and Messaging
+  Service SID are optional (one of the two is needed for sending).
+- **WhatsApp Connector Credentials**: Added missing `whatsapp.phone_number_id` credential field.
+  Previously only configurable via YAML — now manageable from the War Room Connectors page.
 
 ## [0.1.3] - 2026-02-16
 
