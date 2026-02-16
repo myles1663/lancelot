@@ -21,6 +21,32 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+class ProviderAuthError(Exception):
+    """Raised when a provider API call fails due to invalid/expired API key.
+
+    This is caught by the orchestrator to update the provider status in the
+    War Room UI so the user knows their key needs to be rotated.
+    """
+
+    def __init__(self, provider: str, message: str = ""):
+        self.provider = provider
+        super().__init__(message or f"Authentication failed for provider '{provider}'")
+
+
+def _is_auth_error(exc: Exception) -> bool:
+    """Check if an exception indicates an authentication/API key failure."""
+    err_str = str(exc).lower()
+    return any(kw in err_str for kw in (
+        "401", "unauthorized", "invalid api key", "invalid_api_key",
+        "invalid x-api-key", "incorrect api key", "authentication",
+        "api key not valid", "api_key_invalid",
+    ))
+
+
+# ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
 

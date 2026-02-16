@@ -187,6 +187,7 @@ export function CostTracker() {
   const discoveredModels = stack?.discovered_models ?? []
   const isConnected = stack?.status === 'connected'
   const hasNoKey = stack?.status === 'no_key'
+  const hasAuthError = stack?.status === 'auth_error'
 
   // Format last refresh time
   const lastRefresh = stack?.last_refresh
@@ -257,9 +258,17 @@ export function CostTracker() {
           {switching && (
             <span className="text-xs text-text-muted">Switching...</span>
           )}
-          <span className={`inline-flex items-center gap-1.5 text-xs ${isConnected ? 'text-green-400' : hasNoKey ? 'text-state-error' : 'text-text-muted'}`}>
-            <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : hasNoKey ? 'bg-state-error' : 'bg-text-muted'}`} />
-            {isConnected ? 'Connected' : hasNoKey ? 'No API Key' : 'Unavailable'}
+          <span className={`inline-flex items-center gap-1.5 text-xs ${
+            isConnected ? 'text-green-400'
+            : (hasNoKey || hasAuthError) ? 'text-state-error'
+            : 'text-text-muted'
+          }`}>
+            <span className={`w-2 h-2 rounded-full ${
+              isConnected ? 'bg-green-400'
+              : (hasNoKey || hasAuthError) ? 'bg-state-error'
+              : 'bg-text-muted'
+            }`} />
+            {isConnected ? 'Connected' : hasAuthError ? 'Invalid API Key' : hasNoKey ? 'No API Key' : 'Unavailable'}
           </span>
           {lastRefresh && (
             <span className="text-xs text-text-muted ml-auto">

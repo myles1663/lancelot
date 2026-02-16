@@ -13,7 +13,7 @@ import logging
 import time
 from typing import Any, Optional
 
-from providers.base import ProviderClient, GenerateResult, ToolCall, ModelInfo
+from providers.base import ProviderClient, GenerateResult, ToolCall, ModelInfo, ProviderAuthError, _is_auth_error
 from providers.tool_schema import NormalizedToolDeclaration, to_anthropic_tools
 
 logger = logging.getLogger(__name__)
@@ -210,6 +210,8 @@ class AnthropicProviderClient(ProviderClient):
                 return call_fn()
             except Exception as e:
                 last_exc = e
+                if _is_auth_error(e):
+                    raise ProviderAuthError("anthropic", str(e)) from e
                 if attempt < max_retries and self._is_retryable_error(e):
                     delay = base_delay * (2 ** attempt)
                     logger.warning(

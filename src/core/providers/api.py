@@ -32,6 +32,25 @@ router = APIRouter(prefix="/api/v1/providers", tags=["providers"])
 _discovery = None
 _orchestrator = None
 
+# Auth status tracking — updated when provider calls fail with auth errors.
+# Maps provider name → error message (None = healthy).
+_auth_errors: dict[str, str] = {}
+
+
+def report_auth_error(provider: str, message: str = "") -> None:
+    """Record that a provider's API key failed authentication.
+
+    Called by the orchestrator when a ProviderAuthError is caught.
+    The /stack endpoint reads this to show accurate status in the War Room.
+    """
+    _auth_errors[provider] = message or "Invalid API key"
+    logger.warning("Provider auth error recorded for '%s': %s", provider, message)
+
+
+def clear_auth_error(provider: str) -> None:
+    """Clear a previously recorded auth error (e.g. after successful key rotation)."""
+    _auth_errors.pop(provider, None)
+
 # Persistence path (inside Docker volume)
 _DATA_DIR = Path(os.getenv("LANCELOT_DATA_DIR", "lancelot_data"))
 _CONFIG_FILE = _DATA_DIR / "provider_config.json"
@@ -153,11 +172,18 @@ def get_provider_stack():
 
     stack = _discovery.get_stack()
 
-    # Verify the active provider's API key is still present
+    # Determine status: check auth errors first, then key presence
     provider_name = stack.get("provider", "")
     env_var = API_KEY_VARS.get(provider_name, "")
     has_key = bool(os.getenv(env_var, "").strip()) if env_var else False
-    stack["status"] = "connected" if has_key else "no_key"
+
+    if provider_name in _auth_errors:
+        stack["status"] = "auth_error"
+        stack["status_detail"] = _auth_errors[provider_name]
+    elif not has_key:
+        stack["status"] = "no_key"
+    else:
+        stack["status"] = "connected"
     return stack
 
 
@@ -484,8 +510,9 @@ def rotate_provider_key(req: RotateKeyRequest):
             "message": f"Key validation failed: {e}",
         }
 
-    # Step 2: Update os.environ
+    # Step 2: Update os.environ and clear any auth error
     os.environ[env_var] = new_key
+    clear_auth_error(provider_name)
 
     # Step 3: If this is the active provider, hot-swap
     current_provider = _discovery.provider_name if _discovery else None

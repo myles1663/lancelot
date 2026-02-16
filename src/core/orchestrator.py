@@ -1937,10 +1937,20 @@ class LancelotOrchestrator:
         Raises:
             The original exception if all retries are exhausted or error is not retryable.
         """
+        from providers.base import ProviderAuthError
+
         last_exc = None
         for attempt in range(max_retries + 1):
             try:
                 return call_fn()
+            except ProviderAuthError as e:
+                # Auth failure — report to the provider API for War Room status
+                try:
+                    from providers.api import report_auth_error
+                    report_auth_error(e.provider, str(e))
+                except ImportError:
+                    pass
+                raise
             except Exception as e:
                 last_exc = e
                 if attempt < max_retries and self._is_retryable_error(e):
