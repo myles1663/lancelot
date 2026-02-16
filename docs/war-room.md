@@ -97,7 +97,9 @@ When a T3 action requires your approval, it appears here with:
 - Why it's T3 (base tier or escalation reason)
 - The full context of the request
 
-Actions: **Approve** (execute the action) or **Deny** (block and receipt the denial).
+T3 actions from the MCP Sentry are marked with a yellow **T3 ACTION** badge and show the tool parameters. Graduation proposals and APL rule proposals also appear in the same queue.
+
+Actions: **Approve** (execute the action) or **Deny** (block and receipt the denial). Both actions are logged to the Decision Log and appear in the Recent Decisions panel.
 
 **What to watch for:**
 - A sudden spike in T3 actions may indicate unusual behavior — investigate
@@ -264,7 +266,9 @@ Emergency controls for disabling subsystems.
 Each kill switch has a confirmation dialog before activation. Disabling a subsystem:
 - Takes effect immediately
 - Does not destroy data
-- Is reversible (re-enable by toggling the feature flag and restarting)
+- Is reversible (re-enable by toggling the switch back)
+
+**Persistence:** Kill switch state is persisted to `.flag_state.json` in the Docker data volume. Toggles made in the War Room survive container restarts. The priority order is: persisted state > `.env` values > code defaults.
 
 | Switch | What It Controls | When to Use |
 |--------|-----------------|-------------|

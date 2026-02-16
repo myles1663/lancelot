@@ -5,6 +5,38 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.1.1] - 2026-02-15
+
+### Fixed
+- **Governance Dashboard — T3 Approvals Invisible**: MCP Sentry T3 action approvals were stored
+  in a separate in-memory dict that the Governance API never queried. Wired the same MCPSentry
+  instance into `governance_api.py` so `/api/governance/approvals` now includes pending T3 actions
+  alongside graduation proposals and APL rule proposals. Approve/deny endpoints updated to handle
+  all three approval types.
+- **Agentic Loop — Escalated Ops Bypassed Sentry**: The V6/V8 agentic loops only checked
+  `if safety == "escalate" and not allow_writes`, meaning the action request path (`allow_writes=True`)
+  never blocked anything. Now all escalated tool calls go through MCP Sentry regardless of
+  `allow_writes`, creating proper pending approval requests for the War Room.
+- **Trust Records Not Counting**: The `_record_governance_event()` method was only called from
+  the plan execution pipeline, not from V6/V8 agentic loops (the primary execution path). Added
+  governance event recording after tool execution in both loops with proper `RiskTier` enum values.
+- **Kill Switch State Lost on Restart**: Feature flag toggles via the War Room only updated
+  `os.environ` (in-memory). On container restart, `.env` values would overwrite all runtime
+  changes. Added persistent JSON state file (`.flag_state.json`) in the Docker-mounted data
+  volume. Priority order: persisted state > env vars > code defaults. Toggles now survive
+  container restarts.
+- **Missing `health_check` Skill**: Scheduler's `health_sweep` job referenced a `health_check`
+  skill that was never registered as a builtin, causing recurring error logs every 60 seconds.
+  Created `health_check.py` builtin skill that reads the latest `HealthSnapshot` from the
+  health monitor and returns system status. Registered in the skill executor.
+
+### Added
+- **Sentry Decision Logging**: Approving or denying a T3 action via the War Room now records
+  the decision in the `DecisionLog`, so it appears in the Recent Decisions panel with the
+  correct risk tier and timestamp.
+- **T3 ACTION Badge**: War Room Governance Dashboard now shows a distinct yellow "T3 ACTION"
+  badge for MCP Sentry approval items, with warning-colored border and parameter display.
+
 ## [0.1.0] - 2026-02-14 (Public Launch)
 
 Initial public release of the Lancelot Governed Autonomous System.
