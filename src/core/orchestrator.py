@@ -62,6 +62,7 @@ _TOOL_CAPABILITY_MAP = {
     "list_workspace": "fs.list",
     "search_workspace": "fs.read",
     "write_to_file": "fs.write",
+    "document_creator": "fs.write",
     "execute_command": "shell.exec",
 }
 from plan_builder import EnvContext
@@ -1212,6 +1213,43 @@ class LancelotOrchestrator:
                 },
             ),
             NormalizedToolDeclaration(
+                name="document_creator",
+                description=(
+                    "Create professional documents: PDF, Word (.docx), Excel (.xlsx), or PowerPoint (.pptx). "
+                    "Use this tool whenever the user asks you to create, generate, or write a document, report, "
+                    "spreadsheet, presentation, or PDF. Do NOT use repo_writer for documents — use this tool instead. "
+                    "The 'content' parameter is a structured object with: title, subtitle, sections (each with "
+                    "heading, paragraphs, bullets), tables (each with headers and rows). "
+                    "For Excel: use headers and rows (or sheets array for multi-sheet). "
+                    "For PowerPoint: sections become slides."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "format": {
+                            "type": "string",
+                            "enum": ["pdf", "docx", "xlsx", "pptx"],
+                            "description": "Document format to create",
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Output file path relative to workspace (extension added automatically)",
+                        },
+                        "content": {
+                            "type": "object",
+                            "description": (
+                                "Document content. Keys: title (string), subtitle (string), "
+                                "sections (array of {heading, paragraphs[], bullets[]}), "
+                                "tables (array of {headers[], rows[][]}), "
+                                "For Excel: headers[] and rows[][] or sheets[{name, headers, rows}]. "
+                                "For PowerPoint: sections become slides."
+                            ),
+                        },
+                    },
+                    "required": ["format", "path", "content"],
+                },
+            ),
+            NormalizedToolDeclaration(
                 name="schedule_job",
                 description=(
                     "Create, list, or delete scheduled jobs. Use this to set up recurring tasks "
@@ -1297,6 +1335,10 @@ class LancelotOrchestrator:
 
         if skill_name == "schedule_job":
             # Auto-execute: manages scheduled jobs (create/list/delete)
+            return "auto"
+
+        if skill_name == "document_creator":
+            # Document creation within workspace is auto-approved (T1 risk)
             return "auto"
 
         if skill_name == "repo_writer":
@@ -1451,6 +1493,25 @@ class LancelotOrchestrator:
                             },
                         },
                         "required": ["message"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "document_creator",
+                    "description": (
+                        "Create professional documents: PDF, Word (.docx), Excel (.xlsx), or PowerPoint (.pptx). "
+                        "Use this whenever asked to create a document, report, spreadsheet, presentation, or PDF."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "format": {"type": "string", "enum": ["pdf", "docx", "xlsx", "pptx"], "description": "Document format"},
+                            "path": {"type": "string", "description": "Output file path relative to workspace"},
+                            "content": {"type": "object", "description": "Document content: title, subtitle, sections[{heading, paragraphs[], bullets[]}], tables[{headers[], rows[][]}]"},
+                        },
+                        "required": ["format", "path", "content"],
                     },
                 },
             },
