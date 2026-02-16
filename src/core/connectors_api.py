@@ -51,6 +51,7 @@ _CONNECTOR_CLASSES = {
     "calendar": ("src.connectors.connectors.calendar", "CalendarConnector", {}),
     "telegram": ("src.connectors.connectors.telegram", "TelegramConnector", {}),
     "x": ("src.connectors.connectors.x", "XConnector", {}),
+    "generic_rest": ("src.connectors.connectors.generic_rest", "GenericRESTConnector", {}),
 }
 
 _BACKEND_OPTIONS: Dict[str, List[str]] = {

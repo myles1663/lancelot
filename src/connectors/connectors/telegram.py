@@ -177,6 +177,7 @@ class TelegramConnector(ConnectorBase):
                 url=f"{self.TG_API_BASE}{{token}}/getUpdates?offset={offset}&timeout={timeout}&limit={limit}",
                 headers=headers,
                 credential_vault_key=cred_key,
+                metadata={"auth_type": "url_token"},
             )
 
         if operation_id == "get_me":
@@ -187,6 +188,7 @@ class TelegramConnector(ConnectorBase):
                 url=f"{self.TG_API_BASE}{{token}}/getMe",
                 headers=headers,
                 credential_vault_key=cred_key,
+                metadata={"auth_type": "url_token"},
             )
 
         if operation_id == "get_chat":
@@ -198,6 +200,7 @@ class TelegramConnector(ConnectorBase):
                 headers=headers,
                 body={"chat_id": params["chat_id"]},
                 credential_vault_key=cred_key,
+                metadata={"auth_type": "url_token"},
             )
 
         if operation_id == "get_file":
@@ -209,6 +212,7 @@ class TelegramConnector(ConnectorBase):
                 url=f"{self.TG_API_BASE}{{token}}/getFile?file_id={file_id}",
                 headers=headers,
                 credential_vault_key=cred_key,
+                metadata={"auth_type": "url_token"},
             )
 
         if operation_id == "send_message":
@@ -226,6 +230,7 @@ class TelegramConnector(ConnectorBase):
                 headers=headers,
                 body=body,
                 credential_vault_key=cred_key,
+                metadata={"auth_type": "url_token"},
             )
 
         if operation_id == "send_voice":
@@ -240,6 +245,7 @@ class TelegramConnector(ConnectorBase):
                     "voice": params["voice_url"],
                 },
                 credential_vault_key=cred_key,
+                metadata={"auth_type": "url_token"},
             )
 
         if operation_id == "send_photo":
@@ -257,6 +263,7 @@ class TelegramConnector(ConnectorBase):
                 headers=headers,
                 body=body,
                 credential_vault_key=cred_key,
+                metadata={"auth_type": "url_token"},
             )
 
         if operation_id == "delete_message":
@@ -271,6 +278,7 @@ class TelegramConnector(ConnectorBase):
                     "message_id": params["message_id"],
                 },
                 credential_vault_key=cred_key,
+                metadata={"auth_type": "url_token"},
             )
 
         raise KeyError(f"Unknown operation: {operation_id}")

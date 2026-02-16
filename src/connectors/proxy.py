@@ -5,11 +5,14 @@ ConnectorProxy is the ONLY component that makes outbound HTTP requests
 for connectors. It validates domains against manifests, injects credentials
 from the vault, enforces rate limits, and uses a pooled requests.Session.
 
-Supports four credential types:
-- oauth_token / bearer → ``Authorization: Bearer {token}``
-- api_key → ``X-API-Key: {value}``
-- basic_auth → ``Authorization: Basic {base64}``
-- bot_token → ``Authorization: Bot {token}`` (Discord)
+Supports credential injection modes (via ``metadata.auth_type``):
+- ``bearer`` / ``oauth_token`` → ``Authorization: Bearer {token}``
+- ``api_key`` → ``X-API-Key: {value}``
+- ``basic_auth`` → ``Authorization: Basic {base64}``  (single vault key)
+- ``basic_auth_composed`` → composes Basic auth from two vault keys
+- ``bot_token`` → ``Authorization: Bot {token}``  (Discord)
+- ``url_token`` → substitutes ``{token}`` in the URL  (Telegram)
+- ``oauth1`` → OAuth 1.0a signature  (X/Twitter)
 
 Supports three body encodings:
 - JSON (default) → ``json={body}``
@@ -22,8 +25,13 @@ All execution is SYNCHRONOUS (requests library, not aiohttp).
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import logging
+import secrets
 import time
+import urllib.parse
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -36,6 +44,82 @@ from src.connectors.registry import ConnectorRegistry
 from src.connectors.vault import CredentialVault
 
 logger = logging.getLogger(__name__)
+
+
+# ── OAuth 1.0a Signing ──────────────────────────────────────────
+
+def _percent_encode(s: str) -> str:
+    """RFC 5849 percent-encode a string."""
+    return urllib.parse.quote(str(s), safe="")
+
+
+def _build_oauth1_header(
+    method: str,
+    url: str,
+    body: Any,
+    consumer_key: str,
+    consumer_secret: str,
+    token: str,
+    token_secret: str,
+) -> str:
+    """Generate an OAuth 1.0a Authorization header value.
+
+    Implements RFC 5849 HMAC-SHA1 signature for X (Twitter) API v2.
+    """
+    timestamp = str(int(time.time()))
+    nonce = secrets.token_hex(16)
+
+    # OAuth parameters
+    oauth_params = {
+        "oauth_consumer_key": consumer_key,
+        "oauth_nonce": nonce,
+        "oauth_signature_method": "HMAC-SHA1",
+        "oauth_timestamp": timestamp,
+        "oauth_token": token,
+        "oauth_version": "1.0",
+    }
+
+    # Collect all parameters for signature base string
+    # (OAuth params + query string params; POST body only if form-encoded)
+    all_params = dict(oauth_params)
+
+    # Parse query string params from URL
+    parsed = urlparse(url)
+    base_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    if parsed.query:
+        for k, v in urllib.parse.parse_qsl(parsed.query):
+            all_params[k] = v
+
+    # Sort and encode parameters
+    sorted_params = sorted(all_params.items())
+    param_string = "&".join(
+        f"{_percent_encode(k)}={_percent_encode(v)}" for k, v in sorted_params
+    )
+
+    # Build signature base string: METHOD&URL&PARAMS
+    base_string = (
+        f"{method.upper()}&{_percent_encode(base_url)}&{_percent_encode(param_string)}"
+    )
+
+    # Build signing key: consumer_secret&token_secret
+    signing_key = f"{_percent_encode(consumer_secret)}&{_percent_encode(token_secret)}"
+
+    # HMAC-SHA1
+    signature = base64.b64encode(
+        hmac.new(
+            signing_key.encode("utf-8"),
+            base_string.encode("utf-8"),
+            hashlib.sha1,
+        ).digest()
+    ).decode("utf-8")
+
+    # Build Authorization header
+    oauth_params["oauth_signature"] = signature
+    auth_header = "OAuth " + ", ".join(
+        f'{_percent_encode(k)}="{_percent_encode(v)}"'
+        for k, v in sorted(oauth_params.items())
+    )
+    return auth_header
 
 
 # ── Domain Validator ──────────────────────────────────────────────
@@ -122,9 +206,12 @@ class ConnectorProxy:
             self._request_count += 1
             return self._protocol_adapter.execute(result)
 
-        # 4. Domain validation
-        if not DomainValidator.is_domain_allowed(result.url, manifest.target_domains):
-            domain = DomainValidator.extract_domain(result.url)
+        # 4. Domain validation (check before URL template substitution)
+        url = result.url
+        # For URL-token auth, validate domain before substituting the token
+        check_url = url.replace("{token}", "PLACEHOLDER") if "{token}" in url else url
+        if not DomainValidator.is_domain_allowed(check_url, manifest.target_domains):
+            domain = DomainValidator.extract_domain(check_url)
             return ConnectorResponse(
                 operation_id=result.operation_id,
                 connector_id=connector_id,
@@ -138,26 +225,74 @@ class ConnectorProxy:
 
         # 5. Credential injection
         headers = dict(result.headers)
+        auth_type = result.metadata.get("auth_type", "")
+
         if result.credential_vault_key:
             try:
-                cred_value = self._vault.retrieve(
-                    result.credential_vault_key,
-                    accessor_id=connector_id,
-                )
-                # Determine credential type from vault entry
-                vault_entry = self._vault._entries.get(result.credential_vault_key)
-                cred_type = vault_entry.type if vault_entry else "api_key"
+                if auth_type == "url_token":
+                    # Telegram-style: substitute {token} in URL path
+                    cred_value = self._vault.retrieve(
+                        result.credential_vault_key, accessor_id=connector_id,
+                    )
+                    url = url.replace("{token}", cred_value)
 
-                if cred_type in ("oauth_token", "bearer"):
-                    headers["Authorization"] = f"Bearer {cred_value}"
-                elif cred_type == "api_key":
-                    headers["X-API-Key"] = cred_value
-                elif cred_type == "basic_auth":
-                    headers["Authorization"] = f"Basic {cred_value}"
-                elif cred_type == "bot_token":
-                    headers["Authorization"] = f"Bot {cred_value}"
+                elif auth_type == "oauth1":
+                    # OAuth 1.0a signing (X/Twitter) — 4 vault keys
+                    consumer_key = self._vault.retrieve(
+                        result.metadata["oauth_consumer_key"], accessor_id=connector_id,
+                    )
+                    consumer_secret = self._vault.retrieve(
+                        result.metadata["oauth_consumer_secret"], accessor_id=connector_id,
+                    )
+                    oauth_token = self._vault.retrieve(
+                        result.metadata["oauth_token_key"], accessor_id=connector_id,
+                    )
+                    oauth_token_secret = self._vault.retrieve(
+                        result.metadata["oauth_token_secret"], accessor_id=connector_id,
+                    )
+                    headers["Authorization"] = _build_oauth1_header(
+                        method=result.method.value,
+                        url=url,
+                        body=result.body,
+                        consumer_key=consumer_key,
+                        consumer_secret=consumer_secret,
+                        token=oauth_token,
+                        token_secret=oauth_token_secret,
+                    )
+
+                elif auth_type == "basic_auth_composed":
+                    # Composed Basic auth from two vault keys (e.g. Twilio)
+                    username_key = result.metadata.get("basic_auth_username_key", "")
+                    username = self._vault.retrieve(
+                        username_key, accessor_id=connector_id,
+                    )
+                    password = self._vault.retrieve(
+                        result.credential_vault_key, accessor_id=connector_id,
+                    )
+                    encoded = base64.b64encode(
+                        f"{username}:{password}".encode()
+                    ).decode()
+                    headers["Authorization"] = f"Basic {encoded}"
+
                 else:
-                    headers["Authorization"] = f"Bearer {cred_value}"
+                    # Default: determine injection from vault entry type
+                    cred_value = self._vault.retrieve(
+                        result.credential_vault_key, accessor_id=connector_id,
+                    )
+                    vault_entry = self._vault._entries.get(result.credential_vault_key)
+                    cred_type = vault_entry.type if vault_entry else "api_key"
+
+                    if cred_type in ("oauth_token", "bearer"):
+                        headers["Authorization"] = f"Bearer {cred_value}"
+                    elif cred_type == "api_key":
+                        headers["X-API-Key"] = cred_value
+                    elif cred_type == "basic_auth":
+                        headers["Authorization"] = f"Basic {cred_value}"
+                    elif cred_type == "bot_token":
+                        headers["Authorization"] = f"Bot {cred_value}"
+                    else:
+                        headers["Authorization"] = f"Bearer {cred_value}"
+
             except (KeyError, PermissionError) as e:
                 return ConnectorResponse(
                     operation_id=result.operation_id,
@@ -170,7 +305,7 @@ class ConnectorProxy:
         # 6. Make HTTP request
         status_code, resp_headers, resp_body, elapsed_ms = self._make_request(
             method=result.method.value,
-            url=result.url,
+            url=url,
             headers=headers,
             body=result.body,
             timeout=result.timeout_seconds,

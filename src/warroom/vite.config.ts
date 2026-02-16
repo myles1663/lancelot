@@ -21,6 +21,12 @@ export default defineConfig({
       '/connectors': 'http://localhost:8000',
       '/chat': 'http://localhost:8000',
       '/health': 'http://localhost:8000',
+      '/soul': 'http://localhost:8000',
+      '/memory': 'http://localhost:8000',
+      '/system': 'http://localhost:8000',
+      '/usage': 'http://localhost:8000',
+      '/onboarding': 'http://localhost:8000',
+      '/crusader_status': 'http://localhost:8000',
       '/ws': {
         target: 'ws://localhost:8000',
         ws: true,

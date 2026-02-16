@@ -66,6 +66,8 @@ At least one API key is required. You can configure one or more providers. Keys 
 
 All feature flags are boolean: `true`/`1`/`yes` to enable, anything else to disable. All flags are **hot-toggleable** — changes take effect immediately without a container restart. Core subsystem flags (Soul, Skills, Scheduler, Health Monitor, Memory, BAL) use the SubsystemManager to lazily initialize or gracefully shut down their subsystems at runtime.
 
+**Dependency enforcement:** Some flags have `requires` dependencies (e.g., `FEATURE_SCHEDULER` requires `FEATURE_SKILLS`). The API validates these before toggling — enabling a flag without its dependencies returns a 400 error. Disabling a flag that other enabled flags depend on is also blocked. See the War Room Kill Switches page for the full dependency graph.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FEATURE_SOUL` | `true` | Constitutional governance subsystem |

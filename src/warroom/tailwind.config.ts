@@ -16,12 +16,15 @@ const config: Config = {
         state: {
           healthy: '#22C55E',
           degraded: '#F59E0B',
+          warning: '#F59E0B',
           error: '#EF4444',
           inactive: '#6B7280',
         },
         // Surface Colors (dark theme)
         surface: {
           primary: '#0F1117',
+          bg: '#0B0D14',
+          base: '#0F1117',
           card: '#1A1D27',
           'card-elevated': '#242735',
           input: '#2A2D3A',

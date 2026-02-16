@@ -118,6 +118,8 @@ class JobExecutor:
         self._receipts: List[Dict[str, Any]] = []
         self._tick_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._job_locks: Dict[str, threading.Lock] = {}
+        self._job_locks_guard = threading.Lock()
 
     @property
     def receipts(self) -> List[Dict[str, Any]]:
@@ -231,6 +233,13 @@ class JobExecutor:
     # Job execution
     # ------------------------------------------------------------------
 
+    def _get_job_lock(self, job_id: str) -> threading.Lock:
+        """Get or create a per-job lock to prevent concurrent execution."""
+        with self._job_locks_guard:
+            if job_id not in self._job_locks:
+                self._job_locks[job_id] = threading.Lock()
+            return self._job_locks[job_id]
+
     def execute_job(self, job_id: str) -> JobExecutionResult:
         """Execute a job through the gating pipeline.
 
@@ -240,9 +249,33 @@ class JobExecutor:
         3. Job requires_approvals (placeholder — logs if needed)
         4. Execute via skill function
 
+        Per-job locking prevents concurrent execution of the same job
+        from the tick loop and the run_now API.
+
         Returns:
             JobExecutionResult with execution details.
         """
+        lock = self._get_job_lock(job_id)
+        if not lock.acquire(blocking=False):
+            logger.info("Job '%s' already running, skipping", job_id)
+            receipt = self._emit_receipt(
+                "scheduled_job_skipped",
+                job_id=job_id,
+                reason="Already running (concurrent execution blocked)",
+            )
+            return JobExecutionResult(
+                job_id=job_id,
+                skipped=True,
+                skip_reason="Already running (concurrent execution blocked)",
+                receipt=receipt,
+            )
+        try:
+            return self._execute_job_inner(job_id)
+        finally:
+            lock.release()
+
+    def _execute_job_inner(self, job_id: str) -> JobExecutionResult:
+        """Inner execution logic (called with per-job lock held)."""
         # Check job exists
         job = self._scheduler.get_job(job_id)
         if job is None:

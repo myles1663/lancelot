@@ -316,6 +316,21 @@ def get_operations(self):
     ]
 ```
 
+### Authentication Types
+
+The ConnectorProxy supports several credential injection modes via the `metadata.auth_type` field in your `ConnectorResult`:
+
+| Auth Type | How It Works | Example Connector |
+|-----------|-------------|-------------------|
+| `bearer` / `oauth_token` | Injects `Authorization: Bearer {token}` | Gmail, Outlook |
+| `api_key` | Injects `X-API-Key: {value}` | Generic REST |
+| `bot_token` | Injects `Authorization: Bot {token}` | Discord |
+| `url_token` | Substitutes `{token}` in the URL path | Telegram |
+| `basic_auth_composed` | Composes `Authorization: Basic {base64(user:pass)}` from two vault keys | SMS (Twilio) |
+| `oauth1` | Full OAuth 1.0a HMAC-SHA1 signature (4 vault keys) | X (Twitter) |
+
+For `basic_auth_composed`, set `metadata.basic_auth_username_key` to the vault key for the username. For `oauth1`, set `metadata.oauth_consumer_key`, `oauth_consumer_secret`, `oauth_token_key`, and `oauth_token_secret`.
+
 ### Error Handling
 
 Return errors in a structured format:

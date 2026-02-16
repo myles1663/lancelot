@@ -179,6 +179,9 @@ def set_flag(name: str, value: bool) -> None:
     import feature_flags as _self
     if not hasattr(_self, name):
         raise ValueError(f"Unknown flag: {name}")
+    current = getattr(_self, name)
+    if not isinstance(current, bool):
+        raise ValueError(f"{name} is not a boolean flag")
     setattr(_self, name, value)
     os.environ[name] = "true" if value else "false"
     _persisted_state[name] = value

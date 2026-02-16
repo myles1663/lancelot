@@ -199,7 +199,7 @@ class SMSConnector(ConnectorBase):
                 headers=form_headers,
                 body=urlencode(form_data),
                 credential_vault_key=cred_key,
-                metadata={"billable": True, "auth_type": "basic_auth"},
+                metadata={"billable": True, "auth_type": "basic_auth_composed", "basic_auth_username_key": "sms.account_sid"},
             )
 
         elif operation_id == "send_mms":
@@ -220,7 +220,7 @@ class SMSConnector(ConnectorBase):
                 headers=form_headers,
                 body=urlencode(form_data),
                 credential_vault_key=cred_key,
-                metadata={"billable": True, "auth_type": "basic_auth"},
+                metadata={"billable": True, "auth_type": "basic_auth_composed", "basic_auth_username_key": "sms.account_sid"},
             )
 
         elif operation_id == "get_message":
@@ -232,7 +232,7 @@ class SMSConnector(ConnectorBase):
                 url=f"{base}/Messages/{sid}.json",
                 headers=json_headers,
                 credential_vault_key=cred_key,
-                metadata={"auth_type": "basic_auth"},
+                metadata={"auth_type": "basic_auth_composed", "basic_auth_username_key": "sms.account_sid"},
             )
 
         elif operation_id == "list_messages":
@@ -251,7 +251,7 @@ class SMSConnector(ConnectorBase):
                 url=f"{base}/Messages.json{qs}",
                 headers=json_headers,
                 credential_vault_key=cred_key,
-                metadata={"auth_type": "basic_auth"},
+                metadata={"auth_type": "basic_auth_composed", "basic_auth_username_key": "sms.account_sid"},
             )
 
         elif operation_id == "get_media":
@@ -264,7 +264,7 @@ class SMSConnector(ConnectorBase):
                 url=f"{base}/Messages/{msid}/Media/{media_sid}.json",
                 headers=json_headers,
                 credential_vault_key=cred_key,
-                metadata={"auth_type": "basic_auth"},
+                metadata={"auth_type": "basic_auth_composed", "basic_auth_username_key": "sms.account_sid"},
             )
 
         elif operation_id == "delete_message":
@@ -276,7 +276,7 @@ class SMSConnector(ConnectorBase):
                 url=f"{base}/Messages/{sid}.json",
                 headers=json_headers,
                 credential_vault_key=cred_key,
-                metadata={"auth_type": "basic_auth"},
+                metadata={"auth_type": "basic_auth_composed", "basic_auth_username_key": "sms.account_sid"},
             )
 
         else:

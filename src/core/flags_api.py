@@ -12,7 +12,7 @@ import yaml
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +320,38 @@ async def update_network_allowlist(body: AllowlistUpdate):
         return JSONResponse(status_code=500, content={"error": str(exc)})
 
 
+# ── Dependency Validation ────────────────────────────────────────────
+
+def _validate_flag_dependencies(name: str, new_value: bool) -> Optional[str]:
+    """Validate requires/conflicts before enabling or disabling a flag.
+
+    Returns an error message if validation fails, None if OK.
+    """
+    import feature_flags as ff
+
+    meta = FLAG_META.get(name, {})
+
+    if new_value:
+        # Enabling: all required flags must be enabled
+        for req in meta.get("requires", []):
+            if not getattr(ff, req, False):
+                return f"Cannot enable {name}: requires {req} to be enabled first"
+        # Enabling: no conflicting flags can be enabled
+        for conflict in meta.get("conflicts", []):
+            if getattr(ff, conflict, False):
+                return f"Cannot enable {name}: conflicts with {conflict} (currently enabled)"
+    else:
+        # Disabling: check if any other enabled flag depends on this one
+        for other_name, other_meta in FLAG_META.items():
+            if other_name == name:
+                continue
+            if name in other_meta.get("requires", []):
+                if getattr(ff, other_name, False):
+                    return f"Cannot disable {name}: {other_name} depends on it (disable {other_name} first)"
+
+    return None
+
+
 # ── Flag Toggle/Set Routes ───────────────────────────────────────────
 
 @router.post("/{name}/toggle")
@@ -328,6 +360,17 @@ async def toggle_flag(name: str):
     try:
         import feature_flags as ff
         from subsystem_manager import subsystem_manager
+
+        # Determine what the new value will be before toggling
+        current = getattr(ff, name, None)
+        if current is None or not isinstance(current, bool):
+            return JSONResponse(status_code=400, content={"error": f"Unknown flag: {name}"})
+        new_val = not current
+
+        # Validate dependencies
+        dep_error = _validate_flag_dependencies(name, new_val)
+        if dep_error:
+            return JSONResponse(status_code=400, content={"error": dep_error})
 
         new_val = ff.toggle_flag(name)
 
@@ -374,6 +417,11 @@ async def set_flag(name: str, value: bool = True):
     try:
         import feature_flags as ff
         from subsystem_manager import subsystem_manager
+
+        # Validate dependencies
+        dep_error = _validate_flag_dependencies(name, value)
+        if dep_error:
+            return JSONResponse(status_code=400, content={"error": dep_error})
 
         ff.set_flag(name, value)
 

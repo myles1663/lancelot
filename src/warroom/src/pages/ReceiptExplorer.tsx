@@ -44,7 +44,7 @@ export function ReceiptExplorer() {
             label="Success Rate"
             value={
               stats.by_status
-                ? `${Math.round(((stats.by_status.completed ?? 0) / Math.max(stats.total_receipts, 1)) * 100)}%`
+                ? `${Math.round(((stats.by_status.success ?? 0) / Math.max(stats.total_receipts, 1)) * 100)}%`
                 : '--'
             }
           />
@@ -66,8 +66,8 @@ export function ReceiptExplorer() {
           className="bg-surface-input border border-border-default rounded-md px-3 py-2 text-sm text-text-primary"
         >
           <option value="">All Statuses</option>
-          <option value="completed">Completed</option>
-          <option value="failed">Failed</option>
+          <option value="success">Success</option>
+          <option value="failure">Failed</option>
           <option value="pending">Pending</option>
         </select>
         <select

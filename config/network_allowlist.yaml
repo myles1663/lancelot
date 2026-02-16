@@ -1,8 +1,17 @@
 domains:
 - api.anthropic.com
 - api.github.com
+- api.openai.com
 - api.telegram.org
+- api.twilio.com
+- api.x.com
+- api.x.ai
+- discord.com
 - generativelanguage.googleapis.com
 - github.com
+- gmail.googleapis.com
+- graph.facebook.com
+- graph.microsoft.com
 - raw.githubusercontent.com
-- api.x.com
+- slack.com
+- www.googleapis.com

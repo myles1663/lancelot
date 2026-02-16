@@ -211,6 +211,10 @@ def _init_soul():
     from soul.api import router as soul_router
 
     active_soul = load_active_soul()
+    if active_soul is None:
+        logger.warning("No active soul found — Soul subsystem starting without a soul document")
+        main_orchestrator.soul = None
+        return {"soul": None}
 
     # Apply composable soul overlays if BAL is enabled
     try:

@@ -165,7 +165,13 @@ class XConnector(ConnectorBase):
                 url=f"{self.X_API_BASE}/users/me?user.fields={user_fields}",
                 headers={"Content-Type": "application/json"},
                 credential_vault_key=cred_key,
-                metadata={"auth_type": "oauth1"},
+                metadata={
+                    "auth_type": "oauth1",
+                    "oauth_consumer_key": "x.api_key",
+                    "oauth_consumer_secret": "x.api_key_secret",
+                    "oauth_token_key": "x.access_token",
+                    "oauth_token_secret": "x.access_token_secret",
+                },
             )
 
         if operation_id == "post_tweet":
@@ -185,7 +191,13 @@ class XConnector(ConnectorBase):
                 headers={"Content-Type": "application/json"},
                 body=body,
                 credential_vault_key=cred_key,
-                metadata={"auth_type": "oauth1"},
+                metadata={
+                    "auth_type": "oauth1",
+                    "oauth_consumer_key": "x.api_key",
+                    "oauth_consumer_secret": "x.api_key_secret",
+                    "oauth_token_key": "x.access_token",
+                    "oauth_token_secret": "x.access_token_secret",
+                },
             )
 
         if operation_id == "delete_tweet":
@@ -197,7 +209,13 @@ class XConnector(ConnectorBase):
                 url=f"{self.X_API_BASE}/tweets/{tweet_id}",
                 headers={"Content-Type": "application/json"},
                 credential_vault_key=cred_key,
-                metadata={"auth_type": "oauth1"},
+                metadata={
+                    "auth_type": "oauth1",
+                    "oauth_consumer_key": "x.api_key",
+                    "oauth_consumer_secret": "x.api_key_secret",
+                    "oauth_token_key": "x.access_token",
+                    "oauth_token_secret": "x.access_token_secret",
+                },
             )
 
         raise KeyError(f"Unknown operation: {operation_id}")

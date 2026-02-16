@@ -39,7 +39,7 @@ rate_limits:
 connectors:
   email:
     enabled: true
-    backend: smtp
+    backend: outlook
     settings:
       max_results_per_query: 50
   slack:

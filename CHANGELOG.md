@@ -12,6 +12,13 @@ All notable changes to Project Lancelot will be documented in this file.
   reversible via delete), `delete_tweet` (T3, irreversible), `get_me` (T0, read account info).
   Auth via OAuth 1.0a (4 credentials: API Key, API Key Secret, Access Token, Access Token Secret).
   Free tier supports ~1,500 tweets/month. Domain `api.x.com` added to network allowlist.
+- **Connector Proxy Multi-Auth**: ConnectorProxy now supports 4 credential injection modes:
+  `url_token` (Telegram URL template substitution), `oauth1` (X/Twitter HMAC-SHA1 signing),
+  `basic_auth_composed` (Twilio two-key Basic auth), and `bot_token` (Discord). Previously only
+  supported single-credential bearer/api_key injection.
+- **Flag Dependency Enforcement**: Toggle and set endpoints now validate `requires` and `conflicts`
+  metadata before changing flags. Enabling a flag that requires a disabled dependency returns a 400
+  error. Disabling a flag that other enabled flags depend on is also blocked.
 
 ### Fixed
 - **SMTP Email Connector Credentials**: The SMTP backend previously had a single `smtp_credentials`
@@ -24,6 +31,35 @@ All notable changes to Project Lancelot will be documented in this file.
   Service SID are optional (one of the two is needed for sending).
 - **WhatsApp Connector Credentials**: Added missing `whatsapp.phone_number_id` credential field.
   Previously only configurable via YAML — now manageable from the War Room Connectors page.
+- **Receipt Explorer Status Mismatch**: UI used `completed`/`failed` filter values but backend uses
+  `success`/`failure`. Success rate metric always showed 0%. Fixed filter values and calculation.
+- **Network Allowlist Missing Domains**: 7 of 9 connector domains were missing from the allowlist,
+  which would have blocked all traffic. Added: `api.twilio.com`, `slack.com`, `discord.com`,
+  `graph.microsoft.com`, `graph.facebook.com`, `gmail.googleapis.com`, `www.googleapis.com`,
+  `api.openai.com`, `api.x.ai`.
+- **Telegram Connector Auth**: URLs contained literal `{token}` placeholder that was never
+  substituted. Added `url_token` auth type metadata so the proxy substitutes the token correctly.
+- **Discord Connector Auth**: Credential type was `api_key`, causing the proxy to inject
+  `X-API-Key` instead of `Authorization: Bot`. Changed to `bot_token` type.
+- **SMS Connector Auth**: Account SID was always empty because `_instantiate_connector` never
+  populated it. Switched to `basic_auth_composed` where the proxy composes Basic auth from two
+  vault keys at request time.
+- **Health Monitor Slow Shutdown**: `stop_monitor()` could block for up to 30 seconds (the full
+  monitoring interval). Changed from monolithic `time.sleep()` to 1-second increments with a stop
+  event, matching the scheduler pattern. Shutdown now completes within ~1 second.
+- **Scheduler Job Concurrency**: `execute_job()` could run the same job simultaneously from the
+  tick loop and the `run_now` API. Added per-job locking — concurrent attempts are skipped with a
+  receipt.
+- **Soul Init Crash**: `load_active_soul()` returning None caused an AttributeError. Added null
+  guard so Soul subsystem starts gracefully without a soul document.
+- **set_flag() Type Safety**: `set_flag()` could overwrite non-boolean module attributes. Added
+  `isinstance(current, bool)` guard.
+- **Vite Dev Proxy**: Missing proxy entries for `/soul`, `/memory`, `/system`, `/usage`,
+  `/onboarding`, `/crusader_status` caused 404s in development mode.
+- **Tailwind Missing Colors**: Added `state.warning`, `surface.bg`, and `surface.base` color tokens
+  referenced by War Room components but not defined.
+- **generic_rest Connector Registration**: `GenericRESTConnector` was not in `_CONNECTOR_CLASSES`,
+  preventing it from being instantiated.
 
 ## [0.1.3] - 2026-02-16
 

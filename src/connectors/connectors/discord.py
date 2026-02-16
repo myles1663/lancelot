@@ -39,7 +39,7 @@ class DiscordConnector(ConnectorBase):
             required_credentials=[
                 CredentialSpec(
                     name="discord_bot_token",
-                    type="api_key",
+                    type="bot_token",
                     vault_key="discord.bot_token",
                     scopes=[],  # Discord uses permission integers, not OAuth scopes
                 ),

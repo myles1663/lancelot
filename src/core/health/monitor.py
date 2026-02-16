@@ -58,6 +58,7 @@ class HealthMonitor:
         self._previous_ready: Optional[bool] = None
         self._receipts: List[Dict[str, Any]] = []
         self._running = False
+        self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
     @property
@@ -139,6 +140,7 @@ class HealthMonitor:
         if self._running:
             return
         self._running = True
+        self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._loop, daemon=True, name="health-monitor"
         )
@@ -148,16 +150,21 @@ class HealthMonitor:
     def stop_monitor(self) -> None:
         """Stop the background health monitoring loop."""
         self._running = False
+        self._stop_event.set()
         if self._thread is not None:
-            self._thread.join(timeout=self._interval_s + 1)
+            self._thread.join(timeout=5)
             self._thread = None
         logger.info("Health monitor stopped")
 
     def _loop(self) -> None:
         """Background loop that periodically computes snapshots."""
-        while self._running:
+        while self._running and not self._stop_event.is_set():
             try:
                 self.compute_snapshot()
             except Exception:
                 logger.exception("Health monitor tick failed")
-            time.sleep(self._interval_s)
+            # Sleep in 1-second increments so stop_monitor() is responsive
+            for _ in range(int(self._interval_s)):
+                if self._stop_event.is_set():
+                    return
+                time.sleep(1)
