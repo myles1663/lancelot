@@ -131,7 +131,9 @@ class NetworkInterceptor:
         "googleapis.com",
         "salesforce.com",
         "localhost",
-        "127.0.0.1"
+        "127.0.0.1",
+        "api.projectlancelot.dev",
+        "ghcr.io",
     ]
 
     BLOCKED_IP_RANGES = [

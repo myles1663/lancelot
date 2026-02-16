@@ -40,6 +40,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
 RUN playwright install --with-deps chromium
 
+# Copy VERSION file first (separate layer for cache efficiency)
+COPY VERSION /app/VERSION
+
 # Copy the rest of the application code
 COPY . .
 

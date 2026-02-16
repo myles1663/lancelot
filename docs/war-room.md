@@ -324,6 +324,30 @@ All destructive operations are audit-logged.
 
 ---
 
+## Update Banner
+
+A notification banner appears at the top of every War Room page when a new version of Lancelot is available. The system checks for updates every 6 hours in the background.
+
+**Severity levels:**
+
+| Severity | Color | Dismissible | Meaning |
+|----------|-------|-------------|---------|
+| **Info** | Blue | Yes (reappears after 24h) | Minor update, no urgency |
+| **Recommended** | Accent | Yes (reappears after 24h) | Recommended update with improvements |
+| **Important** | Yellow | No | Significant update, should apply soon |
+| **Critical** | Red | No | Security or critical fix, apply immediately |
+
+**Banner actions:**
+- **View Changelog** — Opens the release notes in a new tab
+- **Check Now** — Forces an immediate version check (normally checks every 6 hours)
+- **Dismiss** — Hides the banner for 24 hours (info/recommended only; important/critical are always visible)
+
+**Configuration:**
+- Version manifest URL: `LANCELOT_VERSION_URL` environment variable (default: `https://api.projectlancelot.dev/v1/version`)
+- The `VERSION` file at the repo root is the single source of truth for the running version
+
+---
+
 ## Keyboard Shortcuts
 
 | Shortcut | Action |

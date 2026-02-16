@@ -5,6 +5,28 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.1.7] - 2026-02-16
+
+### Added
+- **Update Mechanism — Phase 1**: Version discovery, periodic update checks, and War Room update
+  banner with severity-colored notifications:
+  - **VERSION file**: Single source of truth for the running version (replaces hardcoded `"8.0"`).
+    Health endpoint now reads from `VERSION`.
+  - **Update Checker Service** (`update_checker.py`): Background daemon thread that checks a version
+    manifest URL every 6 hours (configurable via `LANCELOT_VERSION_URL`). Graceful fallback if
+    unreachable — no crash, no spam. Stores latest check result and banner dismissal state in memory.
+  - **Update API** (`/api/updates/*`): Three endpoints — `GET /status` (cached, cheap poll),
+    `POST /check` (force immediate check), `POST /dismiss` (dismiss banner for info/recommended;
+    important/critical are non-dismissible).
+  - **War Room Update Banner**: Severity-colored banner at top of main content area. Shows current
+    version → available version, severity badge, changelog summary. "View Changelog" link, "Check Now"
+    button, and "Dismiss" button (info/recommended only). Polls backend every 5 minutes.
+  - **Network Allowlist**: Added `api.projectlancelot.dev` and `ghcr.io` to the NetworkInterceptor
+    allow list so version checks aren't blocked.
+- **GitHub Actions CI/CD** (`.github/workflows/release.yml`): Automated release pipeline triggered on
+  `v*` tag push — builds multi-arch Docker image (amd64 + arm64), pushes to GHCR, creates GitHub
+  Release with auto-generated notes. VERSION file is verified against tag before build.
+
 ## [0.1.6] - 2026-02-16
 
 ### Added

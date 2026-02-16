@@ -37,6 +37,10 @@ MAX_REQUEST_SIZE = 20_971_520
 # F8: Startup timestamp for uptime tracking
 _startup_time = None
 
+# Read version from VERSION file (single source of truth)
+from update_checker import read_current_version
+_app_version = read_current_version()
+
 
 # F2: Structured error response helper
 def error_response(status_code: int, message: str, detail: str = None, request_id: str = None) -> JSONResponse:
@@ -671,6 +675,19 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Setup API initialization failed: {e}")
 
+    # ===== UPDATE CHECKER + API =====
+    try:
+        from update_checker import UpdateChecker
+        from update_api import router as update_router, init_update_api
+
+        _update_checker = UpdateChecker()
+        init_update_api(_update_checker)
+        _update_checker.start()
+        app.include_router(update_router)
+        logger.info("Update checker started (version=%s).", _app_version)
+    except Exception as e:
+        logger.warning(f"Update checker initialization failed: {e}")
+
     # ===== PHASE 6b: USAGE TRACKER + PERSISTENCE =====
     try:
         from usage_tracker import UsageTracker
@@ -1033,7 +1050,7 @@ def health_check():
         uptime = round(time.time() - _startup_time, 1) if _startup_time else 0
         return {
             "status": "online",
-            "version": "8.0",
+            "version": _app_version,
             "components": components,
             "crusader_mode": crusader_mode.is_active,
             "uptime_seconds": uptime,

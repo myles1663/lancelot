@@ -4,6 +4,7 @@ import { Sidebar } from './Sidebar'
 import { Header } from './Header'
 import { NotificationTray } from './NotificationTray'
 import { Toast } from '@/components/Toast'
+import { UpdateBanner } from '@/components/UpdateBanner'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 import { useWebSocket, WsEvent } from '@/hooks/useWebSocket'
 
@@ -69,6 +70,7 @@ export function WarRoomShell() {
         }`}
       >
         <div className="p-6 max-w-[1600px] mx-auto">
+          <UpdateBanner />
           <Outlet />
         </div>
       </main>

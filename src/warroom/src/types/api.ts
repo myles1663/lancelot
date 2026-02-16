@@ -453,3 +453,20 @@ export interface MemoryPurgeResponse {
   status: string
   purged_files: string[]
 }
+
+// ------------------------------------------------------------------
+// Updates  (/api/updates/*)
+// ------------------------------------------------------------------
+
+export interface UpdateStatusResponse {
+  current_version: string
+  latest_version: string | null
+  update_available: boolean
+  severity: 'info' | 'recommended' | 'important' | 'critical' | null
+  message: string | null
+  changelog_url: string | null
+  released_at: string | null
+  checked_at: number | null
+  check_error: string | null
+  show_banner: boolean
+}
