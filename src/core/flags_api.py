@@ -98,11 +98,11 @@ FLAG_META = {
 
     # ── Execution & Runtime ───────────────────────────────────────
     "FEATURE_RESPONSE_ASSEMBLER": {
-        "description": "Response assembly pipeline. Processes raw LLM output through formatting, citation injection, and artifact extraction before returning to the user.",
+        "description": "Response assembly pipeline. Always active since Fix Pack V2 — this flag is informational only. The assembler processes raw LLM output through formatting, citation injection, and artifact extraction.",
         "category": "Runtime",
         "requires": [],
         "conflicts": [],
-        "warning": "Disabling returns raw LLM output without post-processing. Artifacts and structured formatting will not be extracted.",
+        "warning": "This flag is informational only. The response assembler is always active since Fix Pack V2 for output hygiene. Toggling has no effect.",
     },
     "FEATURE_EXECUTION_TOKENS": {
         "description": "Execution token system. Generates time-limited, permission-scoped tokens for tool execution. Provides fine-grained authorization control.",

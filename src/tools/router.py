@@ -34,6 +34,7 @@ from src.tools.contracts import (
 )
 from src.tools.health import HealthMonitor, get_health_monitor
 from src.tools.policies import PolicyEngine, PolicyDecision
+from src.core.feature_flags import FEATURE_TOOLS_HOST_EXECUTION
 
 logger = logging.getLogger(__name__)
 
@@ -43,13 +44,20 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
-@dataclass
-class RouterConfig:
-    """Configuration for the provider router."""
-
-    # Default provider preferences per capability
-    # Order matters: first healthy provider is selected
-    provider_preferences: Dict[str, List[str]] = field(default_factory=lambda: {
+def _default_provider_preferences() -> Dict[str, List[str]]:
+    """Build provider preferences based on feature flags."""
+    # When host execution is enabled, prefer it over sandbox for core capabilities
+    if FEATURE_TOOLS_HOST_EXECUTION:
+        return {
+            "shell_exec": ["host_execution", "local_sandbox"],
+            "repo_ops": ["host_execution", "local_sandbox"],
+            "file_ops": ["host_execution", "local_sandbox"],
+            "web_ops": ["local_sandbox"],
+            "ui_builder": ["ui_templates", "ui_antigravity"],
+            "deploy_ops": ["host_execution", "local_sandbox"],
+            "vision_control": ["vision_antigravity"],
+        }
+    return {
         "shell_exec": ["local_sandbox"],
         "repo_ops": ["local_sandbox"],
         "file_ops": ["local_sandbox"],
@@ -57,7 +65,18 @@ class RouterConfig:
         "ui_builder": ["ui_templates", "ui_antigravity"],
         "deploy_ops": ["local_sandbox"],
         "vision_control": ["vision_antigravity"],
-    })
+    }
+
+
+@dataclass
+class RouterConfig:
+    """Configuration for the provider router."""
+
+    # Default provider preferences per capability
+    # Order matters: first healthy provider is selected
+    provider_preferences: Dict[str, List[str]] = field(
+        default_factory=_default_provider_preferences
+    )
 
     # Fallback provider (used if all preferred providers offline)
     fallback_provider: Optional[str] = "local_sandbox"

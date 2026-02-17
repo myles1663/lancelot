@@ -18,11 +18,14 @@ Risk Levels:
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+import yaml
 
 from src.tools.contracts import (
     Capability,
@@ -30,6 +33,24 @@ from src.tools.contracts import (
     PolicySnapshot,
     ToolIntent,
 )
+
+logger = logging.getLogger(__name__)
+
+# Path to network allowlist config (resolved at import time)
+_ALLOWLIST_CONFIG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "config", "network_allowlist.yaml",
+)
+
+
+def _load_network_allowlist() -> List[str]:
+    """Load allowed domains from config/network_allowlist.yaml."""
+    try:
+        with open(_ALLOWLIST_CONFIG_PATH, "r") as f:
+            data = yaml.safe_load(f) or {}
+        return [d.lower().strip() for d in data.get("domains", []) if d]
+    except Exception:
+        return []
 
 
 # =============================================================================
@@ -477,6 +498,7 @@ class PolicyEngine:
         self,
         capability: Capability,
         explicit_request: bool = False,
+        target_domain: Optional[str] = None,
     ) -> PolicyDecision:
         """
         Evaluate network access request.
@@ -484,12 +506,25 @@ class PolicyEngine:
         Args:
             capability: The capability requesting network
             explicit_request: Whether network was explicitly requested
+            target_domain: Optional target domain for allowlist checking
 
         Returns:
             PolicyDecision for network access
         """
+        from src.core.feature_flags import FEATURE_NETWORK_ALLOWLIST
+
         # Check if capability is allowed network by default
         if capability in self.config.network_allowed_capabilities:
+            # If allowlist is active and a domain is specified, enforce it
+            if FEATURE_NETWORK_ALLOWLIST and target_domain:
+                if not self._is_domain_allowed(target_domain):
+                    return PolicyDecision(
+                        allowed=False,
+                        risk_level=RiskLevel.HIGH,
+                        reasons=[
+                            f"Domain '{target_domain}' not in network allowlist"
+                        ],
+                    )
             return PolicyDecision(
                 allowed=True,
                 risk_level=RiskLevel.MEDIUM,
@@ -498,6 +533,16 @@ class PolicyEngine:
 
         # Check global default
         if self.config.network_allowed_default:
+            # Enforce allowlist even for globally allowed network
+            if FEATURE_NETWORK_ALLOWLIST and target_domain:
+                if not self._is_domain_allowed(target_domain):
+                    return PolicyDecision(
+                        allowed=False,
+                        risk_level=RiskLevel.HIGH,
+                        reasons=[
+                            f"Domain '{target_domain}' not in network allowlist"
+                        ],
+                    )
             return PolicyDecision(
                 allowed=True,
                 risk_level=RiskLevel.HIGH,
@@ -518,6 +563,21 @@ class PolicyEngine:
             risk_level=RiskLevel.LOW,
             reasons=["Network disabled by default"],
         )
+
+    def _is_domain_allowed(self, domain: str) -> bool:
+        """Check if a domain is in the network allowlist.
+
+        Supports suffix matching: 'api.github.com' matches allowlisted 'github.com'.
+        """
+        allowed = _load_network_allowlist()
+        if not allowed:
+            # Empty allowlist = allow all (no restrictions configured)
+            return True
+        domain_lower = domain.lower().strip()
+        for entry in allowed:
+            if domain_lower == entry or domain_lower.endswith("." + entry):
+                return True
+        return False
 
     # =========================================================================
     # Tool Intent Evaluation

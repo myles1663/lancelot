@@ -5,6 +5,31 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.0] - 2026-02-16
+
+### Added
+- **Host Execution Provider** (`FEATURE_TOOLS_HOST_EXECUTION`): New `HostExecutionProvider` that
+  runs commands directly on the host OS instead of inside the Docker sandbox. Implements
+  ShellExec, RepoOps, FileOps, and DeployOps capabilities. Still enforces command denylist,
+  output bounding, and timeouts. Registered as preferred provider when enabled.
+
+### Fixed
+- **Feature flag audit — 6 broken flags now functional**:
+  - `FEATURE_TOOLS_NETWORK`: Now wired to `SandboxConfig.network_enabled` so the flag actually
+    controls whether Docker sandbox commands can access the network.
+  - `FEATURE_TOOLS_CLI_PROVIDERS`: Gate added in Tool Fabric setup; logs when enabled, blocks
+    future CLI adapter registration when disabled.
+  - `FEATURE_NETWORK_ALLOWLIST`: Enforcement added in `PolicyEngine.evaluate_network()` — when
+    enabled, only domains listed in `config/network_allowlist.yaml` are permitted. Supports
+    suffix matching (e.g., `api.github.com` matches allowlisted `github.com`).
+  - `FEATURE_VOICE_NOTES`: Now wired in `gateway.py` — `VoiceProcessor` is only created and
+    passed to `TelegramBot` when the flag is enabled.
+  - `FEATURE_SKILL_SECURITY_PIPELINE`: Now gates skill installation in `SkillFactory` with a
+    4-stage pipeline: manifest validation, dangerous code scanning (eval, exec, os.system, etc.),
+    ownership verification, and audit logging.
+  - `FEATURE_RESPONSE_ASSEMBLER`: Updated description to note it's informational-only since
+    Fix Pack V2 (assembler is always active for output hygiene).
+
 ## [0.1.9] - 2026-02-16
 
 ### Added

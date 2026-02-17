@@ -164,7 +164,15 @@ telegram_bot = None
 scheduler_service = None  # Module-level ref for schedule_job skill
 
 if COMMS_TYPE == "telegram":
-    telegram_bot = TelegramBot(orchestrator=main_orchestrator)
+    _voice_proc = None
+    if _ff.FEATURE_VOICE_NOTES:
+        try:
+            from voice_processor import VoiceProcessor
+            _voice_proc = VoiceProcessor()
+            logger.info("Voice notes enabled for Telegram")
+        except Exception as _vp_err:
+            logger.warning("Voice processor init failed: %s", _vp_err)
+    telegram_bot = TelegramBot(orchestrator=main_orchestrator, voice_processor=_voice_proc)
     logger.info("Comms backend: Telegram")
 else:
     chat_poller = ChatPoller(data_dir="/home/lancelot/data", orchestrator=main_orchestrator)

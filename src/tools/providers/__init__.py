@@ -9,6 +9,7 @@ Required:
 - ui_templates: Deterministic template scaffolder (TemplateScaffolder)
 
 Optional:
+- host_execution: Direct host execution (DANGEROUS, gated by FEATURE_TOOLS_HOST_EXECUTION)
 - cli_aider: Aider CLI adapter
 - cli_opencode: OpenCode CLI adapter
 - cli_continue: Continue headless CLI adapter
@@ -39,6 +40,10 @@ from src.tools.providers.vision_antigravity import (
     create_vision_provider,
     AntigravityUnavailableError,
 )
+from src.tools.providers.host_execution import (
+    HostExecutionProvider,
+    HostExecConfig,
+)
 
 __all__ = [
     # Local Sandbox
@@ -59,4 +64,7 @@ __all__ = [
     "VisionConfig",
     "create_vision_provider",
     "AntigravityUnavailableError",
+    # Host Execution
+    "HostExecutionProvider",
+    "HostExecConfig",
 ]

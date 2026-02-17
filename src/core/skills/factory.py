@@ -267,6 +267,15 @@ def test_{name}_returns_result():
                 f"Proposal must be approved before installation (status='{target.status}')"
             )
 
+        # Run security pipeline if enabled
+        from src.core.feature_flags import FEATURE_SKILL_SECURITY_PIPELINE
+        if FEATURE_SKILL_SECURITY_PIPELINE:
+            issues = self._run_security_pipeline(target)
+            if issues:
+                raise SkillError(
+                    f"Security pipeline blocked installation: {'; '.join(issues)}"
+                )
+
         # Write skill files
         base = Path(install_dir or str(self._data_dir / "installed_skills"))
         skill_dir = base / target.name
@@ -289,3 +298,81 @@ def test_{name}_returns_result():
         logger.info("Skill installed from proposal: name=%s, id=%s",
                      target.name, proposal_id)
         return entry
+
+    # ------------------------------------------------------------------
+    # Security Pipeline (gated by FEATURE_SKILL_SECURITY_PIPELINE)
+    # ------------------------------------------------------------------
+
+    # Patterns that indicate potentially dangerous code in skill execute.py
+    _DANGEROUS_PATTERNS = [
+        (r'\beval\s*\(', "eval() call detected"),
+        (r'\bexec\s*\(', "exec() call detected"),
+        (r'\b__import__\s*\(', "__import__() call detected"),
+        (r'\bos\.system\s*\(', "os.system() call detected"),
+        (r'\bos\.popen\s*\(', "os.popen() call detected"),
+        (r'\bcompile\s*\(.*["\']exec["\']', "compile() with exec mode detected"),
+        (r'\bctypes\b', "ctypes usage detected"),
+        (r'\bopen\s*\([^)]*["\']/etc/', "Attempt to read system files"),
+    ]
+
+    # Required fields in a skill MANIFEST dict
+    _REQUIRED_MANIFEST_FIELDS = {"name", "version", "description", "risk", "permissions", "inputs"}
+
+    def _run_security_pipeline(self, proposal: SkillProposal) -> List[str]:
+        """Run 4-stage security checks on a skill proposal.
+
+        Returns a list of issues (empty = passed).
+        """
+        issues: List[str] = []
+
+        # Stage 1: Manifest validation
+        issues.extend(self._check_manifest(proposal))
+
+        # Stage 2: Code scanning for dangerous patterns
+        issues.extend(self._check_code_safety(proposal))
+
+        # Stage 3: Ownership — verify proposal was approved
+        if not proposal.approved_by:
+            issues.append("Proposal has no approval record (approved_by is empty)")
+
+        # Stage 4: Log audit trail
+        if issues:
+            logger.warning(
+                "Security pipeline BLOCKED skill '%s' (id=%s): %s",
+                proposal.name, proposal.id, "; ".join(issues),
+            )
+        else:
+            logger.info(
+                "Security pipeline PASSED for skill '%s' (id=%s)",
+                proposal.name, proposal.id,
+            )
+
+        return issues
+
+    def _check_manifest(self, proposal: SkillProposal) -> List[str]:
+        """Stage 1: Validate manifest YAML has required fields."""
+        issues = []
+        try:
+            manifest = yaml.safe_load(proposal.manifest_yaml) or {}
+        except Exception as e:
+            return [f"Invalid manifest YAML: {e}"]
+
+        missing = self._REQUIRED_MANIFEST_FIELDS - set(manifest.keys())
+        if missing:
+            issues.append(f"Manifest missing required fields: {', '.join(sorted(missing))}")
+
+        # Validate risk is a known level
+        risk = manifest.get("risk", "").upper()
+        if risk and risk not in ("LOW", "MEDIUM", "HIGH"):
+            issues.append(f"Unknown risk level in manifest: '{risk}'")
+
+        return issues
+
+    def _check_code_safety(self, proposal: SkillProposal) -> List[str]:
+        """Stage 2: Scan execute_code for dangerous patterns."""
+        issues = []
+        code = proposal.execute_code or ""
+        for pattern, message in self._DANGEROUS_PATTERNS:
+            if re.search(pattern, code):
+                issues.append(message)
+        return issues

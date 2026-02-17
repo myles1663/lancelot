@@ -64,7 +64,13 @@ from src.tools.providers.ui_templates import (
 )
 from src.tools.providers.ui_antigravity import AntigravityUIProvider
 from src.tools.providers.vision_antigravity import AntigravityVisionProvider
-from src.core.feature_flags import FEATURE_TOOLS_ANTIGRAVITY
+from src.tools.providers.host_execution import HostExecutionProvider
+from src.core.feature_flags import (
+    FEATURE_TOOLS_ANTIGRAVITY,
+    FEATURE_TOOLS_HOST_EXECUTION,
+    FEATURE_TOOLS_NETWORK,
+    FEATURE_TOOLS_CLI_PROVIDERS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -149,9 +155,13 @@ class ToolFabric:
 
     def _setup_default_providers(self) -> None:
         """Set up and register default providers."""
+        # Wire FEATURE_TOOLS_NETWORK to SandboxConfig
+        sandbox_config = self.config.sandbox_config or SandboxConfig()
+        sandbox_config.network_enabled = FEATURE_TOOLS_NETWORK
+
         # LocalSandboxProvider is always registered (required)
         sandbox = LocalSandboxProvider(
-            config=self.config.sandbox_config,
+            config=sandbox_config,
             workspace=self.config.default_workspace,
         )
         self._health_monitor.register(sandbox)
@@ -160,6 +170,16 @@ class ToolFabric:
         templates = TemplateScaffolder()
         self._health_monitor.register(templates)
 
+        # Host execution provider (DANGEROUS — bypasses container isolation)
+        if FEATURE_TOOLS_HOST_EXECUTION:
+            host_provider = HostExecutionProvider(
+                workspace=self.config.default_workspace,
+            )
+            self._health_monitor.register(host_provider)
+            logger.warning(
+                "HOST EXECUTION ENABLED — commands will run directly on host OS"
+            )
+
         # Antigravity providers (requires feature flag + Playwright)
         if FEATURE_TOOLS_ANTIGRAVITY:
             ui_ag = AntigravityUIProvider()
@@ -167,6 +187,10 @@ class ToolFabric:
 
             vision_ag = AntigravityVisionProvider()
             self._health_monitor.register(vision_ag)
+
+        # CLI providers (future — gate for when adapters are implemented)
+        if FEATURE_TOOLS_CLI_PROVIDERS:
+            logger.info("CLI providers enabled — no CLI adapters currently installed")
 
     def register_provider(self, provider: BaseProvider) -> None:
         """
