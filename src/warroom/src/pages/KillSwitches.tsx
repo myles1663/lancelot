@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { usePolling } from '@/hooks'
 import { fetchSystemStatus, fetchFlags, toggleFlag, fetchCrusaderStatus } from '@/api'
-import { fetchNetworkAllowlist, updateNetworkAllowlist, fetchHostAgentStatus, shutdownHostAgent, fetchHostWriteCommands, saveHostWriteCommands } from '@/api/flags'
+import { fetchNetworkAllowlist, updateNetworkAllowlist, fetchHostAgentStatus, shutdownHostAgent, fetchHostWriteCommands, saveHostWriteCommands, fetchHostWriteStatus, toggleHostWriteCommands } from '@/api/flags'
 import type { HostAgentStatus } from '@/api/flags'
 import { StatusDot, ConfirmDialog } from '@/components'
 import type { FlagInfo } from '@/api/flags'
@@ -88,16 +88,23 @@ function AllowlistEditor() {
   )
 }
 
-// ── Inline Host Agent Panel ─────────────────────────────────────────
+// ── Inline Host Agent Panel (with Write Commands sub-toggle) ────────
 function HostAgentPanel() {
   const [status, setStatus] = useState<HostAgentStatus | null>(null)
   const [stopping, setStopping] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [writeEnabled, setWriteEnabled] = useState(false)
+  const [writeToggling, setWriteToggling] = useState(false)
+  const [writeConfirm, setWriteConfirm] = useState(false)
 
   const poll = useCallback(async () => {
     try {
-      const res = await fetchHostAgentStatus()
-      setStatus(res)
+      const [agentRes, writeRes] = await Promise.all([
+        fetchHostAgentStatus(),
+        fetchHostWriteStatus(),
+      ])
+      setStatus(agentRes)
+      setWriteEnabled(writeRes.enabled)
       setError(null)
     } catch {
       setError('Failed to check agent status')
@@ -122,60 +129,159 @@ function HostAgentPanel() {
     }
   }
 
+  const handleWriteToggle = async () => {
+    if (!writeEnabled) {
+      setWriteConfirm(true)
+      return
+    }
+    setWriteToggling(true)
+    try {
+      const res = await toggleHostWriteCommands()
+      setWriteEnabled(res.enabled)
+    } catch {
+      setError('Failed to toggle write commands')
+    } finally {
+      setWriteToggling(false)
+    }
+  }
+
+  const confirmWriteEnable = async () => {
+    setWriteConfirm(false)
+    setWriteToggling(true)
+    try {
+      const res = await toggleHostWriteCommands()
+      setWriteEnabled(res.enabled)
+    } catch {
+      setError('Failed to enable write commands')
+    } finally {
+      setWriteToggling(false)
+    }
+  }
+
   const reachable = status?.reachable ?? false
 
   return (
-    <div className="mt-2 p-3 bg-surface-card rounded-lg border border-border-default">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Host Agent</span>
-        <div className="flex items-center gap-1.5">
-          <span className={`w-2 h-2 rounded-full ${reachable ? 'bg-state-healthy animate-pulse' : 'bg-state-error'}`} />
-          <span className={`text-[10px] font-medium ${reachable ? 'text-state-healthy' : 'text-state-error'}`}>
-            {reachable ? 'Running' : 'Offline'}
-          </span>
+    <div className="mt-2 space-y-3">
+      {/* Section 1: Agent Status */}
+      <div className="p-3 bg-surface-card rounded-lg border border-border-default">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Host Agent</span>
+          <div className="flex items-center gap-1.5">
+            <span className={`w-2 h-2 rounded-full ${reachable ? 'bg-state-healthy animate-pulse' : 'bg-state-error'}`} />
+            <span className={`text-[10px] font-medium ${reachable ? 'text-state-healthy' : 'text-state-error'}`}>
+              {reachable ? 'Running' : 'Offline'}
+            </span>
+          </div>
         </div>
+
+        {reachable && status && (
+          <div className="space-y-1.5 mb-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-text-muted">Platform</span>
+              <span className="text-[10px] font-mono text-text-primary">{status.platform} {status.platform_version}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-text-muted">Hostname</span>
+              <span className="text-[10px] font-mono text-text-primary">{status.hostname}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-text-muted">Agent Version</span>
+              <span className="text-[10px] font-mono text-text-primary">v{status.agent_version}</span>
+            </div>
+          </div>
+        )}
+
+        {reachable ? (
+          <button
+            onClick={handleStop}
+            disabled={stopping}
+            className="px-3 py-1 text-[11px] font-medium rounded bg-state-error/15 text-state-error hover:bg-state-error/25 transition-colors disabled:opacity-50"
+          >
+            {stopping ? 'Stopping...' : 'Stop Agent'}
+          </button>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-[10px] text-text-muted leading-relaxed">
+              The host agent is not running. To install it as a background service, run:
+            </p>
+            <code className="block text-[10px] font-mono bg-surface-input rounded px-2 py-1.5 text-text-primary select-all">
+              host_agent\install_service.bat
+            </code>
+            <p className="text-[10px] text-text-muted">
+              Or start manually: <code className="font-mono text-text-primary">host_agent\start_agent.bat</code>
+            </p>
+          </div>
+        )}
       </div>
 
-      {reachable && status && (
-        <div className="space-y-1.5 mb-3">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] text-text-muted">Platform</span>
-            <span className="text-[10px] font-mono text-text-primary">{status.platform} {status.platform_version}</span>
+      {/* Section 2: Write Commands Sub-Toggle */}
+      <div className={`p-3 rounded-lg border ${writeEnabled ? 'bg-red-500/5 border-red-500/30' : 'bg-surface-card border-border-default'}`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className={`text-[11px] font-medium uppercase tracking-wider ${writeEnabled ? 'text-red-400' : 'text-text-secondary'}`}>
+              Write Commands
+            </span>
+            {writeEnabled && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 font-bold">DANGER</span>
+            )}
           </div>
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] text-text-muted">Hostname</span>
-            <span className="text-[10px] font-mono text-text-primary">{status.hostname}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] text-text-muted">Agent Version</span>
-            <span className="text-[10px] font-mono text-text-primary">v{status.agent_version}</span>
+          <button
+            onClick={handleWriteToggle}
+            disabled={writeToggling}
+            className={`relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0 ${
+              writeEnabled ? 'bg-red-500' : 'bg-surface-input border border-border-default'
+            } ${writeToggling ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+          >
+            <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 ${
+              writeEnabled ? 'translate-x-5' : 'translate-x-0'
+            }`} />
+          </button>
+        </div>
+
+        {!writeEnabled && (
+          <p className="text-[10px] text-text-muted mt-2">
+            Destructive host commands disabled. Enable to allow rm, del, kill, etc.
+          </p>
+        )}
+
+        {writeEnabled && <HostWriteCommandsEditor />}
+      </div>
+
+      {/* Write Commands Danger Confirm Dialog */}
+      {writeConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-surface-card border-2 border-red-500/50 rounded-xl p-6 max-w-md mx-4 shadow-2xl">
+            <h3 className="text-lg font-bold text-red-400 mb-3">EXTREME DANGER</h3>
+            <p className="text-sm text-text-secondary leading-relaxed mb-2">
+              This enables <span className="font-bold text-red-400">DESTRUCTIVE</span> commands
+              (rm, del, kill, shutdown, etc.) on your <span className="font-bold text-red-400">REAL HOST MACHINE</span>.
+            </p>
+            <p className="text-sm text-text-secondary leading-relaxed mb-2">
+              Files deleted <span className="font-bold text-red-400">CANNOT be recovered</span>.
+              Services stopped may not restart. Registry edits can break your system.
+            </p>
+            <p className="text-sm text-text-secondary leading-relaxed mb-4">
+              All write commands still require Sentry approval, but mistakes are <span className="font-bold text-red-400">IRREVERSIBLE</span>.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setWriteConfirm(false)}
+                className="flex-1 px-4 py-2 text-sm font-medium rounded-lg bg-surface-input text-text-primary hover:bg-surface-input/80 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmWriteEnable}
+                className="flex-1 px-4 py-2 text-sm font-bold rounded-lg bg-red-500/20 text-red-400 border border-red-500/40 hover:bg-red-500/30 transition-colors"
+              >
+                I Accept the Risk
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {reachable ? (
-        <button
-          onClick={handleStop}
-          disabled={stopping}
-          className="px-3 py-1 text-[11px] font-medium rounded bg-state-error/15 text-state-error hover:bg-state-error/25 transition-colors disabled:opacity-50"
-        >
-          {stopping ? 'Stopping...' : 'Stop Agent'}
-        </button>
-      ) : (
-        <div className="space-y-2">
-          <p className="text-[10px] text-text-muted leading-relaxed">
-            The host agent is not running. To install it as a background service, run:
-          </p>
-          <code className="block text-[10px] font-mono bg-surface-input rounded px-2 py-1.5 text-text-primary select-all">
-            host_agent\install_service.bat
-          </code>
-          <p className="text-[10px] text-text-muted">
-            Or start manually: <code className="font-mono text-text-primary">host_agent\start_agent.bat</code>
-          </p>
-        </div>
-      )}
-
-      {error && <p className="text-[10px] text-state-error mt-2">{error}</p>}
+      {error && <p className="text-[10px] text-state-error">{error}</p>}
     </div>
   )
 }
@@ -285,6 +391,7 @@ export function KillSwitches() {
   // Group flags by category
   const grouped: Record<string, [string, FlagInfo][]> = {}
   for (const [name, info] of Object.entries(flags)) {
+    if (info.hidden) continue // Sub-toggles are rendered inside parent panels
     const cat = info.category || 'Other'
     if (!grouped[cat]) grouped[cat] = []
     grouped[cat].push([name, info])
@@ -503,7 +610,6 @@ export function KillSwitches() {
                       {/* Inline editor for flags with has_editor */}
                       {info.has_editor === 'network_allowlist' && <AllowlistEditor />}
                       {info.has_editor === 'host_agent' && <HostAgentPanel />}
-                      {info.has_editor === 'host_write_commands' && <HostWriteCommandsEditor />}
                     </div>
                   )}
                 </div>

@@ -112,6 +112,7 @@ FLAG_META = {
         "warning": "EXTREME DANGER. Enables file deletion, process killing, and system commands on your REAL HOST MACHINE. Mistakes are IRREVERSIBLE.",
         "confirm_enable": "\u26a0\ufe0f EXTREME DANGER \u26a0\ufe0f\n\nThis enables DESTRUCTIVE commands (rm, del, kill, shutdown, etc.) on your REAL HOST MACHINE.\n\nFiles deleted CANNOT be recovered. Services stopped may not restart. Registry edits can break your system.\n\nAll write commands still require your approval in the Sentry, but mistakes are IRREVERSIBLE.\n\nOnly enable this if you fully understand the risks.",
         "has_editor": "host_write_commands",
+        "hidden": True,
     },
 
     # ── Execution & Runtime ───────────────────────────────────────
@@ -271,6 +272,8 @@ async def get_flags():
                         entry["has_editor"] = meta["has_editor"]
                     if meta.get("confirm_enable"):
                         entry["confirm_enable"] = meta["confirm_enable"]
+                    if meta.get("hidden"):
+                        entry["hidden"] = True
                     flags[attr] = entry
 
         return {"flags": flags}
@@ -458,6 +461,25 @@ async def update_host_write_commands(body: WriteCommandsUpdate):
     except Exception as exc:
         logger.error("update_host_write_commands error: %s", exc)
         return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+# ── Host Write Commands Sub-Toggle ────────────────────────────────────
+# Inline toggle for FEATURE_HOST_WRITE_COMMANDS (nested in Host Bridge panel).
+
+@router.get("/host-write-status")
+async def get_host_write_status():
+    """Return current state of FEATURE_HOST_WRITE_COMMANDS."""
+    import feature_flags as ff
+    return {"enabled": getattr(ff, "FEATURE_HOST_WRITE_COMMANDS", False)}
+
+
+@router.post("/host-write-toggle")
+async def toggle_host_write_commands():
+    """Toggle FEATURE_HOST_WRITE_COMMANDS on/off."""
+    import feature_flags as ff
+    new_val = ff.toggle_flag("FEATURE_HOST_WRITE_COMMANDS")
+    logger.info("FEATURE_HOST_WRITE_COMMANDS toggled to %s", new_val)
+    return {"enabled": new_val}
 
 
 # ── Dependency Validation ────────────────────────────────────────────

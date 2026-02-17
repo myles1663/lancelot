@@ -10,6 +10,7 @@ export interface FlagInfo {
   warning: string
   has_editor?: string
   confirm_enable?: string
+  hidden?: boolean
 }
 
 export interface FlagsResponse {
@@ -56,3 +57,7 @@ export interface WriteCommandsResponse {
 export const fetchHostWriteCommands = () => apiGet<WriteCommandsResponse>('/api/flags/host-write-commands')
 export const saveHostWriteCommands = (raw: string) =>
   apiPut<{ commands: string[]; count: number }>('/api/flags/host-write-commands', { raw })
+
+// Host Write Commands Sub-Toggle
+export const fetchHostWriteStatus = () => apiGet<{ enabled: boolean }>('/api/flags/host-write-status')
+export const toggleHostWriteCommands = () => apiPost<{ enabled: boolean }>('/api/flags/host-write-toggle')
