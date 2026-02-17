@@ -5,6 +5,23 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.2] - 2026-02-17
+
+### Added
+- **Host Agent control panel**: Inline panel in Kill Switches page (under HOST_BRIDGE toggle)
+  shows agent status (Running/Offline), platform info, hostname, and a "Stop Agent" button.
+  When offline, displays install instructions.
+- **Host Agent `/shutdown` endpoint**: Graceful remote shutdown via `POST /shutdown`.
+- **Host Agent service installer** (`host_agent/install_service.bat`): One-time script that
+  registers the agent as a Windows Scheduled Task using `pythonw.exe` — runs silently in the
+  background with no console window, auto-starts on user login.
+- **Host Agent uninstaller** (`host_agent/uninstall_service.bat`): Removes scheduled task and
+  stops the running agent.
+- **Backend proxy routes**: `GET /api/flags/host-agent-status` and
+  `POST /api/flags/host-agent-shutdown` for container-to-host-agent communication.
+- **Auto-shutdown**: Toggling `FEATURE_TOOLS_HOST_BRIDGE` OFF automatically sends shutdown
+  signal to the host agent (best-effort).
+
 ## [0.2.1] - 2026-02-16
 
 ### Added

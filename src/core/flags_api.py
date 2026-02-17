@@ -102,6 +102,7 @@ FLAG_META = {
         "conflicts": [],
         "warning": "CRITICAL SECURITY RISK. Full access to the host machine. Requires host_agent running on the host. Only for trusted development environments.",
         "confirm_enable": "You are about to grant Lancelot direct access to your host operating system. This bypasses all container isolation — Lancelot will be able to run any command on your actual machine. Only enable this in trusted development environments.\n\nThe Lancelot Host Agent must be running on the host (host_agent/start_agent.bat).\n\nDo you accept this risk?",
+        "has_editor": "host_agent",
     },
 
     # ── Execution & Runtime ───────────────────────────────────────
@@ -338,6 +339,66 @@ async def update_network_allowlist(body: AllowlistUpdate):
         return JSONResponse(status_code=500, content={"error": str(exc)})
 
 
+# ── Host Agent Bridge ────────────────────────────────────────────────
+# Routes for checking/controlling the Lancelot Host Agent running on the
+# host machine. Must be defined before /{name}/* wildcard routes.
+
+HOST_AGENT_URL = os.environ.get("HOST_AGENT_URL", "http://host.docker.internal:9111")
+HOST_AGENT_TOKEN = os.environ.get("HOST_AGENT_TOKEN", "lancelot-host-agent")
+
+
+@router.get("/host-agent-status")
+async def get_host_agent_status():
+    """Check if the host agent is reachable and return its status."""
+    import urllib.request
+    import json as _json
+    try:
+        req = urllib.request.Request(f"{HOST_AGENT_URL}/health", method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        return {
+            "reachable": True,
+            "platform": data.get("platform", "unknown"),
+            "platform_version": data.get("platform_version", ""),
+            "hostname": data.get("hostname", "unknown"),
+            "agent_version": data.get("agent_version", "unknown"),
+        }
+    except Exception:
+        return {
+            "reachable": False,
+            "platform": "",
+            "platform_version": "",
+            "hostname": "",
+            "agent_version": "",
+        }
+
+
+@router.post("/host-agent-shutdown")
+async def shutdown_host_agent():
+    """Send shutdown signal to the host agent."""
+    import urllib.request
+    import json as _json
+    try:
+        req = urllib.request.Request(
+            f"{HOST_AGENT_URL}/shutdown",
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {HOST_AGENT_TOKEN}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        logger.info("Host agent shutdown signal sent")
+        return {"status": "shutdown_sent", "agent_response": data}
+    except Exception as exc:
+        logger.warning("Failed to send shutdown to host agent: %s", exc)
+        return JSONResponse(
+            status_code=502,
+            content={"error": f"Could not reach host agent: {str(exc)[:200]}"},
+        )
+
+
 # ── Dependency Validation ────────────────────────────────────────────
 
 def _validate_flag_dependencies(name: str, new_value: bool) -> Optional[str]:
@@ -412,6 +473,20 @@ async def toggle_flag(name: str):
                     "hot_toggled": False,
                     "message": f"{name} set to {new_val} but subsystem toggle failed: {exc}",
                 }
+
+        # Auto-shutdown host agent when disabling HOST_BRIDGE
+        if name == "FEATURE_TOOLS_HOST_BRIDGE" and not new_val:
+            try:
+                import urllib.request as _ur
+                _req = _ur.Request(
+                    f"{HOST_AGENT_URL}/shutdown",
+                    method="POST",
+                    headers={"Authorization": f"Bearer {HOST_AGENT_TOKEN}"},
+                )
+                _ur.urlopen(_req, timeout=3)
+                logger.info("Host agent shutdown signal sent (flag toggled off)")
+            except Exception:
+                pass  # Best-effort — agent may already be offline
 
         return {
             "flag": name,

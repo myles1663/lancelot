@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { usePolling } from '@/hooks'
 import { fetchSystemStatus, fetchFlags, toggleFlag, fetchCrusaderStatus } from '@/api'
-import { fetchNetworkAllowlist, updateNetworkAllowlist } from '@/api/flags'
+import { fetchNetworkAllowlist, updateNetworkAllowlist, fetchHostAgentStatus, shutdownHostAgent } from '@/api/flags'
+import type { HostAgentStatus } from '@/api/flags'
 import { StatusDot, ConfirmDialog } from '@/components'
 import type { FlagInfo } from '@/api/flags'
 import type { CrusaderStatusResponse } from '@/types/api'
@@ -83,6 +84,98 @@ function AllowlistEditor() {
         {success && <span className="text-[10px] text-state-healthy">Saved</span>}
         {error && <span className="text-[10px] text-state-error">{error}</span>}
       </div>
+    </div>
+  )
+}
+
+// ── Inline Host Agent Panel ─────────────────────────────────────────
+function HostAgentPanel() {
+  const [status, setStatus] = useState<HostAgentStatus | null>(null)
+  const [stopping, setStopping] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const poll = useCallback(async () => {
+    try {
+      const res = await fetchHostAgentStatus()
+      setStatus(res)
+      setError(null)
+    } catch {
+      setError('Failed to check agent status')
+    }
+  }, [])
+
+  useEffect(() => {
+    poll()
+    const timer = setInterval(poll, 5000)
+    return () => clearInterval(timer)
+  }, [poll])
+
+  const handleStop = async () => {
+    setStopping(true)
+    try {
+      await shutdownHostAgent()
+      setTimeout(poll, 2000)
+    } catch {
+      setError('Failed to stop agent')
+    } finally {
+      setStopping(false)
+    }
+  }
+
+  const reachable = status?.reachable ?? false
+
+  return (
+    <div className="mt-2 p-3 bg-surface-card rounded-lg border border-border-default">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Host Agent</span>
+        <div className="flex items-center gap-1.5">
+          <span className={`w-2 h-2 rounded-full ${reachable ? 'bg-state-healthy animate-pulse' : 'bg-state-error'}`} />
+          <span className={`text-[10px] font-medium ${reachable ? 'text-state-healthy' : 'text-state-error'}`}>
+            {reachable ? 'Running' : 'Offline'}
+          </span>
+        </div>
+      </div>
+
+      {reachable && status && (
+        <div className="space-y-1.5 mb-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-text-muted">Platform</span>
+            <span className="text-[10px] font-mono text-text-primary">{status.platform} {status.platform_version}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-text-muted">Hostname</span>
+            <span className="text-[10px] font-mono text-text-primary">{status.hostname}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-text-muted">Agent Version</span>
+            <span className="text-[10px] font-mono text-text-primary">v{status.agent_version}</span>
+          </div>
+        </div>
+      )}
+
+      {reachable ? (
+        <button
+          onClick={handleStop}
+          disabled={stopping}
+          className="px-3 py-1 text-[11px] font-medium rounded bg-state-error/15 text-state-error hover:bg-state-error/25 transition-colors disabled:opacity-50"
+        >
+          {stopping ? 'Stopping...' : 'Stop Agent'}
+        </button>
+      ) : (
+        <div className="space-y-2">
+          <p className="text-[10px] text-text-muted leading-relaxed">
+            The host agent is not running. To install it as a background service, run:
+          </p>
+          <code className="block text-[10px] font-mono bg-surface-input rounded px-2 py-1.5 text-text-primary select-all">
+            host_agent\install_service.bat
+          </code>
+          <p className="text-[10px] text-text-muted">
+            Or start manually: <code className="font-mono text-text-primary">host_agent\start_agent.bat</code>
+          </p>
+        </div>
+      )}
+
+      {error && <p className="text-[10px] text-state-error mt-2">{error}</p>}
     </div>
   )
 }
@@ -323,6 +416,7 @@ export function KillSwitches() {
 
                       {/* Inline editor for flags with has_editor */}
                       {info.has_editor === 'network_allowlist' && <AllowlistEditor />}
+                      {info.has_editor === 'host_agent' && <HostAgentPanel />}
                     </div>
                   )}
                 </div>

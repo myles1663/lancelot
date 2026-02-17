@@ -33,3 +33,15 @@ export const toggleFlag = (name: string) => apiPost<ToggleFlagResponse>(`/api/fl
 export const fetchNetworkAllowlist = () => apiGet<AllowlistResponse>('/api/flags/network-allowlist')
 export const updateNetworkAllowlist = (domains: string[]) =>
   apiPut<AllowlistResponse>('/api/flags/network-allowlist', { domains })
+
+// Host Agent Bridge
+export interface HostAgentStatus {
+  reachable: boolean
+  platform: string
+  platform_version: string
+  hostname: string
+  agent_version: string
+}
+
+export const fetchHostAgentStatus = () => apiGet<HostAgentStatus>('/api/flags/host-agent-status')
+export const shutdownHostAgent = () => apiPost<{ status: string }>('/api/flags/host-agent-shutdown')

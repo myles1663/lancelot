@@ -296,6 +296,21 @@ class HostAgentHandler(BaseHTTPRequestHandler):
             self._send_json(result)
             return
 
+        if self.path == "/shutdown":
+            if not self._check_auth():
+                self._send_error(401, "Unauthorized")
+                return
+
+            logger.info("SHUTDOWN requested — stopping host agent...")
+            self._send_json({"status": "shutting_down"})
+
+            # Shut down in a separate thread so the response can be sent first
+            import threading
+            threading.Thread(
+                target=self.server.shutdown, daemon=True
+            ).start()
+            return
+
         self._send_error(404, f"Not found: {self.path}")
 
 
@@ -319,9 +334,10 @@ def run_server(port: int = DEFAULT_PORT, token: str = DEFAULT_TOKEN):
     logger.info("Auth token:   %s...%s", token[:4], token[-4:] if len(token) > 8 else "****")
     logger.info("=" * 60)
     logger.info("Endpoints:")
-    logger.info("  GET  /health  — Health check (no auth)")
-    logger.info("  GET  /info    — Host info (auth required)")
-    logger.info("  POST /execute — Run command (auth required)")
+    logger.info("  GET  /health   — Health check (no auth)")
+    logger.info("  GET  /info     — Host info (auth required)")
+    logger.info("  POST /execute  — Run command (auth required)")
+    logger.info("  POST /shutdown — Stop agent (auth required)")
     logger.info("=" * 60)
     logger.info("Press Ctrl+C to stop.")
     logger.info("")
