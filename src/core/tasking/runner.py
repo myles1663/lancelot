@@ -273,8 +273,6 @@ class TaskRunner:
 
         if step_type in (StepType.FILE_EDIT.value, StepType.COMMAND.value,
                          StepType.TOOL_CALL.value):
-            # These will be handled by actuator skills in PR6.
-            # For now, return a placeholder.
             if self.skill_executor:
                 # Map step type to skill name
                 skill_map = {
@@ -283,7 +281,22 @@ class TaskRunner:
                     StepType.TOOL_CALL.value: step.inputs.get("tool_name", "echo"),
                 }
                 skill_name = skill_map.get(step_type, "echo")
-                skill_result = self.skill_executor.run(skill_name, step.inputs)
+
+                # Build skill-compatible inputs from step metadata.
+                # The plan compiler stores step info as {description, tool, params}
+                # but skills expect specific keys (e.g. command_runner wants "command").
+                skill_inputs = dict(step.inputs)
+                if skill_name == "command_runner" and "command" not in skill_inputs:
+                    # Extract command from params list if available
+                    for p in skill_inputs.get("params", []):
+                        if p.get("name") == "command":
+                            skill_inputs["command"] = p["value"]
+                            break
+                    # Fallback: use description (may be a raw command string)
+                    if "command" not in skill_inputs:
+                        skill_inputs["command"] = skill_inputs.get("description", "")
+
+                skill_result = self.skill_executor.run(skill_name, skill_inputs)
                 if not skill_result.success:
                     raise RuntimeError(f"Skill '{skill_name}' failed: {skill_result.error}")
                 return skill_result.outputs

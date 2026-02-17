@@ -979,13 +979,23 @@ class LancelotOrchestrator:
             from src.core.feature_flags import FEATURE_TOOLS_HOST_BRIDGE
             if FEATURE_TOOLS_HOST_BRIDGE:
                 host_bridge_note = (
-                    "\n\nHOST OS ACCESS:\n"
-                    "You have a LIVE BRIDGE to the Commander's actual host operating system. "
-                    "The command_runner tool executes commands on the REAL HOST MACHINE (not inside "
-                    "your Docker container). When asked about the system, OS version, hardware, files, "
-                    "or anything about the host — USE command_runner to get real information from the "
-                    "host OS. Do NOT answer based on your container environment (Debian Linux). "
-                    "The host bridge routes your commands to the actual machine the Commander is using."
+                    "\n\nCRITICAL — HOST OS ACCESS (ACTIVE):\n"
+                    "The Host Bridge is ACTIVE. Your command_runner tool executes commands directly "
+                    "on the Commander's REAL HOST MACHINE — a WINDOWS computer. You are NOT limited "
+                    "to your Docker container.\n\n"
+                    "WHEN ASKED about the system, OS, hardware, files, processes, network, or "
+                    "ANYTHING about the Commander's computer — you MUST use command_runner. "
+                    "NEVER answer from memory or your container environment.\n\n"
+                    "USE THESE WINDOWS COMMANDS:\n"
+                    "  - 'ver' or 'systeminfo' → OS version\n"
+                    "  - 'hostname' → machine name\n"
+                    "  - 'whoami' → current user\n"
+                    "  - 'ipconfig' → network info\n"
+                    "  - 'tasklist' → running processes\n"
+                    "  - 'dir <path>' → list files\n\n"
+                    "NEVER use Linux commands (cat, uname, /etc/os-release) — they WILL FAIL.\n"
+                    "You CAN execute shell commands on the Commander's Windows computer. "
+                    "If asked whether you can — the answer is YES."
                 )
         except Exception:
             pass
@@ -1040,7 +1050,21 @@ class LancelotOrchestrator:
         # SELF-AWARENESS (Fix Pack V5)
         self_awareness = self._build_self_awareness()
 
-        instruction = f"{persona}\n\n{self_awareness}\n\n{rules}\n\n{guardrails}\n\n{execution_mode}"
+        # Host bridge awareness (same as _build_system_instruction)
+        host_bridge_note = ""
+        try:
+            from src.core.feature_flags import FEATURE_TOOLS_HOST_BRIDGE
+            if FEATURE_TOOLS_HOST_BRIDGE:
+                host_bridge_note = (
+                    "\n\nCRITICAL — HOST OS ACCESS (ACTIVE):\n"
+                    "The Host Bridge is ACTIVE. command_runner executes on the Commander's "
+                    "REAL WINDOWS HOST MACHINE. Use Windows commands (ver, systeminfo, "
+                    "hostname, ipconfig, dir, tasklist). Never use Linux commands."
+                )
+        except Exception:
+            pass
+
+        instruction = f"{persona}\n\n{self_awareness}\n\n{rules}\n\n{guardrails}\n\n{execution_mode}{host_bridge_note}"
 
         # Crusader Mode overlay
         crusader_mode = os.environ.get("CRUSADER_MODE", "false").lower() == "true"
@@ -1367,10 +1391,14 @@ class LancelotOrchestrator:
         Sensitive writes (.env, system config) and operations outside workspace escalate.
         """
         READ_ONLY_COMMANDS = (
+            # Linux/Unix
             "ls", "cat", "grep", "head", "tail", "find", "wc",
             "git status", "git log", "git diff", "git branch",
             "echo", "pwd", "whoami", "date", "df", "du",
-            "docker ps", "docker logs",
+            "docker ps", "docker logs", "uname", "hostname",
+            # Windows (read-only info commands)
+            "ver", "systeminfo", "ipconfig", "netstat",
+            "tasklist", "dir", "type", "where", "set",
         )
 
         # Sensitive file patterns that always require approval
@@ -1963,6 +1991,9 @@ class LancelotOrchestrator:
                 return text or "No response from local model."
 
             # Append assistant message to conversation
+            # Ensure content is "" not None — llama-cpp-python can't iterate None
+            if message.get("content") is None:
+                message["content"] = ""
             messages.append(message)
 
             # Execute each tool call

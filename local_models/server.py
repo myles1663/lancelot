@@ -266,6 +266,14 @@ def chat_completions(req: ChatCompletionRequest):
 
     # Inject /no_think into system message to suppress chain-of-thought
     messages = list(req.messages)
+
+    # Sanitize: replace None content with "" to prevent TypeError in
+    # llama-cpp-python and our own /no_think check. OpenAI tool-call
+    # assistant messages legitimately have content=None.
+    for msg in messages:
+        if msg.get("content") is None:
+            msg["content"] = ""
+
     if messages and messages[0].get("role") == "system":
         sys_content = messages[0].get("content", "")
         if "/no_think" not in sys_content:

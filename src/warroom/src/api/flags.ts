@@ -45,3 +45,14 @@ export interface HostAgentStatus {
 
 export const fetchHostAgentStatus = () => apiGet<HostAgentStatus>('/api/flags/host-agent-status')
 export const shutdownHostAgent = () => apiPost<{ status: string }>('/api/flags/host-agent-shutdown')
+
+// Host Write Commands
+export interface WriteCommandsResponse {
+  commands: string[]
+  raw: string
+  path?: string
+}
+
+export const fetchHostWriteCommands = () => apiGet<WriteCommandsResponse>('/api/flags/host-write-commands')
+export const saveHostWriteCommands = (raw: string) =>
+  apiPut<{ commands: string[]; count: number }>('/api/flags/host-write-commands', { raw })

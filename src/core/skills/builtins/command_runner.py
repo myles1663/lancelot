@@ -56,6 +56,44 @@ BLOCKED_CHARS = {'&', '|', ';', '$', '`', '(', ')', '{', '}', '<', '>'}
 
 DEFAULT_TIMEOUT = 30
 
+# Path to the host write commands config (relative to project root)
+_WRITE_COMMANDS_CONFIG = os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "config", "host_write_commands.yaml"
+)
+
+
+def _load_write_commands() -> set:
+    """Load the host write commands list from config file.
+
+    Returns a set of command binary names. Reads fresh each call so
+    edits via the War Room UI take effect immediately.
+    """
+    commands = set()
+    try:
+        config_path = os.path.normpath(_WRITE_COMMANDS_CONFIG)
+        # Also check /home/lancelot/config/ (Docker volume mount)
+        if not os.path.exists(config_path):
+            config_path = "/home/lancelot/config/host_write_commands.yaml"
+        if not os.path.exists(config_path):
+            return commands
+        with open(config_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    commands.add(line)
+    except Exception as e:
+        logger.warning("Failed to load host write commands config: %s", e)
+    return commands
+
+
+def _is_write_commands_enabled() -> bool:
+    """Check if FEATURE_HOST_WRITE_COMMANDS flag is on."""
+    try:
+        from src.core.feature_flags import FEATURE_HOST_WRITE_COMMANDS
+        return FEATURE_HOST_WRITE_COMMANDS
+    except Exception:
+        return False
+
 
 def _get_tool_fabric():
     """Try to import and return the global ToolFabric instance, or None."""
@@ -189,5 +227,14 @@ def _validate_command(command: str) -> None:
         raise ValueError("Empty command")
 
     binary = os.path.basename(parts[0])
-    if binary not in COMMAND_WHITELIST:
-        raise ValueError(f"Command '{binary}' not in whitelist")
+    if binary in COMMAND_WHITELIST:
+        return  # Always allowed
+
+    # Check host write commands list (only when flag is enabled)
+    if _is_write_commands_enabled():
+        write_commands = _load_write_commands()
+        if binary in write_commands:
+            logger.info("command_runner: write command '%s' allowed via FEATURE_HOST_WRITE_COMMANDS", binary)
+            return
+
+    raise ValueError(f"Command '{binary}' not in whitelist")

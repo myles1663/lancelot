@@ -5,6 +5,33 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.3] - 2026-02-17
+
+### Added
+- **Host Write Commands** (`FEATURE_HOST_WRITE_COMMANDS`): Toggleable dangerous commands list
+  for the host OS. Unlocks destructive commands (`rm`, `del`, `kill`, `shutdown`, etc.) when
+  enabled. OFF by default with extreme danger confirmation dialog. Editable via inline editor
+  in Kill Switches. All write commands still require Sentry approval before execution.
+- **HostWriteCommandsEditor**: Red-themed inline editor in Kill Switches page for managing
+  the allowed write commands list. Shows bold danger warnings and command count.
+- **Config file** (`config/host_write_commands.yaml`): Editable list of write command binaries.
+  Changes take effect immediately — no restart required.
+- **API routes**: `GET/PUT /api/flags/host-write-commands` for reading and updating the
+  write commands list from the War Room UI.
+
+### Fixed
+- **HTTP 500 from local LLM**: Fixed crash when assistant messages with `content: null`
+  (standard OpenAI tool-call format) were sent to llama-cpp-python. Added message sanitization
+  in `local_models/server.py` and defensive None-to-empty-string conversion in orchestrator.
+- **Task runner COMMAND steps**: Fixed `Missing required input: 'command'` error when the plan
+  compiler created COMMAND steps with `{"description": "..."}` instead of `{"command": "..."}`.
+  Runner now extracts the command from step params or description.
+- **Windows command classification**: Added Windows read-only commands (`ver`, `systeminfo`,
+  `ipconfig`, `hostname`, etc.) to the safety classifier's auto-approve list, preventing
+  infinite escalation loops.
+- **System prompt Windows awareness**: Host bridge prompt now explicitly tells the LLM the
+  host is Windows and suggests Windows commands instead of Linux commands like `cat /etc/os-release`.
+
 ## [0.2.2] - 2026-02-17
 
 ### Added

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { usePolling } from '@/hooks'
 import { fetchSystemStatus, fetchFlags, toggleFlag, fetchCrusaderStatus } from '@/api'
-import { fetchNetworkAllowlist, updateNetworkAllowlist, fetchHostAgentStatus, shutdownHostAgent } from '@/api/flags'
+import { fetchNetworkAllowlist, updateNetworkAllowlist, fetchHostAgentStatus, shutdownHostAgent, fetchHostWriteCommands, saveHostWriteCommands } from '@/api/flags'
 import type { HostAgentStatus } from '@/api/flags'
 import { StatusDot, ConfirmDialog } from '@/components'
 import type { FlagInfo } from '@/api/flags'
@@ -176,6 +176,92 @@ function HostAgentPanel() {
       )}
 
       {error && <p className="text-[10px] text-state-error mt-2">{error}</p>}
+    </div>
+  )
+}
+
+// ── Inline Host Write Commands Editor ─────────────────────────────────
+function HostWriteCommandsEditor() {
+  const [draft, setDraft] = useState('')
+  const [original, setOriginal] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState(false)
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetchHostWriteCommands()
+      setDraft(res.raw)
+      setOriginal(res.raw)
+      setLoaded(true)
+    } catch {
+      setError('Failed to load write commands')
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const handleSave = async () => {
+    setSaving(true)
+    setError(null)
+    setSuccess(false)
+    try {
+      await saveHostWriteCommands(draft)
+      setOriginal(draft)
+      setSuccess(true)
+      setTimeout(() => setSuccess(false), 3000)
+    } catch {
+      setError('Failed to save write commands')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const hasChanges = loaded && draft !== original
+  const cmdCount = draft.split('\n').filter(l => l.trim() && !l.trim().startsWith('#')).length
+
+  return (
+    <div className="mt-2 p-3 bg-surface-card rounded-lg border-2 border-red-500/40">
+      {/* Danger banner */}
+      <div className="mb-3 p-2.5 bg-red-500/10 border border-red-500/30 rounded-lg">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-red-400 text-sm font-bold">DANGER — HOST WRITE COMMANDS</span>
+        </div>
+        <p className="text-[10px] text-red-300/80 leading-relaxed">
+          These commands can <span className="font-bold text-red-400">PERMANENTLY DESTROY</span> data on your host machine.
+          All executions still require Sentry approval, but mistakes are <span className="font-bold text-red-400">IRREVERSIBLE</span>.
+          Catastrophic patterns (rm -rf /, format c:) are blocked by the Host Bridge denylist regardless.
+        </p>
+      </div>
+
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[11px] font-medium text-red-400 uppercase tracking-wider">Allowed Write Commands</span>
+        <span className="text-[10px] text-text-muted">{cmdCount} command{cmdCount !== 1 ? 's' : ''}</span>
+      </div>
+      <textarea
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        placeholder="rm&#10;del&#10;kill&#10;..."
+        rows={8}
+        className="w-full bg-surface-input border border-red-500/30 rounded px-2 py-1.5 text-xs font-mono text-text-primary placeholder:text-text-muted/50 focus:outline-none focus:border-red-500 resize-y"
+      />
+      <p className="text-[10px] text-text-muted mt-1 mb-2">One command binary per line. Lines starting with # are comments.</p>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={handleSave}
+          disabled={saving || !hasChanges}
+          className={`px-3 py-1 text-[11px] font-medium rounded transition-colors ${
+            hasChanges
+              ? 'bg-red-500/20 text-red-400 border border-red-500/40 hover:bg-red-500/30'
+              : 'bg-surface-input text-text-muted cursor-not-allowed'
+          }`}
+        >
+          {saving ? 'Saving...' : 'Save Commands'}
+        </button>
+        {success && <span className="text-[10px] text-state-healthy">Saved</span>}
+        {error && <span className="text-[10px] text-state-error">{error}</span>}
+      </div>
     </div>
   )
 }
@@ -417,6 +503,7 @@ export function KillSwitches() {
                       {/* Inline editor for flags with has_editor */}
                       {info.has_editor === 'network_allowlist' && <AllowlistEditor />}
                       {info.has_editor === 'host_agent' && <HostAgentPanel />}
+                      {info.has_editor === 'host_write_commands' && <HostWriteCommandsEditor />}
                     </div>
                   )}
                 </div>

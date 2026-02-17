@@ -1,0 +1,27 @@
+# Host Write Commands — DANGEROUS
+# These command binaries are allowed ONLY when FEATURE_HOST_WRITE_COMMANDS is ON.
+# They execute on the REAL HOST MACHINE via the Host Bridge.
+# All write commands still require Commander approval via the Sentry.
+#
+# One command binary per line. Lines starting with # are comments.
+# Catastrophic patterns (rm -rf /, format c:, etc.) are STILL blocked
+# by the Host Bridge provider denylist regardless of this list.
+
+# File deletion
+rm
+rmdir
+del
+rd
+
+# Process management
+kill
+taskkill
+
+# Service management
+sc
+net
+
+# System
+shutdown
+reboot
+reg

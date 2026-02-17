@@ -70,13 +70,21 @@ class PolicyConfig:
 
     # Command policies
     command_allowlist: List[str] = field(default_factory=lambda: [
+        # Dev tools
         "git", "python", "python3", "pip", "pip3",
         "node", "npm", "npx", "pnpm", "yarn",
         "pytest", "jest", "mocha",
-        "ls", "cat", "head", "tail", "grep", "find",
-        "echo", "pwd", "whoami", "date",
-        "mkdir", "touch", "cp", "mv",
+        # Unix/Linux
+        "ls", "cat", "head", "tail", "grep", "find", "wc",
+        "echo", "pwd", "whoami", "date", "uname", "hostname",
+        "mkdir", "touch", "cp", "mv", "sort", "uniq",
+        "df", "du", "tar", "gzip", "zip", "unzip",
+        "curl", "wget", "test", "true", "false",
         "docker", "docker-compose",
+        # Windows
+        "dir", "ver", "systeminfo", "ipconfig", "netstat",
+        "tasklist", "where", "type", "set",
+        "powershell", "pwsh", "wmic",
     ])
 
     command_denylist: List[str] = field(default_factory=lambda: [

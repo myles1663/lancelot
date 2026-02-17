@@ -104,6 +104,15 @@ FLAG_META = {
         "confirm_enable": "You are about to grant Lancelot direct access to your host operating system. This bypasses all container isolation — Lancelot will be able to run any command on your actual machine. Only enable this in trusted development environments.\n\nThe Lancelot Host Agent must be running on the host (host_agent/start_agent.bat).\n\nDo you accept this risk?",
         "has_editor": "host_agent",
     },
+    "FEATURE_HOST_WRITE_COMMANDS": {
+        "description": "Host Write Commands. Unlocks DESTRUCTIVE commands (rm, del, kill, shutdown, etc.) on the host OS via the Host Bridge. All write commands still require Sentry approval before execution.",
+        "category": "Tool Fabric",
+        "requires": ["FEATURE_TOOLS_HOST_BRIDGE"],
+        "conflicts": [],
+        "warning": "EXTREME DANGER. Enables file deletion, process killing, and system commands on your REAL HOST MACHINE. Mistakes are IRREVERSIBLE.",
+        "confirm_enable": "\u26a0\ufe0f EXTREME DANGER \u26a0\ufe0f\n\nThis enables DESTRUCTIVE commands (rm, del, kill, shutdown, etc.) on your REAL HOST MACHINE.\n\nFiles deleted CANNOT be recovered. Services stopped may not restart. Registry edits can break your system.\n\nAll write commands still require your approval in the Sentry, but mistakes are IRREVERSIBLE.\n\nOnly enable this if you fully understand the risks.",
+        "has_editor": "host_write_commands",
+    },
 
     # ── Execution & Runtime ───────────────────────────────────────
     "FEATURE_RESPONSE_ASSEMBLER": {
@@ -397,6 +406,58 @@ async def shutdown_host_agent():
             status_code=502,
             content={"error": f"Could not reach host agent: {str(exc)[:200]}"},
         )
+
+
+# ── Host Write Commands Config ────────────────────────────────────────
+# Editable list of dangerous commands allowed on the host when
+# FEATURE_HOST_WRITE_COMMANDS is enabled.
+
+WRITE_COMMANDS_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "config", "host_write_commands.yaml",
+)
+
+
+@router.get("/host-write-commands")
+async def get_host_write_commands():
+    """Return current host write commands list."""
+    try:
+        commands = []
+        raw = ""
+        if os.path.exists(WRITE_COMMANDS_PATH):
+            with open(WRITE_COMMANDS_PATH, "r") as f:
+                raw = f.read()
+            for line in raw.splitlines():
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    commands.append(stripped)
+        return {"commands": commands, "raw": raw, "path": WRITE_COMMANDS_PATH}
+    except Exception as exc:
+        logger.error("get_host_write_commands error: %s", exc)
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+class WriteCommandsUpdate(BaseModel):
+    raw: str
+
+
+@router.put("/host-write-commands")
+async def update_host_write_commands(body: WriteCommandsUpdate):
+    """Update the host write commands list."""
+    try:
+        os.makedirs(os.path.dirname(WRITE_COMMANDS_PATH), exist_ok=True)
+        with open(WRITE_COMMANDS_PATH, "w") as f:
+            f.write(body.raw)
+        # Count non-comment, non-empty lines
+        commands = [
+            ln.strip() for ln in body.raw.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+        logger.info("Host write commands updated: %d commands", len(commands))
+        return {"commands": commands, "count": len(commands)}
+    except Exception as exc:
+        logger.error("update_host_write_commands error: %s", exc)
+        return JSONResponse(status_code=500, content={"error": str(exc)})
 
 
 # ── Dependency Validation ────────────────────────────────────────────
