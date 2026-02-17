@@ -5,6 +5,15 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.1.9] - 2026-02-16
+
+### Added
+- **Shared Workspace Connector**: Configurable shared folder path from the War Room Connectors page:
+  - New `shared_workspace` connector with "Host Folder Path" config field
+  - Hot-swap: changing the path updates `docker-compose.yml` and auto-restarts the container
+  - Current path auto-seeded into vault on startup from docker-compose.yml
+  - Config-type credentials now show as visible text inputs (not masked passwords)
+
 ## [0.1.8] - 2026-02-16
 
 ### Added

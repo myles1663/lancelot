@@ -52,6 +52,7 @@ _CONNECTOR_CLASSES = {
     "telegram": ("src.connectors.connectors.telegram", "TelegramConnector", {}),
     "x": ("src.connectors.connectors.x", "XConnector", {}),
     "generic_rest": ("src.connectors.connectors.generic_rest", "GenericRESTConnector", {}),
+    "shared_workspace": ("src.connectors.connectors.shared_workspace", "SharedWorkspaceConnector", {}),
 }
 
 _BACKEND_OPTIONS: Dict[str, List[str]] = {

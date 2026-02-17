@@ -678,6 +678,27 @@ async def startup_event():
         init_connectors_api(_connector_registry, _connector_vault)
         app.include_router(cred_router)
         app.include_router(connectors_mgmt_router)
+
+        # Seed vault with current workspace path from docker-compose.yml
+        if not _connector_vault.exists("shared_workspace.host_path"):
+            try:
+                import re as _re
+                _compose_file = Path("/home/lancelot/app/docker-compose.yml")
+                if _compose_file.exists():
+                    _compose_text = _compose_file.read_text(encoding="utf-8")
+                    _ws_match = _re.search(
+                        r'-\s*["\']?(.+?):/home/lancelot/workspace',
+                        _compose_text,
+                    )
+                    if _ws_match:
+                        _ws_path = _ws_match.group(1).strip().strip('"').strip("'")
+                        _connector_vault.store(
+                            "shared_workspace.host_path", _ws_path, type="config",
+                        )
+                        logger.info("Seeded vault with workspace path: %s", _ws_path)
+            except Exception as _e:
+                logger.debug("Could not seed workspace path: %s", _e)
+
         logger.info("Connectors subsystem initialized (FEATURE_CONNECTORS=%s).", FEATURE_CONNECTORS)
     except Exception as e:
         logger.warning(f"Connectors initialization failed: {e}")

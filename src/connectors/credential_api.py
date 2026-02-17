@@ -9,6 +9,10 @@ endpoints (manual entry path).
 from __future__ import annotations
 
 import logging
+import re
+import subprocess
+import threading
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -94,6 +98,13 @@ def store_credential(connector_id: str, body: StoreCredentialRequest):
     _vault.store(body.vault_key, body.value, type=body.type)
     _vault.grant_connector_access(connector_id, manifest)
 
+    # Hot-swap: if this is the workspace path, update docker-compose and restart
+    if body.vault_key == "shared_workspace.host_path":
+        try:
+            _apply_workspace_path(body.value)
+        except Exception as exc:
+            logger.warning("Workspace hot-swap failed: %s", exc)
+
     return StoreCredentialResponse(stored=True, vault_key=body.vault_key)
 
 
@@ -175,3 +186,57 @@ def validate_credentials(connector_id: str):
         return ValidateCredentialResponse(valid=valid)
     except Exception as e:
         return ValidateCredentialResponse(valid=False, error=str(e))
+
+
+# ── Workspace Hot-Swap ───────────────────────────────────────────
+
+_COMPOSE_PATH = Path("/home/lancelot/app/docker-compose.yml")
+_WORKSPACE_MOUNT_PATTERN = re.compile(
+    r'^(\s*-\s*["\']?)(.+?)(:/home/lancelot/workspace["\']?\s*)$'
+)
+
+
+def _apply_workspace_path(host_path: str) -> None:
+    """Update docker-compose.yml with the new workspace path and restart.
+
+    Reads the compose file, replaces the workspace volume mount line,
+    saves, then runs `docker compose up -d` to recreate the container
+    with the new mount. The container replaces itself.
+    """
+    if not _COMPOSE_PATH.exists():
+        logger.warning("docker-compose.yml not found at %s", _COMPOSE_PATH)
+        return
+
+    content = _COMPOSE_PATH.read_text(encoding="utf-8")
+    lines = content.splitlines(keepends=True)
+    updated = False
+
+    for i, line in enumerate(lines):
+        match = _WORKSPACE_MOUNT_PATTERN.match(line)
+        if match:
+            prefix, _old_path, suffix = match.groups()
+            lines[i] = f'{prefix}{host_path}{suffix}'
+            if not lines[i].endswith('\n'):
+                lines[i] += '\n'
+            updated = True
+            logger.info("Workspace mount updated: %s -> %s", _old_path, host_path)
+            break
+
+    if not updated:
+        logger.warning("Could not find workspace mount line in docker-compose.yml")
+        return
+
+    _COMPOSE_PATH.write_text("".join(lines), encoding="utf-8")
+
+    # Schedule container recreation after response is sent
+    def _recreate():
+        try:
+            logger.info("Hot-swapping workspace — running docker compose up -d")
+            subprocess.run(
+                ["docker", "compose", "-f", str(_COMPOSE_PATH), "up", "-d", "lancelot-core"],
+                capture_output=True, text=True, timeout=120,
+            )
+        except Exception as exc:
+            logger.error("Workspace hot-swap restart failed: %s", exc)
+
+    threading.Timer(1.0, _recreate).start()

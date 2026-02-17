@@ -306,8 +306,8 @@ export function Connectors() {
                             </div>
                             <div className="flex gap-2">
                               <input
-                                type="password"
-                                placeholder={cred.present ? '••••••••' : `Enter ${cred.type}...`}
+                                type={cred.type === 'config' ? 'text' : 'password'}
+                                placeholder={cred.present ? (cred.type === 'config' ? 'Current value stored' : '••••••••') : `Enter ${cred.type === 'config' ? 'value' : cred.type}...`}
                                 value={credInputs[connector.id]?.[cred.vault_key] || ''}
                                 onChange={(e) => updateCredInput(connector.id, cred.vault_key, e.target.value)}
                                 className="flex-1 bg-surface-input border border-border-default rounded px-2 py-1.5 text-xs font-mono text-text-primary placeholder:text-text-muted/50 focus:outline-none focus:border-accent-primary"

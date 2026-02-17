@@ -84,3 +84,6 @@ connectors:
   x:
     enabled: false
     settings: {}
+  shared_workspace:
+    enabled: true
+    settings: {}
