@@ -5,6 +5,26 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.1.8] - 2026-02-16
+
+### Added
+- **Skill Builder Pipeline**: Wired up the complete skill proposal → approval → installation pipeline:
+  - **SkillFactory initialization** in `gateway.py`: Creates the factory at startup, registers all
+    builtin skills (including `document_creator` and `skill_manager`) in the registry.
+  - **skill_manager builtin skill**: New tool that Lancelot can call to `propose` new skills (with real
+    Python code), `list_proposals`, `list_skills`, and `run_skill`. Proposals require owner approval.
+  - **Skills REST API** (`/api/skills/*`): Six endpoints for War Room proposal management — list
+    proposals, get detail (with code preview), approve, reject, install, and list installed skills.
+  - **War Room Skills Panel**: New "Skills" page under Operations with proposal cards, installed skill
+    list, and a detail modal for reviewing code, approving/rejecting, and installing proposals.
+  - **Tool declarations**: Both Normalized and OpenAI-format declarations for `skill_manager`, with
+    safety classification (auto for list/propose, escalate for run_skill).
+
+### Fixed
+- **Workspace path bug**: `repo_writer` and `document_creator` defaulted to `/home/lancelot/data`
+  instead of the shared workspace. Set `LANCELOT_WORKSPACE=/home/lancelot/workspace` in
+  docker-compose.yml so files land in the shared desktop folder.
+
 ## [0.1.7] - 2026-02-16
 
 ### Added

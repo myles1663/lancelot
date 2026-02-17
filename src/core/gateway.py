@@ -247,10 +247,12 @@ def _init_skills():
     """Initialize Skills subsystem."""
     from skills.registry import SkillRegistry, SkillEntry, SkillOwnership
     from skills.executor import SkillExecutor
+    from skills.factory import SkillFactory
 
     skill_registry = SkillRegistry(data_dir="/home/lancelot/data")
     for builtin_name in ("echo", "command_runner", "repo_writer", "service_runner",
-                         "network_client", "telegram_send", "warroom_send", "schedule_job"):
+                         "network_client", "telegram_send", "warroom_send", "schedule_job",
+                         "health_check", "document_creator", "skill_manager"):
         if not skill_registry.get_skill(builtin_name):
             skill_registry._skills[builtin_name] = SkillEntry(
                 name=builtin_name, version="1.0.0",
@@ -259,11 +261,15 @@ def _init_skills():
     skill_registry._save()
 
     executor = SkillExecutor(registry=skill_registry)
+    skill_factory = SkillFactory(data_dir="/home/lancelot/data")
+
     main_orchestrator.skill_executor = executor
+    main_orchestrator.skill_factory = skill_factory
+    main_orchestrator.skill_registry = skill_registry
     if main_orchestrator.task_runner:
         main_orchestrator.task_runner.skill_executor = executor
-    logger.info("Skills initialized: %d skills", len(skill_registry.list_skills()))
-    return {"registry": skill_registry, "executor": executor}
+    logger.info("Skills initialized: %d skills (factory enabled)", len(skill_registry.list_skills()))
+    return {"registry": skill_registry, "executor": executor, "factory": skill_factory}
 
 
 def _shutdown_skills(objects):
@@ -518,6 +524,15 @@ async def startup_event():
     if FEATURE_SKILLS:
         try:
             subsystem_manager.start("skills")
+            # Register Skills API for War Room proposal management
+            from skills_api import router as skills_api_router, init_skills_api
+            init_skills_api(
+                factory=main_orchestrator.skill_factory,
+                registry=main_orchestrator.skill_registry,
+                executor=main_orchestrator.skill_executor,
+            )
+            app.include_router(skills_api_router)
+            logger.info("Skills API initialized.")
         except Exception as e:
             logger.warning("Skills initialization failed: %s", e)
 

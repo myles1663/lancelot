@@ -16,6 +16,7 @@ import {
   Connectors,
   BusinessDashboard,
   HealthDashboard,
+  SkillsPanel,
 } from '@/pages'
 
 function App() {
@@ -35,6 +36,7 @@ function App() {
         <Route path="/receipts" element={<ReceiptExplorer />} />
         <Route path="/tools" element={<ToolFabric />} />
         <Route path="/memory" element={<MemoryPanel />} />
+        <Route path="/skills" element={<SkillsPanel />} />
         <Route path="/scheduler" element={<SchedulerPanel />} />
 
         {/* SYSTEM */}

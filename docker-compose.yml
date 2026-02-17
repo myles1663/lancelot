@@ -20,6 +20,7 @@ services:
       - PYTHONUNBUFFERED=1
       # - GOOGLE_APPLICATION_CREDENTIALS=/home/lancelot/.config/gcloud/application_default_credentials.json
       - LOCAL_LLM_URL=http://local-llm:8080
+      - LANCELOT_WORKSPACE=/home/lancelot/workspace
       - PYTHONPATH=/home/lancelot/app/src/core:/home/lancelot/app/src/ui:/home/lancelot/app/src/agents:/home/lancelot/app/src/memory:/home/lancelot/app/src/shared:/home/lancelot/app/src/integrations:/home/lancelot/app/src:/home/lancelot/app
     depends_on:
       local-llm:

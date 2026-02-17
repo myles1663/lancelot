@@ -470,3 +470,41 @@ export interface UpdateStatusResponse {
   check_error: string | null
   show_banner: boolean
 }
+
+// ------------------------------------------------------------------
+// Skills  (/api/skills/*)
+// ------------------------------------------------------------------
+
+export interface SkillProposalSummary {
+  id: string
+  name: string
+  description: string
+  permissions: string[]
+  status: string
+  created_at: string
+  approved_by: string | null
+}
+
+export interface SkillProposalDetail extends SkillProposalSummary {
+  manifest_yaml: string
+  execute_code: string
+  test_code: string
+  tests_status: string | null
+}
+
+export interface SkillProposalsResponse {
+  proposals: SkillProposalSummary[]
+  total: number
+}
+
+export interface InstalledSkill {
+  name: string
+  version: string
+  enabled: boolean
+  ownership: string
+}
+
+export interface SkillsListResponse {
+  skills: InstalledSkill[]
+  total: number
+}

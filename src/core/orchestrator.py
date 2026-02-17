@@ -1127,8 +1127,9 @@ class LancelotOrchestrator:
             NormalizedToolDeclaration(
                 name="repo_writer",
                 description=(
-                    "Create, edit, or delete files in the workspace. "
-                    "Use for writing code, configuration, or documentation."
+                    "Create, edit, or delete files in the shared workspace. "
+                    "Files are written to /home/lancelot/workspace which is the shared desktop folder "
+                    "the owner can access directly. Use for writing code, configuration, or documentation."
                 ),
                 parameters={
                     "type": "object",
@@ -1293,6 +1294,52 @@ class LancelotOrchestrator:
                     "required": ["action"],
                 },
             ),
+            NormalizedToolDeclaration(
+                name="skill_manager",
+                description=(
+                    "Manage skills: propose new skills, list proposals, list installed skills, or run a skill. "
+                    "Use action 'propose' to create a new skill — provide name, description, permissions, and "
+                    "execute_code (the full Python implementation). Proposals require owner approval before installation. "
+                    "Use 'list_proposals' to see pending/approved/rejected proposals. "
+                    "Use 'list_skills' to see all installed skills. "
+                    "Use 'run_skill' to execute an installed dynamic skill by name."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["propose", "list_proposals", "list_skills", "run_skill"],
+                            "description": "Skill management action to perform",
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": "Skill name (for propose)",
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "Skill description (for propose)",
+                        },
+                        "permissions": {
+                            "type": "string",
+                            "description": "Comma-separated permissions or JSON array (for propose)",
+                        },
+                        "execute_code": {
+                            "type": "string",
+                            "description": "Full Python implementation of the skill's execute(context, inputs) function (for propose)",
+                        },
+                        "skill_name": {
+                            "type": "string",
+                            "description": "Name of skill to run (for run_skill)",
+                        },
+                        "skill_inputs": {
+                            "type": "string",
+                            "description": "JSON string of inputs to pass to the skill (for run_skill)",
+                        },
+                    },
+                    "required": ["action"],
+                },
+            ),
         ]
 
     def _classify_tool_call_safety(self, skill_name: str, inputs: dict) -> str:
@@ -1340,6 +1387,15 @@ class LancelotOrchestrator:
         if skill_name == "document_creator":
             # Document creation within workspace is auto-approved (T1 risk)
             return "auto"
+
+        if skill_name == "skill_manager":
+            action = inputs.get("action", "").lower()
+            # Read-only listing and proposals are auto-approved
+            # (proposals still require owner approval before installation)
+            if action in ("list_proposals", "list_skills", "propose"):
+                return "auto"
+            # run_skill executes arbitrary dynamic skills — escalate
+            return "escalate"
 
         if skill_name == "repo_writer":
             action = inputs.get("action", "").lower()
@@ -1533,6 +1589,29 @@ class LancelotOrchestrator:
                             "timezone": {"type": "string", "description": "IANA timezone e.g. 'America/New_York' (for create, defaults to America/New_York)"},
                             "inputs": {"type": "string", "description": "JSON inputs for the skill (for create)"},
                             "job_id": {"type": "string", "description": "Job ID (for delete)"},
+                        },
+                        "required": ["action"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "skill_manager",
+                    "description": (
+                        "Manage skills: propose new skills, list proposals, list installed skills, or run a dynamic skill. "
+                        "Proposals require owner approval before installation."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string", "enum": ["propose", "list_proposals", "list_skills", "run_skill"], "description": "Skill management action"},
+                            "name": {"type": "string", "description": "Skill name (for propose)"},
+                            "description": {"type": "string", "description": "Skill description (for propose)"},
+                            "permissions": {"type": "string", "description": "Comma-separated permissions (for propose)"},
+                            "execute_code": {"type": "string", "description": "Python implementation of execute(context, inputs) (for propose)"},
+                            "skill_name": {"type": "string", "description": "Skill to run (for run_skill)"},
+                            "skill_inputs": {"type": "string", "description": "JSON inputs for the skill (for run_skill)"},
                         },
                         "required": ["action"],
                     },
