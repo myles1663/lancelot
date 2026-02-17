@@ -973,7 +973,24 @@ class LancelotOrchestrator:
                 "To push a notification to this dashboard, use the warroom_send tool."
             )
 
-        instruction = f"{persona}\n\n{self_awareness}\n\n{rules}\n\n{guardrails}\n\n{honesty}{channel_note}"
+        # 7. HOST BRIDGE CONTEXT — tells LLM about host OS access
+        host_bridge_note = ""
+        try:
+            from src.core.feature_flags import FEATURE_TOOLS_HOST_BRIDGE
+            if FEATURE_TOOLS_HOST_BRIDGE:
+                host_bridge_note = (
+                    "\n\nHOST OS ACCESS:\n"
+                    "You have a LIVE BRIDGE to the Commander's actual host operating system. "
+                    "The command_runner tool executes commands on the REAL HOST MACHINE (not inside "
+                    "your Docker container). When asked about the system, OS version, hardware, files, "
+                    "or anything about the host — USE command_runner to get real information from the "
+                    "host OS. Do NOT answer based on your container environment (Debian Linux). "
+                    "The host bridge routes your commands to the actual machine the Commander is using."
+                )
+        except Exception:
+            pass
+
+        instruction = f"{persona}\n\n{self_awareness}\n\n{rules}\n\n{guardrails}\n\n{honesty}{channel_note}{host_bridge_note}"
 
         # Crusader Mode overlay
         if crusader_mode:
