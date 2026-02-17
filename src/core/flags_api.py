@@ -89,11 +89,19 @@ FLAG_META = {
         "warning": "Security risk: sandboxed code can make outbound network requests. Enable NETWORK_ALLOWLIST and configure allowed domains to restrict access.",
     },
     "FEATURE_TOOLS_HOST_EXECUTION": {
-        "description": "DANGEROUS: Allows tool execution directly on the host machine instead of inside the Docker sandbox. Bypasses container isolation entirely.",
+        "description": "Docker Linux Access. Runs commands inside the Lancelot container's Linux environment (Debian) instead of in sandboxed sibling containers. No container isolation from Lancelot's own filesystem.",
         "category": "Tool Fabric",
         "requires": ["FEATURE_TOOLS_FABRIC"],
         "conflicts": [],
-        "warning": "CRITICAL SECURITY RISK. Enables arbitrary command execution on the host OS. Only enable for trusted development environments. Never in production.",
+        "warning": "Commands run in the container's Linux environment with full access to Lancelot's filesystem. No sandbox isolation. For actual host OS access, use HOST_BRIDGE instead.",
+    },
+    "FEATURE_TOOLS_HOST_BRIDGE": {
+        "description": "Host OS Bridge. Executes commands on the actual host operating system (e.g., Windows, macOS) via the Lancelot Host Agent. Requires the host agent running on the host machine (host_agent/start_agent.bat).",
+        "category": "Tool Fabric",
+        "requires": ["FEATURE_TOOLS_FABRIC"],
+        "conflicts": [],
+        "warning": "CRITICAL SECURITY RISK. Full access to the host machine. Requires host_agent running on the host. Only for trusted development environments.",
+        "confirm_enable": "You are about to grant Lancelot direct access to your host operating system. This bypasses all container isolation — Lancelot will be able to run any command on your actual machine. Only enable this in trusted development environments.\n\nThe Lancelot Host Agent must be running on the host (host_agent/start_agent.bat).\n\nDo you accept this risk?",
     },
 
     # ── Execution & Runtime ───────────────────────────────────────
@@ -251,6 +259,8 @@ async def get_flags():
                     }
                     if meta.get("has_editor"):
                         entry["has_editor"] = meta["has_editor"]
+                    if meta.get("confirm_enable"):
+                        entry["confirm_enable"] = meta["confirm_enable"]
                     flags[attr] = entry
 
         return {"flags": flags}

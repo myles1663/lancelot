@@ -9,6 +9,7 @@ export interface FlagInfo {
   conflicts: string[]
   warning: string
   has_editor?: string
+  confirm_enable?: string
 }
 
 export interface FlagsResponse {

@@ -34,7 +34,7 @@ from src.tools.contracts import (
 )
 from src.tools.health import HealthMonitor, get_health_monitor
 from src.tools.policies import PolicyEngine, PolicyDecision
-from src.core.feature_flags import FEATURE_TOOLS_HOST_EXECUTION
+from src.core.feature_flags import FEATURE_TOOLS_HOST_EXECUTION, FEATURE_TOOLS_HOST_BRIDGE
 
 logger = logging.getLogger(__name__)
 
@@ -45,25 +45,28 @@ logger = logging.getLogger(__name__)
 
 
 def _default_provider_preferences() -> Dict[str, List[str]]:
-    """Build provider preferences based on feature flags."""
-    # When host execution is enabled, prefer it over sandbox for core capabilities
+    """Build provider preferences based on feature flags.
+
+    Priority order: host_bridge > host_execution > local_sandbox
+    - host_bridge: Real host OS via Host Agent (highest priority when enabled)
+    - host_execution: Container Linux environment (no sandbox isolation)
+    - local_sandbox: Docker sibling container (default, fully sandboxed)
+    """
+    # Build the shell/repo/file/deploy preference chain based on flags
+    exec_chain: List[str] = []
+    if FEATURE_TOOLS_HOST_BRIDGE:
+        exec_chain.append("host_bridge")
     if FEATURE_TOOLS_HOST_EXECUTION:
-        return {
-            "shell_exec": ["host_execution", "local_sandbox"],
-            "repo_ops": ["host_execution", "local_sandbox"],
-            "file_ops": ["host_execution", "local_sandbox"],
-            "web_ops": ["local_sandbox"],
-            "ui_builder": ["ui_templates", "ui_antigravity"],
-            "deploy_ops": ["host_execution", "local_sandbox"],
-            "vision_control": ["vision_antigravity"],
-        }
+        exec_chain.append("host_execution")
+    exec_chain.append("local_sandbox")
+
     return {
-        "shell_exec": ["local_sandbox"],
-        "repo_ops": ["local_sandbox"],
-        "file_ops": ["local_sandbox"],
+        "shell_exec": list(exec_chain),
+        "repo_ops": list(exec_chain),
+        "file_ops": list(exec_chain),
         "web_ops": ["local_sandbox"],
         "ui_builder": ["ui_templates", "ui_antigravity"],
-        "deploy_ops": ["local_sandbox"],
+        "deploy_ops": list(exec_chain),
         "vision_control": ["vision_antigravity"],
     }
 

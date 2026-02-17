@@ -5,6 +5,29 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.1] - 2026-02-16
+
+### Added
+- **Host OS Bridge** (`FEATURE_TOOLS_HOST_BRIDGE`): New `HostBridgeProvider` that executes
+  commands on the actual host operating system (Windows, macOS, Linux) via a lightweight HTTP
+  bridge. The Lancelot Host Agent (`host_agent/agent.py`) runs on the host machine and accepts
+  command execution requests from the Docker container. Supports ShellExec, RepoOps, FileOps,
+  and DeployOps capabilities. Authenticated via shared token, localhost-only binding.
+- **Host Agent** (`host_agent/`): Standalone Python HTTP server (stdlib only, no dependencies)
+  that runs on the host machine. Includes `start_agent.bat` for Windows quick-start. Endpoints:
+  `/health` (no auth), `/info` (auth), `/execute` (auth). Command denylist, output bounding,
+  and timeouts enforced.
+- **Risk acceptance dialog**: Flags with `confirm_enable` metadata now show a confirmation
+  dialog before enabling. `FEATURE_TOOLS_HOST_BRIDGE` requires explicit risk acceptance.
+
+### Changed
+- **Relabeled `FEATURE_TOOLS_HOST_EXECUTION`**: Now clearly described as "Docker Linux Access"
+  (runs in the container's Linux environment) to distinguish from the new Host OS Bridge.
+- **Router priority chain**: `host_bridge` > `host_execution` > `local_sandbox`. The highest
+  available provider in the chain is selected for shell_exec, repo_ops, file_ops, deploy_ops.
+- **Docker Compose**: Added `extra_hosts: host.docker.internal:host-gateway` and
+  `HOST_AGENT_URL`/`HOST_AGENT_TOKEN` environment variables for the host bridge.
+
 ## [0.2.0] - 2026-02-16
 
 ### Added

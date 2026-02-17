@@ -65,9 +65,11 @@ from src.tools.providers.ui_templates import (
 from src.tools.providers.ui_antigravity import AntigravityUIProvider
 from src.tools.providers.vision_antigravity import AntigravityVisionProvider
 from src.tools.providers.host_execution import HostExecutionProvider
+from src.tools.providers.host_bridge import HostBridgeProvider
 from src.core.feature_flags import (
     FEATURE_TOOLS_ANTIGRAVITY,
     FEATURE_TOOLS_HOST_EXECUTION,
+    FEATURE_TOOLS_HOST_BRIDGE,
     FEATURE_TOOLS_NETWORK,
     FEATURE_TOOLS_CLI_PROVIDERS,
 )
@@ -170,14 +172,25 @@ class ToolFabric:
         templates = TemplateScaffolder()
         self._health_monitor.register(templates)
 
-        # Host execution provider (DANGEROUS — bypasses container isolation)
+        # Host execution provider (container Linux access — no sandbox isolation)
         if FEATURE_TOOLS_HOST_EXECUTION:
             host_provider = HostExecutionProvider(
                 workspace=self.config.default_workspace,
             )
             self._health_monitor.register(host_provider)
             logger.warning(
-                "HOST EXECUTION ENABLED — commands will run directly on host OS"
+                "HOST EXECUTION ENABLED — commands will run in container Linux environment"
+            )
+
+        # Host bridge provider (real host OS via Host Agent)
+        if FEATURE_TOOLS_HOST_BRIDGE:
+            bridge_provider = HostBridgeProvider(
+                workspace=self.config.default_workspace,
+            )
+            self._health_monitor.register(bridge_provider)
+            logger.warning(
+                "HOST BRIDGE ENABLED — commands will be sent to host agent at %s",
+                bridge_provider.config.agent_url,
             )
 
         # Antigravity providers (requires feature flag + Playwright)

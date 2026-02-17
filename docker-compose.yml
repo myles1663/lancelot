@@ -14,6 +14,8 @@ services:
       # - ${APPDATA}/gcloud/application_default_credentials.json:/home/lancelot/.config/gcloud/application_default_credentials.json:ro
     group_add:
       - "0"  # root group to access Docker socket (owned root:root on Docker Desktop)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - .env
     environment:
@@ -22,6 +24,9 @@ services:
       - LOCAL_LLM_URL=http://local-llm:8080
       - LANCELOT_WORKSPACE=/home/lancelot/workspace
       - PYTHONPATH=/home/lancelot/app/src/core:/home/lancelot/app/src/ui:/home/lancelot/app/src/agents:/home/lancelot/app/src/memory:/home/lancelot/app/src/shared:/home/lancelot/app/src/integrations:/home/lancelot/app/src:/home/lancelot/app
+      # Host Agent bridge — set HOST_AGENT_TOKEN in .env to match host_agent
+      - HOST_AGENT_URL=http://host.docker.internal:9111
+      - HOST_AGENT_TOKEN=${HOST_AGENT_TOKEN:-lancelot-host-agent}
     depends_on:
       local-llm:
         condition: service_healthy

@@ -9,7 +9,8 @@ Required:
 - ui_templates: Deterministic template scaffolder (TemplateScaffolder)
 
 Optional:
-- host_execution: Direct host execution (DANGEROUS, gated by FEATURE_TOOLS_HOST_EXECUTION)
+- host_execution: Container Linux execution (gated by FEATURE_TOOLS_HOST_EXECUTION)
+- host_bridge: Real host OS execution via Host Agent (gated by FEATURE_TOOLS_HOST_BRIDGE)
 - cli_aider: Aider CLI adapter
 - cli_opencode: OpenCode CLI adapter
 - cli_continue: Continue headless CLI adapter
@@ -44,6 +45,10 @@ from src.tools.providers.host_execution import (
     HostExecutionProvider,
     HostExecConfig,
 )
+from src.tools.providers.host_bridge import (
+    HostBridgeProvider,
+    HostBridgeConfig,
+)
 
 __all__ = [
     # Local Sandbox
@@ -64,7 +69,10 @@ __all__ = [
     "VisionConfig",
     "create_vision_provider",
     "AntigravityUnavailableError",
-    # Host Execution
+    # Host Execution (container Linux)
     "HostExecutionProvider",
     "HostExecConfig",
+    # Host Bridge (real host OS)
+    "HostBridgeProvider",
+    "HostBridgeConfig",
 ]

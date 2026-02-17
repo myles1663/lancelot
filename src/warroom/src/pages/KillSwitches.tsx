@@ -94,6 +94,7 @@ export function KillSwitches() {
   const { data: crusaderStatus } = usePolling<CrusaderStatusResponse>({ fetcher: fetchCrusaderStatus, interval: 5000 })
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [pendingToggle, setPendingToggle] = useState<string | null>(null)
+  const [pendingDanger, setPendingDanger] = useState<{ name: string; message: string } | null>(null)
   const [restartBanner, setRestartBanner] = useState<string | null>(null)
   const [toggling, setToggling] = useState<string | null>(null)
 
@@ -123,6 +124,11 @@ export function KillSwitches() {
 
   const handleToggle = (e: React.MouseEvent, name: string, info: FlagInfo) => {
     e.stopPropagation()
+    // Show risk acceptance dialog when enabling a flag with confirm_enable
+    if (!info.enabled && info.confirm_enable) {
+      setPendingDanger({ name, message: info.confirm_enable })
+      return
+    }
     if (info.restart_required) {
       setPendingToggle(name)
       return
@@ -334,6 +340,16 @@ export function KillSwitches() {
         confirmLabel="Toggle"
         onConfirm={() => pendingToggle && doToggle(pendingToggle)}
         onCancel={() => setPendingToggle(null)}
+      />
+
+      <ConfirmDialog
+        open={pendingDanger !== null}
+        title="Accept Risk"
+        description={pendingDanger?.message ?? ''}
+        variant="destructive"
+        confirmLabel="I Accept the Risk"
+        onConfirm={() => { if (pendingDanger) { doToggle(pendingDanger.name); setPendingDanger(null) } }}
+        onCancel={() => setPendingDanger(null)}
       />
     </div>
   )
