@@ -2218,7 +2218,7 @@ class LancelotOrchestrator:
 
             # Process ALL tool calls and collect results.
             # V13: Set of declared tool names for hallucination guard
-            _DECLARED_TOOL_NAMES = {"network_client", "command_runner", "repo_writer", "service_runner", "telegram_send", "warroom_send", "schedule_job"}
+            _DECLARED_TOOL_NAMES = {"network_client", "command_runner", "repo_writer", "service_runner", "telegram_send", "warroom_send", "schedule_job", "document_creator", "skill_manager"}
 
             tool_results = []  # list of (call_id, fn_name, result_json_str)
             for tc in result.tool_calls:
