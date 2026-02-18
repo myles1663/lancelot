@@ -134,13 +134,13 @@ class LancelotOrchestrator:
         self.rules_context = ""
         self.memory_summary = ""
         self.provider: Optional[ProviderClient] = None
-        self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        self.model_name = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
         self.sentry = None
 
         # Context caching
         self._cache = None
         self._cache_ttl = int(os.getenv("GEMINI_CACHE_TTL", "3600"))
-        self._cache_model = os.getenv("GEMINI_CACHE_MODEL", "gemini-2.0-flash-001")
+        self._cache_model = os.getenv("GEMINI_CACHE_MODEL", "gemini-2.5-flash")
 
         # Security Modules
         self.sanitizer = InputSanitizer()
@@ -904,51 +904,40 @@ class LancelotOrchestrator:
             "saved to their profile."
         )
 
-        # 4. HONESTY GUARDRAILS (Honest Closure policy)
+        # 4. REASONING PRINCIPLES (replaces patchwork Fix Packs V1-V19)
         honesty = (
-            "You must unmistakably never claim to be working on something in the background. "
-            "You must unmistakably never say 'I will report back' or 'please allow me time'. "
-            "You must unmistakably never simulate progress — if you cannot do something, say so directly. "
-            "Complete the task in this response or state honestly what you cannot do. "
-            "If asked to plan something, produce a complete structured plan immediately. Never stall. "
-            "Never use phrases like 'I am currently processing', 'I will provide shortly', or 'actively compiling'. "
-            "You must unmistakably never include time estimates like '(1 hour)' or '(2-3 days)' for work you will do. "
-            "If a user asks you to build or set up something complex, respond with: "
-            "concrete steps they or you can take right now, code snippets if applicable, "
-            "what config or credentials you need from them, and an honest statement of what you cannot do.\n\n"
-            "TOOL USAGE — You have tools available. USE THEM proactively:\n"
-            "- When you need information, USE network_client to fetch it (GET requests to APIs, docs, etc.)\n"
-            "- When you need to check the system, USE command_runner (ls, git status, etc.)\n"
-            "- When asked to send a message via Telegram, USE telegram_send immediately — credentials are pre-configured\n"
-            "- When asked to send a message to the War Room/dashboard/Command Center, USE warroom_send — it pushes a toast notification\n"
-            "- When asked to schedule, set up a recurring task, alarm, reminder, or wake-up call, USE schedule_job with action='create'. "
-            "Provide the cron expression (5 fields: minute hour day month weekday), the skill to run (e.g. 'telegram_send'), "
-            "and the inputs as a JSON string (e.g. '{\"message\": \"Good morning Commander\"}'). "
-            "Always include timezone — the Commander is in Eastern time, so use 'America/New_York' unless told otherwise.\n"
-            "- To list scheduled jobs, USE schedule_job with action='list'\n"
-            "- To cancel/delete a scheduled job, USE schedule_job with action='delete' and the job_id\n"
-            "- Do NOT ask the user for search terms — research it yourself using your tools\n"
-            "- Do NOT produce plans without researching first when tools are available\n"
-            "- When you USE a tool and get results, you CAN say 'I researched X and found Y'\n"
-            "- The difference: REAL tool-backed research is honest. Claiming you WILL research later is not.\n"
-            "- RETRY ON FAILURE: If a tool call fails (HTTP 403, 404, timeout, error), do NOT give up.\n"
-            "  Try a different URL, a different service, or a different search approach.\n"
-            "  Always try at least 2-3 alternatives before concluding you cannot find the information.\n"
-            "  For example: if discord.com returns 403, try searching for Discord alternatives or other voice APIs.\n\n"
-            "PROBLEM-SOLVING MINDSET — You are an autonomous agent. Act like one:\n"
-            "- NEVER stop at 'I cannot access X'. Instead say 'X was unreachable, but here are "
-            "alternatives I found: A, B, C' and explain each option.\n"
-            "- When a service is down or returns errors, USE YOUR OWN KNOWLEDGE to suggest "
-            "alternative services, technologies, or approaches. You know about many technologies "
-            "even without fetching their docs.\n"
-            "- ALWAYS present at least 2-3 options when solving a problem. Compare tradeoffs "
-            "(cost, complexity, features) so the user can make an informed choice.\n"
-            "- When blocked on research, STILL produce a useful plan based on what you know. "
-            "Mark unverified details as assumptions.\n"
-            "- Think step by step about the PROBLEM, not just the first solution that comes to mind. "
-            "For example: if asked about real-time voice, consider WebRTC, LiveKit, Daily.co, "
-            "ElevenLabs, Whisper+TTS, Twilio, Vonage, browser Web Audio API, etc.\n"
-            "- Be resourceful and creative. A good agent finds a way; a lazy agent says 'I cannot'."
+            "REASONING PRINCIPLES — How you think matters more than what you do:\n\n"
+            "1. LITERAL FIDELITY: When the user gives you a name, term, or search query, use it "
+            "EXACTLY as written. Never autocorrect, assume typos, or substitute what you think "
+            "they meant. 'Clawd Bot' means 'Clawd Bot', not 'Claude Bot'. "
+            "'ACME Corp' means 'ACME Corp', not 'Acme Corporation'.\n\n"
+            "2. CORRECTIONS ARE INSTRUCTIONS: When a follow-up message amends, redirects, or "
+            "corrects a previous request, apply the correction to the ORIGINAL task. "
+            "'correction draft to telegram' means 'change the output channel to Telegram' — "
+            "it is NOT a new message to send literally. Look at what came BEFORE to understand "
+            "what is being corrected.\n\n"
+            "3. ACT FIRST: When you have tools, USE them before planning. Search first, summarize "
+            "after. Fetch first, analyze after. Only produce a plan when the user explicitly asks "
+            "for one ('make a plan', 'plan this out'). Never say 'I will research...' — just DO "
+            "the research. Never simulate progress or claim work is happening in the background.\n\n"
+            "4. HONESTY: Never claim to have done something you haven't. Never fake progress. "
+            "Complete the task in THIS response or state honestly what blocks you. "
+            "No phrases like 'I am currently processing', 'I will provide shortly', "
+            "'allow me time', or time estimates for work you will do.\n\n"
+            "5. RESILIENCE: If a tool call fails, try 2-3 alternatives before concluding failure. "
+            "When blocked, present what you CAN do. Use your own knowledge to suggest alternative "
+            "services, approaches, or technologies. A good agent finds a way.\n\n"
+            "6. CHANNEL AWARENESS: Your response goes back through the same channel the message "
+            "arrived on. Only use telegram_send or warroom_send to send to a DIFFERENT channel "
+            "than the one you are replying on. Never double-send.\n\n"
+            "TOOLS AVAILABLE — Use these proactively:\n"
+            "- network_client: HTTP requests (GET/POST/PUT/DELETE) for APIs, docs, web research\n"
+            "- command_runner: Shell commands on the system\n"
+            "- telegram_send: Send messages/files to Telegram (credentials pre-configured)\n"
+            "- warroom_send: Push notifications to the War Room dashboard\n"
+            "- schedule_job: Create/list/delete scheduled tasks (cron format, timezone: America/New_York)\n"
+            "- repo_writer: Create/edit/delete files in the workspace\n"
+            "- service_runner: Docker service management"
         )
 
         # 5. SELF-AWARENESS (Fix Pack V5)
@@ -1936,6 +1925,10 @@ class LancelotOrchestrator:
             "do it", "try it", "run it", "send it", "save it",
             "delete it", "rename it", "retry", "try again",
             "go for it", "proceed", "continue", "carry on",
+            # V20: Correction / redirect signals
+            "correction", "change it to", "switch to", "redirect",
+            "no no", "wait", "hold on", "not that",
+            "use telegram", "use slack", "use email",
         ]
 
         if any(signal in msg_lower for signal in continuation_signals):
@@ -2534,7 +2527,7 @@ class LancelotOrchestrator:
         to the native format (e.g. types.ThinkingConfig for Gemini).
         Non-Gemini providers will ignore this config gracefully.
         """
-        level = os.getenv("GEMINI_THINKING_LEVEL", "off")
+        level = os.getenv("GEMINI_THINKING_LEVEL", "low")
         if level == "off":
             return None
         return {"thinking_level": level}
@@ -3403,11 +3396,19 @@ class LancelotOrchestrator:
                         context_str=context_str,
                     )
                 else:
-                    # V10: Force tool use for research-oriented queries
-                    needs_research = self._needs_research(user_message)
-                    # V12: Allow writes when user expects action (code, config, setup)
-                    wants_action = self._wants_action(user_message)
-                    allow_writes = needs_research and wants_action
+                    # V20: Continuations (corrections, redirects) bypass _needs_research()
+                    # to prevent tool keywords in corrections from hijacking intent.
+                    # e.g. "correction draft to telegram" should NOT trigger telegram_send.
+                    if is_continuation:
+                        print("V20: Continuation — skipping research detection, routing with full context")
+                        needs_research = False
+                        allow_writes = False
+                    else:
+                        # V10: Force tool use for research-oriented queries
+                        needs_research = self._needs_research(user_message)
+                        # V12: Allow writes when user expects action (code, config, setup)
+                        wants_action = self._wants_action(user_message)
+                        allow_writes = needs_research and wants_action
                     if needs_research:
                         print(f"V10: Research query detected — forcing tool use (writes={'enabled' if allow_writes else 'disabled'})")
                     else:

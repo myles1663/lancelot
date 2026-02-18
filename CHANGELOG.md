@@ -5,6 +5,34 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.8] - 2026-02-18
+
+### Changed
+- **Gemini 3 model stack upgrade**: Upgraded all three model lanes to latest Gemini generation.
+  Deep lane: `gemini-3-pro-preview` (was gemini-2.5-pro). Fast lane: `gemini-3-flash-preview`
+  (was gemini-2.0-flash). Cache lane: `gemini-2.5-flash` (was gemini-2.0-flash, deprecated
+  March 31 2026). Gemini 3 Pro brings dramatically improved reasoning, instruction following,
+  and tool use. Gemini 3 Flash brings Pro-level intelligence at Flash speed/pricing.
+- **System prompt overhaul (V20)**: Replaced ~50 lines of patchwork Fix Pack rules (V1–V19)
+  with 6 core reasoning principles: Literal Fidelity (never autocorrect user terms),
+  Corrections Are Instructions (follow-ups amend the original task), Act First (use tools
+  before planning), Honesty (no fake progress), Resilience (try alternatives on failure),
+  Channel Awareness (don't double-send). Compact tool reference replaces verbose per-tool
+  instructions. Teaches the LLM HOW to think instead of WHAT to do in specific cases.
+- **Thinking enabled by default**: `_get_thinking_config()` default changed from `"off"` to
+  `"low"`. Gemini 3 Pro's native reasoning improves correction handling, multi-step task
+  decomposition, and conversational coherence.
+
+### Fixed
+- **Corrections hijacked by tool keyword matching (V20)**: Messages like "correction draft to
+  telegram" were matched by `_needs_research()` on the word "telegram" and routed as a literal
+  telegram_send call instead of being treated as a correction. Fix: when `is_continuation=True`,
+  skip `_needs_research()` entirely so corrections flow through the agentic loop with full
+  conversation context.
+- **`_is_continuation()` missing correction signals (V20)**: Added "correction", "change it to",
+  "switch to", "redirect", "no no", "wait", "hold on", "not that", "use telegram", "use slack",
+  "use email" as continuation signals so corrections and channel redirects are properly detected.
+
 ## [0.2.7] - 2026-02-18
 
 ### Added

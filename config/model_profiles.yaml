@@ -14,6 +14,20 @@ version: "1.0"
 
 profiles:
   # ── Google Gemini ──────────────────────────────────────────────────
+  gemini-3-pro-preview:
+    capability_tier: deep
+    context_window: 1048576
+    supports_tools: true
+    cost_input_per_1k: 0.002
+    cost_output_per_1k: 0.012
+
+  gemini-3-flash-preview:
+    capability_tier: fast
+    context_window: 1048576
+    supports_tools: true
+    cost_input_per_1k: 0.0005
+    cost_output_per_1k: 0.003
+
   gemini-2.0-flash:
     capability_tier: fast
     context_window: 1048576

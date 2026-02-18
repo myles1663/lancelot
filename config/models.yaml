@@ -26,15 +26,15 @@ providers:
   gemini:
     display_name: "Google Gemini"
     fast:
-      model: "gemini-2.0-flash"
-      max_tokens: 4096
+      model: "gemini-3-flash-preview"
+      max_tokens: 8192
       temperature: 0.3
     deep:
-      model: "gemini-2.5-pro"
+      model: "gemini-3-pro-preview"
       max_tokens: 16384
-      temperature: 0.7
+      temperature: 1.0
     cache:
-      model: "gemini-2.0-flash"
+      model: "gemini-2.5-flash"
       max_tokens: 2048
       temperature: 0.1
 
