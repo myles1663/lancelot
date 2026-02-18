@@ -5,6 +5,71 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.4] - 2026-02-18
+
+### Added
+- **Multi-Provider Onboarding** (`src/ui/onboarding.py`): In-app War Room onboarding now supports
+  all 4 LLM providers (Gemini, OpenAI, Anthropic, xAI) with a dedicated provider selection step
+  (`FLAGSHIP_SELECTION`). Previously only Gemini was supported. Each provider shows its key prefix,
+  signup URL, and format validation.
+- **Live API Key Validation**: Onboarding now validates API keys with a live HTTP probe to the
+  provider's API (ported from the CLI installer's `validate.mjs`). Bad keys are rejected immediately
+  with a clear error instead of silently failing at runtime. Network errors are non-blocking.
+- **All Communications Connectors in Onboarding**: Comms selection step now covers all 8 messaging
+  connectors: Telegram, Google Chat, Slack, Discord, Teams, WhatsApp, Email (SMTP), and SMS (Twilio).
+  Each connector has a guided multi-step credential setup flow with provider-specific prompts.
+- **Security Token Auto-Generation** (`FINAL_CHECKS` step): Onboarding automatically generates
+  `LANCELOT_OWNER_TOKEN`, `LANCELOT_API_TOKEN`, and `LANCELOT_VAULT_KEY` using `secrets.token_urlsafe(32)`.
+  Previously these were only set by the CLI installer, leaving War Room onboarders with no auth tokens.
+- **Feature Flag Defaults in Onboarding**: `FINAL_CHECKS` writes default feature flags to `.env`
+  (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FEATURE_HEALTH_MONITOR`, `FEATURE_SCHEDULER`,
+  `FEATURE_AGENTIC_LOOP`, `FEATURE_LOCAL_AGENTIC`) so new installs have a working configuration.
+- **`LANCELOT_PROVIDER` env var**: Onboarding now writes this to `.env` so the model router knows
+  which provider is configured. Includes backward-compatible inference from existing API key env vars.
+- **Launch Scripts** (`launch.sh`, `launch.ps1`): New launcher scripts that wrap `docker compose up -d`,
+  poll the health endpoint every 2 seconds, and auto-open the War Room in the default browser when
+  Lancelot becomes healthy. 120-second timeout with helpful fallback message.
+- **Auto-Open War Room in CLI Installer** (`installer/src/index.mjs`): The `npx create-lancelot`
+  installer now automatically opens `http://localhost:8501` in the default browser after install
+  completes. Cross-platform support (Windows `start`, macOS `open`, Linux `xdg-open`).
+
+### Fixed
+- **Telegram Duplicate Messages** (V15): Fixed `_handle_updates()` using `time.time()` debounce
+  instead of proper Telegram `offset` parameter, causing duplicate processing on every poll cycle.
+  Now tracks `last_update_id` and passes `offset=last_update_id + 1` to `getUpdates`.
+- **Telegram Context Loss** (V15): Fixed conversation history not being injected into LLM context.
+  `TelegramBot` now maintains per-chat `conversation_histories` dict and passes the last 6 messages
+  to the orchestrator's Gemini call via `contents` parameter.
+- **Telegram Model Routing** (V15): Fixed Telegram always using Gemini regardless of message type.
+  Simple/conversational messages now route through the local model first (matching War Room behavior),
+  with Gemini fallback on empty responses.
+- **Telegram Offset Tracking** (V15b): Further hardened offset-based deduplication — `last_update_id`
+  is updated per-message (not per-batch) to prevent gaps on partial batch failures.
+- **Telegram Long Message Chunking** (V15b): Messages exceeding Telegram's 4096-character limit are
+  now split at paragraph boundaries and sent as sequential chunks instead of being silently truncated.
+- **Telegram Voice/Audio Stubs** (V15b): Voice and audio messages now return a friendly
+  "voice notes not yet supported" message instead of crashing with an unhandled content type error.
+- **Telegram Empty File Downloads** (V15b): Added size validation after `getFile` downloads — empty
+  or failed downloads are caught before being passed to processing pipelines.
+- **Onboarding `LOCAL_UTILITY_SETUP` Dead Code** (V16): The local model setup handler existed but
+  `_determine_state()` never routed to it. Now properly wired between credentials and comms steps.
+- **Onboarding State Map** (V16): `_sync_snapshot()` was missing `FLAGSHIP_SELECTION`,
+  `LOCAL_UTILITY_SETUP`, and `FINAL_CHECKS` from its state map, causing snapshot persistence failures
+  for those states.
+
+### Changed
+- **Onboarding Flow**: New sequence is WELCOME → FLAGSHIP_SELECTION → HANDSHAKE →
+  LOCAL_UTILITY_SETUP → COMMS_SELECTION → [guided setup] → FINAL_CHECKS → READY. Previously
+  skipped provider selection, local model setup, and final validation entirely.
+- **Comms Skip**: Choosing to skip comms now writes `LANCELOT_COMMS_TYPE=none` to `.env` so
+  `_determine_state()` knows the step was intentionally skipped (prevents re-prompting on restart).
+- **README**: Updated manual installation section with launch scripts as primary start method.
+  Fixed War Room URL from `localhost:8000` to `localhost:8501`.
+- **Quickstart Guide**: Updated with launch scripts, auto-open behavior, all 8 connectors, and
+  correct War Room URL.
+- **Installation Guide**: Added port 8501, xAI provider, all connector env vars, security tokens,
+  feature flags to .env example, and launch scripts throughout.
+
 ## [0.2.3] - 2026-02-17
 
 ### Added
