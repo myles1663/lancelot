@@ -921,6 +921,9 @@ class LancelotOrchestrator:
             "for one ('make a plan', 'plan this out'). Never say 'I will research...' — just DO "
             "the research. Never simulate progress or claim work is happening in the background.\n\n"
             "4. HONESTY: Never claim to have done something you haven't. Never fake progress. "
+            "You can ONLY perform actions through tool calls — if you didn't call a tool, "
+            "the action DID NOT HAPPEN. Never say 'I sent an email', 'I posted to Slack', "
+            "or 'I saved a file' unless you made an actual tool call that succeeded. "
             "Complete the task in THIS response or state honestly what blocks you. "
             "No phrases like 'I am currently processing', 'I will provide shortly', "
             "'allow me time', or time estimates for work you will do.\n\n"
@@ -998,7 +1001,36 @@ class LancelotOrchestrator:
             "Match the user's energy: casual messages get more emoji, technical responses stay cleaner."
         )
 
-        instruction = f"{persona}\n\n{self_awareness}\n\n{rules}\n\n{guardrails}\n\n{honesty}\n\n{expression}{channel_note}{host_bridge_note}"
+        # V22: Dynamic connector status — tell the LLM what's actually usable
+        # vs what's just enabled. Prevents claiming "sent email" when no SMTP creds exist.
+        connector_status_note = ""
+        try:
+            from connectors.base import ConnectorStatus as _CS
+            _registry = getattr(self, '_connector_registry', None)
+            if _registry:
+                configured = []
+                not_configured = []
+                for entry in _registry.list_connectors():
+                    conn = entry.connector
+                    cid = conn.id
+                    status = conn.status
+                    if status in (_CS.CONFIGURED, _CS.ACTIVE):
+                        configured.append(cid)
+                    else:
+                        not_configured.append(cid)
+                if not_configured:
+                    nc_list = ", ".join(not_configured)
+                    connector_status_note = (
+                        f"\n\nCONNECTOR STATUS — IMPORTANT:\n"
+                        f"Configured and usable: {', '.join(configured) if configured else 'none'}\n"
+                        f"Enabled but NOT configured (missing credentials — DO NOT claim to use these): {nc_list}\n"
+                        f"If a user asks you to use an unconfigured connector, tell them it needs "
+                        f"credentials configured in the War Room Credentials page first."
+                    )
+        except Exception:
+            pass
+
+        instruction = f"{persona}\n\n{self_awareness}\n\n{rules}\n\n{guardrails}\n\n{honesty}\n\n{expression}{channel_note}{host_bridge_note}{connector_status_note}"
 
         # Crusader Mode overlay
         if crusader_mode:

@@ -33,6 +33,21 @@ All notable changes to Project Lancelot will be documented in this file.
   Destructive operations (deploy, delete, send, install, execute commands) still require
   plan approval. New `_is_low_risk_exec()` method in orchestrator.
 
+- **Literal terms guard (V22)**: Extracts multi-word proper nouns and quoted strings from user
+  messages and injects them as untouchable literals into the agentic loop prompt. Prevents
+  Gemini from autocorrecting names like "Clawd Bot" → "Claude". Conservative: only protects
+  multi-word capitalized sequences and explicit quotes — single words are not locked in, so
+  actual typos can still be corrected.
+- **Connector credential gating (V22)**: Connectors now validate credentials at registration.
+  Connectors without credentials are marked REGISTERED (not CONFIGURED) and the system prompt
+  dynamically tells the LLM which connectors are usable vs just enabled. Prevents the LLM
+  from hallucinating "sent email" when no SMTP credentials exist.
+- **Honesty principle strengthened (V22)**: System prompt now explicitly states that actions
+  can ONLY happen through tool calls — if no tool was called, the action did not happen.
+- **Silent tool failure retry (V21)**: When a tool call fails in the agentic loop, the error
+  result now includes an instruction nudging the LLM to silently try an alternative without
+  narrating the recovery.
+
 ### Fixed
 - **`_needs_research()` overly broad keyword triggers (V21)**: Replaced single-word triggers
   ("telegram", "notify me", "message me", "war room", "schedule", etc.) with specific phrases

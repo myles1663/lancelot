@@ -660,6 +660,7 @@ async def startup_event():
     # Connector registration in the runtime registry is gated by FEATURE_CONNECTORS.
     try:
         from connectors.registry import ConnectorRegistry
+        from connectors.base import ConnectorStatus
         from connectors.vault import CredentialVault as ConnectorVault
         from connectors.credential_api import router as cred_router, init_credential_api
         from connectors_api import router as connectors_mgmt_router, init_connectors_api
@@ -668,6 +669,8 @@ async def startup_event():
         _connector_vault = ConnectorVault(config_path="config/vault.yaml")
 
         # Register enabled connectors if FEATURE_CONNECTORS is on
+        # V22: Validate credentials at registration — connectors without
+        # credentials are registered but marked as NOT CONFIGURED.
         from feature_flags import FEATURE_CONNECTORS
         if FEATURE_CONNECTORS:
             _conn_config = _connector_registry._config.get("connectors", {})
@@ -677,10 +680,24 @@ async def startup_event():
                         from connectors_api import _instantiate_connector
                         _conn = _instantiate_connector(_cid, _ccfg)
                         if _conn:
+                            # Inject vault for credential validation
+                            if hasattr(_conn, '_vault') and _conn._vault is None:
+                                _conn._vault = _connector_vault
                             _connector_registry.register(_conn)
-                            logger.info(f"Connector registered: {_cid}")
+                            # V22: Validate credentials and set status
+                            try:
+                                if _conn.validate_credentials():
+                                    _conn.set_status(ConnectorStatus.CONFIGURED)
+                                    logger.info(f"Connector registered + configured: {_cid}")
+                                else:
+                                    logger.warning(f"Connector registered but NOT configured (missing credentials): {_cid}")
+                            except Exception:
+                                logger.warning(f"Connector registered but credential check failed: {_cid}")
                     except Exception as _e:
                         logger.warning(f"Failed to register connector {_cid}: {_e}")
+
+        # V22: Inject connector registry into orchestrator for dynamic capability reporting
+        main_orchestrator._connector_registry = _connector_registry
 
         init_credential_api(_connector_registry, _connector_vault)
         init_connectors_api(_connector_registry, _connector_vault)
