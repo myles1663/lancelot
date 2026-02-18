@@ -82,9 +82,15 @@ cd lancelot
 # Configure — the installer creates .env for you, but for manual setup:
 # Add your API keys and settings to .env
 
-# Run
-docker-compose up -d
+# Launch (starts Docker + auto-opens War Room in browser)
+./launch.sh            # Linux / macOS / Git Bash
+.\launch.ps1           # PowerShell (Windows)
+
+# Or start manually without auto-open:
+docker compose up -d
 ```
+
+The launch scripts start the containers, wait for the health check to pass, then automatically open the War Room in your default browser.
 
 #### Verify
 
@@ -98,7 +104,7 @@ curl -X POST http://localhost:8000/chat \
   -d '{"text": "hello"}'
 ```
 
-Open the **War Room** at `http://localhost:8000/war-room/` to see the operator dashboard.
+Open the **War Room** at `http://localhost:8501` to see the operator dashboard.
 
 ![War Room Overview Dashboard](docs/images/war-room-overview-dashboard.png)
 
