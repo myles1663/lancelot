@@ -108,17 +108,17 @@ LLM provider and model assignments. Controls which models are used for each rout
 models:
   primary:
     provider: google        # google, openai, or anthropic
-    name: gemini-2.0-flash
+    name: gemini-3-flash-preview
     temperature: 0.7
     max_tokens: 8192
   orchestrator:
     provider: google
-    name: gemini-2.0-flash
+    name: gemini-3-flash-preview
     temperature: 0.3
     max_tokens: 4096
   utility:
     provider: google
-    name: gemini-2.0-flash
+    name: gemini-3-flash-preview
     temperature: 0.5
     max_tokens: 2048
 

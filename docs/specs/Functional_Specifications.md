@@ -72,7 +72,7 @@ Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as
   | `flagship_deep` | 4 | Planning, high-risk decisions, complex reasoning | Gemini Pro / GPT-4o / Claude Sonnet |
 
 - **F-03.2 Provider Profiles:** Three flagship providers supported, each with `fast` and `deep` lane configurations:
-  - **Google Gemini:** gemini-2.0-flash (fast), gemini-2.0-pro (deep)
+  - **Google Gemini:** gemini-3-flash-preview (fast), gemini-3-pro-preview (deep)
   - **OpenAI:** gpt-4o-mini (fast), gpt-4o (deep)
   - **Anthropic:** claude-3-5-haiku (fast), claude-sonnet-4 (deep)
 

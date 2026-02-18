@@ -325,7 +325,7 @@ All read from environment variables. `true`/`1`/`yes` = enabled; everything else
 
 | Provider | Fast Model | Deep Model | Cache Model |
 |----------|-----------|------------|-------------|
-| Gemini (active) | gemini-2.0-flash (4096, 0.3) | gemini-2.0-pro (8192, 0.7) | gemini-2.0-flash (2048, 0.1) |
+| Gemini (active) | gemini-3-flash-preview (8192, 0.3) | gemini-3-pro-preview (16384, 1.0) | gemini-2.5-flash (2048, 0.1) |
 | OpenAI | gpt-4o-mini | gpt-4o | gpt-4o-mini |
 | Anthropic | claude-3-5-haiku-latest | claude-sonnet-4-20250514 | claude-3-5-haiku-latest |
 
