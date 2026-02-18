@@ -5,6 +5,14 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.7] - 2026-02-18
+
+### Added
+- **Emoji expression style**: Lancelot now uses emoji naturally in responses — status indicators
+  (✅ ❌ ⚠️), reactions (👍 🎉 💡), and punctuation for key points. Expression directive added
+  to `_build_system_instruction()` so all three generation paths (text-only, agentic, local) respect
+  it. Matches user energy: casual messages get more emoji, technical responses stay cleaner.
+
 ## [0.2.6] - 2026-02-18
 
 ### Fixed

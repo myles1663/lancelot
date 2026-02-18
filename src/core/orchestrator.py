@@ -1000,7 +1000,16 @@ class LancelotOrchestrator:
         except Exception:
             pass
 
-        instruction = f"{persona}\n\n{self_awareness}\n\n{rules}\n\n{guardrails}\n\n{honesty}{channel_note}{host_bridge_note}"
+        # 7. EXPRESSION STYLE
+        expression = (
+            "EXPRESSION STYLE:\n"
+            "Use emoji naturally to enhance your messages — they add warmth and clarity. "
+            "Use them for status indicators (✅ ❌ ⚠️), reactions (👍 🎉 💡), "
+            "and to punctuate key points. Don't overuse them — 1-3 per message is ideal. "
+            "Match the user's energy: casual messages get more emoji, technical responses stay cleaner."
+        )
+
+        instruction = f"{persona}\n\n{self_awareness}\n\n{rules}\n\n{guardrails}\n\n{honesty}\n\n{expression}{channel_note}{host_bridge_note}"
 
         # Crusader Mode overlay
         if crusader_mode:
