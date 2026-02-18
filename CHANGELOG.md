@@ -5,6 +5,27 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.6] - 2026-02-18
+
+### Fixed
+- **Confirmation + action misrouted as conversational** (V17b): Messages like "ok, create the file",
+  "sure, research the options", "yes, build it" were classified as conversational because they started
+  with a confirmation word. Split `_is_conversational()` into two groups: always-conversational
+  (greetings, thanks) and confirmation words (yes, ok, sure) — confirmations are only conversational
+  if the message is JUST the word with optional filler. Substantive content after = not conversational.
+- **"do it", "try again", "retry" etc. not recognized as continuations** (V17b): Added common action
+  follow-ups to `_is_continuation()` signals: "do it", "try it", "run it", "send it", "save it",
+  "delete it", "rename it", "retry", "try again", "proceed", "continue", "carry on", "go for it".
+  Also added comma-suffixed confirmations ("ok,", "alright,", "cool,") since comma implies more
+  content follows.
+- **"it" at end of message not detected as continuation** (V17b): `_is_continuation()` only matched
+  "it " (with trailing space), missing messages ending with "it" like "ok create it", "just do it".
+  Added end-of-string word boundary check.
+- **Local model routed for continuation queries without context** (V17b): `_is_simple_for_local()`
+  now checks `_is_continuation()` — if the message references prior conversation ("what's the status
+  of that?", "show it", "which version?"), it routes to the flagship model which has full history
+  instead of the local model which lacks context.
+
 ## [0.2.5] - 2026-02-18
 
 ### Fixed

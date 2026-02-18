@@ -1674,6 +1674,11 @@ class LancelotOrchestrator:
         if len(prompt) > 500:
             return False
 
+        # V17b: Continuation messages reference prior context that the local
+        # model won't have — always route to flagship for full history
+        if self._is_continuation(prompt):
+            return False
+
         prompt_lower = prompt.lower()
 
         # Keywords suggesting complex reasoning → Gemini
@@ -1802,27 +1807,48 @@ class LancelotOrchestrator:
         Fix Pack V13: Prevents simple chat (greetings, name preferences,
         thanks) from entering the agentic loop where Gemini may hallucinate
         tool calls for messages that just need a text response.
+
+        Fix Pack V17b: Split into two categories:
+        - Always-conversational (greetings, thanks, farewells) — match on prefix
+        - Confirmation words ("yes", "ok", "sure") — only conversational if the
+          message is JUST the word (+ optional punctuation/filler). If there's
+          substantive content after ("ok, create the file"), NOT conversational.
         """
         prompt_lower = prompt.lower().strip()
 
-        # Very short messages are almost always conversational
         if len(prompt_lower) < 60:
-            conversational_patterns = [
+            # Group 1: Always conversational regardless of what follows
+            always_conversational = [
                 "call me ", "my name is ", "i'm ", "i am ",
                 "hello", "hi ", "hey ", "yo", "sup",
                 "thanks", "thank you", "cheers",
                 "good morning", "good afternoon", "good evening",
                 "how are you", "what's up", "whats up",
                 "bye", "goodbye", "see you", "later",
-                "ok", "okay", "sure", "alright", "cool",
                 "never mind", "nevermind", "forget it",
                 "no worries", "no problem", "you're welcome",
                 "nice to meet", "pleased to meet",
-                "yes", "no", "yep", "nope", "yeah", "nah",
             ]
             if any(prompt_lower.startswith(p) or prompt_lower == p
-                   for p in conversational_patterns):
+                   for p in always_conversational):
                 return True
+
+            # Group 2: Confirmation words — only conversational if the message
+            # is JUST the word, optionally with punctuation or filler
+            confirmation_words = [
+                "yes", "no", "yep", "nope", "yeah", "nah",
+                "ok", "okay", "sure", "alright", "cool",
+            ]
+            stripped = prompt_lower.rstrip('.,!? ')
+            if stripped in confirmation_words:
+                return True
+            # Match with trailing filler: "yes please", "ok thanks", "sure thing"
+            filler = ["please", "thanks", "thank you", "mate", "man", "thing"]
+            for word in confirmation_words:
+                if prompt_lower.startswith(word):
+                    remainder = prompt_lower[len(word):].strip().lstrip('.,!').strip()
+                    if remainder in filler:
+                        return True
 
         return False
 
@@ -1894,9 +1920,20 @@ class LancelotOrchestrator:
             "what else", "anything else",
             "yes", "yeah", "yep", "no", "nah", "nope",
             "ok do", "okay do", "sure do", "sure,",
+            # V17b: Confirmation + comma implies more content follows
+            "ok,", "okay,", "alright,", "cool,",
+            "yes,", "yeah,", "yep,", "no,", "nah,",
+            # V17b: Common action follow-ups
+            "do it", "try it", "run it", "send it", "save it",
+            "delete it", "rename it", "retry", "try again",
+            "go for it", "proceed", "continue", "carry on",
         ]
 
         if any(signal in msg_lower for signal in continuation_signals):
+            return True
+
+        # V17b: "it" at end of string (word boundary) — "ok create it", "just do it"
+        if msg_lower.endswith(" it") or msg_lower == "it":
             return True
 
         # Very short messages with a question mark are usually follow-ups

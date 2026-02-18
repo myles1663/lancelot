@@ -17,7 +17,7 @@
 
 ## Session Rules
 
-- **Current version:** `0.2.5` (see `VERSION` file and `CHANGELOG.md`)
+- **Current version:** `0.2.6` (see `VERSION` file and `CHANGELOG.md`)
 - **Push after fix:** If we implement a fix on the local deployed version, we push the fixes to the git repo.
 - **Merge after test:** Once we test any branch and confirm it works, merge it back to `main` for a complete updated system.
 - **Always update CHANGELOG + VERSION:** When deploying a fix pack or feature, bump `VERSION` and add a new section to `CHANGELOG.md` (Added/Fixed/Changed subsections).
