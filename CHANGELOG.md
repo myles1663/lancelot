@@ -5,6 +5,39 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.10] - 2026-02-18
+
+### Added
+- **GitHub Search Skill (V24)**: New built-in skill `github_search` providing structured
+  access to GitHub's REST API. Four actions: `search_repos` (find repositories by keyword),
+  `get_commits` (recent commit history), `get_issues` (issues/PRs with labels and state),
+  `get_releases` (releases with tags and changelogs). Every result includes a browseable
+  source URL. Uses optional `GITHUB_TOKEN` env var for rate limits (60/hr unauthenticated →
+  5000/hr with token). Controlled by `FEATURE_GITHUB_SEARCH` flag (default: `true`).
+- **Competitive Scan Memory (V24)**: New `src/core/competitive_scan.py` module stores
+  competitive intelligence results in episodic memory after each scan. On subsequent scans
+  of the same target, retrieves previous scans and injects context for delta analysis.
+  Includes scan detection, episodic storage with provenance, retrieval by target namespace,
+  and sentence-level diffing. Controlled by `FEATURE_COMPETITIVE_SCAN` flag (default: `false`,
+  requires `FEATURE_MEMORY_VNEXT`).
+- **Self-Knowledge Section (V24)**: System instruction now includes a concise architecture
+  reference (~200 tokens) listing all 10 Lancelot subsystems. When flagging roadmap impact
+  from competitive research, the model references specific subsystems by name instead of
+  making vague statements.
+- **Sourced Intelligence Directive**: New soul tone_invariant requires source URL citation
+  for every competitive intelligence finding. Prevents the model from presenting fabricated
+  summaries as verified intelligence.
+- **Two new feature flags**: `FEATURE_GITHUB_SEARCH` (default: `true`),
+  `FEATURE_COMPETITIVE_SCAN` (default: `false`). Both toggleable via War Room Kill Switches.
+
+### Fixed
+- **500 errors now retryable**: `_is_retryable_error()` now includes HTTP 500 and "internal"
+  server errors in the retryable set. Transient server-side errors from the API provider get
+  up to 3 retries with exponential backoff instead of failing immediately.
+- **Error-path structured reformat**: When the agentic loop LLM call fails mid-loop but tool
+  receipts exist, the structured output presenter now tries to produce a clean summary from
+  the accumulated receipts instead of dumping raw receipt data.
+
 ## [0.2.9] - 2026-02-18
 
 ### Added

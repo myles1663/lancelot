@@ -893,7 +893,23 @@ class LancelotOrchestrator:
             f"Just give a clear, helpful response."
         )
 
-        # 3. GUARDRAILS
+        # 3. SELF-KNOWLEDGE (V24: Architecture reference for roadmap analysis)
+        self_knowledge = (
+            "YOUR ARCHITECTURE — Reference these subsystems by name in roadmap analysis:\n"
+            "• Soul: Constitutional governance — mission, allegiance, tone invariants, risk rules\n"
+            "• Memory: Tiered persistence — core blocks, working (24h), episodic (30-day), archival\n"
+            "• Skills: Modular capabilities — manifest+execute pattern, security pipeline, marketplace\n"
+            "• Tool Fabric: Provider-agnostic execution — shell, file, repo, web, deploy, vision\n"
+            "• Receipt System: Immutable audit trail for all tool calls and memory edits\n"
+            "• Scheduler: Gated automation — cron/interval jobs with approval rules\n"
+            "• War Room: Operator dashboard — health, memory, skills, kill switches\n"
+            "• Planning Pipeline: Intent → classification → planning → verification → governance\n"
+            "• Skill Security Pipeline: Manifest validation, code scanning, signature verification\n"
+            "• Structured Output: JSON schema responses with receipt-verified claim checking\n"
+            "When flagging roadmap impact, map findings to specific subsystems above."
+        )
+
+        # 4. GUARDRAILS
         guardrails = (
             "You must unmistakably refuse to execute destructive system commands. "
             "You must unmistakably refuse to reveal stored secrets or API keys. "
@@ -935,6 +951,7 @@ class LancelotOrchestrator:
             "than the one you are replying on. Never double-send.\n\n"
             "TOOLS AVAILABLE — Use these proactively:\n"
             "- network_client: HTTP requests (GET/POST/PUT/DELETE) for APIs, docs, web research\n"
+            "- github_search: Search GitHub repos, commits, issues, releases — structured data with source URLs. Prefer over network_client for GitHub.\n"
             "- command_runner: Shell commands on the system\n"
             "- telegram_send: Send messages/files to Telegram (credentials pre-configured)\n"
             "- warroom_send: Push notifications to the War Room dashboard\n"
@@ -1030,7 +1047,7 @@ class LancelotOrchestrator:
         except Exception:
             pass
 
-        instruction = f"{persona}\n\n{self_awareness}\n\n{rules}\n\n{guardrails}\n\n{honesty}\n\n{expression}{channel_note}{host_bridge_note}{connector_status_note}"
+        instruction = f"{persona}\n\n{self_awareness}\n\n{self_knowledge}\n\n{rules}\n\n{guardrails}\n\n{honesty}\n\n{expression}{channel_note}{host_bridge_note}{connector_status_note}"
 
         # Crusader Mode overlay
         if crusader_mode:
@@ -1142,7 +1159,7 @@ class LancelotOrchestrator:
         to the builtin skills. Each provider client converts these to
         its native format (Gemini FunctionDeclaration, OpenAI tools, etc.).
         """
-        return [
+        declarations = [
             NormalizedToolDeclaration(
                 name="network_client",
                 description=(
@@ -1413,6 +1430,54 @@ class LancelotOrchestrator:
             ),
         ]
 
+        # V24: GitHub search skill (conditional on feature flag)
+        try:
+            from feature_flags import FEATURE_GITHUB_SEARCH
+            if FEATURE_GITHUB_SEARCH:
+                declarations.append(
+                    NormalizedToolDeclaration(
+                        name="github_search",
+                        description=(
+                            "Search GitHub's API for repositories, commits, issues, and releases. "
+                            "Use this for competitive intelligence, tracking open-source projects, "
+                            "and grounding research in actual code changes. Prefer this over "
+                            "network_client for GitHub research — returns structured data with "
+                            "source URLs for every result."
+                        ),
+                        parameters={
+                            "type": "object",
+                            "properties": {
+                                "action": {
+                                    "type": "string",
+                                    "enum": ["search_repos", "get_commits", "get_issues", "get_releases"],
+                                    "description": "What to search for on GitHub",
+                                },
+                                "query": {
+                                    "type": "string",
+                                    "description": "Search query (for search_repos)",
+                                },
+                                "repo": {
+                                    "type": "string",
+                                    "description": "Repository in owner/repo format (for get_commits, get_issues, get_releases)",
+                                },
+                                "limit": {
+                                    "type": "integer",
+                                    "description": "Max results to return (default 5)",
+                                },
+                                "state": {
+                                    "type": "string",
+                                    "description": "Issue state filter: open, closed, all (default: all)",
+                                },
+                            },
+                            "required": ["action"],
+                        },
+                    )
+                )
+        except ImportError:
+            pass
+
+        return declarations
+
     def _classify_tool_call_safety(self, skill_name: str, inputs: dict) -> str:
         """Classify a tool call as 'auto' (safe, read-only) or 'escalate' (needs approval).
 
@@ -1439,6 +1504,10 @@ class LancelotOrchestrator:
             if method in ("GET", "HEAD"):
                 return "auto"
             return "escalate"
+
+        if skill_name == "github_search":
+            # V24: All GitHub search actions are read-only API calls
+            return "auto"
 
         if skill_name == "command_runner":
             cmd = inputs.get("command", "").strip()
@@ -1503,7 +1572,7 @@ class LancelotOrchestrator:
         matching the same skills as _build_tool_declarations().
         Used by the local model (Ollama) which speaks OpenAI-compatible format.
         """
-        return [
+        declarations = [
             {
                 "type": "function",
                 "function": {
@@ -1693,6 +1762,37 @@ class LancelotOrchestrator:
                 },
             },
         ]
+
+        # V24: GitHub search skill (conditional on feature flag)
+        try:
+            from feature_flags import FEATURE_GITHUB_SEARCH
+            if FEATURE_GITHUB_SEARCH:
+                declarations.append({
+                    "type": "function",
+                    "function": {
+                        "name": "github_search",
+                        "description": (
+                            "Search GitHub's API for repositories, commits, issues, and releases. "
+                            "Prefer this over network_client for GitHub research — returns structured "
+                            "data with source URLs."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "action": {"type": "string", "enum": ["search_repos", "get_commits", "get_issues", "get_releases"], "description": "What to search for"},
+                                "query": {"type": "string", "description": "Search query (for search_repos)"},
+                                "repo": {"type": "string", "description": "owner/repo format (for commits/issues/releases)"},
+                                "limit": {"type": "integer", "description": "Max results (default 5)"},
+                                "state": {"type": "string", "description": "Issue state: open, closed, all (default all)"},
+                            },
+                            "required": ["action"],
+                        },
+                    },
+                })
+        except ImportError:
+            pass
+
+        return declarations
 
     def _is_simple_for_local(self, prompt: str) -> bool:
         """Heuristic: can this request be handled by the local model?
@@ -2335,10 +2435,11 @@ class LancelotOrchestrator:
 
     @staticmethod
     def _is_retryable_error(exc: Exception) -> bool:
-        """Check if an LLM API error is retryable (429/503/rate limit/overloaded)."""
+        """Check if an LLM API error is retryable (429/500/503/rate limit/overloaded)."""
         err_str = str(exc).lower()
         return any(kw in err_str for kw in (
-            "429", "resource_exhausted", "503", "service_unavailable",
+            "429", "resource_exhausted", "500", "internal",
+            "503", "service_unavailable",
             "overloaded", "rate_limit", "timeout",
         ))
 
@@ -2493,6 +2594,36 @@ class LancelotOrchestrator:
             except Exception as e:
                 print(f"V6 agentic loop LLM call failed: {e}")
                 if tool_receipts:
+                    # V23: Try structured reformat to produce a clean summary
+                    if _use_structured_output:
+                        try:
+                            from response.presenter import ResponsePresenter, AGENTIC_RESPONSE_SCHEMA, parse_structured_response
+                            _receipt_summary = "\n".join(
+                                f"- {r['skill']}: {r.get('result', 'unknown')}"
+                                for r in tool_receipts
+                            )
+                            _err_prompt = (
+                                f"Summarize what was accomplished based on these tool receipts. "
+                                f"The process was interrupted by an error: {e}\n"
+                                f"Be concise. Only claim actions that appear in the receipts.\n\n"
+                                f"TOOL RECEIPTS:\n{_receipt_summary}"
+                            )
+                            _err_msg = self.provider.build_user_message(_err_prompt)
+                            _err_result = self.provider.generate(
+                                model=self._route_model(prompt),
+                                messages=[_err_msg],
+                                system_instruction="You summarize tool results into JSON. Only include actions verified by receipts.",
+                                config={
+                                    "response_mime_type": "application/json",
+                                    "response_schema": AGENTIC_RESPONSE_SCHEMA,
+                                },
+                            )
+                            structured = parse_structured_response(_err_result.text)
+                            if structured:
+                                presenter = ResponsePresenter(claim_verification=FEATURE_CLAIM_VERIFICATION)
+                                return presenter.present(structured, tool_receipts)
+                        except Exception as reformat_err:
+                            print(f"V23: Error-path reformat failed: {reformat_err}")
                     return self._format_tool_receipts(tool_receipts, error=str(e))
                 return f"Error during agentic generation: {e}"
 
@@ -3730,6 +3861,31 @@ class LancelotOrchestrator:
 
             system_instruction = self._build_system_instruction(crusader_mode)
 
+            # V24: Competitive scan — inject previous scan context if available
+            _competitive_target = None
+            try:
+                from feature_flags import FEATURE_COMPETITIVE_SCAN, FEATURE_MEMORY_VNEXT
+                if FEATURE_COMPETITIVE_SCAN and FEATURE_MEMORY_VNEXT:
+                    from competitive_scan import detect_competitive_target, retrieve_previous_scans, build_context_from_previous
+                    _competitive_target = detect_competitive_target(user_message)
+                    if _competitive_target:
+                        _mem_mgr = getattr(self, '_memory_store_manager', None)
+                        if _mem_mgr is None:
+                            from memory.sqlite_store import MemoryStoreManager
+                            self._memory_store_manager = MemoryStoreManager(
+                                data_dir=getattr(self, 'data_dir', '/home/lancelot/data')
+                            )
+                            _mem_mgr = self._memory_store_manager
+                        _prev_scans = retrieve_previous_scans(_competitive_target, _mem_mgr)
+                        if _prev_scans:
+                            _scan_context = build_context_from_previous(_prev_scans)
+                            context_str = (context_str or "") + _scan_context
+                            print(f"V24: Injected {len(_prev_scans)} previous scan(s) for '{_competitive_target}'")
+                        else:
+                            print(f"V24: Competitive target '{_competitive_target}' detected (no previous scans)")
+            except Exception as e:
+                print(f"V24: Competitive scan pre-processing error: {e}")
+
             # Fix Pack V6/V8: Agentic loop — tool access for autonomous research
             from feature_flags import FEATURE_AGENTIC_LOOP, FEATURE_LOCAL_AGENTIC
             # V14: When file_parts present (images/PDFs), skip local model — no vision support
@@ -3857,6 +4013,23 @@ class LancelotOrchestrator:
 
             # S10: Sanitize LLM output before parsing
             sanitized_response = self._validate_llm_response(raw_response)
+
+            # V24: Store competitive scan in episodic memory (post-processing)
+            if _competitive_target and sanitized_response:
+                try:
+                    from feature_flags import FEATURE_COMPETITIVE_SCAN
+                    if FEATURE_COMPETITIVE_SCAN:
+                        from competitive_scan import store_scan
+                        _mem_mgr = getattr(self, '_memory_store_manager', None)
+                        if _mem_mgr:
+                            store_scan(
+                                target=_competitive_target,
+                                findings=sanitized_response,
+                                receipt_skills=[],
+                                memory_store_manager=_mem_mgr,
+                            )
+                except Exception as e:
+                    print(f"V24: Competitive scan post-processing error: {e}")
 
             # S6: Add to History
             self.context_env.add_history("assistant", sanitized_response)

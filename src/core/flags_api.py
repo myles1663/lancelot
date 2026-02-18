@@ -267,6 +267,22 @@ FLAG_META = {
         "conflicts": [],
         "warning": "Adds one fast-model API call per incoming message for classification (~100 input tokens). Falls back to keyword classifier if the API call fails. Monitor for classification accuracy — check logs for 'V23 Unified Classifier' entries.",
     },
+
+    # ── Competitive Intelligence (V24) ──────────────────────────
+    "FEATURE_GITHUB_SEARCH": {
+        "description": "GitHub Search Skill. Adds a dedicated tool for querying GitHub's REST API — search repositories, get recent commits, issues/PRs, and releases. Returns structured data with source URLs for every result. Grounds competitive intelligence in verifiable artifacts instead of web search summaries.",
+        "category": "Intelligence",
+        "requires": ["FEATURE_AGENTIC_LOOP"],
+        "conflicts": [],
+        "warning": "Uses GitHub's public API (60 requests/hour unauthenticated). Set GITHUB_TOKEN env var for 5000 req/hour. Read-only — all actions are auto-approved.",
+    },
+    "FEATURE_COMPETITIVE_SCAN": {
+        "description": "Competitive Scan Memory. Stores competitive intelligence results in episodic memory after each scan. On subsequent scans of the same target, retrieves previous scans and generates a diff showing new findings, removed findings, and trends over time.",
+        "category": "Intelligence",
+        "requires": ["FEATURE_MEMORY_VNEXT"],
+        "conflicts": [],
+        "warning": "Requires Memory vNext to be enabled for episodic storage. Scans are stored with 30-day decay. Each scan adds ~200-500 tokens to episodic memory.",
+    },
 }
 
 

@@ -50,6 +50,8 @@ The orchestrator classifies the message into one of five intent types:
 
 **Legacy pipeline** (when unified classifier disabled): Two-stage — (1) deterministic keyword matching (`classify_intent()`) for fast initial routing, then (2) LLM-based verification via the local model (`_verify_intent_with_llm()`) for ambiguous cases where messages >80 chars match PLAN/EXEC keywords incidentally.
 
+**V24 Competitive Scan Memory** (`FEATURE_COMPETITIVE_SCAN`, default `false`, requires `MEMORY_VNEXT`): When a `KNOWLEDGE_REQUEST` is detected as competitive research, `src/core/competitive_scan.py` stores the scan in episodic memory, retrieves previous scans for the same target, and generates a diff against the last result. This gives longitudinal competitive intelligence without re-running full research each time.
+
 ### 3. Model Routing
 
 The Model Router selects the appropriate LLM lane based on task type, risk level, and complexity:
@@ -168,6 +170,8 @@ If any CRITICAL invariant fails, the Soul is rejected and the previous version r
 
 **Amendment workflow:** `PENDING` → owner approves → `APPROVED` → owner activates → `ACTIVATED` (with linter validation). This prevents accidental or unauthorized governance changes.
 
+**V24 — System instruction architecture:** The Soul now includes a `SELF-KNOWLEDGE` section containing 10 subsystem descriptions that Lancelot loads at startup. This gives the model accurate self-referential knowledge (capabilities, architecture, limitations) without relying on the model's pretraining. A companion soul directive requires **sourced intelligence** — all research-type responses must cite URLs, enforced by the Response Governor.
+
 For a deeper dive, see [Governance](governance.md).
 
 ### Memory (Tiered, Commit-Based)
@@ -198,9 +202,11 @@ Skills are Lancelot's extensibility mechanism — modular capabilities with decl
 **Lifecycle:** Install → Enable → Execute → Disable → Uninstall
 
 **Ownership model:**
-- **SYSTEM** skills: Built-in (command_runner, repo_writer, network_client, service_runner)
+- **SYSTEM** skills: Built-in (command_runner, repo_writer, network_client, service_runner, github_search)
 - **USER** skills: Installed by the owner
 - **MARKETPLACE** skills: Third-party, restricted to `read_input`, `write_output`, `read_config` permissions only
+
+**V24 — `github_search`** (`FEATURE_GITHUB_SEARCH`, default `true`): Queries the GitHub REST API for repositories, commits, issues, and releases. Returns structured results with source URLs, enabling sourced intelligence in research responses.
 
 **Skill Factory:** A proposal pipeline for creating new skills. `generate_skeleton()` creates a complete skill directory (manifest, execute.py, tests). Proposals require owner approval before installation.
 
@@ -303,6 +309,8 @@ A core architectural principle: **any subsystem can be disabled without breaking
 | Health Monitor | No background health checks, endpoints still respond |
 | Scheduler | No automated jobs, manual execution still works |
 | Memory vNext | Falls back to basic context management |
+| GitHub Search | `github_search` skill unavailable, other research tools still work |
+| Competitive Scan | No scan memory or diffing; research still works, just stateless |
 | Tool Fabric | No tool execution, conversation-only mode |
 
 This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, etc.) that gate each subsystem at initialization. When a subsystem is disabled, its code paths are skipped and its API endpoints return appropriate "not available" responses.

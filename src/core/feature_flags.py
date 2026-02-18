@@ -43,6 +43,10 @@ Structural Fixes (V23) Environment variables:
     FEATURE_STRUCTURED_OUTPUT        — default: false (JSON schema output mode with receipt verification)
     FEATURE_CLAIM_VERIFICATION       — default: false (cross-reference response claims vs tool receipts)
     FEATURE_UNIFIED_CLASSIFICATION   — default: false (single LLM call intent classification)
+
+Competitive Intelligence (V24) Environment variables:
+    FEATURE_GITHUB_SEARCH            — default: true (GitHub API skill for structured repo/commit/issue data)
+    FEATURE_COMPETITIVE_SCAN         — default: false (episodic memory storage for competitive scan diffing)
 """
 
 from __future__ import annotations
@@ -160,6 +164,10 @@ FEATURE_STRUCTURED_OUTPUT: bool = _env_bool("FEATURE_STRUCTURED_OUTPUT", default
 FEATURE_CLAIM_VERIFICATION: bool = _env_bool("FEATURE_CLAIM_VERIFICATION", default=False)     # Cross-reference response text claims against tool receipts — neutralize unverified claims
 FEATURE_UNIFIED_CLASSIFICATION: bool = _env_bool("FEATURE_UNIFIED_CLASSIFICATION", default=False)  # Single LLM call replaces 7-function keyword heuristic chain for intent routing
 
+# Competitive Intelligence (V24) — grounded research improvements
+FEATURE_GITHUB_SEARCH: bool = _env_bool("FEATURE_GITHUB_SEARCH", default=True)           # GitHub API skill for repos, commits, issues, releases with source URLs
+FEATURE_COMPETITIVE_SCAN: bool = _env_bool("FEATURE_COMPETITIVE_SCAN", default=False)     # Store competitive scans in episodic memory for trending/diffing (requires MEMORY_VNEXT)
+
 
 # All flags are now hot-toggleable via SubsystemManager — no restart required.
 RESTART_REQUIRED_FLAGS = frozenset()
@@ -218,6 +226,7 @@ def reload_flags() -> None:
     global FEATURE_APPROVAL_LEARNING
     global FEATURE_BAL
     global FEATURE_STRUCTURED_OUTPUT, FEATURE_CLAIM_VERIFICATION, FEATURE_UNIFIED_CLASSIFICATION
+    global FEATURE_GITHUB_SEARCH, FEATURE_COMPETITIVE_SCAN
 
     # vNext2 flags
     FEATURE_SOUL = _env_bool("FEATURE_SOUL")
@@ -270,6 +279,10 @@ def reload_flags() -> None:
     FEATURE_STRUCTURED_OUTPUT = _env_bool("FEATURE_STRUCTURED_OUTPUT", default=False)
     FEATURE_CLAIM_VERIFICATION = _env_bool("FEATURE_CLAIM_VERIFICATION", default=False)
     FEATURE_UNIFIED_CLASSIFICATION = _env_bool("FEATURE_UNIFIED_CLASSIFICATION", default=False)
+
+    # Competitive Intelligence (V24)
+    FEATURE_GITHUB_SEARCH = _env_bool("FEATURE_GITHUB_SEARCH", default=True)
+    FEATURE_COMPETITIVE_SCAN = _env_bool("FEATURE_COMPETITIVE_SCAN", default=False)
 
 
 def get_all_flags() -> dict[str, bool]:
@@ -331,4 +344,8 @@ def log_feature_flags() -> None:
     logger.info(
         "Structural Fixes flags: STRUCTURED_OUTPUT=%s, CLAIM_VERIFICATION=%s, UNIFIED_CLASSIFICATION=%s",
         FEATURE_STRUCTURED_OUTPUT, FEATURE_CLAIM_VERIFICATION, FEATURE_UNIFIED_CLASSIFICATION,
+    )
+    logger.info(
+        "Competitive Intelligence flags: GITHUB_SEARCH=%s, COMPETITIVE_SCAN=%s",
+        FEATURE_GITHUB_SEARCH, FEATURE_COMPETITIVE_SCAN,
     )

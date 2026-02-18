@@ -1,8 +1,8 @@
 # Functional Specifications: Project Lancelot v7.0
 
 **Document Version:** 7.0
-**Last Updated:** 2026-02-05
-**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening
+**Last Updated:** 2026-02-18
+**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence
 
 ---
 
@@ -231,6 +231,8 @@ Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as
   - `FEATURE_TOOLS_ANTIGRAVITY` — Enable/disable Antigravity providers (default: false)
   - `FEATURE_TOOLS_NETWORK` — Enable/disable network operations (default: false)
   - `FEATURE_TOOLS_HOST_EXECUTION` — Enable/disable host (non-Docker) execution (default: false)
+  - `FEATURE_GITHUB_SEARCH` — Enable/disable GitHub public API search (default: false)
+  - `FEATURE_COMPETITIVE_SCAN` — Enable/disable competitive intelligence scanning (default: false)
 - **F-13.2 Configuration:** Flags read from environment variables at startup. Accept `true`, `1`, `yes` (case-insensitive).
 - **F-13.3 Runtime Reload:** `reload_flags()` re-reads flags from environment without restart.
 
@@ -306,6 +308,14 @@ Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as
   - ToolReceipt: capability, action, provider, inputs (redacted), outputs (bounded), policy snapshot, file changes, verification results
   - VisionReceipt: screenshots (hashed), detected elements, actions, confidence scores
 - **F-15.6 Safe Mode:** Toggle restricts execution to local sandbox providers only, disabling optional/external providers.
+
+### FA-16: Competitive Intelligence (V24)
+
+**Modules:** `src/core/competitive_scan.py`, `src/tools/github_search.py`
+
+- **F-16.1 Sourced Intelligence:** When performing competitive research or external intelligence gathering, Lancelot must cite specific source URLs for each finding. Unsourced claims must not be presented as verified intelligence. This requirement is enforced via a Soul `tone_invariant` that rejects intelligence outputs lacking provenance URLs.
+- **F-16.2 GitHub Search:** When `FEATURE_GITHUB_SEARCH` is enabled, Lancelot can search GitHub's public API for repositories, commits, issues/PRs, and releases. Results include browseable source URLs that satisfy the sourced-intelligence requirement (F-16.1). Searches are executed through the Tool Fabric WebOps capability and produce standard tool receipts.
+- **F-16.3 Competitive Scan Memory:** When both `FEATURE_COMPETITIVE_SCAN` and `FEATURE_MEMORY_VNEXT` are enabled, competitive research results are stored in episodic memory with a `competitive_scan` provenance tag. Subsequent scans of the same target retrieve previous scan results from memory and produce a change-analysis summary highlighting new, removed, and modified findings since the last scan.
 
 ---
 

@@ -1,8 +1,8 @@
 # Technical Specifications: Project Lancelot v7.0
 
-**Document Version:** 7.0
-**Last Updated:** 2026-02-05
-**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening
+**Document Version:** 7.1
+**Last Updated:** 2026-02-18
+**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence
 
 ---
 
@@ -86,6 +86,8 @@ gateway.py
     |       +-- executor.py (execution engine)
     |       +-- factory.py (proposal pipeline)
     |       +-- governance.py (marketplace hooks)
+    |       +-- builtins/
+    |               +-- github_search.py (GitHub REST API skill)
     |
     +-- health/ (monitoring)
     |       +-- types.py (HealthSnapshot)
@@ -121,6 +123,8 @@ gateway.py
                     +-- ui_templates.py (template scaffolder)
                     +-- ui_antigravity.py (generative UI)
                     +-- vision_antigravity.py (vision control)
+    |
+    +-- competitive_scan.py (competitive intelligence scans)
     |
     +-- feature_flags.py (subsystem kill switches)
 ```
@@ -864,6 +868,8 @@ class JobExecutor:
 | FEATURE_TOOLS_ANTIGRAVITY | `FEATURE_TOOLS_ANTIGRAVITY` | false |
 | FEATURE_TOOLS_NETWORK | `FEATURE_TOOLS_NETWORK` | false |
 | FEATURE_TOOLS_HOST_EXECUTION | `FEATURE_TOOLS_HOST_EXECUTION` | false |
+| FEATURE_GITHUB_SEARCH | `FEATURE_GITHUB_SEARCH` | false |
+| FEATURE_COMPETITIVE_SCAN | `FEATURE_COMPETITIVE_SCAN` | false |
 
 **Accepted Values:** `true`, `1`, `yes` (case-insensitive). Everything else is treated as false.
 
@@ -1306,6 +1312,106 @@ class VerificationResult:
     cleaned_text: str       # Text with unverified claims neutralized
 ```
 
+### 3.38 GitHub Search Skill (V24)
+
+**File:** `src/core/skills/builtins/github_search.py`
+
+Built-in skill providing structured access to GitHub's REST API for competitive
+intelligence gathering. Uses `urllib.request` from the standard library (no
+third-party HTTP dependency). An optional `GITHUB_TOKEN` environment variable
+enables authenticated requests with higher rate limits.
+
+**Feature flag:** `FEATURE_GITHUB_SEARCH`
+
+**Actions:**
+
+| Action | Description |
+|--------|-------------|
+| `search_repos` | Search GitHub repositories by query, language, stars, topic |
+| `get_commits` | Retrieve recent commits for a given owner/repo (default branch) |
+| `get_issues` | List open/closed issues and pull requests with label filtering |
+| `get_releases` | Fetch release history including tag names and publish dates |
+
+**Public API:**
+
+```python
+class GitHubSearchSkill:
+    """Built-in skill registered under name 'github_search'."""
+    ACTIONS: list[str] = ["search_repos", "get_commits", "get_issues", "get_releases"]
+
+    def __init__(self, token: Optional[str] = None)   # Falls back to os.environ["GITHUB_TOKEN"]
+    def execute(self, action: str, params: dict) -> SkillResult
+
+    # Individual action methods
+    def search_repos(self, query: str, language: str = None, min_stars: int = 0) -> dict
+    def get_commits(self, owner: str, repo: str, since: str = None, per_page: int = 30) -> dict
+    def get_issues(self, owner: str, repo: str, state: str = "open", labels: list[str] = None) -> dict
+    def get_releases(self, owner: str, repo: str, per_page: int = 10) -> dict
+```
+
+**Return Format:** All actions return structured dicts containing a `results`
+list and a `source_url` field pointing to the corresponding GitHub web page.
+
+**Rate Limiting:** Unauthenticated requests are capped at 60/hour by GitHub.
+Authenticated requests (via `GITHUB_TOKEN`) are capped at 5,000/hour.
+
+### 3.39 Competitive Scan Memory (V24)
+
+**File:** `src/core/competitive_scan.py`
+
+Module for storing and diffing competitive intelligence scans in episodic
+memory. Each scan is persisted as a timestamped episodic memory item so the
+context compiler can surface prior scans during follow-up analysis.
+
+**Feature flag:** `FEATURE_COMPETITIVE_SCAN` (requires `FEATURE_MEMORY_VNEXT`)
+
+**Public API:**
+
+```python
+def detect_competitive_target(message: str) -> Optional[str]
+    """Identify a competitive target (company, product, repo) from user input."""
+
+def store_scan(target: str, scan_data: dict, memory_manager: MemoryStoreManager) -> str
+    """Persist a scan as an episodic memory item. Returns the item ID."""
+
+def retrieve_previous_scans(target: str, memory_manager: MemoryStoreManager) -> list[MemoryItem]
+    """Retrieve all prior scans for a target, most recent first."""
+
+def diff_scans(old_scan: dict, new_scan: dict) -> dict
+    """Compute a structured diff between two scans (added, removed, changed)."""
+
+def build_context_from_previous(target: str, memory_manager: MemoryStoreManager, max_tokens: int = 2000) -> str
+    """Compile a token-budgeted summary of prior scans for injection into context."""
+```
+
+**Scan Data Schema:**
+
+```python
+{
+    "target": str,              # Competitive target identifier
+    "timestamp": str,           # ISO 8601
+    "repos": list[dict],       # Repository metadata from GitHub search
+    "recent_commits": list[dict],
+    "open_issues_count": int,
+    "recent_releases": list[dict],
+    "summary": str             # LLM-generated competitive summary
+}
+```
+
+**Diff Output:** The `diff_scans()` function returns a dict with keys `added`,
+`removed`, and `changed`, each containing lists of human-readable descriptions
+suitable for direct inclusion in a chat response.
+
+### 3.40 Self-Knowledge System Instruction (V24)
+
+A ~200 token architecture reference block injected into the system prompt at
+startup. Lists the 10 core subsystems (Soul, Skills, Memory, Scheduler, Health,
+Tool Fabric, Model Router, Security, Planner/Verifier, Competitive Intelligence)
+with one-line capability descriptions. This gives the LLM grounded
+self-knowledge when performing roadmap analysis and competitive comparisons,
+reducing hallucinated capability claims. The block is assembled by the context
+compiler and included before the persona core block.
+
 ---
 
 ## 4. Security Architecture
@@ -1424,6 +1530,9 @@ All API endpoints follow these rules:
 | `FEATURE_SKILLS` | Skills subsystem toggle | true |
 | `FEATURE_HEALTH_MONITOR` | Health monitor toggle | true |
 | `FEATURE_SCHEDULER` | Scheduler toggle | true |
+| `FEATURE_GITHUB_SEARCH` | GitHub search skill toggle | false |
+| `FEATURE_COMPETITIVE_SCAN` | Competitive scan memory toggle | false |
+| `GITHUB_TOKEN` | GitHub personal access token (optional, raises rate limit) | None |
 
 ### 5.4 Health Checks
 
