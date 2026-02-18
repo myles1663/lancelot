@@ -5,6 +5,15 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.5] - 2026-02-18
+
+### Fixed
+- **Continuation messages hijacked by conversational bypass** (V17): Messages like "Yes", "go ahead",
+  "yeah" were matched by `_is_conversational()` and routed to the local model (no tools, no context),
+  even when they were follow-ups confirming a prior tool action. Now checks `_is_continuation()` first
+  — if the message references prior conversation, it stays in the Gemini agentic loop with full
+  history and tool access instead of getting a generic "I'm awake" response from the local model.
+
 ## [0.2.4] - 2026-02-18
 
 ### Added
