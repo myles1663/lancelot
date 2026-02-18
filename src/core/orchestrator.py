@@ -2148,8 +2148,18 @@ class LancelotOrchestrator:
 
         tools = self._build_openai_tool_declarations()
 
+        # V22: Local model has a 4K context window — use a minimal system
+        # prompt and truncate context to fit. Full system instruction is
+        # too large (2000+ tokens of persona, guardrails, principles).
+        _LOCAL_CTX_BUDGET = 2500  # chars (~625 tokens), leaves room for tools + response
         ctx = context_str or self.context_env.get_context_string()
-        sys_msg = system_instruction or self._build_system_instruction()
+        if len(ctx) > _LOCAL_CTX_BUDGET:
+            ctx = ctx[-_LOCAL_CTX_BUDGET:]  # Keep most recent context
+            print(f"V22: Truncated context for local model ({len(ctx)} chars)")
+        sys_msg = (
+            "You are Lancelot, an AI assistant. Answer the user's question concisely. "
+            "Use tools when needed. Never claim to have done something you haven't."
+        )
 
         messages = [
             {"role": "system", "content": sys_msg},
