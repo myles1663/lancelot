@@ -67,14 +67,36 @@ class ContextEnvironment:
             self.history = self.history[-200:]
         self.save_history()
 
-    def get_history_string(self, limit: int = 50) -> str:
-        """Formats recent chat history for context."""
+    def get_history_string(self, limit: int = 50, channel: str = None) -> str:
+        """Formats recent chat history for context, optionally filtered by channel.
+
+        V15: When channel is specified, only include messages from that channel
+        (tagged as "[via <channel>]") plus assistant responses and untagged API messages.
+        This prevents cross-channel pollution (e.g. War Room health checks pushing
+        Telegram conversation out of the context window).
+        """
         if not self.history:
             return ""
-            
+
         buffer = ["--- RECENT CHAT HISTORY ---"]
-        # Get last N messages
-        recent = self.history[-limit:]
+
+        if channel:
+            # V15: Filter to messages from this channel
+            filtered = []
+            for msg in self.history:
+                content = msg.get("content", "")
+                role = msg.get("role", "")
+                if role == "assistant":
+                    filtered.append(msg)
+                elif f"[via {channel}]" in content:
+                    filtered.append(msg)
+                elif role == "user" and "[via " not in content:
+                    # API messages (no channel tag) — include as shared context
+                    filtered.append(msg)
+            recent = filtered[-limit:]
+        else:
+            recent = self.history[-limit:]
+
         for msg in recent:
             # S10: Sanitize output? No, trusting internal history for now, but role is critical.
             role = msg.get("role", "unknown").upper()
@@ -227,23 +249,26 @@ class ContextEnvironment:
         except Exception as e:
             return f"Error fetching receipts: {e}"
 
-    def get_context_string(self) -> str:
-        """Formats context for the LLM."""
+    def get_context_string(self, channel: str = None) -> str:
+        """Formats context for the LLM.
+
+        V15: Accepts optional channel to filter history by source channel.
+        """
         buffer = []
-        
+
         # 1. File Context
         if self.items:
             buffer.append("--- BEGIN FILE CONTEXT ---")
             for item_id, item in self.items.items():
                 buffer.append(f"\n[FILE: {item_id}]\n{item.content}")
             buffer.append("\n--- END FILE CONTEXT ---")
-            
+
         # 2. Receipt Context
         receipts_str = self.get_recent_receipts(limit=15)
         buffer.append(f"\n{receipts_str}")
-        
-        # 3. Chat History
-        history_str = self.get_history_string(limit=50)
+
+        # 3. Chat History (V15: filtered by channel when specified)
+        history_str = self.get_history_string(limit=50, channel=channel)
         buffer.append(f"\n{history_str}")
         
         if not buffer:

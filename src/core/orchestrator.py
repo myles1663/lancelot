@@ -1689,6 +1689,13 @@ class LancelotOrchestrator:
             # V16: Self-awareness / identity questions need full system instruction
             "tell me about", "describe your", "how do you", "how does your",
             "what is your", "your memory", "your architecture", "about yourself",
+            # V15: Additional complex keywords for better routing
+            "code",           # "Claude Code", "look at the code", etc. — needs flagship
+            "prompt",         # "prompt X to do Y" — complex delegation request
+            "claude",         # References to Claude/Claude Code
+            "look at",        # "look at the recent..." — analysis request
+            "review",         # "review the logs" — analysis
+            "assess",         # Assessment tasks
         }
         if any(k in prompt_lower for k in complex_keywords):
             return False
@@ -1743,6 +1750,8 @@ class LancelotOrchestrator:
             "recurring", "every morning", "every day", "every hour",
             "remind me", "reminder", "cron", "set up a job",
             "cancel the", "delete the job", "list jobs", "scheduled jobs",
+            # V15: Delegation/invocation patterns
+            "prompt", "invoke",
         ]
         if any(phrase in prompt_lower for phrase in research_phrases):
             return True
@@ -1757,6 +1766,13 @@ class LancelotOrchestrator:
 
         # "What about X?" pattern — user is suggesting a specific service/tool to research
         if re.search(r'\bwhat\s+about\s+\w+', prompt_lower):
+            return True
+
+        # V15: Delegation patterns — "prompt X to do Y", "ask X to do Y"
+        if re.search(
+            r'\b(?:prompt|ask|tell|invoke|use)\s+\w+(?:\s+\w+)?\s+to\b',
+            prompt_lower,
+        ):
             return True
 
         return False
@@ -3121,6 +3137,7 @@ class LancelotOrchestrator:
         """
         self.wake_up("User Chat")
         self._current_channel = channel
+        self._telegram_already_sent = False  # V15: Reset duplicate-send guard
         start_time = __import__("time").time()
 
         # Governance: Check Token Limit (Estimate)
@@ -3185,6 +3202,11 @@ class LancelotOrchestrator:
             elif self._needs_research(user_message):
                 print("V18: Tool-action or research intent — routing through agentic loop")
                 intent = IntentType.KNOWLEDGE_REQUEST
+
+        # V15: Also detect continuations for KNOWLEDGE_REQUEST
+        # Short follow-up messages like "name it X" or "the txt file" reference prior conversation
+        if intent == IntentType.KNOWLEDGE_REQUEST and self._is_continuation(user_message):
+            print("V15: Continuation detected in KNOWLEDGE_REQUEST — ensuring full context")
 
         if intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST):
             # Route through PlanningPipeline — produces PlanArtifact same turn
@@ -3274,9 +3296,9 @@ class LancelotOrchestrator:
                     context_str = compiled.rendered_prompt
                 except Exception as mem_err:
                     print(f"Memory compilation failed, falling back: {mem_err}")
-                    context_str = self.context_env.get_context_string()
+                    context_str = self.context_env.get_context_string(channel=channel)
             else:
-                context_str = self.context_env.get_context_string()
+                context_str = self.context_env.get_context_string(channel=channel)
 
             # Legacy fields
             self.rules_context = "See ContextEnv"

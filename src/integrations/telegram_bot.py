@@ -266,8 +266,13 @@ class TelegramBot:
         try:
             response = self.orchestrator.chat(text, channel="telegram")
             if response:
-                response = self._sanitize_for_telegram(response)
-                self.send_message(response, sender_chat_id)
+                # V15: Skip sending if telegram_send already delivered this response
+                if not getattr(self.orchestrator, '_telegram_already_sent', False):
+                    response = self._sanitize_for_telegram(response)
+                    self.send_message(response, sender_chat_id)
+                else:
+                    logger.info("TelegramBot: Response already sent via telegram_send — skipping duplicate")
+                self.orchestrator._telegram_already_sent = False  # Reset for next message
         except Exception as e:
             logger.error(f"TelegramBot: Orchestrator error: {e}")
             self.send_message(f"Error processing request: {e}", sender_chat_id)

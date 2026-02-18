@@ -146,6 +146,9 @@ def _send_text(message: str, chat_id_override: str = None) -> Dict[str, Any]:
         if hasattr(gateway, "telegram_bot") and gateway.telegram_bot is not None:
             target_chat = chat_id_override or gateway.telegram_bot.chat_id
             gateway.telegram_bot.send_message(message, chat_id=target_chat)
+            # V15: Flag that we already sent via telegram_send (prevents duplicate in telegram_bot)
+            if hasattr(gateway, 'main_orchestrator') and gateway.main_orchestrator:
+                gateway.main_orchestrator._telegram_already_sent = True
             return {
                 "status": "sent",
                 "type": "message",
