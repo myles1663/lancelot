@@ -3,6 +3,7 @@
 // ============================================================
 
 import path from 'node:path';
+import { exec } from 'node:child_process';
 import chalk from 'chalk';
 import ora from 'ora';
 
@@ -211,6 +212,14 @@ export async function run(opts) {
       providerName: PROVIDERS[config.provider]?.name || config.provider,
       commsName: config.commsType === 'skip' ? 'Not configured' : (COMMS[config.commsType]?.name || config.commsType),
     });
+
+    // Auto-open War Room in the default browser
+    const warRoomUrl = 'http://localhost:8501';
+    const platform = process.platform;
+    const openCmd = platform === 'win32' ? `start ${warRoomUrl}`
+                  : platform === 'darwin' ? `open ${warRoomUrl}`
+                  : `xdg-open ${warRoomUrl}`;
+    exec(openCmd, () => {}); // Fire and forget — don't block on failure
 
   } catch (e) {
     showError(e.message);
