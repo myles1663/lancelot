@@ -2432,6 +2432,12 @@ class LancelotOrchestrator:
         if force_tool_use:
             print("V7: Forcing tool use on first iteration (mode=ANY)")
 
+        # V23: Structured output — force JSON schema on text responses
+        from feature_flags import FEATURE_STRUCTURED_OUTPUT, FEATURE_CLAIM_VERIFICATION
+        _use_structured_output = FEATURE_STRUCTURED_OUTPUT
+        if _use_structured_output:
+            print("V23: Structured output enabled — responses will be JSON schema-constrained")
+
         # Build initial message (with optional image/PDF parts for multimodal)
         ctx = context_str or self.context_env.get_context_string()
 
@@ -2467,6 +2473,12 @@ class LancelotOrchestrator:
                 )
 
             try:
+                _gen_config = {"thinking": self._get_thinking_config()}
+                # V23: Add structured output schema to constrain text responses
+                if _use_structured_output:
+                    from response.presenter import AGENTIC_RESPONSE_SCHEMA
+                    _gen_config["response_mime_type"] = "application/json"
+                    _gen_config["response_schema"] = AGENTIC_RESPONSE_SCHEMA
                 result = self._llm_call_with_retry(
                     lambda: self.provider.generate_with_tools(
                         model=self._route_model(prompt),
@@ -2474,7 +2486,7 @@ class LancelotOrchestrator:
                         system_instruction=system_instruction,
                         tools=declarations,
                         tool_config=current_tool_config,
-                        config={"thinking": self._get_thinking_config()},
+                        config=_gen_config,
                     )
                 )
             except Exception as e:
@@ -2499,7 +2511,36 @@ class LancelotOrchestrator:
                 text = result.text or ""
                 if tool_receipts:
                     print(f"V6 agentic loop completed after {len(tool_receipts)} tool calls")
-                # V22: Strip failure narration from final response
+
+                # V23: Structured output — parse JSON and run through presenter
+                if _use_structured_output and text:
+                    try:
+                        from response.presenter import ResponsePresenter, parse_structured_response
+                        structured = parse_structured_response(text)
+                        if structured:
+                            presenter = ResponsePresenter(claim_verification=FEATURE_CLAIM_VERIFICATION)
+                            presented = presenter.present(structured, tool_receipts)
+                            print(f"V23: Structured output parsed and presented ({len(presented)} chars)")
+                            # Check if model wants to continue
+                            if structured.get("next_action") == "continue":
+                                # Don't return yet — model wants another iteration
+                                # Append the structured response as context and continue
+                                print("V23: Model requested continuation — looping")
+                                messages.append(self.provider.build_user_message(
+                                    f"[SYSTEM] Your previous response was processed. Continue with the next action."
+                                ))
+                                continue
+                            return presented
+                        else:
+                            print("V23: Structured output parse failed — falling back to raw text")
+                            # Fallback: still run claim verification on raw text if enabled
+                            if FEATURE_CLAIM_VERIFICATION:
+                                presenter = ResponsePresenter(claim_verification=True)
+                                text = presenter.present_fallback(text, tool_receipts)
+                    except Exception as e:
+                        print(f"V23: Structured output processing error: {e} — using raw text")
+
+                # V22: Strip failure narration from final response (legacy fallback)
                 text = self._strip_failure_narration(text)
                 return text
 
@@ -3467,11 +3508,37 @@ class LancelotOrchestrator:
         self.context_env.add_history("user", f"{channel_tag}{user_message}")
 
         # ── Honest Closure: Intent Classification + Pipeline Routing ──
-        intent = classify_intent(user_message)
-        print(f"Intent Classifier: {intent.value}")
+        # V23: Unified classifier — single LLM call replaces 7-function heuristic chain
+        from feature_flags import FEATURE_UNIFIED_CLASSIFICATION
+        _unified_result = None
+        if FEATURE_UNIFIED_CLASSIFICATION and self.provider:
+            try:
+                from unified_classifier import UnifiedClassifier
+                _clf = UnifiedClassifier(self.provider)
+                # Build recent history for continuation detection
+                _recent_history = []
+                if hasattr(self, 'context_env') and self.context_env:
+                    for entry in self.context_env.history[-6:]:
+                        _recent_history.append({
+                            "role": entry.get("role", "user"),
+                            "text": entry.get("content", "")[:200],
+                        })
+                _unified_result = _clf.classify(user_message, _recent_history)
+                intent = _unified_result.to_intent_type()
+                print(f"V23 Unified Classifier: {_unified_result.intent} "
+                      f"(confidence={_unified_result.confidence:.2f}, "
+                      f"continuation={_unified_result.is_continuation}, "
+                      f"tools={_unified_result.requires_tools}) → {intent.value}")
+            except Exception as e:
+                print(f"V23 Unified classifier failed: {e} — falling back to keyword chain")
+                _unified_result = None
 
-        # V21: LLM-based intent verification for ambiguous classifications
-        intent = self._verify_intent_with_llm(user_message, intent)
+        if _unified_result is None:
+            # Legacy keyword chain (V1-V22)
+            intent = classify_intent(user_message)
+            print(f"Intent Classifier: {intent.value}")
+            # V21: LLM-based intent verification for ambiguous classifications
+            intent = self._verify_intent_with_llm(user_message, intent)
 
         # Fix Pack V1: Check for "Proceed" / "Approve" messages first
         if self._is_proceed_message(user_message) and self.task_store:
@@ -3480,22 +3547,28 @@ class LancelotOrchestrator:
             self.context_env.add_history("assistant", result)
             return result
 
-        # V17: Continuation messages bypass PlanningPipeline entirely.
-        # Short references like "what about that spec?" or "lets do that" should
-        # stay in the agentic loop where Gemini has full conversation history.
-        # V12: When a PLAN_REQUEST needs real research ("figure out a plan"),
-        # reroute through the agentic loop instead of the template pipeline.
-        if intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST, IntentType.EXEC_REQUEST):
-            if self._is_continuation(user_message):
-                print("V17: Continuation detected — routing through agentic loop instead of PlanningPipeline")
+        # V17/V23: Continuation and research rerouting
+        if _unified_result is not None:
+            # V23: Unified classifier already handles continuations and research detection
+            if _unified_result.is_continuation and intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST, IntentType.EXEC_REQUEST):
+                print("V23: Continuation detected by unified classifier — routing to agentic loop")
                 intent = IntentType.KNOWLEDGE_REQUEST
-            elif self._needs_research(user_message):
-                print("V18: Tool-action or research intent — routing through agentic loop")
+            elif _unified_result.intent == "action_low_risk":
+                print("V23: Low-risk action — routing to agentic loop (just-do-it)")
                 intent = IntentType.KNOWLEDGE_REQUEST
+        else:
+            # Legacy continuation/research detection (V17/V18)
+            if intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST, IntentType.EXEC_REQUEST):
+                if self._is_continuation(user_message):
+                    print("V17: Continuation detected — routing through agentic loop instead of PlanningPipeline")
+                    intent = IntentType.KNOWLEDGE_REQUEST
+                elif self._needs_research(user_message):
+                    print("V18: Tool-action or research intent — routing through agentic loop")
+                    intent = IntentType.KNOWLEDGE_REQUEST
 
         # V15: Also detect continuations for KNOWLEDGE_REQUEST
         # Short follow-up messages like "name it X" or "the txt file" reference prior conversation
-        if intent == IntentType.KNOWLEDGE_REQUEST and self._is_continuation(user_message):
+        if _unified_result is None and intent == IntentType.KNOWLEDGE_REQUEST and self._is_continuation(user_message):
             print("V15: Continuation detected in KNOWLEDGE_REQUEST — ensuring full context")
 
         if intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST):
@@ -3608,14 +3681,16 @@ class LancelotOrchestrator:
             from feature_flags import FEATURE_AGENTIC_LOOP, FEATURE_LOCAL_AGENTIC
             # V14: When file_parts present (images/PDFs), skip local model — no vision support
             has_vision_input = bool(file_parts)
-            is_continuation = self._is_continuation(user_message)
+            # V23: Use unified classifier result for continuation if available
+            is_continuation = (_unified_result.is_continuation if _unified_result else self._is_continuation(user_message))
             if FEATURE_AGENTIC_LOOP:
                 # V13: Conversational messages bypass agentic loop entirely
                 # (no tools needed for "call me Myles", "hello", "thanks", etc.)
                 # Route to local model first to save flagship tokens.
                 # V17: BUT if it's a continuation ("yes", "go ahead", etc.),
                 # skip conversational bypass — needs full context + tools.
-                if self._is_conversational(user_message) and not has_vision_input and not is_continuation:
+                _is_conv = (_unified_result.intent == "conversational" if _unified_result else self._is_conversational(user_message))
+                if _is_conv and not has_vision_input and not is_continuation:
                     if FEATURE_LOCAL_AGENTIC and self.local_model and self.local_model.is_healthy():
                         print("V13: Conversational message — routing to local model (no tools)")
                         raw_response = self._local_agentic_generate(
@@ -3645,7 +3720,11 @@ class LancelotOrchestrator:
                         image_parts=file_parts,
                     )
                 # V8: Try local model for simple queries to save flagship tokens
-                elif FEATURE_LOCAL_AGENTIC and self._is_simple_for_local(user_message):
+                # V23: Use unified classifier's confidence for local routing
+                elif FEATURE_LOCAL_AGENTIC and (
+                    (_unified_result.intent == "question" and not _unified_result.requires_tools)
+                    if _unified_result else self._is_simple_for_local(user_message)
+                ):
                     print("V8: Routing simple query to local agentic model")
                     raw_response = self._local_agentic_generate(
                         prompt=user_message,
@@ -3654,13 +3733,16 @@ class LancelotOrchestrator:
                         context_str=context_str,
                     )
                 else:
-                    # V20: Continuations (corrections, redirects) bypass _needs_research()
-                    # to prevent tool keywords in corrections from hijacking intent.
-                    # e.g. "correction draft to telegram" should NOT trigger telegram_send.
+                    # V20/V23: Continuations bypass research detection
                     if is_continuation:
                         print("V20: Continuation — skipping research detection, routing with full context")
                         needs_research = False
                         allow_writes = False
+                    elif _unified_result:
+                        # V23: Use unified classifier's requires_tools field
+                        needs_research = _unified_result.requires_tools
+                        wants_action = _unified_result.intent in ("action_low_risk", "action_high_risk")
+                        allow_writes = needs_research and wants_action
                     else:
                         # V10: Force tool use for research-oriented queries
                         needs_research = self._needs_research(user_message)

@@ -1235,6 +1235,77 @@ class VisionReceipt:
     success: bool
 ```
 
+### 3.35 Unified Classifier (V23)
+
+**Module:** `src/core/unified_classifier.py`
+
+Single LLM call intent classification using Gemini structured output. Replaces
+the 7-function keyword heuristic chain when `FEATURE_UNIFIED_CLASSIFICATION` is enabled.
+
+**Public API:**
+
+```python
+class UnifiedClassifier:
+    def __init__(self, provider: ProviderClient)
+    def classify(self, message: str, history: list = None) -> ClassificationResult
+
+@dataclass
+class ClassificationResult:
+    intent: str            # question | action_low_risk | action_high_risk | plan_request | continuation | conversational
+    confidence: float      # 0.0 to 1.0
+    is_continuation: bool  # True if modifying/correcting a previous request
+    requires_tools: bool   # True if answering requires calling tools
+    reasoning: str         # Brief explanation
+
+    def to_intent_type(self) -> IntentType  # Map to legacy IntentType for routing
+```
+
+Falls back to `classify_intent()` keyword classifier on any failure. Cost: ~$0.0002 per message
+(one Gemini Flash call with ~100 input tokens).
+
+### 3.36 Response Presenter (V23)
+
+**Module:** `src/core/response/presenter.py`
+
+Converts structured agentic JSON output to readable chat text. Cross-references
+`actions_taken` against tool receipts before including them in the response.
+Controlled by `FEATURE_STRUCTURED_OUTPUT`.
+
+**Public API:**
+
+```python
+class ResponsePresenter:
+    def __init__(self, claim_verification: bool = False)
+    def present(self, structured: dict, receipts: list[dict]) -> str
+    def present_fallback(self, raw_text: str, receipts: list[dict]) -> str
+
+def parse_structured_response(raw_text: str) -> Optional[dict]
+```
+
+**Schema:** `AGENTIC_RESPONSE_SCHEMA` — enforces `response_to_user` (required),
+`actions_taken` (optional array), `next_action` (enum: done/continue/needs_approval),
+`thinking` (optional, not shown to user).
+
+### 3.37 Claim Verifier (V23)
+
+**Module:** `src/core/response/claim_verifier.py`
+
+Scans `response_to_user` free-text for action claims and cross-references against
+tool receipts. Controlled by `FEATURE_CLAIM_VERIFICATION`.
+
+**Public API:**
+
+```python
+class ClaimVerifier:
+    def verify(self, response_text: str, receipts: list[dict]) -> VerificationResult
+
+@dataclass
+class VerificationResult:
+    is_clean: bool          # True if no unverified claims found
+    flagged_claims: list    # Descriptions of unverified claims
+    cleaned_text: str       # Text with unverified claims neutralized
+```
+
 ---
 
 ## 4. Security Architecture

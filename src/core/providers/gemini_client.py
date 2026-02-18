@@ -64,6 +64,12 @@ class GeminiProviderClient(ProviderClient):
             else:
                 gen_config.thinking_config = thinking
 
+        # Structured output: force JSON with schema validation (V23)
+        if config.get("response_mime_type"):
+            gen_config.response_mime_type = config["response_mime_type"]
+        if config.get("response_schema"):
+            gen_config.response_schema = config["response_schema"]
+
         response = self._call_with_retry(
             lambda: self._client.models.generate_content(
                 model=model,
@@ -120,6 +126,14 @@ class GeminiProviderClient(ProviderClient):
                 gen_config.thinking_config = types.ThinkingConfig(**thinking)
             else:
                 gen_config.thinking_config = thinking
+
+        # Structured output: force JSON with schema validation (V23)
+        # Note: structured output + tool calling may conflict on some models.
+        # Only enable when explicitly requested via config.
+        if config.get("response_mime_type"):
+            gen_config.response_mime_type = config["response_mime_type"]
+        if config.get("response_schema"):
+            gen_config.response_schema = config["response_schema"]
 
         response = self._call_with_retry(
             lambda: self._client.models.generate_content(

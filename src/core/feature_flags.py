@@ -38,6 +38,11 @@ Capability Upgrade Environment variables:
 
 Approval Pattern Learning Environment variables:
     FEATURE_APPROVAL_LEARNING        — default: false (APL: learn owner decision patterns)
+
+Structural Fixes (V23) Environment variables:
+    FEATURE_STRUCTURED_OUTPUT        — default: false (Gemini JSON schema output mode)
+    FEATURE_CLAIM_VERIFICATION       — default: false (cross-reference claims vs receipts)
+    FEATURE_UNIFIED_CLASSIFICATION   — default: false (single LLM call intent classification)
 """
 
 from __future__ import annotations
@@ -150,6 +155,11 @@ FEATURE_APPROVAL_LEARNING: bool = _env_bool("FEATURE_APPROVAL_LEARNING", default
 # Business Automation Layer flags
 FEATURE_BAL: bool = _env_bool("FEATURE_BAL", default=False)
 
+# Structural Fixes (V23) — production intelligence improvements
+FEATURE_STRUCTURED_OUTPUT: bool = _env_bool("FEATURE_STRUCTURED_OUTPUT", default=False)
+FEATURE_CLAIM_VERIFICATION: bool = _env_bool("FEATURE_CLAIM_VERIFICATION", default=False)
+FEATURE_UNIFIED_CLASSIFICATION: bool = _env_bool("FEATURE_UNIFIED_CLASSIFICATION", default=False)
+
 
 # All flags are now hot-toggleable via SubsystemManager — no restart required.
 RESTART_REQUIRED_FLAGS = frozenset()
@@ -207,6 +217,7 @@ def reload_flags() -> None:
     global FEATURE_CONNECTORS, FEATURE_TRUST_LEDGER, FEATURE_SKILL_SECURITY_PIPELINE
     global FEATURE_APPROVAL_LEARNING
     global FEATURE_BAL
+    global FEATURE_STRUCTURED_OUTPUT, FEATURE_CLAIM_VERIFICATION, FEATURE_UNIFIED_CLASSIFICATION
 
     # vNext2 flags
     FEATURE_SOUL = _env_bool("FEATURE_SOUL")
@@ -254,6 +265,11 @@ def reload_flags() -> None:
 
     # Business Automation Layer flags
     FEATURE_BAL = _env_bool("FEATURE_BAL", default=False)
+
+    # Structural Fixes (V23)
+    FEATURE_STRUCTURED_OUTPUT = _env_bool("FEATURE_STRUCTURED_OUTPUT", default=False)
+    FEATURE_CLAIM_VERIFICATION = _env_bool("FEATURE_CLAIM_VERIFICATION", default=False)
+    FEATURE_UNIFIED_CLASSIFICATION = _env_bool("FEATURE_UNIFIED_CLASSIFICATION", default=False)
 
 
 def get_all_flags() -> dict[str, bool]:
@@ -311,4 +327,8 @@ def log_feature_flags() -> None:
     logger.info(
         "Business Automation Layer flags: BAL=%s",
         FEATURE_BAL,
+    )
+    logger.info(
+        "Structural Fixes flags: STRUCTURED_OUTPUT=%s, CLAIM_VERIFICATION=%s, UNIFIED_CLASSIFICATION=%s",
+        FEATURE_STRUCTURED_OUTPUT, FEATURE_CLAIM_VERIFICATION, FEATURE_UNIFIED_CLASSIFICATION,
     )

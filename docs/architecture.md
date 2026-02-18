@@ -46,7 +46,9 @@ The orchestrator classifies the message into one of five intent types:
 | `KNOWLEDGE_REQUEST` | Information retrieval / research | Flagship Fast/Deep |
 | `CONVERSATIONAL` | General conversation | Local or Flagship Fast |
 
-Classification uses a two-stage pipeline: (1) deterministic keyword matching (`classify_intent()`) for fast initial routing, then (2) LLM-based verification via the local model (`_verify_intent_with_llm()`) for ambiguous cases where messages >80 chars match PLAN/EXEC keywords incidentally. The local model acts as a second opinion to prevent misrouting (e.g., "search for news about our roadmap" hitting PLAN_REQUEST due to "roadmap"). Cost: zero cloud tokens.
+**V23 Unified Classifier** (`FEATURE_UNIFIED_CLASSIFICATION`): When enabled, a single Gemini Flash call with structured output replaces the multi-function keyword chain. Returns intent, confidence, is_continuation, and requires_tools in one JSON response. Falls back to the keyword chain on failure.
+
+**Legacy pipeline** (when unified classifier disabled): Two-stage — (1) deterministic keyword matching (`classify_intent()`) for fast initial routing, then (2) LLM-based verification via the local model (`_verify_intent_with_llm()`) for ambiguous cases where messages >80 chars match PLAN/EXEC keywords incidentally.
 
 ### 3. Model Routing
 
@@ -276,7 +278,7 @@ Governance:    Soul constraints → Policy Engine → Risk classification
                                     ↓
 Execution:     Command denylist → Path traversal → Workspace boundary → Docker sandbox
                                     ↓
-Output:        Receipt generation → PII redaction → Response assembly
+Output:        Receipt generation → PII redaction → Structured output parsing → Claim verification → Presentation → Response assembly
 ```
 
 **Key principles:**

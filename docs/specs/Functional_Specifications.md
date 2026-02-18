@@ -57,6 +57,8 @@ Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as
   - **Success:** Context updated, proceed to next step.
   - **Failure:** Verifier suggests correction; Executor retries (max 3 attempts per step).
 - **F-02.4 Receipt Chain:** Every step generates a Receipt linking parent/child actions for full traceability.
+- **F-02.5 Structured Output (V23):** When `FEATURE_STRUCTURED_OUTPUT` is enabled, the agentic loop's text responses are constrained to a JSON schema with explicit `response_to_user`, `actions_taken`, and `next_action` fields. A presentation layer (`ResponsePresenter`) converts the verified JSON back to readable chat text after cross-referencing `actions_taken` against tool receipts. A claim verifier (`ClaimVerifier`, controlled by `FEATURE_CLAIM_VERIFICATION`) additionally scans the free-text `response_to_user` for unverified action claims.
+- **F-02.6 Unified Classification (V23):** When `FEATURE_UNIFIED_CLASSIFICATION` is enabled, a single Gemini Flash call with structured output replaces the 7-function keyword heuristic chain for intent classification. Returns intent, confidence, is_continuation, and requires_tools. Falls back to the keyword classifier on failure.
 
 ### FA-03: Multi-Provider Model Routing
 

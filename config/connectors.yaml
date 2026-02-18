@@ -38,8 +38,8 @@ rate_limits:
       burst_limit: 3
 connectors:
   email:
-    enabled: true
-    backend: outlook
+    enabled: false
+    backend: smtp
     settings:
       max_results_per_query: 50
   slack:

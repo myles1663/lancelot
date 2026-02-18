@@ -5,6 +5,35 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.9] - 2026-02-18
+
+### Added
+- **Gemini Structured Output Mode (V23)**: New `FEATURE_STRUCTURED_OUTPUT` flag enables JSON
+  schema-constrained responses from the agentic loop. Uses Gemini's native `response_mime_type`
+  and `response_schema` to force structured JSON output with explicit fields: `response_to_user`,
+  `actions_taken`, `next_action`, `thinking`. The model physically cannot hallucinate actions
+  outside the schema. Extended `GeminiProviderClient.generate()` and `generate_with_tools()`
+  to pass structured output parameters through to `GenerateContentConfig`.
+- **Response Presenter (V23)**: New `src/core/response/presenter.py` — the presentation layer
+  that converts structured agentic JSON output back to readable chat text. Cross-references
+  `actions_taken` against tool receipts and silently drops hallucinated actions. Corrects
+  claimed statuses when they don't match receipt evidence. This is a verifier + formatter,
+  not just a formatter.
+- **Claim Verifier (V23)**: New `src/core/response/claim_verifier.py` — scans the
+  `response_to_user` free-text field for action claims (past-tense verbs like "sent",
+  "searched", "created") and cross-references each against tool receipts. Unverified claims
+  are neutralized before the user sees them. Controlled by `FEATURE_CLAIM_VERIFICATION` flag.
+- **Unified Intent Classifier (V23)**: New `src/core/unified_classifier.py` — single Gemini
+  Flash call with structured output replaces the 7-function keyword heuristic chain
+  (`classify_intent` → `_verify_intent_with_llm` → `_is_continuation` → `_needs_research`
+  → `_is_low_risk_exec` → `_is_conversational` → `_is_simple_for_local`). Returns a
+  `ClassificationResult` with intent, confidence, is_continuation, and requires_tools in
+  one JSON response. Falls back to the existing keyword classifier on any failure.
+  Controlled by `FEATURE_UNIFIED_CLASSIFICATION` flag.
+- **Three new feature flags**: `FEATURE_STRUCTURED_OUTPUT`, `FEATURE_CLAIM_VERIFICATION`,
+  `FEATURE_UNIFIED_CLASSIFICATION` — all default to `false` for zero-risk rollout. Each
+  is independently toggleable via War Room or environment variables.
+
 ## [0.2.8] - 2026-02-18
 
 ### Changed
