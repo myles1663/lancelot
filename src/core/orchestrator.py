@@ -3311,11 +3311,14 @@ class LancelotOrchestrator:
             from feature_flags import FEATURE_AGENTIC_LOOP, FEATURE_LOCAL_AGENTIC
             # V14: When file_parts present (images/PDFs), skip local model — no vision support
             has_vision_input = bool(file_parts)
+            is_continuation = self._is_continuation(user_message)
             if FEATURE_AGENTIC_LOOP:
                 # V13: Conversational messages bypass agentic loop entirely
                 # (no tools needed for "call me Myles", "hello", "thanks", etc.)
                 # Route to local model first to save flagship tokens.
-                if self._is_conversational(user_message) and not has_vision_input:
+                # V17: BUT if it's a continuation ("yes", "go ahead", etc.),
+                # skip conversational bypass — needs full context + tools.
+                if self._is_conversational(user_message) and not has_vision_input and not is_continuation:
                     if FEATURE_LOCAL_AGENTIC and self.local_model and self.local_model.is_healthy():
                         print("V13: Conversational message — routing to local model (no tools)")
                         raw_response = self._local_agentic_generate(
