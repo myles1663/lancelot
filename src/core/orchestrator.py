@@ -1841,6 +1841,49 @@ class LancelotOrchestrator:
         ]
         return any(phrase in prompt_lower for phrase in low_risk)
 
+    def _extract_literal_terms(self, text: str) -> list:
+        """V22: Extract high-confidence proper nouns and quoted strings to preserve verbatim.
+
+        Returns a list of terms that should NOT be corrected, substituted,
+        or interpreted by the LLM. These are injected into the agentic loop
+        prompt to prevent autocorrection (e.g., "Clawd Bot" → "Claude").
+
+        Conservative — only extracts terms with high confidence of being intentional:
+        - Quoted strings: "Clawd Bot", 'ACME Corp' (user explicitly quoted = always preserve)
+        - Multi-word capitalized sequences: Clawd Bot, New York Times (2+ capitalized
+          words together = almost certainly a proper noun, not a typo)
+
+        Does NOT extract single capitalized words — those could be sentence starters,
+        common nouns, or actual misspellings. This avoids locking in typos.
+        """
+        terms = []
+
+        # 1. Quoted strings (user explicitly quoted them — always preserve)
+        quoted = re.findall(r'["\']([^"\']{2,50})["\']', text)
+        terms.extend(quoted)
+
+        # 2. Multi-word capitalized sequences: "Clawd Bot", "New York Times"
+        # 2+ consecutive capitalized words = very likely a proper noun
+        proper_nouns = re.findall(r'\b([A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*)+)\b', text)
+        # Filter out common multi-word patterns that aren't proper nouns
+        _COMMON_PHRASES = {
+            "Search For", "Look For", "Find Out", "Tell Me", "Show Me",
+            "Send To", "Let Me", "Can You", "How Do", "What Is",
+        }
+        for noun in proper_nouns:
+            if noun not in _COMMON_PHRASES:
+                terms.append(noun)
+
+        # Deduplicate while preserving order
+        seen = set()
+        unique = []
+        for t in terms:
+            if t.lower() not in seen:
+                seen.add(t.lower())
+                unique.append(t)
+
+        return unique
+
     def _is_conversational(self, prompt: str) -> bool:
         """Detect purely conversational messages that need no tools.
 
@@ -2349,7 +2392,19 @@ class LancelotOrchestrator:
 
         # Build initial message (with optional image/PDF parts for multimodal)
         ctx = context_str or self.context_env.get_context_string()
-        full_text = f"{ctx}\n\n{prompt}"
+
+        # V22: Extract proper nouns / quoted terms and inject as untouchable literals
+        literal_terms = self._extract_literal_terms(prompt)
+        literal_guard = ""
+        if literal_terms:
+            terms_str = ", ".join(f'"{t}"' for t in literal_terms)
+            literal_guard = (
+                f"\n\n⚠️ LITERAL TERMS (use exactly as written — do NOT correct, "
+                f"interpret, or substitute these): {terms_str}"
+            )
+            print(f"V22: Literal terms extracted: {terms_str}")
+
+        full_text = f"{ctx}\n\n{prompt}{literal_guard}"
         initial_msg = self.provider.build_user_message(full_text, images=image_parts)
         messages = [initial_msg]
 
