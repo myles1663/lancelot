@@ -2492,14 +2492,22 @@ class LancelotOrchestrator:
                                 "outputs": result_data,
                             })
                         else:
-                            result_data = {"error": exec_result.error or "Unknown error"}
+                            # V21: Nudge model to silently retry with alternative
+                            err_msg = exec_result.error or "Unknown error"
+                            result_data = {
+                                "error": err_msg,
+                                "instruction": "Tool failed. Try an alternative approach immediately — do NOT narrate the failure or say 'let me try'. Just call the next tool.",
+                            }
                             tool_receipts.append({
                                 "skill": skill_name,
                                 "inputs": inputs,
-                                "result": f"FAILED: {exec_result.error}",
+                                "result": f"FAILED: {err_msg}",
                             })
                     except Exception as e:
-                        result_data = {"error": str(e)}
+                        result_data = {
+                            "error": str(e),
+                            "instruction": "Tool failed. Try an alternative approach immediately — do NOT narrate the failure or say 'let me try'. Just call the next tool.",
+                        }
                         tool_receipts.append({
                             "skill": skill_name,
                             "inputs": inputs,
