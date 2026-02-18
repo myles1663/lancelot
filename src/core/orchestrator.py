@@ -2474,11 +2474,12 @@ class LancelotOrchestrator:
 
             try:
                 _gen_config = {"thinking": self._get_thinking_config()}
-                # V23: Add structured output schema to constrain text responses
-                if _use_structured_output:
-                    from response.presenter import AGENTIC_RESPONSE_SCHEMA
-                    _gen_config["response_mime_type"] = "application/json"
-                    _gen_config["response_schema"] = AGENTIC_RESPONSE_SCHEMA
+                # V23: NOTE — structured output (response_mime_type/response_schema)
+                # is NOT applied to generate_with_tools. Combining JSON schema
+                # enforcement with function calling causes the model to avoid
+                # returning text and keep making tool calls until max iterations.
+                # Instead, structured output is applied as a post-processing
+                # reformat step after the loop completes (see below).
                 result = self._llm_call_with_retry(
                     lambda: self.provider.generate_with_tools(
                         model=self._route_model(prompt),
@@ -2512,33 +2513,51 @@ class LancelotOrchestrator:
                 if tool_receipts:
                     print(f"V6 agentic loop completed after {len(tool_receipts)} tool calls")
 
-                # V23: Structured output — parse JSON and run through presenter
-                if _use_structured_output and text:
+                # V23: Structured output — reformat via a separate generate call
+                # (structured output can't be combined with generate_with_tools)
+                if _use_structured_output and text and tool_receipts:
                     try:
-                        from response.presenter import ResponsePresenter, parse_structured_response
-                        structured = parse_structured_response(text)
+                        from response.presenter import ResponsePresenter, AGENTIC_RESPONSE_SCHEMA, parse_structured_response
+                        # Build a reformat prompt with the raw response + receipt summary
+                        _receipt_summary = "\n".join(
+                            f"- {r['skill']}: {r.get('result', 'unknown')}"
+                            for r in tool_receipts
+                        )
+                        _reformat_prompt = (
+                            f"Reformat this response into the required JSON schema. "
+                            f"Only include actions that appear in the ACTUAL TOOL RECEIPTS below.\n\n"
+                            f"TOOL RECEIPTS (ground truth — only these actions happened):\n{_receipt_summary}\n\n"
+                            f"ORIGINAL RESPONSE:\n{text}"
+                        )
+                        _reformat_msg = self.provider.build_user_message(_reformat_prompt)
+                        _reformat_result = self.provider.generate(
+                            model=self._route_model(prompt),
+                            messages=[_reformat_msg],
+                            system_instruction="You reformat text into JSON. Only include actions verified by tool receipts.",
+                            config={
+                                "response_mime_type": "application/json",
+                                "response_schema": AGENTIC_RESPONSE_SCHEMA,
+                            },
+                        )
+                        structured = parse_structured_response(_reformat_result.text)
                         if structured:
                             presenter = ResponsePresenter(claim_verification=FEATURE_CLAIM_VERIFICATION)
                             presented = presenter.present(structured, tool_receipts)
-                            print(f"V23: Structured output parsed and presented ({len(presented)} chars)")
-                            # Check if model wants to continue
-                            if structured.get("next_action") == "continue":
-                                # Don't return yet — model wants another iteration
-                                # Append the structured response as context and continue
-                                print("V23: Model requested continuation — looping")
-                                messages.append(self.provider.build_user_message(
-                                    f"[SYSTEM] Your previous response was processed. Continue with the next action."
-                                ))
-                                continue
+                            print(f"V23: Structured reformat succeeded ({len(presented)} chars)")
                             return presented
                         else:
-                            print("V23: Structured output parse failed — falling back to raw text")
-                            # Fallback: still run claim verification on raw text if enabled
-                            if FEATURE_CLAIM_VERIFICATION:
-                                presenter = ResponsePresenter(claim_verification=True)
-                                text = presenter.present_fallback(text, tool_receipts)
+                            print("V23: Structured reformat parse failed — falling back to raw text")
                     except Exception as e:
-                        print(f"V23: Structured output processing error: {e} — using raw text")
+                        print(f"V23: Structured reformat error: {e} — using raw text")
+
+                # V23: Claim verification on raw text (no structured output needed)
+                if FEATURE_CLAIM_VERIFICATION and text:
+                    try:
+                        from response.presenter import ResponsePresenter
+                        presenter = ResponsePresenter(claim_verification=True)
+                        text = presenter.present_fallback(text, tool_receipts)
+                    except Exception as e:
+                        print(f"V23: Claim verification error: {e} — using raw text")
 
                 # V22: Strip failure narration from final response (legacy fallback)
                 text = self._strip_failure_narration(text)
@@ -2719,8 +2738,42 @@ class LancelotOrchestrator:
                     else:
                         print("V12: Switched from ANY to AUTO after retry iteration")
 
-        # Max iterations reached
+        # Max iterations reached — model never returned a text response
         print(f"V6 agentic loop hit max iterations ({MAX_ITERATIONS})")
+
+        # V23: When structured output is enabled, try to produce a clean
+        # summary via the presenter instead of raw receipt list
+        if _use_structured_output and tool_receipts:
+            try:
+                from response.presenter import ResponsePresenter, AGENTIC_RESPONSE_SCHEMA, parse_structured_response
+                _receipt_summary = "\n".join(
+                    f"- {r['skill']}: {r.get('result', 'unknown')}"
+                    for r in tool_receipts
+                )
+                _summary_prompt = (
+                    f"Summarize what was accomplished based on these tool receipts. "
+                    f"Be concise. Only claim actions that appear in the receipts.\n\n"
+                    f"TOOL RECEIPTS:\n{_receipt_summary}"
+                )
+                _summary_msg = self.provider.build_user_message(_summary_prompt)
+                _summary_result = self.provider.generate(
+                    model=self._route_model(prompt),
+                    messages=[_summary_msg],
+                    system_instruction="Summarize tool execution results concisely. Only mention actions in the receipts.",
+                    config={
+                        "response_mime_type": "application/json",
+                        "response_schema": AGENTIC_RESPONSE_SCHEMA,
+                    },
+                )
+                structured = parse_structured_response(_summary_result.text)
+                if structured:
+                    presenter = ResponsePresenter(claim_verification=FEATURE_CLAIM_VERIFICATION)
+                    presented = presenter.present(structured, tool_receipts)
+                    print(f"V23: Max-iterations summary via presenter ({len(presented)} chars)")
+                    return presented
+            except Exception as e:
+                print(f"V23: Max-iterations presenter failed: {e} — using receipt list")
+
         return self._format_tool_receipts(
             tool_receipts,
             note="Reached maximum tool call limit. Here's what I found so far:",

@@ -40,8 +40,8 @@ Approval Pattern Learning Environment variables:
     FEATURE_APPROVAL_LEARNING        — default: false (APL: learn owner decision patterns)
 
 Structural Fixes (V23) Environment variables:
-    FEATURE_STRUCTURED_OUTPUT        — default: false (Gemini JSON schema output mode)
-    FEATURE_CLAIM_VERIFICATION       — default: false (cross-reference claims vs receipts)
+    FEATURE_STRUCTURED_OUTPUT        — default: false (JSON schema output mode with receipt verification)
+    FEATURE_CLAIM_VERIFICATION       — default: false (cross-reference response claims vs tool receipts)
     FEATURE_UNIFIED_CLASSIFICATION   — default: false (single LLM call intent classification)
 """
 
@@ -156,9 +156,9 @@ FEATURE_APPROVAL_LEARNING: bool = _env_bool("FEATURE_APPROVAL_LEARNING", default
 FEATURE_BAL: bool = _env_bool("FEATURE_BAL", default=False)
 
 # Structural Fixes (V23) — production intelligence improvements
-FEATURE_STRUCTURED_OUTPUT: bool = _env_bool("FEATURE_STRUCTURED_OUTPUT", default=False)
-FEATURE_CLAIM_VERIFICATION: bool = _env_bool("FEATURE_CLAIM_VERIFICATION", default=False)
-FEATURE_UNIFIED_CLASSIFICATION: bool = _env_bool("FEATURE_UNIFIED_CLASSIFICATION", default=False)
+FEATURE_STRUCTURED_OUTPUT: bool = _env_bool("FEATURE_STRUCTURED_OUTPUT", default=False)       # JSON schema output + receipt verification — eliminates narration/hallucination at format level
+FEATURE_CLAIM_VERIFICATION: bool = _env_bool("FEATURE_CLAIM_VERIFICATION", default=False)     # Cross-reference response text claims against tool receipts — neutralize unverified claims
+FEATURE_UNIFIED_CLASSIFICATION: bool = _env_bool("FEATURE_UNIFIED_CLASSIFICATION", default=False)  # Single LLM call replaces 7-function keyword heuristic chain for intent routing
 
 
 # All flags are now hot-toggleable via SubsystemManager — no restart required.

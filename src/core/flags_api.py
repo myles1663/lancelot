@@ -244,6 +244,29 @@ FLAG_META = {
         "conflicts": [],
         "warning": "Disabling will stop all BAL client operations and close the database connection. Active client workflows will be interrupted.",
     },
+
+    # ── Structural Fixes (V23) ────────────────────────────────────
+    "FEATURE_STRUCTURED_OUTPUT": {
+        "description": "Structured Output Mode. After the agentic loop completes, a reformat step converts the raw response into a verified JSON structure with explicit fields: response_to_user, actions_taken, next_action. A presentation layer cross-references claimed actions against actual tool receipts and silently drops anything that didn't happen. Converts the verified JSON back to readable chat text. Eliminates narration, fake progress claims, and verbose failure descriptions at the format level.",
+        "category": "Intelligence",
+        "requires": ["FEATURE_AGENTIC_LOOP"],
+        "conflicts": [],
+        "warning": "Requires AGENTIC_LOOP. Adds one additional LLM call per agentic response for reformatting. If reformatting fails, falls back to raw text. Monitor logs for 'V23: Structured reformat' entries.",
+    },
+    "FEATURE_CLAIM_VERIFICATION": {
+        "description": "Response Claim Verification. Scans the response for action claims ('I sent the email', 'I searched for X') and cross-references each claim against actual tool receipts from the current turn. Claims without matching receipts are neutralized before the user sees them. Works with or without STRUCTURED_OUTPUT — when structured output is enabled, verifies the response_to_user field; when disabled, verifies raw text directly.",
+        "category": "Intelligence",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Adds a post-processing step to every response. May occasionally flag legitimate statements as unverified if the wording closely matches action verbs. Monitor flagged claims in logs.",
+    },
+    "FEATURE_UNIFIED_CLASSIFICATION": {
+        "description": "Unified Intent Classification. Replaces the 7-function keyword heuristic chain (classify_intent, _verify_intent_with_llm, _is_continuation, _needs_research, _is_low_risk_exec, _is_conversational, _is_simple_for_local) with a single LLM call using structured output. Returns intent, confidence, is_continuation, and requires_tools in one JSON response. Falls back to the keyword classifier on any failure. Cost: ~$0.0002 per message.",
+        "category": "Intelligence",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Adds one fast-model API call per incoming message for classification (~100 input tokens). Falls back to keyword classifier if the API call fails. Monitor for classification accuracy — check logs for 'V23 Unified Classifier' entries.",
+    },
 }
 
 

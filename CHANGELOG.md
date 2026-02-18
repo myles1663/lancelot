@@ -8,12 +8,13 @@ All notable changes to Project Lancelot will be documented in this file.
 ## [0.2.9] - 2026-02-18
 
 ### Added
-- **Gemini Structured Output Mode (V23)**: New `FEATURE_STRUCTURED_OUTPUT` flag enables JSON
-  schema-constrained responses from the agentic loop. Uses Gemini's native `response_mime_type`
-  and `response_schema` to force structured JSON output with explicit fields: `response_to_user`,
-  `actions_taken`, `next_action`, `thinking`. The model physically cannot hallucinate actions
-  outside the schema. Extended `GeminiProviderClient.generate()` and `generate_with_tools()`
-  to pass structured output parameters through to `GenerateContentConfig`.
+- **Structured Output Mode (V23)**: New `FEATURE_STRUCTURED_OUTPUT` flag enables JSON
+  schema-constrained response reformatting. After the agentic loop completes, a reformat step
+  converts the raw response into verified JSON with explicit fields: `response_to_user`,
+  `actions_taken`, `next_action`. A presentation layer cross-references claimed actions against
+  tool receipts and drops anything unverified. Extended the provider client's `generate()` and
+  `generate_with_tools()` to support structured output parameters (`response_mime_type`,
+  `response_schema`).
 - **Response Presenter (V23)**: New `src/core/response/presenter.py` — the presentation layer
   that converts structured agentic JSON output back to readable chat text. Cross-references
   `actions_taken` against tool receipts and silently drops hallucinated actions. Corrects
@@ -23,8 +24,8 @@ All notable changes to Project Lancelot will be documented in this file.
   `response_to_user` free-text field for action claims (past-tense verbs like "sent",
   "searched", "created") and cross-references each against tool receipts. Unverified claims
   are neutralized before the user sees them. Controlled by `FEATURE_CLAIM_VERIFICATION` flag.
-- **Unified Intent Classifier (V23)**: New `src/core/unified_classifier.py` — single Gemini
-  Flash call with structured output replaces the 7-function keyword heuristic chain
+- **Unified Intent Classifier (V23)**: New `src/core/unified_classifier.py` — single fast-model
+  LLM call with structured output replaces the 7-function keyword heuristic chain
   (`classify_intent` → `_verify_intent_with_llm` → `_is_continuation` → `_needs_research`
   → `_is_low_risk_exec` → `_is_conversational` → `_is_simple_for_local`). Returns a
   `ClassificationResult` with intent, confidence, is_continuation, and requires_tools in
