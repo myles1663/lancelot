@@ -33,20 +33,21 @@ The installer walks you through each step interactively:
 1. **Prerequisites check** — verifies Docker, Git, disk space, RAM, GPU
 2. **Install location** — where to put Lancelot (default: `./lancelot`)
 3. **LLM provider** — select Gemini, OpenAI, Anthropic, or xAI and paste your API key
-4. **Communications** — optionally configure Telegram or Google Chat (you can skip this)
+4. **Communications** — optionally configure a messaging channel: Telegram, Google Chat, Slack, Discord, Teams, WhatsApp, Email, or SMS (you can skip this)
 5. **Repository clone** — pulls the latest code from GitHub
 6. **Configuration** — generates your `.env` file automatically
 7. **Model download** — downloads the 5GB local utility model (with progress bar)
 8. **Docker build & start** — builds images, starts services, waits for health
 
-When it finishes, you'll see:
+When it finishes, the **War Room** opens automatically in your default browser and you'll see:
 
 ```
-  Lancelot is running!
-
-  War Room:  http://localhost:8000/war-room/
-  API:       http://localhost:8000
-  Health:    http://localhost:8000/health/live
+  ╔══════════════════════════════════════════╗
+  ║        LANCELOT IS READY!                ║
+  ╠══════════════════════════════════════════╣
+  ║  War Room: http://localhost:8501         ║
+  ║  API:      http://localhost:8000         ║
+  ╚══════════════════════════════════════════╝
 ```
 
 > **Tip:** If the install is interrupted, resume with `npx create-lancelot --resume`. To skip the 5GB model download, use `--skip-model` (the local model handles routine tasks like PII redaction — Lancelot still works without it, but routes everything to cloud APIs).
@@ -55,10 +56,21 @@ When it finishes, you'll see:
 
 ## Step 2: Open the War Room
 
-Open your browser and go to:
+The War Room opens automatically after install. If you need to open it manually:
 
 ```
-http://localhost:8000/war-room/
+http://localhost:8501
+```
+
+**Starting Lancelot after first install:**
+
+```bash
+# Auto-opens War Room in your browser when ready
+./launch.sh            # Linux / macOS / Git Bash
+.\launch.ps1           # PowerShell (Windows)
+
+# Or start manually (no auto-open)
+docker compose up -d
 ```
 
 You should see the Lancelot War Room dashboard with panels for health, governance, and system status. The health dashboard should show all subsystems as operational.
@@ -205,7 +217,7 @@ Now that you have a running instance:
 | Learn how governance works | [Governance](governance.md) |
 | Customize Lancelot's behavior | [Authoring Souls](authoring-souls.md) |
 | Configure providers and models | [Configuration Reference](configuration-reference.md) |
-| Set up integrations (Telegram, etc.) | [Installation Guide](installation.md) |
+| Set up integrations (Telegram, Slack, Discord, etc.) | [Installation Guide](installation.md) |
 | Understand the security model | [Security Posture](security.md) |
 | Operate the War Room dashboard | [War Room Guide](war-room.md) |
 
