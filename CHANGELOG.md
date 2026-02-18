@@ -22,8 +22,25 @@ All notable changes to Project Lancelot will be documented in this file.
 - **Thinking enabled by default**: `_get_thinking_config()` default changed from `"off"` to
   `"low"`. Gemini 3 Pro's native reasoning improves correction handling, multi-step task
   decomposition, and conversational coherence.
+- **LLM-based intent verification (V21)**: Local model (Qwen3-8B) now acts as a second opinion
+  when the keyword classifier produces PLAN_REQUEST or EXEC_REQUEST for messages >80 chars.
+  Catches cases like "search for news about our roadmap" where "roadmap" triggers PLAN_REQUEST
+  but the user wants an action. New `verify_intent` prompt template and
+  `_verify_intent_with_llm()` method. Falls back gracefully if local model unavailable.
+- **Just-do-it mode for low-risk actions (V21)**: Execution requests that are read-only or
+  text-generation (search, draft, summarize, check status, compare, fetch) now skip the
+  PlanningPipeline → TaskGraph → Permission flow and go straight to the agentic loop.
+  Destructive operations (deploy, delete, send, install, execute commands) still require
+  plan approval. New `_is_low_risk_exec()` method in orchestrator.
 
 ### Fixed
+- **`_needs_research()` overly broad keyword triggers (V21)**: Replaced single-word triggers
+  ("telegram", "notify me", "message me", "war room", "schedule", etc.) with specific phrases
+  ("send a telegram message", "send via telegram", "notify me via", etc.) to prevent routing
+  misfires where tool keywords in normal conversation hijacked intent.
+- **History window for plan correction context (V21)**: Increased `_execute_with_llm()` history
+  window from limit=6 to limit=12, giving the LLM more conversational context when processing
+  corrections and follow-up messages during plan execution.
 - **Corrections hijacked by tool keyword matching (V20)**: Messages like "correction draft to
   telegram" were matched by `_needs_research()` on the word "telegram" and routed as a literal
   telegram_send call instead of being treated as a correction. Fix: when `is_continuation=True`,

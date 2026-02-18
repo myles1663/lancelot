@@ -594,7 +594,7 @@ class LancelotOrchestrator:
 
         # Fix Pack V9: Include recent conversation history so Gemini sees
         # any corrections the user made after the plan was generated.
-        recent_history = self.context_env.get_history_string(limit=6)
+        recent_history = self.context_env.get_history_string(limit=12)
         history_block = ""
         if recent_history:
             history_block = f"\n\nRECENT CONVERSATION (includes user corrections):\n{recent_history}\n"
@@ -1743,18 +1743,19 @@ class LancelotOrchestrator:
             "is there a free", "free way to", "free option",
             "what's the best", "what is the best",
             "come up with a plan", "plan for",
-            # V18: Tool-action triggers — user explicitly wants a tool to act
-            "send a message", "send me", "send a telegram",
-            "send in telegram", "send via telegram", "send on telegram",
-            "telegram", "notify me", "message me",
-            "war room", "warroom", "command center", "dashboard",
-            # V19: Scheduling triggers
-            "schedule", "alarm", "wake up", "wake-up", "wakeup",
-            "recurring", "every morning", "every day", "every hour",
-            "remind me", "reminder", "cron", "set up a job",
-            "cancel the", "delete the job", "list jobs", "scheduled jobs",
-            # V15: Delegation/invocation patterns
-            "prompt", "invoke",
+            # V18/V20: Tool-action triggers — specific phrases only (not bare keywords)
+            "send a message", "send me a message",
+            "send a telegram message", "send via telegram", "send on telegram",
+            "send to telegram", "send to the war room", "send to warroom",
+            "notify me via", "message me on",
+            "post to the dashboard", "push to command center",
+            # V19: Scheduling triggers — specific phrases
+            "schedule a", "set an alarm", "set a reminder",
+            "wake me up", "wake-up call",
+            "set up a recurring", "every morning at", "every day at", "every hour",
+            "remind me to", "remind me at", "create a reminder",
+            "cron job", "set up a job", "create a job",
+            "cancel the job", "delete the job", "list my jobs", "list scheduled jobs",
         ]
         if any(phrase in prompt_lower for phrase in research_phrases):
             return True
@@ -1798,6 +1799,47 @@ class LancelotOrchestrator:
             "schedule", "alarm", "remind", "wake up", "cancel",
         ]
         return any(phrase in prompt_lower for phrase in action_phrases)
+
+    def _is_low_risk_exec(self, prompt: str) -> bool:
+        """V21: Detect execution requests that are low-risk (read-only or text generation).
+
+        Used by just-do-it mode to skip PlanningPipeline → TaskGraph → Permission
+        for actions that have no destructive side effects. These go straight to
+        the agentic loop where Gemini can use tools immediately.
+
+        Low-risk: search, draft, summarize, check status, list, compare, analyze
+        High-risk (still needs pipeline): deploy, delete, send, install, execute commands
+        """
+        prompt_lower = prompt.lower()
+
+        # High-risk signals — if ANY of these are present, keep in pipeline
+        high_risk = [
+            "deploy", "push", "ship", "release", "publish",
+            "delete", "remove", "drop", "destroy", "wipe",
+            "send", "post", "notify", "message", "email", "telegram",
+            "install", "migrate", "upgrade", "downgrade",
+            "execute", "run command", "run script", "run the",
+            "commit", "merge", "rebase",
+            "shut down", "shutdown", "restart", "reboot", "kill",
+            "move", "rename", "overwrite",
+        ]
+        if any(phrase in prompt_lower for phrase in high_risk):
+            return False
+
+        # Low-risk signals — read-only or text-generation actions
+        low_risk = [
+            "search", "find", "look up", "look for", "lookup",
+            "draft", "compose", "write a draft", "write a summary",
+            "summarize", "summary of", "recap",
+            "check", "status", "health check", "what's the status",
+            "list", "show me", "display", "show all",
+            "compare", "analyze", "analyse", "review",
+            "explain", "describe", "tell me",
+            "fetch", "get", "retrieve", "pull up",
+            "count", "how many", "calculate",
+            "test", "verify", "validate", "check if",
+        ]
+        return any(phrase in prompt_lower for phrase in low_risk)
 
     def _is_conversational(self, prompt: str) -> bool:
         """Detect purely conversational messages that need no tools.
@@ -1943,6 +1985,55 @@ class LancelotOrchestrator:
             return True
 
         return False
+
+    def _verify_intent_with_llm(self, user_message: str, keyword_intent: "IntentType") -> "IntentType":
+        """V21: Use local model to verify ambiguous keyword classifications.
+
+        When the keyword classifier produces PLAN_REQUEST or EXEC_REQUEST for
+        longer messages (>80 chars), the local model acts as a second opinion.
+        This catches cases like "search for news about our roadmap" where
+        "roadmap" triggers PLAN_REQUEST but the user wants an action.
+
+        Only invoked when:
+            - Local model is available and healthy
+            - Keyword intent is PLAN_REQUEST, EXEC_REQUEST, or MIXED_REQUEST
+            - Message is >80 chars (short messages are less ambiguous)
+
+        Returns the (possibly overridden) IntentType.
+        """
+        # Guard: only verify ambiguous cases
+        if keyword_intent not in (IntentType.PLAN_REQUEST, IntentType.EXEC_REQUEST, IntentType.MIXED_REQUEST):
+            return keyword_intent
+        if len(user_message) <= 80:
+            return keyword_intent
+        if not self.local_model or not self.local_model.is_healthy():
+            return keyword_intent
+
+        try:
+            llm_label = self.local_model.verify_routing_intent(user_message)
+            print(f"V21: Local model intent verification: keyword={keyword_intent.value} → llm={llm_label}")
+
+            if keyword_intent == IntentType.PLAN_REQUEST:
+                if llm_label in ("action", "question"):
+                    print("V21: Overriding PLAN_REQUEST → KNOWLEDGE_REQUEST (LLM says action/question)")
+                    return IntentType.KNOWLEDGE_REQUEST
+            elif keyword_intent == IntentType.EXEC_REQUEST:
+                if llm_label == "question":
+                    print("V21: Overriding EXEC_REQUEST → KNOWLEDGE_REQUEST (LLM says question)")
+                    return IntentType.KNOWLEDGE_REQUEST
+            elif keyword_intent == IntentType.MIXED_REQUEST:
+                if llm_label == "question":
+                    print("V21: Overriding MIXED_REQUEST → KNOWLEDGE_REQUEST (LLM says question)")
+                    return IntentType.KNOWLEDGE_REQUEST
+                elif llm_label == "action":
+                    print("V21: Overriding MIXED_REQUEST → KNOWLEDGE_REQUEST (LLM says action)")
+                    return IntentType.KNOWLEDGE_REQUEST
+
+            return keyword_intent
+
+        except Exception as e:
+            print(f"V21: Local model verification failed ({e}), keeping keyword intent")
+            return keyword_intent
 
     def _local_agentic_generate(
         self,
@@ -3221,6 +3312,8 @@ class LancelotOrchestrator:
         intent = classify_intent(user_message)
         print(f"Intent Classifier: {intent.value}")
 
+        # V21: LLM-based intent verification for ambiguous classifications
+        intent = self._verify_intent_with_llm(user_message, intent)
 
         # Fix Pack V1: Check for "Proceed" / "Approve" messages first
         if self._is_proceed_message(user_message) and self.task_store:
@@ -3273,6 +3366,13 @@ class LancelotOrchestrator:
                 self.context_env.add_history("assistant", pipeline_result.rendered_output)
                 return pipeline_result.rendered_output
             # If pipeline couldn't complete, fall through to LLM
+
+        if intent == IntentType.EXEC_REQUEST:
+            # V21: Just-do-it mode — low-risk exec requests skip the pipeline
+            if self._is_low_risk_exec(user_message):
+                print("V21: Low-risk execution detected — just-do-it mode (agentic loop)")
+                intent = IntentType.KNOWLEDGE_REQUEST
+                # Fall through to KNOWLEDGE_REQUEST handling below
 
         if intent == IntentType.EXEC_REQUEST:
             # Fix Pack V2: Route through PlanningPipeline → TaskGraph → Permission

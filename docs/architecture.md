@@ -40,12 +40,13 @@ The orchestrator classifies the message into one of five intent types:
 | Intent | Description | Route |
 |--------|-------------|-------|
 | `PLAN_REQUEST` | Complex goal requiring multi-step planning | Planning Pipeline |
-| `EXEC_REQUEST` | Direct action request | Tool Fabric |
+| `EXEC_REQUEST` | Direct action request (high-risk) | Planning Pipeline → Permission |
+| `EXEC_REQUEST` | Direct action request (low-risk: search, draft, summarize) | Agentic Loop (just-do-it) |
 | `MIXED_REQUEST` | Contains both planning and execution | Planning Pipeline |
 | `KNOWLEDGE_REQUEST` | Information retrieval / research | Flagship Fast/Deep |
 | `CONVERSATIONAL` | General conversation | Local or Flagship Fast |
 
-Classification is done by the local model (cost: zero cloud tokens) and determines the entire downstream execution path.
+Classification uses a two-stage pipeline: (1) deterministic keyword matching (`classify_intent()`) for fast initial routing, then (2) LLM-based verification via the local model (`_verify_intent_with_llm()`) for ambiguous cases where messages >80 chars match PLAN/EXEC keywords incidentally. The local model acts as a second opinion to prevent misrouting (e.g., "search for news about our roadmap" hitting PLAN_REQUEST due to "roadmap"). Cost: zero cloud tokens.
 
 ### 3. Model Routing
 

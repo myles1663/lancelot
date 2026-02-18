@@ -44,3 +44,4 @@ prompts:
   - summarize_internal
   - redact
   - rag_rewrite
+  - verify_intent

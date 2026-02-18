@@ -223,6 +223,26 @@ class LocalModelClient:
         raw = self.complete(prompt, max_tokens=128, temperature=0.1)
         return raw.strip()
 
+    def verify_routing_intent(self, text: str) -> str:
+        """Verify routing intent using the local model as a second opinion.
+
+        V21: Used when the keyword classifier produces PLAN_REQUEST or
+        EXEC_REQUEST but the message is long enough to be ambiguous.
+        The local model reads the full message and decides if the user
+        actually wants a plan, an action, or is asking a question.
+
+        Returns one of: plan, action, question
+        """
+        prompt = self._render("verify_intent", input=text)
+        raw = self.complete(prompt, max_tokens=16, temperature=0.0, timeout=10.0)
+        # Extract first valid label from potentially noisy output
+        valid_labels = {"plan", "action", "question"}
+        for word in raw.lower().split():
+            cleaned = word.strip(".,!?:;'\"\n\r")
+            if cleaned in valid_labels:
+                return cleaned
+        return "action"  # Default to action (routes to agentic loop)
+
     # ------------------------------------------------------------------
     # Fix Pack V8: Chat completions with tool/function calling
     # ------------------------------------------------------------------

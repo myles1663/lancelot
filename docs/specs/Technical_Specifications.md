@@ -321,6 +321,7 @@ class LocalModelClient:
     def is_healthy(self) -> bool                  # Returns False on error, never raises
     def complete(self, prompt: str, **kwargs) -> str
     def classify_intent(self, text: str) -> str
+    def verify_routing_intent(self, text: str) -> str  # V21: Returns plan/action/question
     def extract_json(self, text: str, schema: dict) -> dict
     def summarize(self, text: str) -> str
     def redact(self, text: str) -> str

@@ -51,7 +51,7 @@ Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as
 
 **Modules:** `src/agents/planner.py`, `src/agents/verifier.py`
 
-- **F-02.1 Planning:** Complex goals (>50 tokens or containing action keywords) invoke the Planner, which generates a JSON-structured step list using Gemini 2.0 Flash with JSON schema enforcement.
+- **F-02.1 Planning:** Complex goals (>50 tokens or containing action keywords) invoke the Planner, which generates a JSON-structured step list using Gemini Flash with JSON schema enforcement. Low-risk execution requests (search, draft, summarize, check status) bypass the pipeline via just-do-it mode (V21) and go straight to the agentic loop.
 - **F-02.2 Execution:** The Executor runs steps sequentially through the Model Router, selecting appropriate lanes based on task type and risk level.
 - **F-02.3 Verification:** After each step, the Verifier (temperature 0.1) analyzes output against the step's success criteria.
   - **Success:** Context updated, proceed to next step.
@@ -67,7 +67,7 @@ Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as
   | Lane | Priority | Purpose | Provider |
   |------|----------|---------|----------|
   | `local_redaction` | 1 | PII redaction | Local GGUF model |
-  | `local_utility` | 2 | Classification, summarization, JSON extraction | Local GGUF model |
+  | `local_utility` | 2 | Classification, intent verification, summarization, JSON extraction | Local GGUF model |
   | `flagship_fast` | 3 | Orchestration, tool calls, standard reasoning | Gemini Flash / GPT-4o-mini / Claude Haiku |
   | `flagship_deep` | 4 | Planning, high-risk decisions, complex reasoning | Gemini Pro / GPT-4o / Claude Sonnet |
 
