@@ -75,7 +75,8 @@ Docker Compose is the primary and recommended deployment method. It runs two con
 
 | Container | Port | Purpose |
 |-----------|------|---------|
-| `lancelot_core` | 8000 | FastAPI gateway, War Room, all subsystems |
+| `lancelot_core` | 8000 | FastAPI gateway, API endpoints |
+| `lancelot_core` | 8501 | War Room (Streamlit operator dashboard) |
 | `lancelot_local_llm` | 8080 | Local GGUF model inference server |
 
 Both containers communicate on an internal bridge network (`lancelot_net`). The core container depends on the local LLM being healthy before starting.
@@ -106,11 +107,11 @@ The installer handles:
 | Flag | Description |
 |------|-------------|
 | `-d, --directory <path>` | Install location (default: `./lancelot`) |
-| `--provider <name>` | Pre-select: `gemini`, `openai`, or `anthropic` |
+| `--provider <name>` | Pre-select: `gemini`, `openai`, `anthropic`, or `xai` |
 | `--skip-model` | Skip the local model download |
 | `--resume` | Resume an interrupted installation |
 
-When the installer finishes, the War Room is live at `http://localhost:8000/war-room/`.
+When the installer finishes, it automatically opens the **War Room** in your default browser at `http://localhost:8501`.
 
 ---
 
@@ -134,13 +135,19 @@ cp config/models.example.yaml config/models.yaml
 Create a `.env` file in the project root with your configuration:
 
 ```ini
-# LLM API Keys (at least one required)
-GEMINI_API_KEY=your-key-here
-OPENAI_API_KEY=your-key-here
-ANTHROPIC_API_KEY=your-key-here
+# LLM Provider (gemini, openai, anthropic, or xai)
+LANCELOT_PROVIDER=gemini
 
-# Owner authentication token (required for Soul amendments, memory writes)
-LANCELOT_OWNER_TOKEN=choose-a-secure-token
+# LLM API Keys (at least one required, matching your provider)
+GEMINI_API_KEY=your-key-here
+# OPENAI_API_KEY=your-key-here
+# ANTHROPIC_API_KEY=your-key-here
+# XAI_API_KEY=your-key-here
+
+# Security Tokens (auto-generated during onboarding if omitted)
+# LANCELOT_OWNER_TOKEN=
+# LANCELOT_API_TOKEN=
+# LANCELOT_VAULT_KEY=
 
 # Local model settings
 LOCAL_LLM_URL=http://local-llm:8080
@@ -150,7 +157,17 @@ LOCAL_MODEL_GPU_LAYERS=0
 
 # Logging
 LANCELOT_LOG_LEVEL=INFO
+
+# Feature Flags
+FEATURE_SOUL=true
+FEATURE_SKILLS=true
+FEATURE_HEALTH_MONITOR=true
+FEATURE_SCHEDULER=true
+FEATURE_AGENTIC_LOOP=true
+FEATURE_LOCAL_AGENTIC=true
 ```
+
+> **Tip:** If you skip the security tokens, the in-app onboarding at `http://localhost:8501` will auto-generate them on first launch.
 
 ### 3. Download the local model
 
@@ -180,7 +197,8 @@ The `docker-compose.yml` already includes GPU configuration. If you do **not** h
 ### 5. Build and start
 
 ```bash
-docker compose up -d
+# First build (compiles images)
+docker compose up -d --build
 ```
 
 First build takes 3-10 minutes. Watch logs with:
@@ -195,7 +213,17 @@ lancelot_core       | INFO:     Uvicorn running on http://0.0.0.0:8000
 lancelot_local_llm  | INFO:     Model loaded successfully
 ```
 
-### 6. Verify
+### 6. Open the War Room
+
+```bash
+# Auto-opens War Room in your browser when ready
+./launch.sh            # Linux / macOS / Git Bash
+.\launch.ps1           # PowerShell (Windows)
+```
+
+Or open `http://localhost:8501` manually. The in-app onboarding will guide you through any remaining configuration (provider selection, API key validation, comms setup, security tokens).
+
+### 7. Verify
 
 ```bash
 curl http://localhost:8000/health/live
@@ -204,8 +232,6 @@ curl http://localhost:8000/health/live
 curl http://localhost:8000/health/ready
 # Expected: {"ready": true, "local_llm_ready": true, ...}
 ```
-
-Open the War Room at `http://localhost:8000/war-room/`.
 
 ---
 
@@ -375,7 +401,8 @@ Configure all three API keys in `.env`. Lancelot will use the primary provider f
 
 | Port | Service | Purpose |
 |------|---------|---------|
-| 8000 | lancelot-core | FastAPI gateway + War Room |
+| 8000 | lancelot-core | FastAPI gateway + API |
+| 8501 | lancelot-core | War Room (Streamlit dashboard) |
 | 8080 | local-llm | Local model inference |
 
 Both are configurable in `docker-compose.yml` under the `ports` section.
@@ -398,7 +425,7 @@ To allow additional domains (for connectors or integrations), add them to this f
 
 ### Firewall considerations
 
-- **Inbound:** Only ports 8000 and 8080 need to be accessible (localhost only by default)
+- **Inbound:** Only ports 8000, 8501, and 8080 need to be accessible (localhost only by default)
 - **Outbound:** Allow HTTPS (443) to the domains in your allowlist
 - The War Room is designed for local access only — do not expose it to the public internet without additional authentication
 
@@ -496,7 +523,7 @@ Should return a governed response with receipt IDs.
 
 ### 6. War Room
 
-Open `http://localhost:8000/war-room/` in a browser. You should see the operator dashboard with health, governance, and system panels.
+Open `http://localhost:8501` in a browser. You should see the operator dashboard with health, governance, and system panels.
 
 ---
 
@@ -506,18 +533,33 @@ Open `http://localhost:8000/war-room/` in a browser. You should see the operator
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `GEMINI_API_KEY` | One of three | — | Google Gemini API key |
-| `OPENAI_API_KEY` | One of three | — | OpenAI API key |
-| `ANTHROPIC_API_KEY` | One of three | — | Anthropic API key |
-| `LANCELOT_OWNER_TOKEN` | Yes | — | Token for administrative actions |
+| **LLM Provider** | | | |
+| `LANCELOT_PROVIDER` | Yes | — | Active provider: `gemini`, `openai`, `anthropic`, or `xai` |
+| `GEMINI_API_KEY` | One of four | — | Google Gemini API key |
+| `OPENAI_API_KEY` | One of four | — | OpenAI API key |
+| `ANTHROPIC_API_KEY` | One of four | — | Anthropic API key |
+| `XAI_API_KEY` | One of four | — | xAI (Grok) API key |
+| **Security** | | | |
+| `LANCELOT_OWNER_TOKEN` | Yes | — | Token for Soul amendments, memory writes |
+| `LANCELOT_API_TOKEN` | Yes | — | Token for API authentication |
+| `LANCELOT_VAULT_KEY` | Yes | — | Encryption key for credential vault |
+| **Local Model** | | | |
 | `LOCAL_LLM_URL` | No | `http://local-llm:8080` | Local model server URL |
 | `LOCAL_MODEL_CTX` | No | `4096` | Local model context window |
 | `LOCAL_MODEL_THREADS` | No | `4` | CPU threads for local model |
 | `LOCAL_MODEL_GPU_LAYERS` | No | `0` | GPU layers to offload |
+| **General** | | | |
 | `LANCELOT_LOG_LEVEL` | No | `INFO` | Logging level |
-| `TELEGRAM_BOT_TOKEN` | No | — | Telegram bot token |
-| `TELEGRAM_CHAT_ID` | No | — | Telegram chat ID |
-| `GOOGLE_CHAT_WEBHOOK_URL` | No | — | Google Chat webhook URL |
+| **Communications** | | | |
+| `LANCELOT_COMMS_TYPE` | No | — | Channel type: `telegram`, `google_chat`, `slack`, `discord`, `teams`, `whatsapp`, `email`, `sms`, or `none` |
+| `LANCELOT_TELEGRAM_TOKEN` | No | — | Telegram bot token |
+| `LANCELOT_TELEGRAM_CHAT_ID` | No | — | Telegram chat ID |
+| `LANCELOT_CHAT_SPACE_NAME` | No | — | Google Chat space resource name |
+| `SLACK_BOT_TOKEN` | No | — | Slack Bot User OAuth Token |
+| `DISCORD_BOT_TOKEN` | No | — | Discord bot token |
+| `TEAMS_ACCESS_TOKEN` | No | — | Microsoft Graph API access token |
+
+> **Note:** Security tokens (`LANCELOT_OWNER_TOKEN`, `LANCELOT_API_TOKEN`, `LANCELOT_VAULT_KEY`) are auto-generated during onboarding if not manually set. The CLI installer and in-app onboarding both handle this automatically.
 
 ### YAML Configuration Files
 
@@ -562,9 +604,14 @@ Set to `true`, `1`, or `yes` to enable; anything else disables.
 docker compose down
 ```
 
-### Restart
+### Start / Restart
 
 ```bash
+# Recommended — auto-opens War Room in browser when ready
+./launch.sh            # Linux / macOS / Git Bash
+.\launch.ps1           # PowerShell (Windows)
+
+# Or start without auto-open
 docker compose up -d
 ```
 
