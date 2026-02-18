@@ -85,7 +85,12 @@ class TelegramBot:
         return text.strip()
 
     def send_message(self, text: str, chat_id: str = None):
-        """Sends a message to the configured chat."""
+        """Sends a message to the configured chat.
+
+        V15b: Retries failed chunks once and logs which chunk failed for
+        debugging. Previously, a failed chunk was silently skipped, causing
+        the user to receive an incomplete response with no indication.
+        """
         target = chat_id or self.chat_id
         if not self.token or not target:
             logger.warning("TelegramBot: Cannot send (token or chat_id missing).")
@@ -95,23 +100,35 @@ class TelegramBot:
 
         # Telegram limit is 4096 chars per message; chunk if needed
         chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)]
-        for chunk in chunks:
-            try:
-                resp = requests.post(url, json={
-                    "chat_id": target,
-                    "text": chunk,
-                    "parse_mode": "Markdown",
-                }, timeout=15)
-                if not resp.ok:
-                    # Retry without Markdown if parse fails
-                    resp2 = requests.post(url, json={
-                        "chat_id": target,
-                        "text": chunk,
-                    }, timeout=15)
-                    if not resp2.ok:
-                        logger.error(f"TelegramBot: Send failed: {resp2.text}")
-            except Exception as e:
-                logger.error(f"TelegramBot: Send error: {e}")
+        total_chunks = len(chunks)
+        failed_chunks = []
+
+        for idx, chunk in enumerate(chunks):
+            sent = False
+            for attempt in range(2):  # V15b: retry once on failure
+                try:
+                    parse_mode = "Markdown" if attempt == 0 else None
+                    payload = {"chat_id": target, "text": chunk}
+                    if parse_mode:
+                        payload["parse_mode"] = parse_mode
+                    resp = requests.post(url, json=payload, timeout=15)
+                    if resp.ok:
+                        sent = True
+                        break
+                    # First attempt with Markdown failed — retry without it
+                    if attempt == 0:
+                        logger.warning("TelegramBot: Markdown send failed for chunk %d/%d, retrying plain", idx + 1, total_chunks)
+                except Exception as e:
+                    logger.error("TelegramBot: Send error chunk %d/%d (attempt %d): %s", idx + 1, total_chunks, attempt + 1, e)
+                    if attempt == 0:
+                        time.sleep(1)  # Brief pause before retry
+
+            if not sent:
+                failed_chunks.append(idx + 1)
+                logger.error("TelegramBot: Chunk %d/%d permanently failed", idx + 1, total_chunks)
+
+        if failed_chunks and total_chunks > 1:
+            logger.error("TelegramBot: %d/%d chunks failed to send: %s", len(failed_chunks), total_chunks, failed_chunks)
 
     # ------------------------------------------------------------------
     # Internal
@@ -216,12 +233,18 @@ class TelegramBot:
         return dl_resp.content
 
     def _handle_update(self, update: dict):
-        """Processes a single Telegram update."""
+        """Processes a single Telegram update.
+
+        V15b: Offset is now incremented AFTER processing succeeds (or is
+        deliberately skipped for non-message updates). This prevents permanent
+        message loss if orchestrator.chat() crashes mid-processing.
+        """
         update_id = update.get("update_id", 0)
-        self._offset = update_id + 1  # ack this update
 
         msg = update.get("message")
         if not msg:
+            # Non-message updates (edited_message, callback_query, etc.) — ack and skip
+            self._offset = update_id + 1
             return
 
         sender_chat_id = str(msg.get("chat", {}).get("id", ""))
@@ -230,12 +253,14 @@ class TelegramBot:
         # Only respond to the configured chat (security)
         if self.chat_id and sender_chat_id != self.chat_id:
             logger.warning(f"TelegramBot: Ignoring message from unauthorized chat {sender_chat_id}")
+            self._offset = update_id + 1  # Ack ignored messages
             return
 
         # Check for voice note / audio
         voice = msg.get("voice") or msg.get("audio")
         if voice:
             self._handle_voice(voice, sender_chat_id, sender_name)
+            self._offset = update_id + 1
             return
 
         # V14: Check for photo messages
@@ -244,6 +269,7 @@ class TelegramBot:
             caption = msg.get("caption", "What's in this image?")
             largest = photo[-1]  # Highest resolution
             self._handle_photo(largest["file_id"], caption, sender_chat_id, sender_name)
+            self._offset = update_id + 1
             return
 
         # V14: Check for document messages
@@ -251,16 +277,19 @@ class TelegramBot:
         if document:
             caption = msg.get("caption", "Please analyze this document.")
             self._handle_document(document, caption, sender_chat_id, sender_name)
+            self._offset = update_id + 1
             return
 
         text = msg.get("text", "")
         if not text:
+            self._offset = update_id + 1
             return
 
         logger.info(f"TelegramBot: [{sender_name}] {text[:50]}...")
 
         if not self.orchestrator:
             self.send_message("Lancelot orchestrator is not available.", sender_chat_id)
+            self._offset = update_id + 1
             return
 
         try:
@@ -273,9 +302,13 @@ class TelegramBot:
                 else:
                     logger.info("TelegramBot: Response already sent via telegram_send — skipping duplicate")
                 self.orchestrator._telegram_already_sent = False  # Reset for next message
+            # V15b: Only ack after successful processing
+            self._offset = update_id + 1
         except Exception as e:
             logger.error(f"TelegramBot: Orchestrator error: {e}")
             self.send_message(f"Error processing request: {e}", sender_chat_id)
+            # V15b: Still ack on handled errors (user got an error message)
+            self._offset = update_id + 1
 
     def _handle_voice(self, voice: dict, chat_id: str, sender_name: str):
         """Handle a voice note: STT → orchestrator → TTS → voice reply."""
@@ -307,6 +340,15 @@ class TelegramBot:
             if not transcribed_text:
                 self.send_message(
                     "I couldn't understand the voice note. Please try again or send text.",
+                    chat_id,
+                )
+                return
+
+            # V15b: Detect stub mode placeholder — don't feed it into the orchestrator
+            if transcribed_text.startswith("[") and "not configured" in transcribed_text:
+                logger.warning("TelegramBot: STT returned stub placeholder — voice not configured")
+                self.send_message(
+                    "Voice processing is not currently configured. Please send a text message instead.",
                     chat_id,
                 )
                 return
@@ -365,6 +407,11 @@ class TelegramBot:
             image_bytes = self._download_file(file_id)
             logger.info("TelegramBot: Downloaded photo (%d bytes)", len(image_bytes))
 
+            # V15b: Guard against empty downloads
+            if not image_bytes:
+                self.send_message("Failed to download the photo. Please try sending it again.", chat_id)
+                return
+
             from orchestrator import ChatAttachment
             attachment = ChatAttachment(
                 filename="telegram_photo.jpg",
@@ -396,6 +443,11 @@ class TelegramBot:
         try:
             file_bytes = self._download_file(file_id)
             logger.info("TelegramBot: Downloaded document (%d bytes)", len(file_bytes))
+
+            # V15b: Guard against empty downloads
+            if not file_bytes:
+                self.send_message("Failed to download the document. Please try sending it again.", chat_id)
+                return
 
             from orchestrator import ChatAttachment
             attachment = ChatAttachment(
