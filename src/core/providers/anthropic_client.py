@@ -141,6 +141,9 @@ class AnthropicProviderClient(ProviderClient):
                 "budget_tokens": budget,
             }
             kwargs["max_tokens"] = max(kwargs["max_tokens"], 16384)
+            # Anthropic: thinking cannot be combined with forced tool_choice
+            if "tool_choice" in kwargs:
+                del kwargs["tool_choice"]
 
         response = self._call_with_retry(
             lambda: self._client.messages.create(**kwargs)
@@ -317,9 +320,13 @@ class AnthropicProviderClient(ProviderClient):
 
         # raw = the response content blocks for conversation continuity
         # Anthropic needs the assistant message appended as-is
-        raw = {"role": "assistant", "content": response.content}
+        # Strip thinking blocks — Anthropic rejects them in input messages
+        content_for_history = [
+            block for block in response.content if block.type != "thinking"
+        ]
+        raw = {"role": "assistant", "content": content_for_history}
 
-        # V27: Include thinking text for orchestrator access
+        # V27: Include thinking text for orchestrator (not sent back to API)
         if thinking_parts:
             raw["thinking"] = "\n".join(thinking_parts)
 

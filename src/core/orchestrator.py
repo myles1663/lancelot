@@ -2755,10 +2755,14 @@ class LancelotOrchestrator:
                 return text
 
             # Append model's response to conversation (provider-native format)
-            if isinstance(result.raw, list):
-                messages.extend(result.raw)
+            # Strip non-message fields (e.g. thinking) before sending back to API
+            raw_msg = result.raw
+            if isinstance(raw_msg, dict):
+                raw_msg = {k: v for k, v in raw_msg.items() if k in ("role", "content")}
+            if isinstance(raw_msg, list):
+                messages.extend(raw_msg)
             else:
-                messages.append(result.raw)
+                messages.append(raw_msg)
 
             # Process ALL tool calls and collect results.
             # V13: Hallucination guard — derived from actual declarations so

@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from src.core.skills.schema import SkillError, SkillManifest
-from src.core.skills.registry import SkillRegistry, SkillEntry, SignatureState
+from src.core.skills.registry import SkillRegistry, SkillEntry, SkillOwnership, SignatureState
 
 logger = logging.getLogger(__name__)
 
