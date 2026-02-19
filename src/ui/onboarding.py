@@ -294,6 +294,7 @@ class OnboardingOrchestrator:
             "WELCOME": OnboardingState.WELCOME,
             "FLAGSHIP_SELECTION": OnboardingState.FLAGSHIP_SELECTION,
             "HANDSHAKE": OnboardingState.CREDENTIALS_CAPTURE,
+            "ANTHROPIC_OAUTH_WAITING": OnboardingState.CREDENTIALS_CAPTURE,  # V28: OAuth browser flow
             "PROVIDER_MODE_SELECTION": OnboardingState.CREDENTIALS_CAPTURE,  # V27: shares credential phase
             "LOCAL_UTILITY_SETUP": OnboardingState.LOCAL_UTILITY_SETUP,
             "COMMS_SELECTION": OnboardingState.COMMS_SELECTION,
@@ -367,7 +368,18 @@ class OnboardingOrchestrator:
                 if os.path.exists(default_adc):
                     adc_exists = True
 
-        if not api_key and not adc_exists:
+        # V28: Check for OAuth token as alternative for Anthropic
+        oauth_configured = False
+        if provider == "anthropic":
+            try:
+                from oauth_token_manager import get_oauth_manager
+                mgr = get_oauth_manager()
+                if mgr and mgr.get_token_status().get("configured"):
+                    oauth_configured = True
+            except Exception:
+                pass
+
+        if not api_key and not adc_exists and not oauth_configured:
             return "HANDSHAKE"
 
         # Step 3.5: V27 — Provider mode (SDK/API) must be selected
@@ -525,6 +537,11 @@ class OnboardingOrchestrator:
             msg += ("\n\nAlternatively, type **'scan'** to detect Google Cloud "
                     "Application Default Credentials (advanced).")
 
+        # V28: OAuth option for Anthropic
+        if provider_id == "anthropic":
+            msg += ("\n\nAlternatively, type **'oauth'** to authenticate via browser "
+                    "(uses your claude.ai subscription — no API key needed).")
+
         return msg
 
     # ------------------------------------------------------------------
@@ -550,6 +567,10 @@ class OnboardingOrchestrator:
                 return ("**Identity Verified.** (Google ADC detected)\n\n"
                         + self._comms_selection_prompt())
             return result
+
+        # V28: Anthropic OAuth browser flow
+        if stripped.lower() == "oauth" and provider_id == "anthropic":
+            return self._initiate_anthropic_oauth()
 
         return self._verify_api_key(stripped)
 
@@ -602,6 +623,72 @@ class OnboardingOrchestrator:
 
         except Exception as e:
             return f"Error saving API Key: {e}"
+
+    # ------------------------------------------------------------------
+    # V28: Anthropic OAuth browser flow
+    # ------------------------------------------------------------------
+
+    def _initiate_anthropic_oauth(self) -> str:
+        """Start Anthropic OAuth PKCE flow — generate auth URL for browser."""
+        try:
+            from oauth_token_manager import get_oauth_manager
+            manager = get_oauth_manager()
+            if manager is None:
+                return ("OAuth manager not available. Please use an API key instead.\n\n"
+                        "Paste your API key (starts with `sk-ant-...`):")
+
+            auth_url, state = manager.generate_auth_url()
+            self.temp_data["oauth_state"] = state
+            self.state = "ANTHROPIC_OAUTH_WAITING"
+
+            return (
+                "**Anthropic OAuth Setup**\n\n"
+                "Please open this URL in your browser to authorize Lancelot:\n\n"
+                f"{auth_url}\n\n"
+                "After you authorize, the browser will redirect back to Lancelot.\n"
+                "Type **'done'** once you see the success page, or **'cancel'** to use an API key instead."
+            )
+        except Exception as e:
+            return f"OAuth initialization failed: {e}\n\nPlease paste your API key instead:"
+
+    def _handle_anthropic_oauth_waiting(self, text: str) -> str:
+        """Handle user input while waiting for OAuth browser completion."""
+        cmd = text.strip().lower()
+
+        if cmd == "cancel":
+            self.state = "HANDSHAKE"
+            provider = PROVIDERS.get("anthropic", PROVIDERS["gemini"])
+            return (f"OAuth cancelled.\n\nPaste your API key "
+                    f"(starts with `{provider['prefix']}...`):")
+
+        if cmd == "done":
+            try:
+                from oauth_token_manager import get_oauth_manager
+                manager = get_oauth_manager()
+                if manager and manager.get_token_status().get("configured"):
+                    self._write_env_values({
+                        "LANCELOT_AUTH_MODE": "OAUTH",
+                        "LANCELOT_PROVIDER": "anthropic",
+                    }, section_comment="Anthropic OAuth (V28)")
+                    self.fail_count = 0
+                    self.state = "PROVIDER_MODE_SELECTION"
+                    return (
+                        "**OAuth Authorized.** (Anthropic)\n\n"
+                        "Your Lancelot instance is connected to your claude.ai account.\n\n"
+                        + self._provider_mode_prompt()
+                    )
+                else:
+                    return (
+                        "OAuth tokens not detected yet. Make sure you completed "
+                        "the browser authorization.\n\n"
+                        "Type **'done'** to check again, or **'cancel'** to use "
+                        "an API key instead."
+                    )
+            except Exception as e:
+                return f"Error checking OAuth status: {e}\n\nType **'done'** or **'cancel'**."
+
+        return ("Please type **'done'** after completing browser authorization, "
+                "or **'cancel'** to use an API key instead.")
 
     def _validate_api_key_live(self, provider: str, key: str) -> dict:
         """Live HTTP probe to validate API key. Non-blocking on network errors."""
@@ -1212,6 +1299,9 @@ class OnboardingOrchestrator:
 
         elif self.state == "HANDSHAKE":
             return self._handle_auth_options(text)
+
+        elif self.state == "ANTHROPIC_OAUTH_WAITING":
+            return self._handle_anthropic_oauth_waiting(text)
 
         elif self.state == "PROVIDER_MODE_SELECTION":
             return self._handle_provider_mode(text)

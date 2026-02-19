@@ -52,14 +52,19 @@ class FlagshipClient:
         self._provider = provider
         self._profile = profile
         self._api_key: Optional[str] = None
+        self._oauth_token: Optional[str] = None  # V28: OAuth bearer token
 
         env_var = _API_KEY_VARS.get(provider)
         if env_var:
             self._api_key = os.environ.get(env_var)
 
+        # V28: Check for OAuth token (Anthropic only)
+        if provider == "anthropic":
+            self._oauth_token = os.environ.get("ANTHROPIC_OAUTH_TOKEN")
+
     def is_configured(self) -> bool:
-        """Check if the API key is available."""
-        return bool(self._api_key)
+        """Check if the API key (or OAuth token) is available."""
+        return bool(self._api_key) or bool(self._oauth_token)
 
     def complete(
         self,
@@ -84,11 +89,15 @@ class FlagshipClient:
         Raises:
             FlagshipError on API failure or missing configuration.
         """
-        if not self._api_key:
+        if not self._api_key and not self._oauth_token:
             raise FlagshipError(
                 f"API key not configured for {self._provider} "
                 f"(set {_API_KEY_VARS.get(self._provider, 'UNKNOWN')})"
             )
+
+        # V28: Refresh OAuth token from env (background refresh thread updates it)
+        if self._provider == "anthropic" and not self._api_key:
+            self._oauth_token = os.environ.get("ANTHROPIC_OAUTH_TOKEN", self._oauth_token)
 
         lane_config = self._get_lane_config(lane)
         effective_max = max_tokens or lane_config.max_tokens
@@ -169,10 +178,17 @@ class FlagshipClient:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": temperature,
         }
-        headers = {
-            "x-api-key": self._api_key,
-            "anthropic-version": "2024-10-22",
-        }
+        # V28: Use Bearer auth for OAuth, x-api-key for API key
+        if self._oauth_token and not self._api_key:
+            headers = {
+                "Authorization": f"Bearer {self._oauth_token}",
+                "anthropic-version": "2024-10-22",
+            }
+        else:
+            headers = {
+                "x-api-key": self._api_key,
+                "anthropic-version": "2024-10-22",
+            }
         data = self._http_post(_ANTHROPIC_URL, payload, timeout, extra_headers=headers)
         try:
             return data["content"][0]["text"]

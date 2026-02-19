@@ -99,6 +99,8 @@ export interface ProviderKeyInfo {
   has_key: boolean
   key_preview: string
   active: boolean
+  oauth_configured: boolean
+  oauth_status: string | null
 }
 
 export interface ProviderKeysResponse {
@@ -120,3 +122,35 @@ export const fetchProviderKeys = () =>
 
 export const rotateProviderKey = (provider: string, apiKey: string) =>
   apiPost<RotateKeyResponse>('/api/v1/providers/keys/rotate', { provider, api_key: apiKey })
+
+// --- V28: OAuth Management ---
+
+export interface OAuthInitiateResponse {
+  status: string
+  auth_url?: string
+  state?: string
+  message?: string
+}
+
+export interface OAuthStatusResponse {
+  configured: boolean
+  valid?: boolean
+  status: string
+  expires_at?: string
+  expires_in_seconds?: number
+  error?: string
+}
+
+export interface OAuthRevokeResponse {
+  status: string
+  message?: string
+}
+
+export const initiateOAuth = () =>
+  apiPost<OAuthInitiateResponse>('/api/v1/providers/oauth/initiate')
+
+export const fetchOAuthStatus = () =>
+  apiGet<OAuthStatusResponse>('/api/v1/providers/oauth/status')
+
+export const revokeOAuth = () =>
+  apiPost<OAuthRevokeResponse>('/api/v1/providers/oauth/revoke')

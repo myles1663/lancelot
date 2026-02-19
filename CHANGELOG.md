@@ -5,6 +5,25 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.14] - 2026-02-19
+
+### Added — V28: Anthropic OAuth Authentication
+- **OAuth Token Manager** (`src/core/oauth_token_manager.py`): New module implementing OAuth 2.0 Authorization Code + PKCE flow for Anthropic. Tokens are stored in the encrypted connector vault with automatic refresh before the 8-hour expiry. Background refresh thread proactively refreshes tokens every 5 minutes when near expiry.
+- **Gateway OAuth Callback**: New `GET /auth/anthropic/callback` endpoint receives browser redirect after authorization. PKCE state nonce validates the flow. Returns HTML success/failure page.
+- **Provider API OAuth Endpoints**: `POST /oauth/initiate` generates PKCE auth URL, `GET /oauth/status` returns token health, `POST /oauth/revoke` clears stored tokens. `/keys` endpoint now includes `oauth_configured` and `oauth_status` fields for Anthropic.
+- **Anthropic Client `auth_token`**: `AnthropicProviderClient` now accepts an `auth_token` parameter for Bearer token authentication via the SDK's `auth_token` constructor. Includes `update_auth_token()` for hot-swap and automatic 401 retry with token refresh.
+- **FlagshipClient Bearer Auth**: When Anthropic OAuth is configured (no API key), FlagshipClient uses `Authorization: Bearer` header instead of `x-api-key`.
+- **Orchestrator OAuth-Aware Init**: `_init_provider()` and `switch_provider()` check for OAuth tokens via the token manager before falling back to API keys.
+- **Onboarding OAuth Option**: Typing `oauth` during Anthropic's HANDSHAKE state initiates browser-based PKCE flow. New `ANTHROPIC_OAUTH_WAITING` state handles `done`/`cancel` commands. Writes `LANCELOT_AUTH_MODE=OAUTH` to `.env` on success.
+- **War Room Cost Tracker OAuth Section**: New "Anthropic OAuth" card below Provider API Keys showing token status (CONNECTED/EXPIRING/EXPIRED/NOT CONFIGURED), expiry countdown, Setup OAuth/Re-authorize/Revoke buttons. Polls for completion after browser authorization.
+
+### Technical Details
+- **PKCE Flow**: SHA-256 code challenge, `user:inference user:profile` scopes, `http://127.0.0.1:8000/auth/anthropic/callback` redirect (Docker port mapping)
+- **Token Format**: Access `sk-ant-oat01-…` (8h TTL), Refresh `sk-ant-ort01-…` (single-use)
+- **No Token Collision**: Lancelot runs its own independent OAuth flow — does not share tokens with Claude Code CLI
+- **Thread-Safe Refresh**: `threading.Lock` prevents concurrent refresh races with single-use refresh tokens
+- **Backward Compatible**: API key authentication unchanged; OAuth is optional
+
 ## [0.2.13] - 2026-02-18
 
 ### Added

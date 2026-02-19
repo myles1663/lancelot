@@ -280,14 +280,26 @@ def switch_provider(req: SwitchProviderRequest):
             "message": f"Unknown provider: '{provider_name}'. Available: {', '.join(API_KEY_VARS.keys())}",
         }
 
-    # Validate API key is configured
+    # Validate API key (or OAuth token for Anthropic) is configured
     env_var = API_KEY_VARS[provider_name]
     api_key = os.getenv(env_var, "").strip()
     if not api_key:
-        return {
-            "status": "error",
-            "message": f"No API key configured for {provider_name} (set {env_var})",
-        }
+        # V28: Check for OAuth token as alternative for Anthropic
+        _has_oauth = False
+        if provider_name == "anthropic":
+            try:
+                from oauth_token_manager import get_oauth_manager
+                mgr = get_oauth_manager()
+                if mgr:
+                    token = mgr.get_valid_token()
+                    _has_oauth = bool(token)
+            except Exception:
+                pass
+        if not _has_oauth:
+            return {
+                "status": "error",
+                "message": f"No API key configured for {provider_name} (set {env_var})",
+            }
 
     try:
         # Switch the orchestrator's provider
@@ -460,14 +472,28 @@ def get_provider_keys():
     keys = []
     for name, env_var in API_KEY_VARS.items():
         raw = os.getenv(env_var, "").strip()
-        keys.append({
+        entry = {
             "provider": name,
             "display_name": display_names.get(name, name.title()),
             "env_var": env_var,
             "has_key": bool(raw),
             "key_preview": _mask_key(raw) if raw else "",
             "active": name == current_provider,
-        })
+            "oauth_configured": False,
+            "oauth_status": None,
+        }
+        # V28: Append OAuth status for Anthropic
+        if name == "anthropic":
+            try:
+                from oauth_token_manager import get_oauth_manager
+                mgr = get_oauth_manager()
+                if mgr:
+                    status = mgr.get_token_status()
+                    entry["oauth_configured"] = status.get("configured", False)
+                    entry["oauth_status"] = status.get("status")
+            except Exception:
+                pass
+        keys.append(entry)
 
     return {"keys": keys}
 
@@ -548,3 +574,48 @@ def rotate_provider_key(req: RotateKeyRequest):
             " and provider hot-swapped" if hot_swapped else ""
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# OAuth Management (V28 / v0.2.14) — Anthropic OAuth from the War Room
+# ---------------------------------------------------------------------------
+
+@router.post("/oauth/initiate")
+def oauth_initiate():
+    """Generate Anthropic OAuth authorization URL with PKCE for browser flow."""
+    try:
+        from oauth_token_manager import get_oauth_manager
+        manager = get_oauth_manager()
+        if manager is None:
+            return {"status": "error", "message": "OAuth manager not initialized"}
+        auth_url, state = manager.generate_auth_url()
+        return {"status": "ok", "auth_url": auth_url, "state": state}
+    except Exception as e:
+        logger.error("OAuth initiate failed: %s", e)
+        return {"status": "error", "message": str(e)}
+
+
+@router.get("/oauth/status")
+def oauth_status():
+    """Get current Anthropic OAuth token status for the War Room."""
+    try:
+        from oauth_token_manager import get_oauth_manager
+        manager = get_oauth_manager()
+        if manager is None:
+            return {"configured": False, "status": "not_available"}
+        return manager.get_token_status()
+    except Exception as e:
+        return {"configured": False, "status": "error", "error": str(e)}
+
+
+@router.post("/oauth/revoke")
+def oauth_revoke():
+    """Revoke/clear stored Anthropic OAuth tokens."""
+    try:
+        from oauth_token_manager import get_oauth_manager
+        manager = get_oauth_manager()
+        if manager:
+            manager.revoke()
+        return {"status": "ok", "message": "OAuth tokens revoked"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

@@ -25,6 +25,7 @@ def create_provider(
     provider_name: str,
     api_key: str,
     mode: str = "sdk",
+    auth_token: str = "",
     **kwargs,
 ) -> ProviderClient:
     """Factory to create the right ProviderClient based on provider name.
@@ -33,6 +34,7 @@ def create_provider(
         provider_name: One of "gemini", "openai", "anthropic", "xai".
         api_key: The API key for the provider.
         mode: "sdk" (full SDK features) or "api" (lightweight). Default: "sdk".
+        auth_token: V28 — OAuth bearer token (Anthropic only, takes priority over api_key).
         **kwargs: Additional provider-specific options.
 
     Returns:
@@ -51,7 +53,7 @@ def create_provider(
 
     elif provider_name == "anthropic":
         from providers.anthropic_client import AnthropicProviderClient
-        return AnthropicProviderClient(api_key=api_key, mode=mode, **kwargs)
+        return AnthropicProviderClient(api_key=api_key, mode=mode, auth_token=auth_token, **kwargs)
 
     elif provider_name == "xai":
         from providers.xai_client import XAIProviderClient

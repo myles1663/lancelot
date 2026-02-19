@@ -5,8 +5,9 @@ import {
   fetchProviderStack, refreshModelDiscovery,
   fetchAvailableProviders, switchProvider, overrideLane, resetLanes,
   fetchProviderKeys, rotateProviderKey,
+  initiateOAuth, fetchOAuthStatus, revokeOAuth,
 } from '@/api'
-import type { DiscoveredModel, AvailableProvider, ProviderKeyInfo } from '@/api'
+import type { DiscoveredModel, AvailableProvider, ProviderKeyInfo, OAuthStatusResponse } from '@/api'
 import { MetricCard } from '@/components'
 
 /** Format context window size for display */
@@ -45,6 +46,10 @@ export function CostTracker() {
   const [keyLoading, setKeyLoading] = useState(false)
   const [keyError, setKeyError] = useState<string | null>(null)
 
+  // V28: OAuth state
+  const [oauthStatus, setOauthStatus] = useState<OAuthStatusResponse | null>(null)
+  const [oauthLoading, setOauthLoading] = useState(false)
+
   // Fetch available providers on mount
   useEffect(() => {
     fetchAvailableProviders()
@@ -52,6 +57,10 @@ export function CostTracker() {
       .catch(() => {})
     fetchProviderKeys()
       .then(res => setProviderKeys(res.keys ?? []))
+      .catch(() => {})
+    // V28: Fetch OAuth status
+    fetchOAuthStatus()
+      .then(res => setOauthStatus(res))
       .catch(() => {})
   }, [])
 
@@ -153,6 +162,51 @@ export function CostTracker() {
       setKeyError('Key rotation failed — check the key and try again')
     } finally {
       setKeyLoading(false)
+    }
+  }
+
+  // V28: OAuth handlers
+  const handleOAuthSetup = async () => {
+    setOauthLoading(true)
+    try {
+      const res = await initiateOAuth()
+      if (res.status === 'ok' && res.auth_url) {
+        window.open(res.auth_url, '_blank', 'noopener,noreferrer')
+        showStatus('Opened Anthropic authorization in new tab…')
+        // Poll for completion
+        const pollId = setInterval(async () => {
+          try {
+            const status = await fetchOAuthStatus()
+            setOauthStatus(status)
+            if (status.configured) {
+              clearInterval(pollId)
+              showStatus('OAuth authorized successfully!')
+              fetchProviderKeys().then(r => setProviderKeys(r.keys ?? [])).catch(() => {})
+              refreshProviders()
+              await refetchStack()
+            }
+          } catch { /* ignore */ }
+        }, 3000)
+        // Stop polling after 5 minutes
+        setTimeout(() => clearInterval(pollId), 300000)
+      } else {
+        showStatus(res.message || 'Failed to initiate OAuth')
+      }
+    } catch {
+      showStatus('OAuth initiation failed')
+    } finally {
+      setOauthLoading(false)
+    }
+  }
+
+  const handleOAuthRevoke = async () => {
+    try {
+      await revokeOAuth()
+      setOauthStatus({ configured: false, status: 'not_configured' })
+      showStatus('OAuth tokens revoked')
+      fetchProviderKeys().then(r => setProviderKeys(r.keys ?? [])).catch(() => {})
+    } catch {
+      showStatus('Failed to revoke OAuth')
     }
   }
 
@@ -436,6 +490,76 @@ export function CostTracker() {
           {editingKey && keyError && (
             <p className="text-xs text-state-error mt-1 px-3">{keyError}</p>
           )}
+        </div>
+      </section>
+
+      {/* ======= V28: Anthropic OAuth Section ======= */}
+      <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
+        <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+          Anthropic OAuth
+        </h3>
+        <p className="text-xs text-text-muted mb-3">
+          Connect via your claude.ai subscription (Pro/Max). OAuth tokens auto-refresh every 8 hours.
+        </p>
+        <div className="flex items-center gap-3 p-3 bg-surface-card-elevated rounded-md">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-text-primary">Anthropic OAuth</span>
+              {oauthStatus?.configured ? (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                  oauthStatus.status === 'active'
+                    ? 'bg-state-healthy/15 text-state-healthy'
+                    : oauthStatus.status === 'expiring'
+                    ? 'bg-yellow-500/15 text-yellow-400'
+                    : 'bg-state-error/15 text-state-error'
+                }`}>
+                  {oauthStatus.status === 'active' ? 'CONNECTED' :
+                   oauthStatus.status === 'expiring' ? 'EXPIRING' : 'EXPIRED'}
+                </span>
+              ) : (
+                <span className="text-[10px] px-1.5 py-0.5 bg-text-muted/15 text-text-muted rounded font-mono">
+                  NOT CONFIGURED
+                </span>
+              )}
+            </div>
+            {oauthStatus?.configured && oauthStatus.expires_in_seconds != null && (
+              <span className="text-xs text-text-muted mt-1 block">
+                Expires in {Math.round(oauthStatus.expires_in_seconds / 60)} min
+                {oauthStatus.status === 'active' && ' (auto-refresh enabled)'}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {oauthStatus?.configured ? (
+              <>
+                <button
+                  onClick={handleOAuthSetup}
+                  disabled={oauthLoading}
+                  className="px-3 py-1.5 text-xs border border-border-default text-text-secondary rounded
+                             hover:bg-surface-card hover:text-text-primary transition-colors whitespace-nowrap"
+                >
+                  Re-authorize
+                </button>
+                <button
+                  onClick={handleOAuthRevoke}
+                  className="px-3 py-1.5 text-xs border border-state-error/30 text-state-error rounded
+                             hover:bg-state-error/10 transition-colors whitespace-nowrap"
+                >
+                  Revoke
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={handleOAuthSetup}
+                disabled={oauthLoading}
+                className="px-3 py-1.5 text-xs bg-accent-primary/15 text-accent-primary rounded
+                           hover:bg-accent-primary/25 transition-colors
+                           disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+              >
+                {oauthLoading ? 'Opening…' : 'Setup OAuth'}
+              </button>
+            )}
+          </div>
         </div>
       </section>
 

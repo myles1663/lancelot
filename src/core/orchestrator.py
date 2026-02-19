@@ -750,9 +750,16 @@ class LancelotOrchestrator:
         self._provider_name = provider_name
         self._provider_mode = provider_mode
 
-        if api_key:
+        # V28: For Anthropic, check OAuth token as alternative to API key
+        auth_token = ""
+        if provider_name == "anthropic" and not api_key:
+            auth_token = self._get_anthropic_oauth_token()
+
+        if api_key or auth_token:
             try:
-                self.provider = create_provider(provider_name, api_key, mode=provider_mode)
+                self.provider = create_provider(
+                    provider_name, api_key, mode=provider_mode, auth_token=auth_token,
+                )
                 # Load model names from models.yaml profile if available
                 try:
                     from provider_profile import ProfileRegistry
@@ -765,7 +772,8 @@ class LancelotOrchestrator:
                         self._deep_thinking_config = profile.deep.thinking  # V27
                 except Exception:
                     pass  # Keep env-var defaults
-                print(f"{provider_name.title()} provider initialized via API key (model: {self.model_name}, mode: {provider_mode}).")
+                auth_method = "OAuth" if auth_token else "API key"
+                print(f"{provider_name.title()} provider initialized via {auth_method} (model: {self.model_name}, mode: {provider_mode}).")
                 return
             except Exception as e:
                 print(f"Error initializing {provider_name} provider: {e}")
@@ -815,14 +823,18 @@ class LancelotOrchestrator:
             raise ValueError(f"Unknown provider: {provider_name}")
 
         api_key = os.getenv(api_key_var, "")
-        if not api_key:
+        # V28: Check for OAuth token as alternative for Anthropic
+        auth_token = ""
+        if provider_name == "anthropic" and not api_key:
+            auth_token = self._get_anthropic_oauth_token()
+        if not api_key and not auth_token:
             raise ValueError(f"No API key configured for {provider_name} (set {api_key_var})")
 
         # V27: Read provider mode
         provider_mode = os.getenv("LANCELOT_PROVIDER_MODE", "sdk")
 
         # Create new provider
-        new_provider = create_provider(provider_name, api_key, mode=provider_mode)
+        new_provider = create_provider(provider_name, api_key, mode=provider_mode, auth_token=auth_token)
 
         # Swap provider reference (atomic under GIL)
         self.provider = new_provider
@@ -849,8 +861,20 @@ class LancelotOrchestrator:
             if attr.startswith("_deep_model_valid_"):
                 delattr(self, attr)
 
-        print(f"Provider hot-swapped to {provider_name} (model: {self.model_name}, mode: {provider_mode})")
+        auth_method = "OAuth" if auth_token else "API key"
+        print(f"Provider hot-swapped to {provider_name} via {auth_method} (model: {self.model_name}, mode: {provider_mode})")
         return f"{provider_name.title()} provider active (model: {self.model_name}, mode: {provider_mode})"
+
+    def _get_anthropic_oauth_token(self) -> str:
+        """V28: Try to get a valid Anthropic OAuth token from the global token manager."""
+        try:
+            from oauth_token_manager import get_oauth_manager
+            manager = get_oauth_manager()
+            if manager:
+                return manager.get_valid_token() or ""
+        except Exception:
+            pass
+        return ""
 
     def set_lane_model(self, lane: str, model_id: str) -> None:
         """Override the model assigned to a specific lane at runtime.

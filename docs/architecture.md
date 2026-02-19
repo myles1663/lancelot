@@ -274,6 +274,20 @@ SQLite-backed job scheduler supporting cron and interval triggers.
 
 **Job receipts:** Every run, failure, and skip generates a typed receipt (`scheduled_job_run`, `scheduled_job_failed`, `scheduled_job_skipped`).
 
+### OAuth Token Manager (Anthropic OAuth)
+
+**V28** (`FEATURE_ANTHROPIC_OAUTH`, v0.2.14): `src/core/oauth_token_manager.py` provides an alternative authentication path for the Anthropic provider using OAuth 2.0 with PKCE, replacing the static API key when enabled.
+
+**Token lifecycle:**
+1. **Initiation** — `POST /oauth/initiate` (Provider API) starts the PKCE flow: generates `code_verifier` + `code_challenge`, builds the Anthropic authorization URL, and returns it to the owner.
+2. **Callback** — `GET /auth/anthropic/callback` (Gateway) receives the authorization code, exchanges it for access + refresh tokens via the Anthropic token endpoint, and stores both tokens in the encrypted vault.
+3. **Usage** — The `AnthropicProviderClient` calls `OAuthTokenManager.get_token()` to obtain a valid access token. If the token is expired, the manager refreshes it transparently.
+4. **Background refresh** — A daemon thread (`_refresh_loop`) wakes every 5 minutes, checks token expiry, and proactively refreshes before the access token expires. Thread safety is enforced via `threading.Lock` on all read/write paths.
+5. **Revocation** — `POST /oauth/revoke` invalidates both tokens at Anthropic and removes them from the vault.
+6. **Status** — `GET /oauth/status` returns current token validity, expiry time, and provider binding.
+
+**Fallback:** When the feature flag is disabled or no OAuth token is present, the Anthropic provider falls back to API key authentication. OAuth and API key auth are mutually exclusive per session; OAuth takes priority when a valid token exists.
+
 ### War Room (Operator Dashboard)
 
 The War Room is a React SPA (Vite + React 18 + TypeScript + Tailwind) providing full system observability:
@@ -309,7 +323,7 @@ Output:        Receipt generation → PII redaction → Structured output parsin
 - The model is treated as **untrusted logic** inside a governed system
 - Governance is enforced **outside the model** (Soul + Policy Engine)
 - Tool outputs are treated as **untrusted input** — never executed directly
-- Secrets are **never stored in memory**, never logged in plaintext, never sent to models unless explicitly required
+- Secrets are **never stored in memory**, never logged in plaintext, never sent to models unless explicitly required. OAuth tokens are encrypted at rest in the vault and refreshed via a thread-safe background daemon
 - All subsystems have **kill switches** (feature flags)
 
 For the full security model, see [Security Posture](security.md).
@@ -331,9 +345,10 @@ A core architectural principle: **any subsystem can be disabled without breaking
 | Competitive Scan | No scan memory or diffing; research still works, just stateless |
 | Deep Reasoning Loop | No pre-execution reasoning pass; agentic loop runs without strategic analysis |
 | Provider SDK | Falls back to API mode (FlagshipClient REST); extended thinking and native tool calling unavailable |
+| Anthropic OAuth | Falls back to API key authentication for Anthropic; all other providers unaffected |
 | Tool Fabric | No tool execution, conversation-only mode |
 
-This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FEATURE_DEEP_REASONING_LOOP`, `FEATURE_PROVIDER_SDK`, etc.) that gate each subsystem at initialization. When a subsystem is disabled, its code paths are skipped and its API endpoints return appropriate "not available" responses.
+This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FEATURE_DEEP_REASONING_LOOP`, `FEATURE_PROVIDER_SDK`, `FEATURE_ANTHROPIC_OAUTH`, etc.) that gate each subsystem at initialization. When a subsystem is disabled, its code paths are skipped and its API endpoints return appropriate "not available" responses.
 
 ---
 
@@ -348,6 +363,7 @@ This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FE
 | Data Validation | Pydantic v2 |
 | Configuration | PyYAML |
 | LLM Providers | Google GenAI, OpenAI, Anthropic, xAI SDKs (SDK mode) / REST via FlagshipClient (API mode) |
+| Auth | OAuth 2.0 PKCE (Anthropic), API keys (all providers), vault-backed token storage |
 | Local Inference | llama-cpp-python (GGUF format) |
 | Persistence | SQLite (scheduler, memory), JSON (registries, receipts) |
 | Encryption | cryptography library |

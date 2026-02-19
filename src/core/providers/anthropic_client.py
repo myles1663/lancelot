@@ -3,9 +3,10 @@ AnthropicProviderClient — Anthropic adapter via anthropic SDK (v8.3.0).
 
 Implements the ProviderClient interface for Anthropic models (Claude).
 Handles Anthropic's message format, tool_use/tool_result blocks, and model listing.
+V28: Supports OAuth bearer-token auth via ``auth_token`` parameter.
 
 Public API:
-    AnthropicProviderClient(api_key)
+    AnthropicProviderClient(api_key, mode, auth_token)
 """
 
 import json
@@ -22,16 +23,29 @@ logger = logging.getLogger(__name__)
 class AnthropicProviderClient(ProviderClient):
     """Anthropic provider adapter using the anthropic SDK."""
 
-    def __init__(self, api_key: str, mode: str = "sdk"):
+    def __init__(self, api_key: str = "", mode: str = "sdk", auth_token: str = ""):
         self._mode = mode
+        self._auth_token = auth_token  # V28: OAuth token (takes priority)
+        self._api_key = api_key
         try:
             import anthropic
-            self._client = anthropic.Anthropic(api_key=api_key)
-            logger.info("Anthropic provider initialized (mode=%s)", mode)
+            if auth_token:
+                self._client = anthropic.Anthropic(auth_token=auth_token)
+                logger.info("Anthropic provider initialized via OAuth (mode=%s)", mode)
+            else:
+                self._client = anthropic.Anthropic(api_key=api_key)
+                logger.info("Anthropic provider initialized via API key (mode=%s)", mode)
         except ImportError:
             raise ImportError(
                 "Anthropic SDK not installed. Run: pip install anthropic"
             )
+
+    def update_auth_token(self, new_token: str) -> None:
+        """Hot-swap the OAuth token without full re-init (called by refresh manager)."""
+        import anthropic
+        self._auth_token = new_token
+        self._client = anthropic.Anthropic(auth_token=new_token)
+        logger.info("Anthropic OAuth token hot-swapped")
 
     @property
     def provider_name(self) -> str:
@@ -235,6 +249,11 @@ class AnthropicProviderClient(ProviderClient):
                 return call_fn()
             except Exception as e:
                 last_exc = e
+                # V28: If OAuth mode and auth error, try refreshing the token first
+                if _is_auth_error(e) and self._auth_token and attempt == 0:
+                    if self._try_oauth_refresh():
+                        logger.info("OAuth token refreshed after 401, retrying…")
+                        continue
                 if _is_auth_error(e):
                     raise ProviderAuthError("anthropic", str(e)) from e
                 if attempt < max_retries and self._is_retryable_error(e):
@@ -247,6 +266,21 @@ class AnthropicProviderClient(ProviderClient):
                 else:
                     raise
         raise last_exc
+
+    def _try_oauth_refresh(self) -> bool:
+        """Attempt to refresh the OAuth token via the global manager."""
+        try:
+            from oauth_token_manager import get_oauth_manager
+            manager = get_oauth_manager()
+            if manager is None:
+                return False
+            new_token = manager.get_valid_token()
+            if new_token and new_token != self._auth_token:
+                self.update_auth_token(new_token)
+                return True
+        except Exception as e:
+            logger.warning("OAuth token refresh in retry failed: %s", e)
+        return False
 
     def _parse_response(self, response) -> GenerateResult:
         """Convert an Anthropic response to GenerateResult."""

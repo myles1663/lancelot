@@ -1,8 +1,8 @@
 # Technical Specifications: Project Lancelot v7.0
 
-**Document Version:** 7.4
-**Last Updated:** 2026-02-18
-**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2 + V26 Output Formatting + V27 Provider SDK Upgrade
+**Document Version:** 7.5
+**Last Updated:** 2026-02-19
+**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2 + V26 Output Formatting + V27 Provider SDK Upgrade + V28 Anthropic OAuth
 
 ---
 
@@ -66,9 +66,10 @@ gateway.py
     |       |       |
     |       |       +-- provider_profile.py (config loading)
     |       |       +-- local_model_client.py (local LLM HTTP)
-    |       |       +-- flagship_client.py (provider HTTP — API mode)
-    |       |       +-- anthropic_provider.py (Anthropic SDK — SDK mode, V27)
-    |       |       +-- provider_factory.py (create_provider(), V27)
+    |       |       +-- flagship_client.py (provider HTTP — API mode, V28 OAuth Bearer)
+    |       |       +-- anthropic_provider.py (Anthropic SDK — SDK mode, V27 + V28 OAuth)
+    |       |       +-- provider_factory.py (create_provider(), V27 + V28 auth_token)
+    |       |       +-- oauth_token_manager.py (PKCE flow + vault storage, V28)
     |       |       +-- usage_tracker.py (telemetry)
     |       |
     |       +-- planner.py (plan generation)
@@ -375,18 +376,26 @@ HTTP client for external LLM providers (Gemini, OpenAI, Anthropic). Used for
 lanes configured with `mode: api` (the default). V27 introduced SDK-mode
 providers as an alternative path; see Section 3.47.
 
+**V28 OAuth Support (Anthropic):** When the `anthropic` provider has no API key
+but an OAuth token is present in `ANTHROPIC_OAUTH_TOKEN`, the client uses
+`Authorization: Bearer <token>` instead of the `x-api-key` header. The OAuth
+token env var is kept current by the background refresh thread in
+`OAuthTokenManager` (Section 3.50). `is_configured()` returns `True` if either
+an API key or an OAuth token is available.
+
 **Public API:**
 
 ```python
 class FlagshipClient:
     def __init__(self, provider_name: str, profile: ProviderProfile)
+    def is_configured(self) -> bool     # True if API key or OAuth token available
     def complete(self, prompt: str, lane: str = "fast", **kwargs) -> str
 
 class FlagshipError(Exception): ...
 ```
 
 **Error Behavior:**
-- Missing API key raises `FlagshipError("API key not configured")`
+- Missing API key (and no OAuth token) raises `FlagshipError("API key not configured")`
 - Unsupported provider raises `FlagshipError("Unsupported provider")`
 - Invalid lane raises `FlagshipError("Unknown lane")`
 
@@ -1682,9 +1691,9 @@ the chat response. Receipt lines are retained in War Room tool traces for
 auditability but no longer duplicate into the user-facing message. This
 eliminates the visual noise of repeated receipt annotations in chat output.
 
-### 3.47 Anthropic Provider Client — SDK Mode (V27, v0.2.13)
+### 3.47 Anthropic Provider Client — SDK Mode (V27, v0.2.13 + V28 OAuth)
 
-**File:** `src/core/anthropic_provider.py`
+**File:** `src/core/providers/anthropic_client.py`
 
 Native Anthropic Python SDK client supporting extended thinking, streaming, and
 native tool calling. Used when a lane is configured with `mode: sdk` and the
@@ -1694,13 +1703,24 @@ active provider is Anthropic.
 
 ```python
 class AnthropicProviderClient:
-    def __init__(self, api_key: str = None)  # Falls back to ANTHROPIC_API_KEY env var
-    def complete(self, prompt: str, model: str, max_tokens: int,
-                 temperature: float = 0.7, thinking: Optional[ThinkingConfig] = None,
-                 **kwargs) -> str
+    def __init__(self, api_key: str = "", mode: str = "sdk", auth_token: str = "")
+    def update_auth_token(self, new_token: str) -> None  # V28: hot-swap OAuth token
+    def generate(self, model, messages, system_instruction, config) -> GenerateResult
+    def generate_with_tools(self, model, messages, system_instruction, tools, ...) -> GenerateResult
 ```
 
-**Extended Thinking:** When a `thinking` parameter is supplied (via `ThinkingConfig`
+**V28 OAuth Auth:** When `auth_token` is provided, the SDK is initialized with
+`anthropic.Anthropic(auth_token=...)` instead of `api_key`. The `auth_token`
+parameter takes priority over `api_key`. `update_auth_token()` enables hot-swap
+of the OAuth token at runtime without full re-initialization.
+
+**401 Retry with OAuth Refresh:** `_call_with_retry()` detects authentication
+errors (401 responses). On the first 401, if the client is in OAuth mode, it
+calls `_try_oauth_refresh()` which retrieves a fresh token from the global
+`OAuthTokenManager`, calls `update_auth_token()`, and retries the request. If
+the refresh fails or the error recurs, `ProviderAuthError` is raised.
+
+**Extended Thinking:** When a `thinking` parameter is supplied (via config dict
 with `budget_tokens`), the client passes the `thinking` block to the Anthropic
 SDK. The response is parsed in `_parse_response()`, which extracts both
 `thinking` blocks (internal chain-of-thought) and `text` blocks (final answer).
@@ -1715,6 +1735,7 @@ observability but not surfaced to the user.
 | Streaming | Native SDK streaming | Raw HTTP chunked |
 | Tool calling | Native Anthropic tool format | Generic JSON |
 | Error handling | SDK exception types | HTTP status codes |
+| OAuth auth | `auth_token` parameter + 401 auto-refresh | Bearer header via env var |
 
 ### 3.48 Provider Factory (V27, v0.2.13)
 
@@ -1726,19 +1747,21 @@ lane's `mode` configuration.
 **Public API:**
 
 ```python
-def create_provider(provider_name: str, profile: ProviderProfile,
-                    mode: str = "api") -> Union[FlagshipClient, AnthropicProviderClient]:
+def create_provider(provider_name: str, api_key: str, mode: str = "sdk",
+                    auth_token: str = "", **kwargs) -> ProviderClient:
     """
-    Returns a FlagshipClient for mode='api' or a provider-specific SDK client
-    for mode='sdk'. Currently supports SDK mode for Anthropic only.
+    Returns the correct ProviderClient based on provider name and mode.
+    V28: auth_token parameter passes OAuth bearer token to Anthropic.
     Raises ValueError for unsupported provider/mode combinations.
     """
 ```
 
 **Resolution Logic:**
-1. `mode="api"` (default) — returns `FlagshipClient(provider_name, profile)`
-2. `mode="sdk"` + `provider_name="anthropic"` — returns `AnthropicProviderClient()`
-3. `mode="sdk"` + unsupported provider — raises `ValueError`
+1. `provider_name="gemini"` — returns `GeminiProviderClient(api_key, mode)`
+2. `provider_name="anthropic"` — returns `AnthropicProviderClient(api_key, mode, auth_token)`
+3. `provider_name="openai"` — returns `OpenAIProviderClient(api_key, mode)`
+4. `provider_name="xai"` — returns `XAIProviderClient(api_key, mode)`
+5. Unknown provider — raises `ValueError`
 
 ### 3.49 Dual-Mode Provider Architecture (V27, v0.2.13)
 
@@ -1775,6 +1798,163 @@ models.yaml lane config
 | `claude-opus-4-6` | deep | Deep reasoning with extended thinking support |
 | `claude-sonnet-4-5-20250929` | fast | Fast general-purpose responses |
 | `claude-haiku-4-5-20251001` | cache | Lightweight cache/utility tasks |
+
+### 3.50 OAuth Token Manager (V28, v0.2.14)
+
+**File:** `src/core/oauth_token_manager.py`
+
+Manages the Anthropic OAuth 2.0 Authorization Code + PKCE lifecycle: URL
+generation, code exchange, vault-backed token storage, proactive refresh, and
+revocation. Initialized at gateway startup and exposed as a module singleton.
+
+**Public API:**
+
+```python
+class OAuthTokenManager:
+    def __init__(self, vault: Any, port: int = 8000)
+    def generate_auth_url(self) -> Tuple[str, str]          # (auth_url, state_nonce)
+    def exchange_code(self, code: str, state: str) -> bool   # True on success
+    def get_valid_token(self) -> Optional[str]               # Refreshes if near expiry
+    def get_token_status(self) -> dict                       # War Room display info
+    def revoke(self) -> None                                 # Clear all stored tokens
+    def start_background_refresh(self) -> None               # Daemon thread
+    def stop_background_refresh(self) -> None
+
+# Module-level singleton
+def set_oauth_manager(manager: OAuthTokenManager) -> None
+def get_oauth_manager() -> Optional[OAuthTokenManager]
+```
+
+**PKCE Flow:**
+
+```
+1. generate_auth_url()
+   → Generate code_verifier (secrets.token_urlsafe, 128 chars)
+   → Compute code_challenge (SHA-256 + base64url)
+   → Store {state → code_verifier} in _pending_flows
+   → Build authorization URL with response_type=code, client_id, redirect_uri,
+     scope, code_challenge, code_challenge_method=S256, state
+
+2. Browser redirect → user authorizes → callback to /auth/anthropic/callback
+   → exchange_code(code, state)
+   → Look up code_verifier from _pending_flows[state]
+   → POST to token endpoint with grant_type=authorization_code + code_verifier
+   → Store access_token, refresh_token, expiry in vault
+
+3. get_valid_token()
+   → If expired: refresh via refresh_token grant
+   → If expiring within REFRESH_WINDOW (600s): proactive refresh
+   → Return current access_token
+```
+
+**Vault Storage Keys:**
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `anthropic.oauth.access_token` | `oauth_token` | Current access token |
+| `anthropic.oauth.refresh_token` | `oauth_token` | Single-use refresh token |
+| `anthropic.oauth.token_expiry` | `metadata` | Epoch timestamp of access token expiry |
+
+**Constants:**
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `ACCESS_TOKEN_TTL` | 28800 (8h) | Default access token lifetime |
+| `REFRESH_WINDOW` | 600 (10min) | Proactive refresh threshold |
+| `PENDING_FLOW_TTL` | 600 (10min) | PKCE flow timeout |
+| `BACKGROUND_CHECK_INTERVAL` | 300 (5min) | Background thread check interval |
+| `CLIENT_ID` | `9d1c250a-...` | Anthropic OAuth application ID |
+| `SCOPES` | `user:inference user:profile` | Requested OAuth scopes |
+
+**Background Refresh Thread:** A daemon thread (`oauth-refresh`) polls every
+5 minutes. If the access token is within the refresh window or already expired,
+it calls `_refresh_token()` which uses the single-use refresh token to obtain a
+new access/refresh token pair. Tokens are atomically stored in the vault and
+`ANTHROPIC_OAUTH_TOKEN` env var is updated for `FlagshipClient` consumption.
+
+**Token Status Response:**
+
+```python
+{
+    "configured": bool,       # True if tokens exist in vault
+    "valid": bool,            # True if not expired
+    "status": str,            # "active" | "expiring" | "expired" | "not_configured"
+    "expires_at": str,        # ISO 8601 UTC
+    "expires_in_seconds": int
+}
+```
+
+### 3.51 Gateway OAuth Callback (V28, v0.2.14)
+
+**File:** `src/core/gateway.py`
+
+**Endpoint:**
+
+| Method | Path | Auth | Response | Description |
+|--------|------|------|----------|-------------|
+| GET | `/auth/anthropic/callback` | None (PKCE state validates) | HTML | Browser redirect target for Anthropic OAuth |
+
+**Flow:** The user's browser is redirected here after authorizing on Anthropic's
+consent page. The endpoint extracts `code` and `state` from query parameters and
+calls `OAuthTokenManager.exchange_code()`. PKCE state validation replaces
+traditional authentication — only a pending flow with a matching state nonce can
+complete the exchange.
+
+**Responses:**
+- **Success:** HTML page confirming authorization, with auto-close script (3s)
+- **Error (query param):** `?error=...&error_description=...` renders failure HTML (400)
+- **Invalid state:** Expired or unknown state nonce renders failure HTML (400)
+- **Server error:** Exception renders error HTML (500)
+
+**Startup Wiring:** During gateway startup, `OAuthTokenManager` is created with
+the connector vault, registered via `set_oauth_manager()`, and its background
+refresh thread is started. On shutdown, `stop_background_refresh()` is called.
+
+### 3.52 Provider API — OAuth Endpoints (V28, v0.2.14)
+
+**File:** `src/core/providers/api.py`
+
+OAuth management endpoints on the Provider API router, used by the War Room to
+initiate, monitor, and revoke Anthropic OAuth connections.
+
+**Endpoints:**
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/api/v1/providers/oauth/initiate` | None | Generate PKCE auth URL for browser redirect |
+| GET | `/api/v1/providers/oauth/status` | None | Current OAuth token health |
+| POST | `/api/v1/providers/oauth/revoke` | None | Clear all stored OAuth tokens |
+
+**POST `/api/v1/providers/oauth/initiate` Response:**
+
+```json
+{
+    "status": "ok",
+    "auth_url": "https://claude.ai/oauth/authorize?...",
+    "state": "<nonce>"
+}
+```
+
+**GET `/api/v1/providers/oauth/status` Response:**
+
+Returns the `get_token_status()` dict from `OAuthTokenManager` (see
+Section 3.50). The War Room uses this to display OAuth connection state and
+token health in the Provider Settings panel.
+
+**POST `/api/v1/providers/oauth/revoke` Response:**
+
+```json
+{"status": "ok", "message": "OAuth tokens revoked"}
+```
+
+**Provider Listing Enhancement:** The `GET /api/v1/providers/keys` endpoint now
+includes `oauth_configured` (bool) and `oauth_status` (string) fields for the
+Anthropic entry, enabling the War Room to show OAuth state alongside API key
+status.
+
+**Provider Switch Enhancement:** The `POST /api/v1/providers/switch` endpoint
+checks for a valid OAuth token as an alternative to an API key when switching to
+the Anthropic provider. If neither is configured, the switch is rejected.
 
 ---
 
@@ -1845,11 +2025,14 @@ All API endpoints follow these rules:
 | Soul amendments | Bearer token | `LANCELOT_OWNER_TOKEN` environment variable |
 | API endpoints | None | Rate limiting only (single-owner assumption) |
 | War Room | None | Local access only (Docker network) |
+| Anthropic OAuth callback | PKCE state nonce | Validated against pending flow map (no token) |
+| Anthropic API (OAuth) | Bearer token | OAuth access token from vault (V28) |
 
 ### 4.4 Secret Management
 
 - API keys stored in `.env` file (never committed)
 - Sensitive data encrypted at rest via `vault.py` (cryptography library)
+- OAuth tokens (access, refresh, expiry) encrypted in connector vault under `anthropic.oauth.*` keys (V28)
 - No secrets exposed through API responses
 - PII redacted via local model before external API calls
 

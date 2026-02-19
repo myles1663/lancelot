@@ -1,8 +1,8 @@
 # Functional Specifications: Project Lancelot v7.0
 
-**Document Version:** 7.3
-**Last Updated:** 2026-02-18
-**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2 + V26 Output Formatting + v0.2.13 Provider SDK Upgrade
+**Document Version:** 7.4
+**Last Updated:** 2026-02-19
+**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2 + V26 Output Formatting + v0.2.13 Provider SDK Upgrade + v0.2.14 Anthropic OAuth (V28)
 
 ---
 
@@ -85,6 +85,8 @@ Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as
 - **F-03.6 Provider Modes (v0.2.13):** Each provider connection operates in one of two modes, selected during onboarding (see F-09.5):
   - **SDK Mode (Recommended):** Uses the provider's native SDK client. Enables full feature support including extended thinking for the Anthropic deep lane (`claude-sonnet-4`). This is the default recommended mode.
   - **API Mode:** Uses raw HTTP calls via ModelRouter. Lightweight with no SDK dependencies. Suitable for environments where minimal footprint is preferred, but lacks SDK-specific features such as extended thinking.
+
+- **F-03.7 Anthropic OAuth Authentication (v0.2.14, V28):** OAuth 2.0 as an alternative to static API keys for the Anthropic provider. Uses PKCE (Proof Key for Code Exchange) browser-based authorization flow. Access tokens are stored encrypted alongside a refresh token; the system auto-refreshes tokens before expiry. Fully backward compatible — existing API key configurations continue to work unchanged. When OAuth is active, the Anthropic SDK/API client uses the OAuth access token instead of the API key.
 
 - **F-03.3 Escalation:** Automatic escalation from fast to deep lane on:
   - Risk keyword detection in input
@@ -198,6 +200,11 @@ Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as
   - **[2] API Mode** — Lightweight raw HTTP integration with no SDK dependencies.
   The selected mode is stored as `LANCELOT_PROVIDER_MODE` in the `.env` file and persists across container restarts.
 - **F-09.6 Final Checks Summary (v0.2.13):** The onboarding final checks summary now includes the selected provider mode (SDK or API) alongside the provider name, local model status, and other system readiness indicators.
+- **F-09.7 Anthropic OAuth Onboarding (v0.2.14, V28):** During the Anthropic provider `HANDSHAKE` step, the user may type `oauth` instead of pasting an API key. This initiates the OAuth onboarding flow:
+  1. The system generates a PKCE challenge and displays a browser authorization URL.
+  2. The onboarding state transitions to `ANTHROPIC_OAUTH_WAITING` while the user completes browser-based authorization.
+  3. The user types `done` after authorizing in the browser, or `cancel` to abort and fall back to API key entry.
+  4. On success, the OAuth tokens are stored and the onboarding proceeds to the next step (provider mode selection).
 
 ### FA-10: Crusader Mode (High-Agency Autonomy)
 
@@ -373,6 +380,7 @@ The primary command center with specialized panels:
 All panels handle backend-down scenarios gracefully with safe fallback displays.
 
 - **Setup & Recovery Tab — Provider Mode Display (v0.2.13):** The Setup & Recovery System tab now displays the active provider mode (SDK or API) alongside the provider name, giving the Commander immediate visibility into which integration path is active.
+- **Cost Tracker — Anthropic OAuth Section (v0.2.14, V28):** The War Room Cost Tracker now includes an "Anthropic OAuth" section displaying a status badge (CONNECTED, EXPIRING, EXPIRED, or NOT CONFIGURED) reflecting the current OAuth token state. Action buttons are context-sensitive: "Setup OAuth" when no token exists, "Re-authorize" when connected or expiring, and "Revoke" to clear stored tokens.
 
 ### 4.2 Chat Interface
 

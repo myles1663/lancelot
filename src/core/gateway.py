@@ -728,6 +728,20 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Connectors initialization failed: {e}")
 
+    # ===== OAUTH TOKEN MANAGER (V28) =====
+    try:
+        from oauth_token_manager import OAuthTokenManager, set_oauth_manager
+        _oauth_vault = _connector_vault if '_connector_vault' in dir() else None
+        if _oauth_vault:
+            _oauth_mgr = OAuthTokenManager(vault=_oauth_vault)
+            set_oauth_manager(_oauth_mgr)
+            _oauth_mgr.start_background_refresh()
+            logger.info("OAuth token manager initialized.")
+        else:
+            logger.warning("OAuth token manager skipped — connector vault not available.")
+    except Exception as e:
+        logger.warning("OAuth token manager initialization failed: %s", e)
+
     # ===== SETUP & RECOVERY API =====
     try:
         from setup_api import router as setup_router, init_setup_api
@@ -883,6 +897,14 @@ async def shutdown_event():
                 persistence = getattr(main_orchestrator.usage_tracker, '_persistence', None)
                 if persistence:
                     persistence.flush()
+        except Exception:
+            pass
+        # V28: Stop OAuth background refresh
+        try:
+            from oauth_token_manager import get_oauth_manager
+            _oauth_mgr = get_oauth_manager()
+            if _oauth_mgr:
+                _oauth_mgr.stop_background_refresh()
         except Exception:
             pass
         main_orchestrator.audit_logger.log_event("GATEWAY_SHUTDOWN", "Graceful shutdown initiated")
@@ -1442,6 +1464,64 @@ async def ucp_confirm(request: Request):
         return {"result": result, "request_id": request_id}
     except Exception as e:
         return error_response(500, "Internal server error", request_id=request_id)
+
+
+# --- V28: Anthropic OAuth Callback (unauthenticated — browser redirect) ---
+
+@app.get("/auth/anthropic/callback")
+async def oauth_anthropic_callback(request: Request):
+    """Receive OAuth authorization code from browser redirect after user authorises."""
+    error = request.query_params.get("error")
+    if error:
+        desc = request.query_params.get("error_description", error)
+        return HTMLResponse(
+            "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+            f"<h2>Authorization Failed</h2><p>{desc}</p>"
+            "</body></html>",
+            status_code=400,
+        )
+
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    if not code or not state:
+        return HTMLResponse(
+            "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+            "<h2>Missing Parameters</h2><p>No authorization code received.</p>"
+            "</body></html>",
+            status_code=400,
+        )
+
+    try:
+        from oauth_token_manager import get_oauth_manager
+        manager = get_oauth_manager()
+        if manager is None:
+            raise RuntimeError("OAuth manager not initialized")
+        success = manager.exchange_code(code, state)
+        if success:
+            return HTMLResponse(
+                "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+                "<h2 style='color:#22c55e'>Authorization Successful</h2>"
+                "<p>Lancelot is now connected to your Anthropic account via OAuth.</p>"
+                "<p style='color:#888'>You may close this tab.</p>"
+                "<script>setTimeout(function(){window.close()},3000)</script>"
+                "</body></html>"
+            )
+        else:
+            return HTMLResponse(
+                "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+                "<h2>Authorization Failed</h2>"
+                "<p>Invalid or expired authorization state. Please try again from Lancelot.</p>"
+                "</body></html>",
+                status_code=400,
+            )
+    except Exception as e:
+        logger.error("OAuth callback error: %s", e)
+        return HTMLResponse(
+            "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+            f"<h2>Error</h2><p>{e}</p>"
+            "</body></html>",
+            status_code=500,
+        )
 
 
 # --- War Room React SPA Static Mount ---
