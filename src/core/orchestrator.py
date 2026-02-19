@@ -2889,7 +2889,8 @@ class LancelotOrchestrator:
                             # V29b: Inject download URL for document_creator results
                             if skill_name == "document_creator" and result_data.get("path"):
                                 doc_abs = result_data["path"]
-                                doc_rel = doc_abs.replace("/home/lancelot/data/", "").lstrip("/")
+                                _ws = os.getenv("LANCELOT_WORKSPACE", "/home/lancelot/workspace")
+                                doc_rel = doc_abs.replace(f"{_ws}/", "").lstrip("/")
                                 result_data["download_url"] = f"/api/files/{doc_rel}"
                                 result_data["download_note"] = (
                                     f"Document created. Include this link in your response so "
@@ -3909,11 +3910,11 @@ class LancelotOrchestrator:
         if not doc_paths:
             return response
         links = []
+        _ws = os.getenv("LANCELOT_WORKSPACE", "/home/lancelot/workspace")
         for path in doc_paths:
-            # Convert /home/lancelot/data/report_xxx.pdf → report_xxx.pdf
             fname = Path(path).name
             # Determine relative path from workspace root
-            rel = path.replace("/home/lancelot/data/", "").lstrip("/")
+            rel = path.replace(f"{_ws}/", "").lstrip("/")
             ext = Path(fname).suffix.lower().lstrip(".")
             type_label = {
                 "pdf": "PDF", "docx": "Word", "xlsx": "Excel",

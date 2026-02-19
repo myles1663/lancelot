@@ -1525,9 +1525,9 @@ async def oauth_anthropic_callback(request: Request):
 
 
 # --- V29: Workspace File Download Endpoint ---
-# Serves documents from /home/lancelot/data/ so chat can include download links
+# Serves documents from the workspace directory so chat can include download links
 
-_WORKSPACE_ROOT = Path("/home/lancelot/data")
+_WORKSPACE_ROOT = Path(os.getenv("LANCELOT_WORKSPACE", "/home/lancelot/workspace"))
 
 @app.get("/api/files/{file_path:path}")
 async def serve_workspace_file(file_path: str, request: Request):
@@ -1535,7 +1535,7 @@ async def serve_workspace_file(file_path: str, request: Request):
 
     V29: Enables chat responses to include clickable download links
     for documents created by document_creator, research reports, etc.
-    Path traversal is blocked — only files under /home/lancelot/data/ are served.
+    Path traversal is blocked — only files under the workspace directory are served.
     """
     # Authenticate
     if API_TOKEN:
