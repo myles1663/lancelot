@@ -785,10 +785,17 @@ class OnboardingOrchestrator:
             {"LANCELOT_PROVIDER_MODE": mode},
             "Provider Mode (V27)",
         )
-        self.state = "LOCAL_UTILITY_SETUP"
+        # Skip already-completed steps (e.g. local models already verified)
+        self.state = self._determine_state()
+        self._sync_snapshot()
+        if self.state == "READY":
+            return (
+                f"**{mode.upper()} mode selected.**\n\n"
+                "All setup steps already complete. Lancelot is ready."
+            )
         return (
             f"**{mode.upper()} mode selected.**\n\n"
-            "Proceeding to local model setup..."
+            "Proceeding to next setup step..."
         )
 
     # ------------------------------------------------------------------

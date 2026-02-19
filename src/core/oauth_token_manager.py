@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # ── OAuth Constants ──────────────────────────────────────────────────
 
 ANTHROPIC_AUTH_URL = "https://claude.ai/oauth/authorize"
-ANTHROPIC_TOKEN_URL = "https://console.anthropic.com/api/oauth/token"
+ANTHROPIC_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 SCOPES = "user:inference user:profile"
 
@@ -90,7 +90,7 @@ class OAuthTokenManager:
         verifier = _generate_code_verifier()
         challenge = _generate_code_challenge(verifier)
         state = secrets.token_urlsafe(32)
-        redirect_uri = f"http://127.0.0.1:{self._port}/auth/anthropic/callback"
+        redirect_uri = f"http://localhost:{self._port}/callback"
 
         # Store pending flow for later code exchange
         self._pending_flows[state] = {
@@ -101,8 +101,9 @@ class OAuthTokenManager:
         self._cleanup_pending_flows()
 
         params = urlencode({
-            "response_type": "code",
+            "code": "true",
             "client_id": CLIENT_ID,
+            "response_type": "code",
             "redirect_uri": redirect_uri,
             "scope": SCOPES,
             "code_challenge": challenge,
@@ -127,7 +128,7 @@ class OAuthTokenManager:
             logger.warning("OAuth exchange: flow expired (%.0fs old)", age)
             return False
 
-        redirect_uri = f"http://127.0.0.1:{self._port}/auth/anthropic/callback"
+        redirect_uri = f"http://localhost:{self._port}/callback"
         try:
             resp = requests.post(
                 ANTHROPIC_TOKEN_URL,
@@ -137,6 +138,7 @@ class OAuthTokenManager:
                     "code": code,
                     "redirect_uri": redirect_uri,
                     "code_verifier": flow["code_verifier"],
+                    "state": state,
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=30,
@@ -173,7 +175,7 @@ class OAuthTokenManager:
             # Expired — must refresh
             logger.info("OAuth access token expired, refreshing…")
             if self._refresh_token():
-                return self._vault.retrieve(VAULT_ACCESS_TOKEN, accessor_id="oauth_manager")
+                return self._vault.retrieve(VAULT_ACCESS_TOKEN, accessor_id="")
             return None
 
         if remaining <= REFRESH_WINDOW:
@@ -181,7 +183,7 @@ class OAuthTokenManager:
             logger.info("OAuth access token expiring in %.0fs, refreshing…", remaining)
             self._refresh_token()  # best-effort; return current if refresh fails
 
-        return self._vault.retrieve(VAULT_ACCESS_TOKEN, accessor_id="oauth_manager")
+        return self._vault.retrieve(VAULT_ACCESS_TOKEN, accessor_id="")
 
     # ── Token Status ─────────────────────────────────────────────
 
@@ -265,7 +267,7 @@ class OAuthTokenManager:
                 return False
 
             current_refresh = self._vault.retrieve(
-                VAULT_REFRESH_TOKEN, accessor_id="oauth_manager"
+                VAULT_REFRESH_TOKEN, accessor_id=""
             )
             if not current_refresh:
                 return False
@@ -302,7 +304,7 @@ class OAuthTokenManager:
     def _get_expiry(self) -> float:
         """Get stored token expiry as epoch timestamp."""
         try:
-            raw = self._vault.retrieve(VAULT_TOKEN_EXPIRY, accessor_id="oauth_manager")
+            raw = self._vault.retrieve(VAULT_TOKEN_EXPIRY, accessor_id="")
             return float(raw)
         except Exception:
             return 0.0

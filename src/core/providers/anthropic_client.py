@@ -30,7 +30,10 @@ class AnthropicProviderClient(ProviderClient):
         try:
             import anthropic
             if auth_token:
-                self._client = anthropic.Anthropic(auth_token=auth_token)
+                self._client = anthropic.Anthropic(
+                    auth_token=auth_token,
+                    default_headers={"anthropic-beta": "oauth-2025-04-20"},
+                )
                 logger.info("Anthropic provider initialized via OAuth (mode=%s)", mode)
             else:
                 self._client = anthropic.Anthropic(api_key=api_key)
@@ -44,7 +47,10 @@ class AnthropicProviderClient(ProviderClient):
         """Hot-swap the OAuth token without full re-init (called by refresh manager)."""
         import anthropic
         self._auth_token = new_token
-        self._client = anthropic.Anthropic(auth_token=new_token)
+        self._client = anthropic.Anthropic(
+            auth_token=new_token,
+            default_headers={"anthropic-beta": "oauth-2025-04-20"},
+        )
         logger.info("Anthropic OAuth token hot-swapped")
 
     @property

@@ -1,8 +1,8 @@
 # Technical Specifications: Project Lancelot v7.0
 
-**Document Version:** 7.5
+**Document Version:** 7.6
 **Last Updated:** 2026-02-19
-**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2 + V26 Output Formatting + V27 Provider SDK Upgrade + V28 Anthropic OAuth
+**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2 + V26 Output Formatting + V27 Provider SDK Upgrade + V28 Anthropic OAuth + V29 Launcher Pre-flight
 
 ---
 
@@ -379,6 +379,8 @@ providers as an alternative path; see Section 3.47.
 **V28 OAuth Support (Anthropic):** When the `anthropic` provider has no API key
 but an OAuth token is present in `ANTHROPIC_OAUTH_TOKEN`, the client uses
 `Authorization: Bearer <token>` instead of the `x-api-key` header. The OAuth
+Bearer path also includes the `anthropic-beta: oauth-2025-04-20` header, which
+is required by the Anthropic API for OAuth-authenticated requests. The OAuth
 token env var is kept current by the background refresh thread in
 `OAuthTokenManager` (Section 3.50). `is_configured()` returns `True` if either
 an API key or an OAuth token is available.
@@ -1712,7 +1714,10 @@ class AnthropicProviderClient:
 **V28 OAuth Auth:** When `auth_token` is provided, the SDK is initialized with
 `anthropic.Anthropic(auth_token=...)` instead of `api_key`. The `auth_token`
 parameter takes priority over `api_key`. `update_auth_token()` enables hot-swap
-of the OAuth token at runtime without full re-initialization.
+of the OAuth token at runtime without full re-initialization. Both init and
+hot-swap pass `default_headers={"anthropic-beta": "oauth-2025-04-20"}` to the
+SDK client, which is required by the Anthropic API when using OAuth bearer
+tokens.
 
 **401 Retry with OAuth Refresh:** `_call_with_retry()` detects authentication
 errors (401 responses). On the first 401, if the client is in OAuth mode, it
@@ -1955,6 +1960,36 @@ status.
 **Provider Switch Enhancement:** The `POST /api/v1/providers/switch` endpoint
 checks for a valid OAuth token as an alternative to an API key when switching to
 the Anthropic provider. If neither is configured, the switch is rejected.
+
+### 3.53 Launcher Pre-flight Checks (V29, v0.2.15)
+
+**Files:** `launch.ps1` (Windows/PowerShell), `launch.sh` (Linux/macOS/Bash)
+
+Cross-platform launcher scripts that run pre-flight validation before
+`docker compose up -d`. Both scripts perform the same logical checks and share
+a consistent error format.
+
+**Pre-flight Checks:**
+
+| # | Check | Failure Message |
+|---|-------|----------------|
+| 1 | Docker CLI on `$PATH` | "Docker is not installed." |
+| 2 | Docker daemon responding (`docker info`) | "Docker is not running." |
+| 3 | `curl` available (`launch.sh` only) | "curl is not installed." |
+| 4 | Port 8000 not in use | "Port 8000 is already in use (by *process*)." |
+| 5 | Port 8080 not in use | "Port 8080 is already in use (by *process*)." |
+
+Each passing check prints `[OK]`. On any failure the script exits immediately.
+
+**Error Format:** All fatal errors use a shared helper (`Show-FatalError` /
+`fatal_error`) that prints the error, an actionable fix suggestion, and a
+GitHub support link (`https://github.com/myles1663/lancelot/issues`). The
+same support link is shown if the post-startup health check times out.
+
+**Post-Startup:** After `docker compose up -d`, the launcher polls
+`/health/live` every 2 seconds (up to 120 s). On success it opens the War Room
+in the default browser. On timeout it prints a warning with the `docker compose
+logs` command and the GitHub issues link.
 
 ---
 

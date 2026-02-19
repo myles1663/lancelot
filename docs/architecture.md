@@ -286,6 +286,8 @@ SQLite-backed job scheduler supporting cron and interval triggers.
 5. **Revocation** — `POST /oauth/revoke` invalidates both tokens at Anthropic and removes them from the vault.
 6. **Status** — `GET /oauth/status` returns current token validity, expiry time, and provider binding.
 
+**Required header** (v0.2.15): When using OAuth Bearer authentication, all requests to the Anthropic API must include the `anthropic-beta: oauth-2025-04-20` header. The `AnthropicProviderClient` attaches this header automatically whenever an OAuth token is in use.
+
 **Fallback:** When the feature flag is disabled or no OAuth token is present, the Anthropic provider falls back to API key authentication. OAuth and API key auth are mutually exclusive per session; OAuth takes priority when a valid token exists.
 
 ### War Room (Operator Dashboard)
@@ -387,3 +389,5 @@ This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FE
 6. **Single-owner allegiance.** Lancelot serves one owner. This eliminates an entire category of security concerns (multi-tenant data isolation, role-based access control, permission escalation between users) and keeps the governance model simple.
 
 7. **Docker-first deployment.** The Tool Fabric relies on Docker for execution sandboxing. Bare-metal is supported but loses the container isolation that makes tool execution safe.
+
+**V29 Launcher pre-flight checks** (v0.2.15): The launcher scripts (`launch.ps1`, `launch.sh`) run a pre-flight sequence before `docker compose up`: verify the Docker CLI is installed, verify the Docker daemon is running, and check that ports 8000 and 8080 are available. Any failure produces a human-readable error with a suggested fix and a link to the GitHub issues page (`https://github.com/myles1663/lancelot/issues`) for support.

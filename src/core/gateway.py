@@ -1468,7 +1468,7 @@ async def ucp_confirm(request: Request):
 
 # --- V28: Anthropic OAuth Callback (unauthenticated — browser redirect) ---
 
-@app.get("/auth/anthropic/callback")
+@app.get("/callback")
 async def oauth_anthropic_callback(request: Request):
     """Receive OAuth authorization code from browser redirect after user authorises."""
     error = request.query_params.get("error")

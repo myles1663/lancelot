@@ -5,6 +5,20 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.15] - 2026-02-19
+
+### Fixed — V28 OAuth Beta Header
+- **OAuth 401 fix**: Added required `anthropic-beta: oauth-2025-04-20` header to both `AnthropicProviderClient` (SDK) and `FlagshipClient` (direct HTTP) when using OAuth Bearer tokens. Without this header, the Anthropic API returns `401 — OAuth authentication is currently not supported`.
+- **Provider stack OAuth awareness**: `/available`, `/stack`, and `/switch` endpoints now recognize OAuth tokens as valid credentials for Anthropic (no API key required when OAuth is configured).
+- **Onboarding skip logic**: Mode selection now skips already-completed steps (e.g., local model setup) instead of re-entering them.
+
+### Added — Installer Fail-Loud Error Messages
+- **`launch.ps1` pre-flight checks**: Docker CLI, Docker daemon running, port 8000/8080 availability. Each failure shows a clear error message with fix hint.
+- **`launch.sh` pre-flight checks**: Docker CLI, Docker daemon, curl, port 8000/8080 availability with ANSI-colored output.
+- **Support link on all errors**: Every error in `launch.ps1`, `launch.sh`, and the Node.js installer (`create-lancelot`) now ends with: `If this doesn't resolve the issue, open a ticket: https://github.com/myles1663/lancelot/issues`
+- **Node.js installer `showError()`**: Central error display function now appends the GitHub issues link automatically.
+- **Ctrl+C handler**: Interrupting the Node.js installer now shows the support link.
+
 ## [0.2.14] - 2026-02-19
 
 ### Added — V28: Anthropic OAuth Authentication

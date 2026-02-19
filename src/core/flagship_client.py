@@ -183,6 +183,7 @@ class FlagshipClient:
             headers = {
                 "Authorization": f"Bearer {self._oauth_token}",
                 "anthropic-version": "2024-10-22",
+                "anthropic-beta": "oauth-2025-04-20",
             }
         else:
             headers = {

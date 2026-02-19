@@ -32,6 +32,9 @@ export async function run(opts) {
     console.log(chalk.yellow('  Installation interrupted.'));
     console.log(chalk.gray('  Run ') + chalk.white('npx create-lancelot --resume') + chalk.gray(' to continue.'));
     console.log('');
+    console.log(chalk.gray("  If this doesn't resolve the issue, open a ticket:"));
+    console.log(chalk.cyan.underline('  https://github.com/myles1663/lancelot/issues'));
+    console.log('');
     process.exit(130);
   });
 

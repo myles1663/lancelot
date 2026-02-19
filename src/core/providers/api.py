@@ -176,6 +176,15 @@ def get_provider_stack():
     provider_name = stack.get("provider", "")
     env_var = API_KEY_VARS.get(provider_name, "")
     has_key = bool(os.getenv(env_var, "").strip()) if env_var else False
+    # V28: Anthropic OAuth counts as having credentials
+    if not has_key and provider_name == "anthropic":
+        try:
+            from oauth_token_manager import get_oauth_manager
+            mgr = get_oauth_manager()
+            if mgr and mgr.get_token_status().get("configured"):
+                has_key = True
+        except Exception:
+            pass
 
     if provider_name in _auth_errors:
         stack["status"] = "auth_error"
@@ -256,6 +265,15 @@ def get_available_providers():
     providers = []
     for name, env_var in API_KEY_VARS.items():
         has_key = bool(os.getenv(env_var, "").strip())
+        # V28: Anthropic OAuth counts as having credentials
+        if not has_key and name == "anthropic":
+            try:
+                from oauth_token_manager import get_oauth_manager
+                mgr = get_oauth_manager()
+                if mgr and mgr.get_token_status().get("configured"):
+                    has_key = True
+            except Exception:
+                pass
         providers.append({
             "name": name,
             "display_name": display_names.get(name, name.title()),
@@ -309,7 +327,17 @@ def switch_provider(req: SwitchProviderRequest):
             result_msg = f"Switched to {provider_name} (no orchestrator)"
 
         # Create a fresh provider for model discovery
-        new_provider = create_provider(provider_name, api_key)
+        # V28: pass OAuth token for Anthropic when no API key
+        _auth_token = ""
+        if not api_key and provider_name == "anthropic":
+            try:
+                from oauth_token_manager import get_oauth_manager
+                mgr = get_oauth_manager()
+                if mgr:
+                    _auth_token = mgr.get_valid_token() or ""
+            except Exception:
+                pass
+        new_provider = create_provider(provider_name, api_key, auth_token=_auth_token)
 
         # Read existing config to preserve lane overrides if desired
         config = _read_current_config()

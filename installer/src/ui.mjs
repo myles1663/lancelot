@@ -45,6 +45,9 @@ export function showError(message, hint) {
     console.log(chalk.yellow('  Hint: ') + chalk.yellow(hint));
   }
   console.log('');
+  console.log(chalk.gray("  If this doesn't resolve the issue, open a ticket:"));
+  console.log(chalk.cyan.underline('  https://github.com/myles1663/lancelot/issues'));
+  console.log('');
 }
 
 export function showWarning(message) {
