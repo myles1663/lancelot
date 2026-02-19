@@ -890,7 +890,15 @@ class LancelotOrchestrator:
             f"Memory:\n{self.memory_summary}\n"
             f"Response format: Answer the user directly in natural language. "
             f"Do not prefix responses with confidence scores, 'PERMISSION REQUIRED', or 'Action:'. "
-            f"Just give a clear, helpful response."
+            f"Just give a clear, helpful response.\n\n"
+            f"OUTPUT FORMATTING:\n"
+            f"- Use **bold** for key findings, names, and important terms\n"
+            f"- Use ## headers to organize sections in longer responses\n"
+            f"- Use bullet points (- or *) for lists of findings or recommendations\n"
+            f"- Use markdown tables (| col1 | col2 |) for comparisons and feature matrices\n"
+            f"- Use paragraph breaks between distinct topics — never output a wall of text\n"
+            f"- For research and analysis, structure as: summary → findings → recommendations\n"
+            f"- Keep formatting clean and scannable — the user reads this in a dashboard"
         )
 
         # 3. SELF-KNOWLEDGE (V24: Architecture reference for roadmap analysis)

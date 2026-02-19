@@ -1,8 +1,8 @@
 # Functional Specifications: Project Lancelot v7.0
 
-**Document Version:** 7.1
+**Document Version:** 7.2
 **Last Updated:** 2026-02-18
-**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2
+**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2 + V26 Output Formatting
 
 ---
 
@@ -331,6 +331,16 @@ Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as
 - **F-17.1 Sourced Intelligence:** When performing competitive research or external intelligence gathering, Lancelot must cite specific source URLs for each finding. Unsourced claims must not be presented as verified intelligence. This requirement is enforced via a Soul `tone_invariant` that rejects intelligence outputs lacking provenance URLs.
 - **F-17.2 GitHub Search:** When `FEATURE_GITHUB_SEARCH` is enabled, Lancelot can search GitHub's public API for repositories, commits, issues/PRs, and releases. Results include browseable source URLs that satisfy the sourced-intelligence requirement (F-17.1). Searches are executed through the Tool Fabric WebOps capability and produce standard tool receipts.
 - **F-17.3 Competitive Scan Memory:** When both `FEATURE_COMPETITIVE_SCAN` and `FEATURE_MEMORY_VNEXT` are enabled, competitive research results are stored in episodic memory with a `competitive_scan` provenance tag. Subsequent scans of the same target retrieve previous scan results from memory and produce a change-analysis summary highlighting new, removed, and modified findings since the last scan.
+
+### FA-18: Output Formatting & Markdown Rendering (V26, v0.2.12)
+
+**Modules:** `src/core/response/policies.py`, `src/core/response/presenter.py`, War Room `ChatMessage.tsx`
+
+- **F-18.1 Markdown Rendering in War Room:** Assistant messages in the War Room Command panel now render full markdown — headers, bold/italic, tables, fenced code blocks, and bullet/numbered lists — via `react-markdown` with `remark-gfm` and Tailwind Typography prose styling. User messages remain plain text. This gives research output, comparisons, and structured analysis a polished, readable presentation.
+- **F-18.2 Output Formatting Directives:** The system instruction includes formatting guidance that directs the model to use bold for key terms, headers for sections, tables for comparisons, bullet points for lists, and paragraph breaks for readability. This ensures model output is structured for the markdown renderer.
+- **F-18.3 Longer Chat Responses:** `MAX_CHAT_LINES` increased from 25 to 80, allowing detailed research responses and multi-section reports to display in chat without truncation.
+- **F-18.4 Broadened Chat Headers:** The output filter now permits a wider set of section headers in chat (Summary, Findings, Analysis, Comparison, Recommendations, Roadmap Impact, etc.), enabling well-structured reports directly in the conversation view.
+- **F-18.5 Receipt Line Cleanup:** `ResponsePresenter` no longer appends `[x]/[+]` action receipt summary lines to the user-facing chat message. Receipts remain visible in War Room tool traces for auditability, but the chat response is free of duplicated receipt noise.
 
 ---
 

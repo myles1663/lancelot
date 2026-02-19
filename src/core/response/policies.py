@@ -54,7 +54,7 @@ _FUNCTION_CALL = re.compile(
 class OutputPolicy:
     """Defines limits and routing rules for response output."""
 
-    MAX_CHAT_LINES = 25
+    MAX_CHAT_LINES = 80
     MAX_PLAN_SUMMARY_LINES = 15
     MAX_NEXT_ACTIONS = 5
     MAX_STATUS_LINES = 3
@@ -80,8 +80,11 @@ class OutputPolicy:
     )
 
     # Section headers that are allowed in chat output
+    # V26: Broadened to include common research/analysis headers
     _CHAT_HEADERS = re.compile(
-        r"^##\s*(Goal|Plan\s+Steps|Next\s+Action)\s*$",
+        r"^##\s*(Goal|Plan\s+Steps|Next\s+Action|Summary|Executive\s+Summary|"
+        r"Findings|Analysis|Comparison|Competitive\s+Analysis|Recommendations|"
+        r"Roadmap\s+Impact|Key\s+Differences|Architecture|Features|Overview)\s*$",
         re.IGNORECASE | re.MULTILINE,
     )
 

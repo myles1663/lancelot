@@ -5,6 +5,36 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.12] - 2026-02-18
+
+### Added
+- **War Room Markdown Rendering (V26)**: Chat messages from Lancelot are now rendered
+  with full markdown support in the War Room dashboard. Added `react-markdown` with
+  `remark-gfm` (GitHub Flavored Markdown) for headers, bold, tables, bullet lists,
+  code blocks, blockquotes, and links. Added `@tailwindcss/typography` plugin with
+  dark-theme `prose` styling tuned to the War Room color palette. User messages
+  remain plain text. Previously, all markdown syntax was displayed as raw characters.
+- **Output Formatting Directives (V26)**: System instruction now includes explicit
+  formatting guidance: use `**bold**` for key findings, `## headers` for sections,
+  bullet points for lists, markdown tables for comparisons, and paragraph breaks
+  between topics. Research output is structured as summary → findings → recommendations.
+  Previously, the instruction only said "answer in natural language" with no formatting
+  guidance, leading to wall-of-text responses.
+
+### Changed
+- **MAX_CHAT_LINES increased from 25 to 80**: Research and analysis responses were
+  being truncated at 25 lines with a "Full details in War Room" overflow. Increased
+  to 80 lines to allow substantive research output to render in full.
+- **Chat-allowed headers broadened**: The output policy now allows research-related
+  section headers (Summary, Findings, Analysis, Comparison, Recommendations, etc.)
+  to remain in chat output instead of being routed to War Room artifacts.
+
+### Fixed
+- **Receipt line repetition removed**: The `ResponsePresenter` no longer appends
+  `[x]`/`[+]` action receipt lines to chat responses. The duplicate detection
+  heuristic was unreliable, causing receipt lines to repeat at the end of responses.
+  Tool receipts remain available in War Room tool traces for audit purposes.
+
 ## [0.2.11] - 2026-02-18
 
 ### Added

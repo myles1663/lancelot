@@ -268,7 +268,7 @@ SQLite-backed job scheduler supporting cron and interval triggers.
 
 The War Room is a React SPA (Vite + React 18 + TypeScript + Tailwind) providing full system observability:
 
-- **Command** — Chat interface for interacting with Lancelot
+- **Command** — Chat interface for interacting with Lancelot. Assistant messages render full markdown (headers, bold, tables, code blocks, lists) via `react-markdown` + `remark-gfm` with Tailwind Typography prose classes. User messages remain plain text.
 - **Health** — System status, subsystem health, degradation alerts
 - **Governance** — Risk tier distribution, policy decisions, approval queue
 - **Trust** — Per-connector trust scores, graduation history

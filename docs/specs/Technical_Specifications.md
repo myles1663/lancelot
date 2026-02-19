@@ -1,8 +1,8 @@
 # Technical Specifications: Project Lancelot v7.0
 
-**Document Version:** 7.2
+**Document Version:** 7.3
 **Last Updated:** 2026-02-18
-**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2
+**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2 + V26 Output Formatting
 
 ---
 
@@ -1605,6 +1605,49 @@ with one-line capability descriptions. This gives the LLM grounded
 self-knowledge when performing roadmap analysis and competitive comparisons,
 reducing hallucinated capability claims. The block is assembled by the context
 compiler and included before the persona core block.
+
+### 3.46 Output Formatting & Markdown Rendering (V26, v0.2.12)
+
+**Files:** `src/core/response/policies.py`, `src/ui/war-room/src/components/ChatMessage.tsx`, system instruction
+
+Changes to the output pipeline that improve the readability and structure of
+War Room chat responses.
+
+**Markdown Rendering in War Room:**
+
+`ChatMessage.tsx` now uses `react-markdown` with the `remark-gfm` plugin and
+Tailwind Typography `prose` classes to render assistant messages. Full markdown
+is supported: headers, bold/italic, tables, fenced code blocks, and lists.
+User messages remain plain text. This is a frontend-only change — the backend
+produces the same text, but the War Room now interprets markdown syntax visually.
+
+**Output Formatting Directives:**
+
+The system instruction now includes formatting guidance directing the model to
+use bold for key terms, headers for sections, tables for comparisons, bullet
+points for lists, and paragraph breaks for readability. This ensures the model
+produces structured markdown that the War Room renderer can display effectively.
+
+**OutputPolicy — MAX_CHAT_LINES increased to 80:**
+
+`OutputPolicy.MAX_CHAT_LINES` in `src/core/response/policies.py` increased from
+25 to 80. This allows longer, more detailed research responses to pass through
+to chat without truncation, matching the richer formatting capabilities.
+
+**Chat-Allowed Headers Broadened:**
+
+The set of section headers permitted in chat output now includes: Summary,
+Findings, Analysis, Comparison, Recommendations, Roadmap Impact, and others.
+Previously only a narrow set of headers passed the output filter; broader
+headers enable the model to produce well-structured research reports directly
+in chat.
+
+**Receipt Line Repetition Fix:**
+
+`ResponsePresenter` no longer appends `[x]/[+]` action receipt summary lines to
+the chat response. Receipt lines are retained in War Room tool traces for
+auditability but no longer duplicate into the user-facing message. This
+eliminates the visual noise of repeated receipt annotations in chat output.
 
 ---
 

@@ -246,23 +246,11 @@ class ResponsePresenter:
         if response_text:
             parts.append(response_text.strip())
 
-        # Append a brief action summary if there were verified actions
-        if verified_actions:
-            action_lines = []
-            for action in verified_actions:
-                status_icon = {
-                    "success": "+",
-                    "failed": "x",
-                    "pending_approval": "?",
-                }.get(action.get("status", ""), "-")
-                summary = action.get("summary", action.get("tool", ""))
-                action_lines.append(f"  [{status_icon}] {summary}")
-
-            if action_lines:
-                # Only add action summary if not already described in response text
-                # (avoid redundancy when the model's response already covers the actions)
-                if not self._actions_described_in_text(response_text, verified_actions):
-                    parts.append("\n" + "\n".join(action_lines))
+        # V26: Action receipt lines ([x], [+]) are no longer appended to chat.
+        # The model's response_to_user already describes actions taken. Receipt
+        # lines are audit artifacts — they clutter the chat and the duplicate
+        # detection heuristic was unreliable, causing repetition at the end of
+        # responses. Receipts are still available in War Room tool traces.
 
         # Approval prompt if needed
         if next_action == "needs_approval":

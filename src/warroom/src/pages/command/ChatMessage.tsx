@@ -1,3 +1,6 @@
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+
 interface ChatMessageProps {
   role: 'user' | 'assistant'
   content: string
@@ -35,7 +38,25 @@ export function ChatMessage({ role, content, timestamp, crusaderMode, filesCount
             </span>
           )}
         </div>
-        <p className="text-sm text-text-primary whitespace-pre-wrap">{content}</p>
+        {isUser ? (
+          <p className="text-sm text-text-primary whitespace-pre-wrap">{content}</p>
+        ) : (
+          <div className="text-sm text-text-primary prose prose-sm prose-invert max-w-none
+            prose-headings:text-text-primary prose-headings:font-semibold prose-headings:mt-3 prose-headings:mb-1
+            prose-p:my-1.5 prose-p:leading-relaxed
+            prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5
+            prose-strong:text-accent-primary prose-strong:font-semibold
+            prose-table:text-xs prose-th:px-2 prose-th:py-1 prose-th:text-left prose-th:border-b prose-th:border-border-default
+            prose-td:px-2 prose-td:py-1 prose-td:border-b prose-td:border-border-default/50
+            prose-code:text-accent-secondary prose-code:text-xs prose-code:bg-surface-input prose-code:px-1 prose-code:py-0.5 prose-code:rounded
+            prose-pre:bg-surface-input prose-pre:rounded-md prose-pre:p-3
+            prose-a:text-accent-primary prose-a:underline
+            prose-hr:border-border-default prose-hr:my-3
+            prose-blockquote:border-l-2 prose-blockquote:border-accent-primary/50 prose-blockquote:pl-3 prose-blockquote:italic
+          ">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+          </div>
+        )}
         <span className="text-[10px] text-text-muted font-mono mt-1 block">{timestamp}</span>
       </div>
     </div>
