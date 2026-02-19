@@ -32,6 +32,25 @@ export async function promptProvider(preselected) {
   });
 }
 
+export async function promptAuthMethod(provider) {
+  const providerInfo = PROVIDERS[provider];
+  if (!providerInfo.supportsOAuth) return 'api_key';
+
+  return await select({
+    message: `How would you like to authenticate with ${providerInfo.name}?`,
+    choices: [
+      {
+        name: `API Key — ${chalk.gray('paste your key from console.anthropic.com')}`,
+        value: 'api_key',
+      },
+      {
+        name: `OAuth (sign in with browser) ${chalk.green('(recommended)')} — ${chalk.gray('no API key needed')}`,
+        value: 'oauth',
+      },
+    ],
+  });
+}
+
 export async function promptApiKey(provider) {
   const providerInfo = PROVIDERS[provider];
 
@@ -135,7 +154,10 @@ export async function promptConfirm(config) {
   console.log('');
   console.log(chalk.white.bold('  Configuration Summary:'));
   console.log(chalk.gray(`    Location:   ${config.installDir}`));
-  console.log(chalk.gray(`    Provider:   ${providerInfo?.name || config.provider}`));
+  const authLabel = config.authMode === 'oauth'
+    ? `${providerInfo?.name || config.provider} (OAuth — browser sign-in)`
+    : `${providerInfo?.name || config.provider} (API key)`;
+  console.log(chalk.gray(`    Provider:   ${authLabel}`));
   console.log(chalk.gray(`    Comms:      ${commsInfo?.name || config.commsType}`));
   if (config.hasGpu) {
     console.log(chalk.gray(`    GPU:        ${config.gpuName} (${config.gpuLayers} layers)`));

@@ -31,10 +31,11 @@ export const PROVIDERS = {
     envVar: 'ANTHROPIC_API_KEY',
     envProvider: 'anthropic',
     recommended: false,
-    description: 'Claude, pay-as-you-go',
+    description: 'Claude — API key or sign in with OAuth',
     keyPrefix: 'sk-ant-',
     validationUrl: 'https://api.anthropic.com/v1/messages',
     signupUrl: 'https://console.anthropic.com/',
+    supportsOAuth: true,
   },
   xai: {
     name: 'xAI (Grok)',

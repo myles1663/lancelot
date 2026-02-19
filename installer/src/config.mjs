@@ -21,12 +21,28 @@ export function generateEnvContent(config) {
     '',
     '# LLM Provider',
     `LANCELOT_PROVIDER=${config.provider}`,
-    `${providerInfo.envVar}=${config.apiKey}`,
+  ];
+
+  // OAuth mode: write auth mode instead of API key
+  if (config.authMode === 'oauth') {
+    lines.push('LANCELOT_AUTH_MODE=OAUTH');
+    lines.push(`# ${providerInfo.envVar} not needed — using OAuth`);
+  } else {
+    lines.push(`${providerInfo.envVar}=${config.apiKey}`);
+  }
+
+  // Generate security tokens — store API token in config for OAuth flow
+  const ownerToken = generateToken();
+  const apiToken = generateToken();
+  const vaultKey = generateToken();
+  config._generatedApiToken = apiToken;
+
+  lines.push(
     '',
     '# Security Tokens (auto-generated — keep secret)',
-    `LANCELOT_OWNER_TOKEN=${generateToken()}`,
-    `LANCELOT_API_TOKEN=${generateToken()}`,
-    `LANCELOT_VAULT_KEY=${generateToken()}`,
+    `LANCELOT_OWNER_TOKEN=${ownerToken}`,
+    `LANCELOT_API_TOKEN=${apiToken}`,
+    `LANCELOT_VAULT_KEY=${vaultKey}`,
     '',
     '# Logging',
     'LANCELOT_LOG_LEVEL=INFO',
@@ -46,7 +62,7 @@ export function generateEnvContent(config) {
     'FEATURE_TRUST_LEDGER=true',
     'FEATURE_APPROVAL_LEARNING=true',
     '',
-  ];
+  );
 
   if (config.commsType && config.commsType !== 'skip') {
     lines.push('# Communications');

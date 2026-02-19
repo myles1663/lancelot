@@ -14,7 +14,7 @@ export async function markOnboardingComplete(installDir, config) {
   const snapshot = {
     state: 'READY',
     flagship_provider: config.provider,
-    credential_status: 'verified',
+    credential_status: config.authMode === 'oauth' ? 'oauth_pending' : 'verified',
     local_model_status: 'verified',
     verification_code_hash: null,
     resend_count: 0,

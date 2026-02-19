@@ -11,7 +11,7 @@ import { PROVIDERS, COMMS } from './constants.mjs';
 import { showBanner, showStep, showSuccess, showError, showInfo } from './ui.mjs';
 import { runAllChecks } from './prereqs.mjs';
 import {
-  promptInstallDir, promptProvider, promptApiKey,
+  promptInstallDir, promptProvider, promptAuthMethod, promptApiKey,
   promptCommsChannel, promptTelegramToken, promptTelegramChatId,
   promptGoogleChatSpace, promptConfirm,
 } from './prompts.mjs';
@@ -44,6 +44,7 @@ export async function run(opts) {
     startedAt: new Date().toISOString(),
     installDir: null,
     provider: opts.provider || null,
+    authMode: null,  // 'api_key' or 'oauth'
     apiKey: null,
     commsType: null,
     telegramToken: null,
@@ -87,27 +88,40 @@ export async function run(opts) {
       await saveState(completed, config);
     }
 
-    // ── Step 3: Provider + API key ──
+    // ── Step 3: Provider + API key / OAuth ──
     if (!isStepComplete(completed, 'provider')) {
       showStep(3, TOTAL_STEPS, 'LLM Provider');
 
       let providerSelected = false;
       while (!providerSelected) {
         config.provider = await promptProvider(config.provider);
-        const key = await promptApiKey(config.provider);
-        if (key === null) {
-          // User wants to switch provider
-          config.provider = null;
-          continue;
+
+        // Check if provider supports OAuth
+        config.authMode = await promptAuthMethod(config.provider);
+
+        if (config.authMode === 'oauth') {
+          console.log('');
+          console.log(chalk.gray('  OAuth selected — you\'ll sign in via browser after Lancelot starts.'));
+          console.log('');
+          config.apiKey = '';
+          providerSelected = true;
+        } else {
+          const key = await promptApiKey(config.provider);
+          if (key === null) {
+            // User wants to switch provider
+            config.provider = null;
+            config.authMode = null;
+            continue;
+          }
+          config.apiKey = key;
+          providerSelected = true;
         }
-        config.apiKey = key;
-        providerSelected = true;
       }
 
       completed.push('provider');
       await saveState(completed, config);
-    } else if (!config.apiKey) {
-      // Resumed — need to re-prompt for API key (never stored)
+    } else if (!config.apiKey && config.authMode !== 'oauth') {
+      // Resumed — need to re-prompt for API key (never stored, not OAuth)
       showStep(3, TOTAL_STEPS, 'LLM Provider (re-enter API key)');
       config.apiKey = await promptApiKey(config.provider);
     }
@@ -206,6 +220,13 @@ export async function run(opts) {
       await saveState(completed, config);
     }
 
+    // ── OAuth flow (after Docker is running) ──
+    if (config.authMode === 'oauth' && !isStepComplete(completed, 'oauth')) {
+      await runOAuthFlow(config);
+      completed.push('oauth');
+      await saveState(completed, config);
+    }
+
     // ── Done! ──
     completed.push('done');
     await clearState();
@@ -229,6 +250,83 @@ export async function run(opts) {
     showInfo('Run ' + chalk.white('npx create-lancelot --resume') + ' to continue from where you left off.');
     process.exit(1);
   }
+}
+
+async function runOAuthFlow(config) {
+  const baseUrl = 'http://localhost:8000';
+  const apiToken = config._generatedApiToken;
+
+  console.log('');
+  console.log(chalk.white.bold('  Anthropic OAuth Setup'));
+  console.log(chalk.gray('  Opening your browser to sign in with Anthropic...'));
+  console.log('');
+
+  // Step 1: Initiate OAuth — get the auth URL
+  const spinner = ora('  Initiating OAuth flow...').start();
+  let authUrl;
+  try {
+    const resp = await fetch(`${baseUrl}/api/v1/providers/oauth/initiate`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    const data = await resp.json();
+    if (data.status !== 'ok' || !data.auth_url) {
+      throw new Error(data.message || 'Failed to generate OAuth URL');
+    }
+    authUrl = data.auth_url;
+    spinner.succeed('  OAuth flow initiated');
+  } catch (e) {
+    spinner.fail(`  OAuth initiation failed: ${e.message}`);
+    console.log('');
+    console.log(chalk.yellow('  You can complete OAuth setup later in the War Room.'));
+    console.log(chalk.gray('  Go to: http://localhost:8000 → Settings → Provider → Anthropic OAuth'));
+    return;
+  }
+
+  // Step 2: Open browser
+  const platform = process.platform;
+  const openCmd = platform === 'win32' ? `start "${authUrl}"`
+                : platform === 'darwin' ? `open "${authUrl}"`
+                : `xdg-open "${authUrl}"`;
+  exec(openCmd, () => {});
+
+  console.log(chalk.cyan('  Browser opened — sign in with your Anthropic account.'));
+  console.log(chalk.gray('  Waiting for authorization...'));
+  console.log('');
+
+  // Step 3: Poll for completion
+  const pollSpinner = ora('  Waiting for OAuth authorization...').start();
+  const maxAttempts = 120; // 4 minutes
+  const pollInterval = 2000;
+
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise(r => setTimeout(r, pollInterval));
+
+    try {
+      const resp = await fetch(`${baseUrl}/api/v1/providers/oauth/status`, {
+        headers: { 'Authorization': `Bearer ${apiToken}` },
+      });
+      const status = await resp.json();
+
+      if (status.configured && status.status === 'CONNECTED') {
+        pollSpinner.succeed('  OAuth connected — Anthropic account linked!');
+        return;
+      }
+      if (status.status === 'EXPIRED' || status.status === 'error') {
+        pollSpinner.fail(`  OAuth failed: ${status.error || status.status}`);
+        console.log(chalk.yellow('  You can retry OAuth setup in the War Room.'));
+        return;
+      }
+    } catch {
+      // Server might be busy — keep polling
+    }
+  }
+
+  pollSpinner.warn('  OAuth authorization timed out.');
+  console.log(chalk.yellow('  You can complete OAuth setup in the War Room settings.'));
 }
 
 function buildProgressBar(percent) {

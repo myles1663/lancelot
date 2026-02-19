@@ -5,6 +5,18 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.17] - 2026-02-19
+
+### Added — Installer OAuth Support (create-lancelot v1.1.0)
+- **Anthropic OAuth in installer**: When selecting Anthropic as provider, users now choose between "API Key" and "OAuth (sign in with browser)". OAuth skips the API key prompt entirely.
+- **Automated OAuth flow**: After Docker starts and health check passes, the installer automatically initiates the PKCE OAuth flow — opens the browser to Anthropic's authorization page, polls for completion, and confirms the connection.
+- **Graceful fallback**: If OAuth times out or fails during install, the user is directed to complete setup in the War Room settings. Installation still completes.
+- **Configuration summary**: Shows "(OAuth — browser sign-in)" or "(API key)" next to the provider name in the pre-install confirmation.
+
+### Fixed — V29b: File Download Endpoint
+- **Workspace path mismatch**: File download endpoint (`/api/files/`) was hardcoded to `/home/lancelot/data/` but documents are created in `/home/lancelot/workspace/`. Now uses `LANCELOT_WORKSPACE` env var.
+- **Browser auth for downloads**: Download URLs now include `?token=` query parameter so links clicked in War Room chat work without a 401.
+
 ## [0.2.16] - 2026-02-19
 
 ### Fixed — V29: Response Assembler Tuning
