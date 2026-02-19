@@ -2886,6 +2886,15 @@ class LancelotOrchestrator:
                         if exec_result.success:
                             _exec_success = True
                             result_data = exec_result.outputs or {"status": "success"}
+                            # V29b: Inject download URL for document_creator results
+                            if skill_name == "document_creator" and result_data.get("path"):
+                                doc_abs = result_data["path"]
+                                doc_rel = doc_abs.replace("/home/lancelot/data/", "").lstrip("/")
+                                result_data["download_url"] = f"/api/files/{doc_rel}"
+                                result_data["download_note"] = (
+                                    f"Document created. Include this link in your response so "
+                                    f"the user can download it: [Download {Path(doc_abs).name}](/api/files/{doc_rel})"
+                                )
                             result_str = str(result_data)
                             if len(result_str) > 8000:
                                 result_data = {"truncated": result_str[:8000] + "... [truncated]"}
@@ -3782,13 +3791,18 @@ class LancelotOrchestrator:
             print(f"V29: Forced synthesis failed: {e}")
             return ""
 
-    def _deliver_war_room_artifacts(self, artifacts: list) -> None:
+    def _deliver_war_room_artifacts(self, artifacts: list) -> list:
         """V29: Broadcast War Room artifacts via EventBus → WebSocket.
 
         Pushes assembled artifacts (research reports, plan details, tool traces)
         to connected War Room clients. Also triggers auto-document creation
         for RESEARCH_REPORT artifacts.
+
+        Returns:
+            List of document paths created (for download link injection).
         """
+        created_docs = []
+
         try:
             from event_bus import event_bus, Event
         except ImportError:
@@ -3796,7 +3810,7 @@ class LancelotOrchestrator:
                 from src.core.event_bus import event_bus, Event
             except ImportError:
                 _gov_logger.debug("V29: event_bus not available — skipping artifact delivery")
-                return
+                return created_docs
 
         for artifact in artifacts:
             try:
@@ -3809,6 +3823,7 @@ class LancelotOrchestrator:
                         doc_path = self._auto_create_document(full_text)
                         if doc_path:
                             content["document_path"] = doc_path
+                            created_docs.append(doc_path)
                             _gov_logger.info("V29: Auto-document created: %s", doc_path)
 
                 # Broadcast artifact to War Room
@@ -3825,6 +3840,8 @@ class LancelotOrchestrator:
                 event_bus.publish_sync(event)
             except Exception as e:
                 _gov_logger.warning("V29: Failed to deliver artifact %s: %s", artifact.id, e)
+
+        return created_docs
 
     def _auto_create_document(self, content: str, title: str = "Research Report") -> str:
         """V29: Auto-create a document from long content via document_creator skill.
@@ -3881,6 +3898,31 @@ class LancelotOrchestrator:
         except Exception as e:
             _gov_logger.warning("V29: Auto-document creation error: %s", e)
             return ""
+
+    @staticmethod
+    def _append_download_links(response: str, doc_paths: list) -> str:
+        """V29b: Append download links for auto-created documents to the chat response.
+
+        Converts absolute workspace paths to /api/files/ URLs so the War Room
+        markdown renderer produces clickable download links.
+        """
+        if not doc_paths:
+            return response
+        links = []
+        for path in doc_paths:
+            # Convert /home/lancelot/data/report_xxx.pdf → report_xxx.pdf
+            fname = Path(path).name
+            # Determine relative path from workspace root
+            rel = path.replace("/home/lancelot/data/", "").lstrip("/")
+            ext = Path(fname).suffix.lower().lstrip(".")
+            type_label = {
+                "pdf": "PDF", "docx": "Word", "xlsx": "Excel",
+                "pptx": "PowerPoint", "csv": "CSV", "md": "Markdown",
+            }.get(ext, ext.upper())
+            links.append(f"- [{fname}](/api/files/{rel}) ({type_label})")
+
+        link_block = "\n\n---\n**Attached Documents:**\n" + "\n".join(links)
+        return response + link_block
 
     def _validate_llm_response(self, response_text: str) -> str:
         """S10: Sanitizes LLM output before further processing.
@@ -4781,7 +4823,10 @@ class LancelotOrchestrator:
                 final_response = assembled.chat_response
                 # V29: Deliver War Room artifacts (research reports, auto-documents)
                 if assembled.war_room_artifacts:
-                    self._deliver_war_room_artifacts(assembled.war_room_artifacts)
+                    doc_paths = self._deliver_war_room_artifacts(assembled.war_room_artifacts)
+                    # V29b: Append download links for auto-created documents
+                    if doc_paths:
+                        final_response = self._append_download_links(final_response, doc_paths)
 
             # Store conversation turn in episodic memory if enabled
             if self._memory_enabled and self.context_compiler:

@@ -1524,6 +1524,49 @@ async def oauth_anthropic_callback(request: Request):
         )
 
 
+# --- V29: Workspace File Download Endpoint ---
+# Serves documents from /home/lancelot/data/ so chat can include download links
+
+_WORKSPACE_ROOT = Path("/home/lancelot/data")
+
+@app.get("/api/files/{file_path:path}")
+async def serve_workspace_file(file_path: str, request: Request):
+    """Serve a file from the workspace for download.
+
+    V29: Enables chat responses to include clickable download links
+    for documents created by document_creator, research reports, etc.
+    Path traversal is blocked — only files under /home/lancelot/data/ are served.
+    """
+    # Authenticate
+    if API_TOKEN:
+        auth = request.headers.get("Authorization", "")
+        token_param = request.query_params.get("token", "")
+        if not (auth == f"Bearer {API_TOKEN}" or token_param == API_TOKEN):
+            return error_response(401, "Unauthorized")
+
+    # Resolve and validate path (block traversal)
+    try:
+        target = (_WORKSPACE_ROOT / file_path).resolve()
+        if not str(target).startswith(str(_WORKSPACE_ROOT.resolve())):
+            return error_response(403, "Path traversal blocked")
+    except Exception:
+        return error_response(400, "Invalid file path")
+
+    if not target.is_file():
+        return error_response(404, f"File not found: {file_path}")
+
+    # Determine Content-Disposition (inline for viewable types, attachment for others)
+    suffix = target.suffix.lower()
+    inline_types = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".txt", ".md", ".csv", ".html"}
+    disposition = "inline" if suffix in inline_types else "attachment"
+
+    return FileResponse(
+        path=str(target),
+        filename=target.name,
+        content_disposition_type=disposition,
+    )
+
+
 # --- War Room React SPA Static Mount ---
 
 _warroom_dist = Path(__file__).resolve().parent.parent / "warroom" / "dist"

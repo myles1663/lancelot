@@ -14,14 +14,24 @@ All notable changes to Project Lancelot will be documented in this file.
 - **War Room artifact delivery**: Assembled artifacts (research reports, plan details, tool traces) are now broadcast to connected War Room clients via EventBus → WebSocket. Previously artifacts were generated but never delivered.
 - **New `RESEARCH_REPORT` artifact type**: Full research content is preserved as a War Room artifact with metadata (char count, line count, auto-document flag).
 
+### Added — V29b: Workspace File Download Endpoint
+- **`/api/files/{path}` endpoint**: New gateway route serves documents from the workspace directory (`/home/lancelot/data/`) as downloadable files. Supports PDF, DOCX, XLSX, CSV, Markdown, images, and all other file types.
+- **Path traversal protection**: Resolved paths are validated against the workspace root — requests outside the workspace return 403.
+- **Auth-gated**: Requires Bearer token header or `?token=` query parameter (same API token as other endpoints).
+- **Content-Disposition**: Viewable types (PDF, images, CSV, TXT, MD, HTML) served inline; others as attachment downloads.
+- **Download link injection**: When `document_creator` produces a file, the tool result now includes a `download_url` and `download_note` so the model can include a clickable link in its response.
+- **Auto-document download links**: When the assembler auto-creates documents for long content, download links are appended to the chat response under an "Attached Documents" section.
+
 ### Technical Details
 - `OutputPolicy.enforce_chat_limits()` now accepts `channel` parameter (`warroom`/`telegram`/`api`)
 - `OutputPolicy.needs_auto_document()` detects content exceeding auto-document thresholds
 - `ResponseAssembler.assemble()` accepts `channel` parameter, passed through from orchestrator
 - `_is_narration_without_content()` checks 25+ narration patterns against short responses after tool-heavy loops
 - `_force_synthesis()` appends narration to conversation, sends follow-up prompt, uses `generate()` (not `generate_with_tools`) for fresh max_tokens budget
-- `_deliver_war_room_artifacts()` broadcasts via EventBus, triggers auto-document for `RESEARCH_REPORT` type
+- `_deliver_war_room_artifacts()` broadcasts via EventBus, triggers auto-document for `RESEARCH_REPORT` type, returns list of created doc paths
 - `_auto_create_document()` parses markdown into structured sections and creates PDF via `document_creator` skill
+- `_append_download_links()` converts workspace paths to `/api/files/` URLs for clickable download links
+- `serve_workspace_file()` gateway endpoint with auth + path traversal protection + MIME-aware disposition
 
 ## [0.2.15] - 2026-02-19
 
