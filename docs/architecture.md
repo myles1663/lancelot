@@ -60,10 +60,18 @@ The Model Router selects the appropriate LLM lane based on task type, risk level
 |----------|------|--------|-----------|
 | 1 | `local_redaction` | Qwen3-8B (local) | PII redaction — always runs locally first |
 | 2 | `local_utility` | Qwen3-8B (local) | Intent classification, summarization, JSON extraction |
-| 3 | `flagship_fast` | Gemini Flash / GPT-4o-mini / Claude Haiku / Grok-3-mini | Standard reasoning, tool calls, orchestration |
-| 4 | `flagship_deep` | Gemini Pro / GPT-4o / Claude Sonnet / Grok-3 | Complex planning, high-risk decisions |
+| 3 | `flagship_fast` | Gemini Flash / GPT-4o-mini / Claude Sonnet 4.5 / Grok-3-mini | Standard reasoning, tool calls, orchestration |
+| 4 | `flagship_deep` | Gemini Pro / GPT-4o / Claude Opus 4 / Grok-3 | Complex planning, high-risk decisions |
+| — | `cache` | Gemini 2.5 Flash / GPT-4o-mini / Claude Haiku 4.5 / Grok-3-mini | Lightweight caching and low-latency lookups |
 
 **Escalation triggers:** If the fast lane fails, if risk keywords are detected, or if the task involves multi-step planning, the router automatically escalates to the deep lane. Every routing decision produces a `RouterDecision` record with lane, model, rationale, timing, and outcome.
+
+**V27 Dual-Mode Providers** (`FEATURE_PROVIDER_SDK`, v0.2.13): Providers now operate in one of two modes, configured per-provider via the `mode` field in `models.yaml` and selected during onboarding through the `LANCELOT_PROVIDER_MODE` env var:
+
+- **SDK mode** — Full Python SDK integration (e.g. `google-genai`, `openai`, `anthropic`, `xai`). Supports extended thinking, streaming responses, and native tool calling. In SDK mode the ModelRouter routes through `ProviderClient.generate()` rather than the REST-based `FlagshipClient.complete()`.
+- **API mode** — Lightweight REST calls via `FlagshipClient`. No SDK dependency, lower memory footprint, suitable for constrained environments.
+
+The `ProviderProfile` dataclass carries a `mode` field (`"sdk"` | `"api"`) and each `LaneConfig` now accepts an optional `thinking` dict (see Extended Thinking below). A new onboarding state, `PROVIDER_MODE_SELECTION`, appears between `HANDSHAKE` and `LOCAL_UTILITY_SETUP` to let the owner choose the provider mode at first run.
 
 ### 4. Planning Pipeline (for complex requests)
 
@@ -88,6 +96,8 @@ Each step generates a receipt linked to the parent plan via `parent_id` and `que
 **V25 Autonomy Loop v2** (`FEATURE_DEEP_REASONING_LOOP`, v0.2.11): Three new phases extend the autonomy loop with pre-execution reasoning, structured governance feedback, and experiential learning.
 
 **Phase 1 — Deep Reasoning Pass.** Before the agentic loop begins, a dedicated reasoning pass analyzes the request using a deep model with high thinking budget. The orchestrator evaluates `_should_use_deep_reasoning()` triggers (request complexity, tool requirements, risk indicators) and, when triggered, calls `_build_reasoning_instruction()` to assemble a reasoning-focused system prompt. The `_deep_reasoning_pass()` method then calls `provider.generate()` with the deep model lane and elevated thinking tokens. The output is captured as a `ReasoningArtifact` (defined in `src/core/reasoning_artifact.py`) and injected as structured context into `_agentic_generate()`. This means Lancelot thinks deeply about what it needs to do — identifying capability gaps, anticipating risks, and forming a strategy — before it takes any action. The reasoning output is also scanned for `CAPABILITY GAP:` markers, which identify tools or skills the system lacks for the current task.
+
+**V27 Extended Thinking** (v0.2.13): When the Anthropic provider is running in SDK mode, the deep reasoning pass leverages Claude's native extended thinking capability. The thinking budget is configurable per-lane via the `thinking` key in `models.yaml` (e.g. `thinking: { enabled: true, budget_tokens: 10000 }` on the `deep` lane). The `AnthropicProviderClient` parses thinking blocks from the API response and extracts them into the `ReasoningArtifact`, giving the orchestrator access to the model's internal chain-of-thought alongside the final output.
 
 **Phase 3 — Governed Negotiation.** When governance blocks an action, the system no longer returns a generic `BLOCKED` message. Instead, it constructs a `GovernanceFeedback` dataclass (from `reasoning_artifact.py`) containing the blocked action, the policy rule that triggered the block, and a set of structured alternative approaches the model can pursue. This feedback is injected back into the agentic loop context, allowing the model to adapt its plan — choosing a lower-risk path, requesting approval, or decomposing the action — rather than stalling.
 
@@ -320,9 +330,10 @@ A core architectural principle: **any subsystem can be disabled without breaking
 | GitHub Search | `github_search` skill unavailable, other research tools still work |
 | Competitive Scan | No scan memory or diffing; research still works, just stateless |
 | Deep Reasoning Loop | No pre-execution reasoning pass; agentic loop runs without strategic analysis |
+| Provider SDK | Falls back to API mode (FlagshipClient REST); extended thinking and native tool calling unavailable |
 | Tool Fabric | No tool execution, conversation-only mode |
 
-This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FEATURE_DEEP_REASONING_LOOP`, etc.) that gate each subsystem at initialization. When a subsystem is disabled, its code paths are skipped and its API endpoints return appropriate "not available" responses.
+This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FEATURE_DEEP_REASONING_LOOP`, `FEATURE_PROVIDER_SDK`, etc.) that gate each subsystem at initialization. When a subsystem is disabled, its code paths are skipped and its API endpoints return appropriate "not available" responses.
 
 ---
 
@@ -336,7 +347,7 @@ This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FE
 | Legacy UI | Streamlit |
 | Data Validation | Pydantic v2 |
 | Configuration | PyYAML |
-| LLM Providers | Google GenAI, OpenAI, Anthropic, xAI SDKs |
+| LLM Providers | Google GenAI, OpenAI, Anthropic, xAI SDKs (SDK mode) / REST via FlagshipClient (API mode) |
 | Local Inference | llama-cpp-python (GGUF format) |
 | Persistence | SQLite (scheduler, memory), JSON (registries, receipts) |
 | Encryption | cryptography library |

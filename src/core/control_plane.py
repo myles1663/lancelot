@@ -7,6 +7,7 @@ Mounted as a FastAPI APIRouter.
 
 All responses use safe error handling — no stack traces leak to clients.
 """
+import os
 import time
 import logging
 from typing import Optional
@@ -144,9 +145,12 @@ async def onboarding_status():
     """Detailed onboarding snapshot for the War Room recovery panel."""
     try:
         snap = get_snapshot()
+        # V27: Read provider mode from env
+        provider_mode = os.environ.get("LANCELOT_PROVIDER_MODE", "sdk")
         return {
             "state": snap.state.value,
             "flagship_provider": snap.flagship_provider,
+            "provider_mode": provider_mode,
             "credential_status": snap.credential_status,
             "local_model_status": snap.local_model_status,
             "is_ready": snap.is_ready,

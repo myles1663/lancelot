@@ -1,8 +1,8 @@
 # Technical Specifications: Project Lancelot v7.0
 
-**Document Version:** 7.3
+**Document Version:** 7.4
 **Last Updated:** 2026-02-18
-**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2 + V26 Output Formatting
+**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2 + V26 Output Formatting + V27 Provider SDK Upgrade
 
 ---
 
@@ -18,6 +18,7 @@
 | **Data Validation** | Pydantic | v2 |
 | **Configuration** | PyYAML | >= 6.0 |
 | **Primary LLM** | Google GenAI SDK (google-genai) | >= 1.0.0 |
+| **Anthropic LLM** | Anthropic Python SDK (anthropic) | >= 0.40.0 |
 | **Local Inference** | llama-cpp-python (GGUF) | >= 0.2.0 |
 | **Database** | SQLite (scheduler), JSON (registries) | stdlib |
 | **Encryption** | cryptography | latest |
@@ -47,8 +48,9 @@
 +---------------------------+
 |   Flagship LLM Providers  |
 |   - Google Gemini API     |
-|   - OpenAI API            |
-|   - Anthropic API         |
+|   - OpenAI API (API mode) |
+|   - Anthropic SDK / API   |
+|     (dual-mode: V27)      |
 +---------------------------+
 ```
 
@@ -64,7 +66,9 @@ gateway.py
     |       |       |
     |       |       +-- provider_profile.py (config loading)
     |       |       +-- local_model_client.py (local LLM HTTP)
-    |       |       +-- flagship_client.py (provider HTTP)
+    |       |       +-- flagship_client.py (provider HTTP — API mode)
+    |       |       +-- anthropic_provider.py (Anthropic SDK — SDK mode, V27)
+    |       |       +-- provider_factory.py (create_provider(), V27)
     |       |       +-- usage_tracker.py (telemetry)
     |       |
     |       +-- planner.py (plan generation)
@@ -212,6 +216,7 @@ class RouterResult:
     executed: bool
 
 class ModelRouter:
+    def __init__(self, ..., provider_client=None)  # V27: optional SDK-mode provider
     def route(self, task_type: str, text: str, **kwargs) -> RouterResult
     @property
     def recent_decisions(self) -> list[RouterDecision]  # deque(maxlen=200)
@@ -220,6 +225,13 @@ class ModelRouter:
     @property
     def usage(self) -> UsageTracker
 ```
+
+**SDK-Mode Routing (V27):** When a `provider_client` is supplied (e.g.,
+`AnthropicProviderClient`), the router delegates to it for lanes configured with
+`mode: sdk`. SDK-mode calls use the provider's native Python SDK with full
+feature support (streaming, extended thinking, native tool calling). Lanes
+configured with `mode: api` (or no mode specified) continue to use the existing
+`FlagshipClient` HTTP path.
 
 ### 3.3 Provider Profile Registry
 
@@ -241,15 +253,28 @@ providers:
       model: "model-id"
       max_tokens: 4096
       temperature: 0.3
+      mode: "api"                   # V27: "sdk" | "api" (default: "api")
     deep:
       model: "model-id"
       max_tokens: 8192
       temperature: 0.7
+      mode: "sdk"                   # V27: SDK mode enables native SDK features
+      thinking:                     # V27: optional, SDK mode only
+        budget_tokens: 10000
     cache:                          # Optional
       model: "model-id"
       max_tokens: 2048
       temperature: 0.1
+      mode: "api"
 ```
+
+**V27 Anthropic Model Assignments:**
+
+| Lane | Model ID | Purpose |
+|------|----------|---------|
+| deep | `claude-opus-4-6` | Deep reasoning, planning, architecture |
+| fast | `claude-sonnet-4-5-20250929` | Fast lane responses |
+| cache | `claude-haiku-4-5-20251001` | Cache/utility lane |
 
 **Configuration Schema (router.yaml):**
 
@@ -285,10 +310,16 @@ local_utility_tasks:
 
 ```python
 @dataclass(frozen=True)
+class ThinkingConfig:                       # V27
+    budget_tokens: int
+
+@dataclass(frozen=True)
 class LaneConfig:
     model: str
     max_tokens: int
     temperature: float
+    mode: str = "api"                       # V27: "sdk" | "api"
+    thinking: Optional[ThinkingConfig] = None  # V27: extended thinking config
 
 @dataclass(frozen=True)
 class ProviderProfile:
@@ -336,11 +367,13 @@ class LocalModelClient:
 class LocalModelError(Exception): ...
 ```
 
-### 3.5 Flagship Client
+### 3.5 Flagship Client (API Mode)
 
 **File:** `src/core/flagship_client.py`
 
-HTTP client for external LLM providers (Gemini, OpenAI, Anthropic).
+HTTP client for external LLM providers (Gemini, OpenAI, Anthropic). Used for
+lanes configured with `mode: api` (the default). V27 introduced SDK-mode
+providers as an alternative path; see Section 3.47.
 
 **Public API:**
 
@@ -1648,6 +1681,100 @@ in chat.
 the chat response. Receipt lines are retained in War Room tool traces for
 auditability but no longer duplicate into the user-facing message. This
 eliminates the visual noise of repeated receipt annotations in chat output.
+
+### 3.47 Anthropic Provider Client — SDK Mode (V27, v0.2.13)
+
+**File:** `src/core/anthropic_provider.py`
+
+Native Anthropic Python SDK client supporting extended thinking, streaming, and
+native tool calling. Used when a lane is configured with `mode: sdk` and the
+active provider is Anthropic.
+
+**Public API:**
+
+```python
+class AnthropicProviderClient:
+    def __init__(self, api_key: str = None)  # Falls back to ANTHROPIC_API_KEY env var
+    def complete(self, prompt: str, model: str, max_tokens: int,
+                 temperature: float = 0.7, thinking: Optional[ThinkingConfig] = None,
+                 **kwargs) -> str
+```
+
+**Extended Thinking:** When a `thinking` parameter is supplied (via `ThinkingConfig`
+with `budget_tokens`), the client passes the `thinking` block to the Anthropic
+SDK. The response is parsed in `_parse_response()`, which extracts both
+`thinking` blocks (internal chain-of-thought) and `text` blocks (final answer).
+Only the text content is returned to the caller; thinking blocks are logged for
+observability but not surfaced to the user.
+
+**SDK Features vs API Mode:**
+
+| Feature | SDK Mode | API Mode (FlagshipClient) |
+|---------|----------|--------------------------|
+| Extended thinking | Supported (configurable budget_tokens) | Not available |
+| Streaming | Native SDK streaming | Raw HTTP chunked |
+| Tool calling | Native Anthropic tool format | Generic JSON |
+| Error handling | SDK exception types | HTTP status codes |
+
+### 3.48 Provider Factory (V27, v0.2.13)
+
+**File:** `src/core/provider_factory.py`
+
+Factory function for instantiating the correct provider client based on the
+lane's `mode` configuration.
+
+**Public API:**
+
+```python
+def create_provider(provider_name: str, profile: ProviderProfile,
+                    mode: str = "api") -> Union[FlagshipClient, AnthropicProviderClient]:
+    """
+    Returns a FlagshipClient for mode='api' or a provider-specific SDK client
+    for mode='sdk'. Currently supports SDK mode for Anthropic only.
+    Raises ValueError for unsupported provider/mode combinations.
+    """
+```
+
+**Resolution Logic:**
+1. `mode="api"` (default) — returns `FlagshipClient(provider_name, profile)`
+2. `mode="sdk"` + `provider_name="anthropic"` — returns `AnthropicProviderClient()`
+3. `mode="sdk"` + unsupported provider — raises `ValueError`
+
+### 3.49 Dual-Mode Provider Architecture (V27, v0.2.13)
+
+V27 introduces dual-mode providers, allowing each lane in `models.yaml` to
+independently specify `mode: sdk` or `mode: api`. This enables a gradual
+migration path: providers with mature Python SDKs (e.g., Anthropic) can use
+SDK mode for full feature access, while others continue using the raw HTTP
+`FlagshipClient`.
+
+**Per-Lane Mode Selection:**
+
+```
+models.yaml lane config
+    |
+    +-- mode: "sdk"
+    |       |
+    |       v
+    |   create_provider(mode="sdk")
+    |       -> AnthropicProviderClient (native SDK)
+    |       -> Extended thinking, streaming, native tools
+    |
+    +-- mode: "api" (or omitted)
+            |
+            v
+        create_provider(mode="api")
+            -> FlagshipClient (raw HTTP)
+            -> Standard prompt/completion cycle
+```
+
+**Updated Anthropic Models (v0.2.13):**
+
+| Model ID | Lane | Capabilities |
+|----------|------|-------------|
+| `claude-opus-4-6` | deep | Deep reasoning with extended thinking support |
+| `claude-sonnet-4-5-20250929` | fast | Fast general-purpose responses |
+| `claude-haiku-4-5-20251001` | cache | Lightweight cache/utility tasks |
 
 ---
 

@@ -1,8 +1,8 @@
 # Functional Specifications: Project Lancelot v7.0
 
-**Document Version:** 7.2
+**Document Version:** 7.3
 **Last Updated:** 2026-02-18
-**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2 + V26 Output Formatting
+**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2 + V26 Output Formatting + v0.2.13 Provider SDK Upgrade
 
 ---
 
@@ -81,6 +81,10 @@ Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as
   - **Google Gemini:** gemini-3-flash-preview (fast), gemini-3-pro-preview (deep)
   - **OpenAI:** gpt-4o-mini (fast), gpt-4o (deep)
   - **Anthropic:** claude-3-5-haiku (fast), claude-sonnet-4 (deep)
+
+- **F-03.6 Provider Modes (v0.2.13):** Each provider connection operates in one of two modes, selected during onboarding (see F-09.5):
+  - **SDK Mode (Recommended):** Uses the provider's native SDK client. Enables full feature support including extended thinking for the Anthropic deep lane (`claude-sonnet-4`). This is the default recommended mode.
+  - **API Mode:** Uses raw HTTP calls via ModelRouter. Lightweight with no SDK dependencies. Suitable for environments where minimal footprint is preferred, but lacks SDK-specific features such as extended thinking.
 
 - **F-03.3 Escalation:** Automatic escalation from fast to deep lane on:
   - Risk keyword detection in input
@@ -189,6 +193,11 @@ Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as
   - **OAuth Mode:** Detects `application_default_credentials.json` (ADC) for enterprise integration
 - **F-09.3 Communications Setup:** Configures Google Chat and/or Telegram webhook endpoints.
 - **F-09.4 Onboarding State Machine:** Persistent state tracking with recovery commands: STATUS, BACK, RESTART STEP, RESEND CODE, RESET.
+- **F-09.5 Provider Mode Selection (v0.2.13):** A new `PROVIDER_MODE_SELECTION` onboarding step is inserted between the API key entry (`HANDSHAKE`) step and `LOCAL_UTILITY_SETUP`. After successful API key validation, the user is presented with two options:
+  - **[1] SDK Mode (Recommended)** — Full feature support including extended thinking for supported providers.
+  - **[2] API Mode** — Lightweight raw HTTP integration with no SDK dependencies.
+  The selected mode is stored as `LANCELOT_PROVIDER_MODE` in the `.env` file and persists across container restarts.
+- **F-09.6 Final Checks Summary (v0.2.13):** The onboarding final checks summary now includes the selected provider mode (SDK or API) alongside the provider name, local model status, and other system readiness indicators.
 
 ### FA-10: Crusader Mode (High-Agency Autonomy)
 
@@ -362,6 +371,8 @@ The primary command center with specialized panels:
 | **Tool Fabric Panel** | `src/ui/panels/tools_panel.py` | Provider health, capability routing, receipts, safe mode |
 
 All panels handle backend-down scenarios gracefully with safe fallback displays.
+
+- **Setup & Recovery Tab — Provider Mode Display (v0.2.13):** The Setup & Recovery System tab now displays the active provider mode (SDK or API) alongside the provider name, giving the Commander immediate visibility into which integration path is active.
 
 ### 4.2 Chat Interface
 

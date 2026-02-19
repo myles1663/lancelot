@@ -22,11 +22,12 @@ logger = logging.getLogger(__name__)
 class AnthropicProviderClient(ProviderClient):
     """Anthropic provider adapter using the anthropic SDK."""
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, mode: str = "sdk"):
+        self._mode = mode
         try:
             import anthropic
             self._client = anthropic.Anthropic(api_key=api_key)
-            logger.info("Anthropic provider initialized")
+            logger.info("Anthropic provider initialized (mode=%s)", mode)
         except ImportError:
             raise ImportError(
                 "Anthropic SDK not installed. Run: pip install anthropic"
@@ -54,6 +55,18 @@ class AnthropicProviderClient(ProviderClient):
         }
         if system_instruction:
             kwargs["system"] = system_instruction
+
+        # V27: Extended thinking support (SDK mode only)
+        if self._mode == "sdk" and config and config.get("thinking"):
+            thinking_cfg = config["thinking"]
+            budget = thinking_cfg.get("budget_tokens", 10000)
+            kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": budget,
+            }
+            # Extended thinking needs higher max_tokens
+            kwargs["max_tokens"] = max(kwargs["max_tokens"], 16384)
+            logger.info("Anthropic extended thinking enabled (budget=%d)", budget)
 
         response = self._call_with_retry(
             lambda: self._client.messages.create(**kwargs)
@@ -91,13 +104,23 @@ class AnthropicProviderClient(ProviderClient):
 
         # Map tool_config mode
         if tool_config:
-            mode = tool_config.get("mode", "AUTO")
-            if mode == "ANY":
+            tc_mode = tool_config.get("mode", "AUTO")
+            if tc_mode == "ANY":
                 kwargs["tool_choice"] = {"type": "any"}
-            elif mode == "NONE":
+            elif tc_mode == "NONE":
                 # Don't pass tools at all for NONE mode
                 del kwargs["tools"]
             # AUTO is the default
+
+        # V27: Extended thinking support (SDK mode only)
+        if self._mode == "sdk" and config and config.get("thinking"):
+            thinking_cfg = config["thinking"]
+            budget = thinking_cfg.get("budget_tokens", 10000)
+            kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": budget,
+            }
+            kwargs["max_tokens"] = max(kwargs["max_tokens"], 16384)
 
         response = self._call_with_retry(
             lambda: self._client.messages.create(**kwargs)
@@ -164,7 +187,7 @@ class AnthropicProviderClient(ProviderClient):
                 elif "opus" in model_id:
                     tier = "deep"
                 elif "sonnet" in model_id:
-                    tier = "deep"
+                    tier = "standard"
 
                 models.append(ModelInfo(
                     id=model_id,
@@ -174,12 +197,14 @@ class AnthropicProviderClient(ProviderClient):
                 ))
         except Exception as e:
             logger.warning("Anthropic model listing failed: %s", e)
-            # Fallback: return known models
+            # Fallback: return known models (V27: updated to latest)
             models = [
-                ModelInfo(id="claude-3-5-haiku-latest", display_name="Claude 3.5 Haiku",
-                          context_window=200000, supports_tools=True, capability_tier="fast"),
-                ModelInfo(id="claude-sonnet-4-20250514", display_name="Claude Sonnet 4",
+                ModelInfo(id="claude-opus-4-6", display_name="Claude Opus 4.6",
                           context_window=200000, supports_tools=True, capability_tier="deep"),
+                ModelInfo(id="claude-sonnet-4-5-20250929", display_name="Claude Sonnet 4.5",
+                          context_window=200000, supports_tools=True, capability_tier="standard"),
+                ModelInfo(id="claude-haiku-4-5-20251001", display_name="Claude Haiku 4.5",
+                          context_window=200000, supports_tools=True, capability_tier="fast"),
             ]
 
         return models
@@ -226,10 +251,14 @@ class AnthropicProviderClient(ProviderClient):
     def _parse_response(self, response) -> GenerateResult:
         """Convert an Anthropic response to GenerateResult."""
         text_parts = []
+        thinking_parts = []
         tool_calls = []
 
         for block in response.content:
-            if block.type == "text":
+            if block.type == "thinking":
+                # V27: Extended thinking block
+                thinking_parts.append(block.thinking)
+            elif block.type == "text":
                 text_parts.append(block.text)
             elif block.type == "tool_use":
                 tool_calls.append(ToolCall(
@@ -249,6 +278,10 @@ class AnthropicProviderClient(ProviderClient):
         # raw = the response content blocks for conversation continuity
         # Anthropic needs the assistant message appended as-is
         raw = {"role": "assistant", "content": response.content}
+
+        # V27: Include thinking text for orchestrator access
+        if thinking_parts:
+            raw["thinking"] = "\n".join(thinking_parts)
 
         return GenerateResult(
             text=text,

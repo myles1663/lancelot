@@ -38,6 +38,7 @@ class LaneConfig:
     model: str
     max_tokens: int
     temperature: float
+    thinking: Optional[dict] = None  # Extended thinking config: {"enabled": True, "budget_tokens": N}
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class ProviderProfile:
     fast: LaneConfig
     deep: LaneConfig
     cache: Optional[LaneConfig] = None
+    mode: str = "sdk"  # "sdk" (full SDK features) or "api" (raw HTTP)
 
 
 @dataclass(frozen=True)
@@ -277,11 +279,13 @@ class ProfileRegistry:
                 model=raw["fast"]["model"],
                 max_tokens=raw["fast"]["max_tokens"],
                 temperature=raw["fast"]["temperature"],
+                thinking=raw["fast"].get("thinking"),
             )
             deep = LaneConfig(
                 model=raw["deep"]["model"],
                 max_tokens=raw["deep"]["max_tokens"],
                 temperature=raw["deep"]["temperature"],
+                thinking=raw["deep"].get("thinking"),
             )
             cache = None
             if "cache" in raw:
@@ -289,6 +293,7 @@ class ProfileRegistry:
                     model=raw["cache"]["model"],
                     max_tokens=raw["cache"]["max_tokens"],
                     temperature=raw["cache"]["temperature"],
+                    thinking=raw["cache"].get("thinking"),
                 )
             self._profiles[name] = ProviderProfile(
                 name=name,
@@ -296,6 +301,7 @@ class ProfileRegistry:
                 fast=fast,
                 deep=deep,
                 cache=cache,
+                mode=raw.get("mode", "sdk"),
             )
 
         # Routing order

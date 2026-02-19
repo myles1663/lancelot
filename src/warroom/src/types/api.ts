@@ -104,6 +104,7 @@ export interface CrusaderActionResponse extends CrusaderStatusResponse {
 export interface OnboardingStatusResponse {
   state: string
   flagship_provider: string
+  provider_mode: string
   credential_status: string
   local_model_status: string
   is_ready: boolean

@@ -171,7 +171,7 @@ class FlagshipClient:
         }
         headers = {
             "x-api-key": self._api_key,
-            "anthropic-version": "2023-06-01",
+            "anthropic-version": "2024-10-22",
         }
         data = self._http_post(_ANTHROPIC_URL, payload, timeout, extra_headers=headers)
         try:

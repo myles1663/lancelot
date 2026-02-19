@@ -216,7 +216,7 @@ function SystemTab() {
         {!onboarding ? (
           <p className="text-sm text-text-muted">Loading...</p>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <div>
               <span className="text-[10px] uppercase tracking-wider text-text-muted">State</span>
               <div className="mt-1">
@@ -230,6 +230,12 @@ function SystemTab() {
               <span className="text-[10px] uppercase tracking-wider text-text-muted">Provider</span>
               <p className="text-sm font-mono text-text-primary mt-1">
                 {onboarding.flagship_provider || 'None'}
+              </p>
+            </div>
+            <div>
+              <span className="text-[10px] uppercase tracking-wider text-text-muted">Mode</span>
+              <p className="text-sm font-mono text-text-primary mt-1">
+                {(onboarding.provider_mode || 'sdk').toUpperCase()}
               </p>
             </div>
             <div>

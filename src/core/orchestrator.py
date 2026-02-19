@@ -744,12 +744,15 @@ class LancelotOrchestrator:
         from providers.factory import create_provider, API_KEY_VARS
 
         provider_name = os.getenv("LANCELOT_PROVIDER", "gemini")
+        provider_mode = os.getenv("LANCELOT_PROVIDER_MODE", "sdk")
         api_key_var = API_KEY_VARS.get(provider_name, "")
         api_key = os.getenv(api_key_var, "")
+        self._provider_name = provider_name
+        self._provider_mode = provider_mode
 
         if api_key:
             try:
-                self.provider = create_provider(provider_name, api_key)
+                self.provider = create_provider(provider_name, api_key, mode=provider_mode)
                 # Load model names from models.yaml profile if available
                 try:
                     from provider_profile import ProfileRegistry
@@ -759,9 +762,10 @@ class LancelotOrchestrator:
                         self.model_name = profile.fast.model
                         self._deep_model_name = profile.deep.model
                         self._cache_model = profile.cache.model if profile.cache else self.model_name
+                        self._deep_thinking_config = profile.deep.thinking  # V27
                 except Exception:
                     pass  # Keep env-var defaults
-                print(f"{provider_name.title()} provider initialized via API key (model: {self.model_name}).")
+                print(f"{provider_name.title()} provider initialized via API key (model: {self.model_name}, mode: {provider_mode}).")
                 return
             except Exception as e:
                 print(f"Error initializing {provider_name} provider: {e}")
@@ -814,11 +818,16 @@ class LancelotOrchestrator:
         if not api_key:
             raise ValueError(f"No API key configured for {provider_name} (set {api_key_var})")
 
+        # V27: Read provider mode
+        provider_mode = os.getenv("LANCELOT_PROVIDER_MODE", "sdk")
+
         # Create new provider
-        new_provider = create_provider(provider_name, api_key)
+        new_provider = create_provider(provider_name, api_key, mode=provider_mode)
 
         # Swap provider reference (atomic under GIL)
         self.provider = new_provider
+        self._provider_name = provider_name
+        self._provider_mode = provider_mode
 
         # Update model names from ProfileRegistry
         try:
@@ -829,6 +838,7 @@ class LancelotOrchestrator:
                 self.model_name = profile.fast.model
                 self._deep_model_name = profile.deep.model
                 self._cache_model = profile.cache.model if profile.cache else self.model_name
+                self._deep_thinking_config = profile.deep.thinking  # V27
         except Exception:
             pass  # Keep current model names
 
@@ -839,8 +849,8 @@ class LancelotOrchestrator:
             if attr.startswith("_deep_model_valid_"):
                 delattr(self, attr)
 
-        print(f"Provider hot-swapped to {provider_name} (model: {self.model_name})")
-        return f"{provider_name.title()} provider active (model: {self.model_name})"
+        print(f"Provider hot-swapped to {provider_name} (model: {self.model_name}, mode: {provider_mode})")
+        return f"{provider_name.title()} provider active (model: {self.model_name}, mode: {provider_mode})"
 
     def set_lane_model(self, lane: str, model_id: str) -> None:
         """Override the model assigned to a specific lane at runtime.
@@ -3164,16 +3174,39 @@ class LancelotOrchestrator:
             msg = self.provider.build_user_message(user_message)
             messages = [msg]
 
+            # V27: Provider-specific thinking configuration
+            provider_name = getattr(self, '_provider_name', 'gemini')
+            provider_mode = getattr(self, '_provider_mode', 'sdk')
+            thinking_config = {}
+
+            if provider_name == "anthropic" and provider_mode == "sdk":
+                # Anthropic extended thinking via SDK
+                deep_thinking = getattr(self, '_deep_thinking_config', None)
+                budget = 10000
+                if deep_thinking and isinstance(deep_thinking, dict):
+                    budget = deep_thinking.get("budget_tokens", 10000)
+                thinking_config = {"thinking": {"type": "enabled", "budget_tokens": budget}}
+            elif provider_name == "gemini":
+                # Gemini uses thinking_level
+                thinking_config = {"thinking": {"thinking_level": "high"}}
+            # OpenAI/xAI: no native extended thinking — use standard reasoning
+
             result = self._llm_call_with_retry(
                 lambda: self.provider.generate(
                     model=deep_model,
                     messages=messages,
                     system_instruction=reasoning_instruction,
-                    config={"thinking": {"thinking_level": "high"}},
+                    config=thinking_config if thinking_config else None,
                 )
             )
 
             reasoning_text = result.text if result.text else ""
+
+            # V27: If Anthropic returned thinking blocks, prepend them
+            if hasattr(result, 'raw') and isinstance(result.raw, dict) and result.raw.get("thinking"):
+                thinking_text = result.raw["thinking"]
+                reasoning_text = thinking_text + "\n\n" + reasoning_text if reasoning_text else thinking_text
+
             token_estimate = len(reasoning_text) // 4
 
             # Parse capability gaps from the reasoning output
@@ -3927,8 +3960,8 @@ class LancelotOrchestrator:
     def _get_deep_model(self) -> str:
         """Returns the deep/reasoning model name with graceful fallback.
 
-        Checks the profile-assigned deep model or GEMINI_DEEP_MODEL env var,
-        then falls back to self.model_name (fast lane).
+        V27: Provider-aware — checks profile-assigned deep model first,
+        then falls back to env var and finally self.model_name (fast lane).
         Validates the model is accessible before returning it.
         """
         deep_model = getattr(self, '_deep_model_name', '') or os.getenv("GEMINI_DEEP_MODEL", "")

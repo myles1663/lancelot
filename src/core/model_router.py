@@ -110,10 +110,12 @@ class ModelRouter:
         registry: ProfileRegistry,
         local_client: Optional[LocalModelClient] = None,
         flagship_client: Optional[Any] = None,
+        provider_client: Optional[Any] = None,
     ):
         self._registry = registry
         self._local = local_client
         self._flagship = flagship_client
+        self._provider_client = provider_client  # V27: SDK-mode ProviderClient
         self._decisions: deque[RouterDecision] = deque(maxlen=_MAX_RECENT)
         self._usage = UsageTracker()
 
@@ -306,6 +308,12 @@ class ModelRouter:
         """Execute a task on the flagship provider."""
         from src.core.flagship_client import FlagshipError
 
+        # V27: SDK mode — use ProviderClient.generate() when available
+        if self._provider_client is not None:
+            return self._execute_flagship_sdk(
+                task_type, text, lane, rationale, input_preview, start, **kwargs
+            )
+
         if self._flagship is None:
             elapsed = (time.monotonic() - start) * 1000
             decision = self._record(
@@ -428,6 +436,140 @@ class ModelRouter:
         except Exception:
             pass
         return f"flagship-{lane}"
+
+    # ------------------------------------------------------------------
+    # V27: SDK-mode flagship execution
+    # ------------------------------------------------------------------
+
+    def _execute_flagship_sdk(
+        self,
+        task_type: str,
+        text: str,
+        lane: str,
+        rationale: str,
+        input_preview: str,
+        start: float,
+        **kwargs: Any,
+    ) -> RouterResult:
+        """Execute a task via ProviderClient.generate() (SDK mode)."""
+        flagship_lane = "deep" if lane == "flagship_deep" else "fast"
+
+        # Resolve model from the active provider profile
+        model_name = self._resolve_sdk_model_name(flagship_lane)
+
+        try:
+            messages = [self._provider_client.build_user_message(text)]
+            result = self._provider_client.generate(
+                model=model_name,
+                messages=messages,
+            )
+            output = result.text or ""
+            elapsed = (time.monotonic() - start) * 1000
+            output_preview = output[:_PREVIEW_LEN] if output else ""
+
+            decision = self._record(
+                task_type=task_type,
+                lane=lane,
+                model=model_name,
+                rationale=f"{rationale} (SDK mode)",
+                elapsed_ms=elapsed,
+                success=True,
+                input_preview=input_preview,
+                output_preview=output_preview,
+            )
+            return RouterResult(
+                decision=decision, output=output, executed=True,
+            )
+        except Exception as exc:
+            # Escalation on failure: if fast lane failed, retry on deep
+            if flagship_lane == "fast":
+                logger.warning(
+                    "SDK fast lane failed for '%s', escalating to deep: %s",
+                    task_type, exc,
+                )
+                return self._retry_on_deep_sdk(
+                    task_type, text, rationale, input_preview, start, exc, **kwargs
+                )
+
+            elapsed = (time.monotonic() - start) * 1000
+            decision = self._record(
+                task_type=task_type,
+                lane=lane,
+                model=model_name,
+                rationale=f"{rationale} (SDK mode)",
+                elapsed_ms=elapsed,
+                success=False,
+                error=str(exc),
+                input_preview=input_preview,
+            )
+            return RouterResult(decision=decision, executed=False)
+
+    def _retry_on_deep_sdk(
+        self,
+        task_type: str,
+        text: str,
+        original_rationale: str,
+        input_preview: str,
+        start: float,
+        original_error: Exception,
+        **kwargs: Any,
+    ) -> RouterResult:
+        """Retry a failed fast-lane task on the deep lane (SDK mode)."""
+        rationale = f"Escalated from fast to deep after failure: {original_error}"
+        model_name = self._resolve_sdk_model_name("deep")
+
+        try:
+            messages = [self._provider_client.build_user_message(text)]
+            result = self._provider_client.generate(
+                model=model_name,
+                messages=messages,
+            )
+            output = result.text or ""
+            elapsed = (time.monotonic() - start) * 1000
+            output_preview = output[:_PREVIEW_LEN] if output else ""
+
+            decision = self._record(
+                task_type=task_type,
+                lane="flagship_deep",
+                model=model_name,
+                rationale=f"{rationale} (SDK mode)",
+                elapsed_ms=elapsed,
+                success=True,
+                input_preview=input_preview,
+                output_preview=output_preview,
+            )
+            return RouterResult(
+                decision=decision, output=output, executed=True,
+            )
+        except Exception as exc:
+            elapsed = (time.monotonic() - start) * 1000
+            decision = self._record(
+                task_type=task_type,
+                lane="flagship_deep",
+                model=model_name,
+                rationale=f"{rationale} (SDK mode)",
+                elapsed_ms=elapsed,
+                success=False,
+                error=str(exc),
+                input_preview=input_preview,
+            )
+            return RouterResult(decision=decision, executed=False)
+
+    def _resolve_sdk_model_name(self, lane: str) -> str:
+        """Get the model name for SDK mode from the registry's active profile."""
+        try:
+            # Try to get from the registry's active provider profile
+            for name in self._registry.provider_names:
+                profile = self._registry.get_profile(name)
+                if lane == "deep":
+                    return profile.deep.model
+                elif lane == "fast":
+                    return profile.fast.model
+                elif lane == "cache" and profile.cache:
+                    return profile.cache.model
+        except Exception:
+            pass
+        return f"sdk-{lane}"
 
     # ------------------------------------------------------------------
     # Receipt logging

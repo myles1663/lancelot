@@ -5,6 +5,41 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.13] - 2026-02-18
+
+### Added
+- **Dual-Mode Providers — SDK & API (V27)**: Providers now support two connection
+  modes: SDK mode (recommended) uses the provider's Python SDK with full features
+  including extended thinking, streaming, and native tool calling. API mode uses
+  lightweight REST calls via FlagshipClient. Mode is selected during onboarding and
+  stored as `LANCELOT_PROVIDER_MODE` in `.env`. SDK mode is the default.
+- **Extended Thinking for Anthropic (V27)**: When using Anthropic in SDK mode, the
+  deep reasoning pass leverages Claude's extended thinking capability via the
+  `thinking` parameter. Thinking budget is configurable per-lane in `models.yaml`
+  (default: 10,000 tokens). Thinking blocks are parsed from responses and included
+  in the `ReasoningArtifact` for richer context injection into the agentic loop.
+- **Provider Mode Selection in Onboarding (V27)**: New `PROVIDER_MODE_SELECTION`
+  state added between API key entry and local model setup. Users choose between
+  SDK Mode (full features) and API Mode (lightweight). Mode is displayed in the
+  War Room Setup & Recovery panel.
+- **SDK-Mode ModelRouter (V27)**: When in SDK mode, the `ModelRouter` routes
+  flagship lane completions through `ProviderClient.generate()` instead of the
+  raw HTTP `FlagshipClient`. This enables consistent SDK features across all LLM
+  call paths.
+
+### Changed
+- **Anthropic Models Updated to Latest (V27)**: Deep lane now uses `claude-opus-4-6`
+  (was `claude-sonnet-4-20250514`). Fast lane uses `claude-sonnet-4-5-20250929`
+  (was `claude-3-5-haiku-latest`). Cache lane uses `claude-haiku-4-5-20251001`.
+  Model fallbacks in `AnthropicProviderClient.list_models()` also updated.
+- **Anthropic API Version Updated**: FlagshipClient now uses `anthropic-version:
+  2024-10-22` (was `2023-06-01`).
+- **`ProviderProfile` Extended**: Added `mode` field ("sdk" or "api") and optional
+  `thinking` config to `LaneConfig` dataclass. `ProfileRegistry` reads these from
+  `models.yaml`.
+- **`create_provider()` Factory**: Now accepts `mode` parameter, passed to provider
+  clients for feature gating.
+
 ## [0.2.12] - 2026-02-18
 
 ### Added

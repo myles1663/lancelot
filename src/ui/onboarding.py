@@ -289,11 +289,12 @@ class OnboardingOrchestrator:
 
     def _sync_snapshot(self):
         """Sync dynamically determined state to the snapshot file."""
-        # V16: Complete state map covering all onboarding steps
+        # V27: Complete state map covering all onboarding steps
         state_map = {
             "WELCOME": OnboardingState.WELCOME,
             "FLAGSHIP_SELECTION": OnboardingState.FLAGSHIP_SELECTION,
             "HANDSHAKE": OnboardingState.CREDENTIALS_CAPTURE,
+            "PROVIDER_MODE_SELECTION": OnboardingState.CREDENTIALS_CAPTURE,  # V27: shares credential phase
             "LOCAL_UTILITY_SETUP": OnboardingState.LOCAL_UTILITY_SETUP,
             "COMMS_SELECTION": OnboardingState.COMMS_SELECTION,
             "FINAL_CHECKS": OnboardingState.FINAL_CHECKS,
@@ -330,8 +331,9 @@ class OnboardingOrchestrator:
     def _determine_state(self):
         """Determines current state based on filesystem/env — self-healing on restart.
 
-        V16 flow: WELCOME -> FLAGSHIP_SELECTION -> HANDSHAKE -> LOCAL_UTILITY_SETUP
-                  -> COMMS_SELECTION -> [comms sub-states] -> FINAL_CHECKS -> READY
+        V27 flow: WELCOME -> FLAGSHIP_SELECTION -> HANDSHAKE -> PROVIDER_MODE_SELECTION
+                  -> LOCAL_UTILITY_SETUP -> COMMS_SELECTION -> [comms sub-states]
+                  -> FINAL_CHECKS -> READY
         """
         # v4: COOLDOWN replaces permanent LOCKDOWN — check snapshot first
         if self.snapshot.state == OnboardingState.COOLDOWN:
@@ -367,6 +369,11 @@ class OnboardingOrchestrator:
 
         if not api_key and not adc_exists:
             return "HANDSHAKE"
+
+        # Step 3.5: V27 — Provider mode (SDK/API) must be selected
+        provider_mode = self._get_env_value("LANCELOT_PROVIDER_MODE")
+        if not provider_mode:
+            return "PROVIDER_MODE_SELECTION"
 
         # Step 4: V16 — Local model must be verified
         if self.snapshot.local_model_status != "verified":
@@ -589,8 +596,8 @@ class OnboardingOrchestrator:
             if warning:
                 msg += f"*Note: {warning}*\n\n"
 
-            self.state = "LOCAL_UTILITY_SETUP"
-            msg += "Proceeding to local model setup..."
+            self.state = "PROVIDER_MODE_SELECTION"
+            msg += self._provider_mode_prompt()
             return msg
 
         except Exception as e:
@@ -658,6 +665,44 @@ class OnboardingOrchestrator:
 
         except Exception as e:
             return {"valid": True, "warning": f"Could not reach {provider} API to validate: {e}"}
+
+    # ------------------------------------------------------------------
+    # V27: PROVIDER_MODE_SELECTION state — SDK vs API
+    # ------------------------------------------------------------------
+
+    def _provider_mode_prompt(self) -> str:
+        """Render the SDK/API mode selection menu."""
+        provider_id = self.temp_data.get("provider", "")
+        provider_name = PROVIDERS.get(provider_id, {}).get("name", provider_id)
+        return (
+            f"**{provider_name} — Connection Mode**\n\n"
+            "[1] SDK Mode (Recommended) — Full Python SDK with extended thinking, "
+            "streaming, and native tool calling\n\n"
+            "[2] API Mode — Lightweight REST API calls. Fewer features but lower "
+            "overhead\n\n"
+            "Enter your choice:"
+        )
+
+    def _handle_provider_mode(self, text: str) -> str:
+        """Handles PROVIDER_MODE_SELECTION state — user picks SDK or API."""
+        choice = text.strip().lower()
+        mode_map = {
+            "1": "sdk", "sdk": "sdk",
+            "2": "api", "api": "api",
+        }
+        mode = mode_map.get(choice)
+        if not mode:
+            return "Invalid selection.\n\n" + self._provider_mode_prompt()
+
+        self._write_env_values(
+            {"LANCELOT_PROVIDER_MODE": mode},
+            "Provider Mode (V27)",
+        )
+        self.state = "LOCAL_UTILITY_SETUP"
+        return (
+            f"**{mode.upper()} mode selected.**\n\n"
+            "Proceeding to local model setup..."
+        )
 
     # ------------------------------------------------------------------
     # ADC / OAuth (Gemini only)
@@ -1105,9 +1150,11 @@ class OnboardingOrchestrator:
         comms = self._get_env_value("LANCELOT_COMMS_TYPE") or "none"
         comms_display = COMMS_CONNECTORS.get(comms, {}).get("name", comms)
 
+        provider_mode = self._get_env_value("LANCELOT_PROVIDER_MODE") or "sdk"
+
         msg = "**Final Configuration Complete**\n\n"
         msg += "**System Summary:**\n"
-        msg += f"- LLM Provider: {provider_name}\n"
+        msg += f"- LLM Provider: {provider_name} ({provider_mode.upper()} mode)\n"
         msg += f"- Local Model: Verified\n"
         msg += f"- Communications: {comms_display}\n"
         msg += f"- Security: Tokens configured\n"
@@ -1165,6 +1212,9 @@ class OnboardingOrchestrator:
 
         elif self.state == "HANDSHAKE":
             return self._handle_auth_options(text)
+
+        elif self.state == "PROVIDER_MODE_SELECTION":
+            return self._handle_provider_mode(text)
 
         elif self.state == "LOCAL_UTILITY_SETUP":
             return handle_local_utility_setup(text, self.snapshot)
