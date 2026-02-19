@@ -98,9 +98,10 @@ export async function patchDockerCompose(installDir, config) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Replace hardcoded Windows workspace path with relative path
-    if (line.includes('Lancelot Workspace:/home/lancelot/workspace')) {
-      result.push('      - "./lancelot_workspace:/home/lancelot/workspace"');
+    // Ensure workspace uses named volume (not bind mount)
+    if (line.includes('Lancelot Workspace:/home/lancelot/workspace') ||
+        line.includes('./lancelot_workspace:/home/lancelot/workspace')) {
+      result.push('      - lancelot_workspace:/home/lancelot/workspace');
       continue;
     }
 

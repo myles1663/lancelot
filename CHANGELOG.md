@@ -5,6 +5,15 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.18] - 2026-02-19
+
+### Fixed — V30: Docker Desktop Windows Compatibility
+- **Named Docker volumes**: Replaced bind mounts (`./lancelot_data:/home/lancelot/data`) with named Docker volumes (`lancelot_data`, `lancelot_workspace`). Bind mounts from Windows hosts are read-only inside containers on Docker Desktop for Windows, preventing SQLite database creation and file writes. Named volumes are managed by Docker inside the WSL2 VM with proper Linux permissions.
+- **Seed data baked into image**: `lancelot_data/` removed from `.dockerignore` so onboarding files (CAPABILITIES.md, RULES.md, USER.md, onboarding_snapshot.json) are copied into the Docker image at build time. Docker auto-populates named volumes with image contents on first mount.
+- **Removed dev code mount**: The `.:/home/lancelot/app` bind mount (for live code reloading during development) is no longer in the default docker-compose.yml. Production and installer users get the code baked into the image, avoiding read-only overlay issues on Windows.
+- **Entrypoint permission fixer**: `entrypoint.sh` ensures `/home/lancelot/data` and `/home/lancelot/workspace` directories exist and are owned by the `lancelot` user before dropping privileges via `gosu`.
+- **CRLF line ending fix**: Dockerfile strips Windows `\r\n` line endings from `entrypoint.sh` via `sed -i 's/\r$//'` to prevent "no such file or directory" errors from broken shebangs.
+
 ## [0.2.17] - 2026-02-19
 
 ### Added — Installer OAuth Support (create-lancelot v1.1.0)

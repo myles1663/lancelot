@@ -3,13 +3,11 @@ services:
     build: .
     container_name: lancelot_core
     volumes:
-      - ./lancelot_data:/home/lancelot/data
-      # Map the current directory to /home/lancelot/app for development
-      - .:/home/lancelot/app
+      # Named volumes — managed by Docker, writable on all platforms
+      - lancelot_data:/home/lancelot/data
+      - lancelot_workspace:/home/lancelot/workspace
       # Docker socket for sandbox provider (sibling containers)
       - /var/run/docker.sock:/var/run/docker.sock
-      # Shared workspace folder — user and Lancelot can both read/write
-      - "C:\\Users\\SSAdministrator\\Desktop\\Lancelot Workspace:/home/lancelot/workspace"
       # Mount Google OAuth credentials (ADC) from host (uncomment if using Google OAuth)
       # - ${APPDATA}/gcloud/application_default_credentials.json:/home/lancelot/.config/gcloud/application_default_credentials.json:ro
     group_add:
@@ -76,6 +74,12 @@ services:
     restart: unless-stopped
     networks:
       - lancelot_net
+
+volumes:
+  lancelot_data:
+    name: lancelot_data
+  lancelot_workspace:
+    name: lancelot_workspace
 
 networks:
   lancelot_net:

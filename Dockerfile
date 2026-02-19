@@ -46,6 +46,12 @@ COPY VERSION /app/VERSION
 # Copy the rest of the application code
 COPY . .
 
+# Copy seed / onboarding data into the data directory.
+# When a named Docker volume is mounted here on first run, Docker
+# auto-populates it with these files (CAPABILITIES.md, RULES.md, etc.)
+RUN mkdir -p /home/lancelot/data && \
+    cp -r lancelot_data/* /home/lancelot/data/ 2>/dev/null || true
+
 # Build War Room React SPA
 RUN cd src/warroom && npm ci && npm run build && rm -rf node_modules
 
@@ -55,11 +61,14 @@ RUN chown -R lancelot:lancelot /home/lancelot
 # Add lancelot to docker group so it can use the mounted socket
 RUN groupadd docker 2>/dev/null; usermod -aG docker lancelot
 
-# Switch to non-root user
-USER lancelot
+# Install gosu for dropping privileges in entrypoint
+RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
 
-# Expose port (if needed for FastAPI later, though not explicitly asked, it's good practice)
+# Copy and set entrypoint (runs as root, drops to lancelot user)
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/entrypoint.sh
+
 EXPOSE 8000
 
-# Default command can be bash or python
+ENTRYPOINT ["entrypoint.sh"]
 CMD ["bash"]
