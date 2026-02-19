@@ -936,7 +936,14 @@ class LancelotOrchestrator:
             f"- Use markdown tables (| col1 | col2 |) for comparisons and feature matrices\n"
             f"- Use paragraph breaks between distinct topics — never output a wall of text\n"
             f"- For research and analysis, structure as: summary → findings → recommendations\n"
-            f"- Keep formatting clean and scannable — the user reads this in a dashboard"
+            f"- Keep formatting clean and scannable — the user reads this in a dashboard\n\n"
+            f"LONG CONTENT POLICY:\n"
+            f"- For comprehensive research reports, competitive analyses, or detailed findings "
+            f"that would exceed ~100 lines: use the document_creator tool to generate a PDF, "
+            f"then share a brief summary in chat with a note that the full report is available as a document.\n"
+            f"- ALWAYS produce the actual content — never just describe what you will write. "
+            f"If you gathered data via tools, synthesize it into the full report immediately.\n"
+            f"- Do NOT say 'Let me compile' or 'I will now create' — just produce the content."
         )
 
         # 3. SELF-KNOWLEDGE (V24: Architecture reference for roadmap analysis)
@@ -1353,6 +1360,8 @@ class LancelotOrchestrator:
                     "Create professional documents: PDF, Word (.docx), Excel (.xlsx), or PowerPoint (.pptx). "
                     "Use this tool whenever the user asks you to create, generate, or write a document, report, "
                     "spreadsheet, presentation, or PDF. Do NOT use repo_writer for documents — use this tool instead. "
+                    "IMPORTANT: For comprehensive research reports, competitive analyses, or any response that "
+                    "would be very long (100+ lines), create a PDF document and share a summary in chat. "
                     "The 'content' parameter is a structured object with: title, subtitle, sections (each with "
                     "heading, paragraphs, bullets), tables (each with headers and rows). "
                     "For Excel: use headers and rows (or sheets array for multi-sheet). "
@@ -1748,7 +1757,8 @@ class LancelotOrchestrator:
                     "name": "document_creator",
                     "description": (
                         "Create professional documents: PDF, Word (.docx), Excel (.xlsx), or PowerPoint (.pptx). "
-                        "Use this whenever asked to create a document, report, spreadsheet, presentation, or PDF."
+                        "Use this whenever asked to create a document, report, spreadsheet, presentation, or PDF. "
+                        "Also use this for comprehensive research reports or analyses that would be very long."
                     ),
                     "parameters": {
                         "type": "object",
@@ -2639,6 +2649,10 @@ class LancelotOrchestrator:
 
             try:
                 _gen_config = {"thinking": self._get_thinking_config()}
+                # V29b: After 3+ tool calls, increase max_tokens so the model
+                # has room to synthesize a comprehensive report (not just a summary)
+                if len(tool_receipts) >= 3:
+                    _gen_config["max_tokens"] = 16384
                 # V23: NOTE — structured output (response_mime_type/response_schema)
                 # is NOT applied to generate_with_tools. Combining JSON schema
                 # enforcement with function calling causes the model to avoid
@@ -3715,6 +3729,9 @@ class LancelotOrchestrator:
 
         The conversation `messages` already contains all tool call results,
         so the model has full context to synthesize from.
+
+        V29b: Uses max_tokens=16384 to give the model enough room for a
+        comprehensive report after tool-heavy research loops.
         """
         try:
             # Append the model's narration response to conversation
@@ -3725,22 +3742,39 @@ class LancelotOrchestrator:
 
             # Send follow-up demanding actual content (not more narration)
             synthesis_msg = self.provider.build_user_message(
-                "You just said you would compile the analysis, but you need to "
-                "produce the ACTUAL CONTENT now. Do NOT describe what you will do — "
-                "write the comprehensive report with all findings, data, comparisons, "
-                "and recommendations. Include specific details from the research data "
-                "you gathered via the tool calls above. This is the final response "
-                "the user will see. Be thorough and detailed."
+                "IMPORTANT: You just described what you would do instead of actually doing it. "
+                "Now produce the COMPLETE, DETAILED report. This is your FINAL response — "
+                "the user will see exactly this text.\n\n"
+                "Requirements:\n"
+                "1. Write the full analysis with ALL sections (not just an executive summary)\n"
+                "2. Include specific data points, numbers, and comparisons from the research\n"
+                "3. Use markdown headers (##) for each major section\n"
+                "4. Cover: findings, competitive comparison, strengths/weaknesses, "
+                "roadmap implications, and recommendations\n"
+                "5. Be comprehensive — aim for 2000+ words\n\n"
+                "Do NOT say 'let me compile' or 'I will now' — write the actual content."
             )
             messages.append(synthesis_msg)
 
+            # V29b: Use higher max_tokens for synthesis — the model needs room
+            # for a full report after digesting 50k+ tokens of tool results
+            thinking_config = self._get_thinking_config()
+            synthesis_config = {
+                "max_tokens": 16384,  # 4x default — enough for comprehensive reports
+            }
+            if thinking_config:
+                synthesis_config["thinking"] = thinking_config
+
             # Use generate() with fresh max_tokens budget (no tools needed)
+            # Route to deep model for best synthesis quality
+            deep_model = self._get_deep_model()
+            print(f"V29: Synthesis call with max_tokens=16384, model={deep_model}")
             result = self._llm_call_with_retry(
                 lambda: self.provider.generate(
-                    model=self._route_model(prompt),
+                    model=deep_model,
                     messages=messages,
                     system_instruction=system_instruction,
-                    config={"thinking": self._get_thinking_config()},
+                    config=synthesis_config,
                 )
             )
             return result.text if result.text else ""

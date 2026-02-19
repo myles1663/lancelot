@@ -73,6 +73,10 @@ class AnthropicProviderClient(ProviderClient):
             "messages": messages,
             "max_tokens": 8192,
         }
+        # V29: Allow config-driven max_tokens override (for synthesis calls etc.)
+        if config and config.get("max_tokens"):
+            kwargs["max_tokens"] = config["max_tokens"]
+
         if system_instruction:
             kwargs["system"] = system_instruction
 
@@ -119,6 +123,10 @@ class AnthropicProviderClient(ProviderClient):
             "max_tokens": 8192,
             "tools": anthropic_tools,
         }
+        # V29: Allow config-driven max_tokens override
+        if config and config.get("max_tokens"):
+            kwargs["max_tokens"] = config["max_tokens"]
+
         if system_instruction:
             kwargs["system"] = system_instruction
 
