@@ -283,6 +283,15 @@ FLAG_META = {
         "conflicts": [],
         "warning": "Requires Memory vNext to be enabled for episodic storage. Scans are stored with 30-day decay. Each scan adds ~200-500 tokens to episodic memory.",
     },
+
+    # ── Autonomy Loop v2 (V25) ──────────────────────────────────────
+    "FEATURE_DEEP_REASONING_LOOP": {
+        "description": "Autonomy Loop v2: Deep reasoning pass before agentic execution. Runs a reasoning-only LLM call (no tools, deep model, high thinking) before the agentic loop. The model analyzes the task, identifies information needs, proposes approaches, and flags capability gaps. Reasoning output is injected as context for the agentic loop. Also records task experiences in episodic memory for future learning, and provides structured governance feedback when actions are blocked.",
+        "category": "Reasoning",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Adds one extra LLM call (deep model with extended thinking) per qualifying request. Increases latency by 3-10 seconds and token cost by ~2000-8000 tokens per request. Disable if response time is critical.",
+    },
 }
 
 

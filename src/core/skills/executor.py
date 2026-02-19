@@ -230,9 +230,20 @@ class SkillExecutor:
 
         entry = self._registry.get_skill(skill_name)
         if entry is None:
-            error = f"Skill '{skill_name}' not found in registry"
-            self._emit_receipt("skill_failed", skill=skill_name, error=error)
-            return SkillResult(success=False, error=error)
+            # Fallback: built-in skills work without registry entries
+            if skill_name in _BUILTIN_SKILLS:
+                entry = SkillEntry(
+                    name=skill_name,
+                    version="builtin",
+                    enabled=True,
+                    manifest_path="",
+                    ownership=SkillOwnership.SYSTEM,
+                    signature_state=SignatureState.VERIFIED,
+                )
+            else:
+                error = f"Skill '{skill_name}' not found in registry or builtins"
+                self._emit_receipt("skill_failed", skill=skill_name, error=error)
+                return SkillResult(success=False, error=error)
 
         if not entry.enabled:
             error = f"Skill '{skill_name}' is disabled"

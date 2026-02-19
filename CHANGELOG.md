@@ -5,6 +5,48 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.11] - 2026-02-18
+
+### Added
+- **Autonomy Loop v2 — Deep Reasoning Pass (V25 Phase 1)**: Before the agentic loop executes,
+  a dedicated reasoning-only LLM call analyzes the task using the deep model with extended
+  thinking. The reasoning pass produces a `ReasoningArtifact` containing structured analysis,
+  proposed approaches, and identified capability gaps. This artifact is injected as context
+  into the agentic loop, grounding tool use in prior analysis rather than blind action.
+  Triggered for complex/analytical/research requests (>150 chars with reasoning indicators).
+  New helper methods: `_should_use_deep_reasoning()`, `_build_reasoning_instruction()`,
+  `_deep_reasoning_pass()`. Controlled by `FEATURE_DEEP_REASONING_LOOP` flag (default: `false`).
+- **Capability Gap Detection (V25)**: The reasoning pass explicitly identifies missing tools
+  or skills needed to complete a task well. Gaps are parsed from `CAPABILITY GAP:` markers
+  in reasoning output and appended to the agentic loop's system instruction, enabling the
+  model to work around limitations or note them in its response.
+- **Task Experience Memory (V25 Phase 6)**: After each qualifying request, a `TaskExperience`
+  record is stored in episodic memory capturing: task summary, approach taken, tools used/
+  succeeded/failed, actions blocked by governance, capability gaps, and whether deep reasoning
+  was used. On future requests, relevant past experiences are retrieved and injected into the
+  reasoning pass, enabling learning from what worked and what didn't. New helper methods:
+  `_retrieve_task_experiences()`, `_record_task_experience()`.
+- **Governed Negotiation Feedback (V25 Phase 3)**: When the Sentry blocks a tool call, the
+  model now receives structured `GovernanceFeedback` instead of a generic "BLOCKED" message.
+  Feedback includes: why the action was blocked, current permission state, trust record
+  summary, suggested alternative approaches, and resolution hints. This enables the model
+  to adapt its strategy rather than stalling. New helper methods: `_get_trust_summary()`,
+  `_suggest_alternatives()`.
+- **New dataclass module `reasoning_artifact.py`**: Contains `ReasoningArtifact` (Phase 1
+  output), `TaskExperience` (Phase 6 episodic record), and `GovernanceFeedback` (Phase 3
+  structured feedback) — the three core data structures for the Autonomy Loop v2.
+- **New feature flag**: `FEATURE_DEEP_REASONING_LOOP` (default: `false`). Toggleable via
+  War Room Kill Switches. Warning: adds latency (1 extra LLM call) and cost (deep model
+  tokens) per qualifying request.
+
+### Fixed
+- **github_search skill registration**: The `github_search` skill was defined in the
+  `_BUILTIN_SKILLS` dict but was unreachable because `executor.run()` checked the
+  `SkillRegistry` JSON first and returned "not found" before consulting builtins. Fixed
+  by adding a fallback in `executor.run()` that creates a synthetic `SkillEntry` for any
+  skill found in `_BUILTIN_SKILLS` when not present in the registry. This also prevents
+  the same bug for any future built-in skills.
+
 ## [0.2.10] - 2026-02-18
 
 ### Added

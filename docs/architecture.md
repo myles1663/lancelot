@@ -85,6 +85,14 @@ For plans that require execution, the three-agent loop runs:
 
 Each step generates a receipt linked to the parent plan via `parent_id` and `quest_id`, forming a traceable chain.
 
+**V25 Autonomy Loop v2** (`FEATURE_DEEP_REASONING_LOOP`, v0.2.11): Three new phases extend the autonomy loop with pre-execution reasoning, structured governance feedback, and experiential learning.
+
+**Phase 1 — Deep Reasoning Pass.** Before the agentic loop begins, a dedicated reasoning pass analyzes the request using a deep model with high thinking budget. The orchestrator evaluates `_should_use_deep_reasoning()` triggers (request complexity, tool requirements, risk indicators) and, when triggered, calls `_build_reasoning_instruction()` to assemble a reasoning-focused system prompt. The `_deep_reasoning_pass()` method then calls `provider.generate()` with the deep model lane and elevated thinking tokens. The output is captured as a `ReasoningArtifact` (defined in `src/core/reasoning_artifact.py`) and injected as structured context into `_agentic_generate()`. This means Lancelot thinks deeply about what it needs to do — identifying capability gaps, anticipating risks, and forming a strategy — before it takes any action. The reasoning output is also scanned for `CAPABILITY GAP:` markers, which identify tools or skills the system lacks for the current task.
+
+**Phase 3 — Governed Negotiation.** When governance blocks an action, the system no longer returns a generic `BLOCKED` message. Instead, it constructs a `GovernanceFeedback` dataclass (from `reasoning_artifact.py`) containing the blocked action, the policy rule that triggered the block, and a set of structured alternative approaches the model can pursue. This feedback is injected back into the agentic loop context, allowing the model to adapt its plan — choosing a lower-risk path, requesting approval, or decomposing the action — rather than stalling.
+
+**Phase 6 — Task Experience Memory.** After task completion, the orchestrator calls `_record_task_experience()`, which stores a `TaskExperience` dataclass (from `reasoning_artifact.py`) in episodic memory under the `task_experience` namespace. Each experience record captures the original request, the reasoning artifact, capability gaps encountered, actions taken, the outcome, and a duration. On future requests, the context compiler can retrieve relevant past experiences, enabling Lancelot to learn from previous successes and failures — avoiding repeated mistakes and reusing strategies that worked.
+
 ### 6. Risk Classification & Governance
 
 Every action is classified into one of four risk tiers:
@@ -311,9 +319,10 @@ A core architectural principle: **any subsystem can be disabled without breaking
 | Memory vNext | Falls back to basic context management |
 | GitHub Search | `github_search` skill unavailable, other research tools still work |
 | Competitive Scan | No scan memory or diffing; research still works, just stateless |
+| Deep Reasoning Loop | No pre-execution reasoning pass; agentic loop runs without strategic analysis |
 | Tool Fabric | No tool execution, conversation-only mode |
 
-This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, etc.) that gate each subsystem at initialization. When a subsystem is disabled, its code paths are skipped and its API endpoints return appropriate "not available" responses.
+This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FEATURE_DEEP_REASONING_LOOP`, etc.) that gate each subsystem at initialization. When a subsystem is disabled, its code paths are skipped and its API endpoints return appropriate "not available" responses.
 
 ---
 

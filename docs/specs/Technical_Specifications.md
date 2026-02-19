@@ -1,8 +1,8 @@
 # Technical Specifications: Project Lancelot v7.0
 
-**Document Version:** 7.1
+**Document Version:** 7.2
 **Last Updated:** 2026-02-18
-**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence
+**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2
 
 ---
 
@@ -125,6 +125,8 @@ gateway.py
                     +-- vision_antigravity.py (vision control)
     |
     +-- competitive_scan.py (competitive intelligence scans)
+    |
+    +-- reasoning_artifact.py (deep reasoning dataclasses)
     |
     +-- feature_flags.py (subsystem kill switches)
 ```
@@ -870,6 +872,7 @@ class JobExecutor:
 | FEATURE_TOOLS_HOST_EXECUTION | `FEATURE_TOOLS_HOST_EXECUTION` | false |
 | FEATURE_GITHUB_SEARCH | `FEATURE_GITHUB_SEARCH` | false |
 | FEATURE_COMPETITIVE_SCAN | `FEATURE_COMPETITIVE_SCAN` | false |
+| FEATURE_DEEP_REASONING_LOOP | `FEATURE_DEEP_REASONING_LOOP` | false |
 
 **Accepted Values:** `true`, `1`, `yes` (case-insensitive). Everything else is treated as false.
 
@@ -1402,7 +1405,198 @@ def build_context_from_previous(target: str, memory_manager: MemoryStoreManager,
 `removed`, and `changed`, each containing lists of human-readable descriptions
 suitable for direct inclusion in a chat response.
 
-### 3.40 Self-Knowledge System Instruction (V24)
+### 3.40 Reasoning Artifact Module (V25)
+
+**File:** `src/core/reasoning_artifact.py`
+
+Dataclass definitions for the Autonomy Loop v2 deep reasoning pipeline. This
+module provides the three core data structures used by the deep reasoning pass,
+governed negotiation, and task experience memory subsystems.
+
+**Feature flag:** `FEATURE_DEEP_REASONING_LOOP`
+
+**Dataclasses:**
+
+```python
+@dataclass
+class ReasoningArtifact:
+    """Output of the deep reasoning pass, injected as context into the agentic loop."""
+    raw_reasoning: str              # Full reasoning output from the deep model
+    capability_gaps: list[str]      # Parsed from "CAPABILITY GAP:" markers in reasoning
+    strategy_summary: str           # Condensed strategy for the agentic loop
+    risk_flags: list[str]           # Identified risks requiring governance attention
+    timestamp: str                  # ISO 8601
+
+@dataclass
+class TaskExperience:
+    """Post-task record stored in episodic memory for experiential learning."""
+    task_id: str                    # UUID
+    original_request: str           # The user's original message
+    reasoning_artifact: Optional[ReasoningArtifact]
+    capability_gaps: list[str]      # Gaps encountered during execution
+    actions_taken: list[str]        # Summary of actions executed
+    outcome: str                    # "success" | "partial" | "failure"
+    duration_ms: float
+    timestamp: str                  # ISO 8601
+
+@dataclass
+class GovernanceFeedback:
+    """Structured feedback replacing generic BLOCKED messages."""
+    blocked_action: str             # The action that was blocked
+    policy_rule: str                # The governance rule that triggered the block
+    alternatives: list[str]         # Structured alternative approaches
+    can_request_approval: bool      # Whether the owner can be asked to approve
+    explanation: str                # Human-readable explanation of the block
+```
+
+### 3.41 Deep Reasoning Pass (V25)
+
+**Integrated into:** `src/core/orchestrator.py`
+
+The deep reasoning pass is a pre-execution analysis phase that runs before the
+agentic loop. It gives the system a strategic understanding of the request
+before any actions are taken.
+
+**Trigger Evaluation — `_should_use_deep_reasoning()`:**
+
+The orchestrator evaluates whether a request warrants deep reasoning based on:
+- Request complexity (token length, multi-step indicators)
+- Tool requirements detected in the message
+- Risk indicators (action keywords matching T2/T3 tiers)
+- Whether the unified classifier flagged `requires_tools: true`
+
+Returns `True` if any trigger fires and `FEATURE_DEEP_REASONING_LOOP` is enabled.
+
+**Instruction Assembly — `_build_reasoning_instruction()`:**
+
+Builds a reasoning-focused system prompt containing:
+- The user's original request
+- Available tool capabilities and skill inventory
+- Current memory context (compiled via the context compiler)
+- Governance constraints from the active Soul
+- Instruction to emit `CAPABILITY GAP: <description>` markers for missing tools/skills
+
+**Execution — `_deep_reasoning_pass()`:**
+
+```
+_should_use_deep_reasoning() == True
+    |
+    v
+_build_reasoning_instruction()
+    → Assembles reasoning-focused system prompt
+    |
+    v
+provider.generate(model=deep, thinking=high)
+    → Deep model with elevated thinking budget
+    |
+    v
+Parse output for "CAPABILITY GAP:" markers
+    → Extracted into ReasoningArtifact.capability_gaps
+    |
+    v
+Construct ReasoningArtifact
+    → raw_reasoning, capability_gaps, strategy_summary, risk_flags
+    |
+    v
+Inject ReasoningArtifact as context into _agentic_generate()
+```
+
+**Capability Gap Detection:**
+
+The reasoning output is scanned line-by-line for markers matching the pattern
+`CAPABILITY GAP: <description>`. Each match is extracted and stored in
+`ReasoningArtifact.capability_gaps`. These gaps are surfaced in the task
+experience record and can inform future skill factory proposals.
+
+### 3.42 Governed Negotiation (V25)
+
+**Integrated into:** `src/core/orchestrator.py`
+
+When the governance layer (Soul + Policy Engine) blocks an action during the
+agentic loop, the system constructs a `GovernanceFeedback` instance instead of
+returning a generic `BLOCKED` string.
+
+**Flow:**
+
+```
+Agentic loop attempts action
+    |
+    v
+PolicyEngine.evaluate() → DENIED
+    |
+    v
+Construct GovernanceFeedback:
+    - blocked_action: the attempted action
+    - policy_rule: which Soul/policy rule triggered
+    - alternatives: list of viable alternative approaches
+    - can_request_approval: True if T3 approval gate available
+    - explanation: human-readable reason
+    |
+    v
+Inject GovernanceFeedback into agentic loop context
+    |
+    v
+Model receives structured feedback → adapts plan
+    (choose lower-risk path / request approval / decompose action)
+```
+
+This replaces the previous behavior where a `BLOCKED` string would terminate
+the action branch, often causing the model to stall or repeat the same blocked
+action.
+
+### 3.43 Task Experience Memory (V25)
+
+**Integrated into:** `src/core/orchestrator.py`
+
+After task completion, the orchestrator records the task outcome in episodic
+memory for future retrieval.
+
+**Recording — `_record_task_experience()`:**
+
+```python
+def _record_task_experience(self, request, reasoning_artifact, actions, outcome, duration_ms):
+    experience = TaskExperience(
+        task_id=str(uuid4()),
+        original_request=request,
+        reasoning_artifact=reasoning_artifact,
+        capability_gaps=reasoning_artifact.capability_gaps if reasoning_artifact else [],
+        actions_taken=actions,
+        outcome=outcome,
+        duration_ms=duration_ms,
+        timestamp=datetime.utcnow().isoformat()
+    )
+    # Store in episodic memory with namespace "task_experience"
+    self.memory_manager.insert_item(
+        tier="episodic",
+        item=MemoryItem(
+            id=experience.task_id,
+            content=json.dumps(asdict(experience)),
+            metadata={"namespace": "task_experience", "outcome": outcome}
+        )
+    )
+```
+
+**Retrieval:** The context compiler can query episodic memory with
+`namespace="task_experience"` to surface relevant past experiences during the
+deep reasoning pass, enabling the system to learn from previous task outcomes.
+
+**Storage:** Episodic memory tier via `MemoryStoreManager`, searchable through
+the full-text search index. Namespace filtering ensures task experiences are
+retrieved separately from other episodic items.
+
+### 3.44 GitHub Search Builtin Fallback Fix (V25)
+
+**File:** `src/core/skills/executor.py`
+
+The `executor.run()` method now includes a fallback path for the `github_search`
+builtin skill. Previously, if the skill executor failed to locate the builtin
+module through the standard registry lookup, the skill would error silently.
+The fix adds an explicit import fallback in `executor.run()` that directly
+instantiates `GitHubSearchSkill` from `src/core/skills/builtins/github_search.py`
+when the registry-based path fails, ensuring the builtin always resolves
+correctly regardless of registration state.
+
+### 3.45 Self-Knowledge System Instruction (V24)
 
 A ~200 token architecture reference block injected into the system prompt at
 startup. Lists the 10 core subsystems (Soul, Skills, Memory, Scheduler, Health,
@@ -1532,6 +1726,7 @@ All API endpoints follow these rules:
 | `FEATURE_SCHEDULER` | Scheduler toggle | true |
 | `FEATURE_GITHUB_SEARCH` | GitHub search skill toggle | false |
 | `FEATURE_COMPETITIVE_SCAN` | Competitive scan memory toggle | false |
+| `FEATURE_DEEP_REASONING_LOOP` | Deep reasoning pass + governed negotiation + task experience memory | false |
 | `GITHUB_TOKEN` | GitHub personal access token (optional, raises rate limit) | None |
 
 ### 5.4 Health Checks

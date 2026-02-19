@@ -47,6 +47,9 @@ Structural Fixes (V23) Environment variables:
 Competitive Intelligence (V24) Environment variables:
     FEATURE_GITHUB_SEARCH            — default: true (GitHub API skill for structured repo/commit/issue data)
     FEATURE_COMPETITIVE_SCAN         — default: false (episodic memory storage for competitive scan diffing)
+
+Autonomy Loop v2 (V25) Environment variables:
+    FEATURE_DEEP_REASONING_LOOP      — default: false (deep reasoning pass before agentic execution)
 """
 
 from __future__ import annotations
@@ -168,6 +171,9 @@ FEATURE_UNIFIED_CLASSIFICATION: bool = _env_bool("FEATURE_UNIFIED_CLASSIFICATION
 FEATURE_GITHUB_SEARCH: bool = _env_bool("FEATURE_GITHUB_SEARCH", default=True)           # GitHub API skill for repos, commits, issues, releases with source URLs
 FEATURE_COMPETITIVE_SCAN: bool = _env_bool("FEATURE_COMPETITIVE_SCAN", default=False)     # Store competitive scans in episodic memory for trending/diffing (requires MEMORY_VNEXT)
 
+# Autonomy Loop v2 (V25) — deep reasoning before action
+FEATURE_DEEP_REASONING_LOOP: bool = _env_bool("FEATURE_DEEP_REASONING_LOOP", default=False)  # Reasoning-only LLM pass before agentic loop + task experience memory
+
 
 # All flags are now hot-toggleable via SubsystemManager — no restart required.
 RESTART_REQUIRED_FLAGS = frozenset()
@@ -227,6 +233,7 @@ def reload_flags() -> None:
     global FEATURE_BAL
     global FEATURE_STRUCTURED_OUTPUT, FEATURE_CLAIM_VERIFICATION, FEATURE_UNIFIED_CLASSIFICATION
     global FEATURE_GITHUB_SEARCH, FEATURE_COMPETITIVE_SCAN
+    global FEATURE_DEEP_REASONING_LOOP
 
     # vNext2 flags
     FEATURE_SOUL = _env_bool("FEATURE_SOUL")
@@ -283,6 +290,9 @@ def reload_flags() -> None:
     # Competitive Intelligence (V24)
     FEATURE_GITHUB_SEARCH = _env_bool("FEATURE_GITHUB_SEARCH", default=True)
     FEATURE_COMPETITIVE_SCAN = _env_bool("FEATURE_COMPETITIVE_SCAN", default=False)
+
+    # Autonomy Loop v2 (V25)
+    FEATURE_DEEP_REASONING_LOOP = _env_bool("FEATURE_DEEP_REASONING_LOOP", default=False)
 
 
 def get_all_flags() -> dict[str, bool]:
@@ -348,4 +358,8 @@ def log_feature_flags() -> None:
     logger.info(
         "Competitive Intelligence flags: GITHUB_SEARCH=%s, COMPETITIVE_SCAN=%s",
         FEATURE_GITHUB_SEARCH, FEATURE_COMPETITIVE_SCAN,
+    )
+    logger.info(
+        "Autonomy Loop v2 flags: DEEP_REASONING_LOOP=%s",
+        FEATURE_DEEP_REASONING_LOOP,
     )

@@ -1,8 +1,8 @@
 # Functional Specifications: Project Lancelot v7.0
 
-**Document Version:** 7.0
+**Document Version:** 7.1
 **Last Updated:** 2026-02-18
-**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence
+**Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2
 
 ---
 
@@ -59,6 +59,10 @@ Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as
 - **F-02.4 Receipt Chain:** Every step generates a Receipt linking parent/child actions for full traceability.
 - **F-02.5 Structured Output (V23):** When `FEATURE_STRUCTURED_OUTPUT` is enabled, the agentic loop's text responses are constrained to a JSON schema with explicit `response_to_user`, `actions_taken`, and `next_action` fields. A presentation layer (`ResponsePresenter`) converts the verified JSON back to readable chat text after cross-referencing `actions_taken` against tool receipts. A claim verifier (`ClaimVerifier`, controlled by `FEATURE_CLAIM_VERIFICATION`) additionally scans the free-text `response_to_user` for unverified action claims.
 - **F-02.6 Unified Classification (V23):** When `FEATURE_UNIFIED_CLASSIFICATION` is enabled, a single Gemini Flash call with structured output replaces the 7-function keyword heuristic chain for intent classification. Returns intent, confidence, is_continuation, and requires_tools. Falls back to the keyword classifier on failure.
+- **F-02.7 Deep Reasoning Pass (V25):** When `FEATURE_DEEP_REASONING_LOOP` is enabled, Lancelot performs a dedicated reasoning pass before entering the agentic loop on complex requests. The deep reasoning pass uses a deep model with an elevated thinking budget to analyze the request, identify capability gaps, anticipate risks, and form a strategy. The resulting `ReasoningArtifact` is injected as context into the agentic loop, giving the execution phase a strategic foundation. From the user's perspective, Lancelot now thinks deeply before acting on complex requests — responses to multi-step or tool-heavy tasks are more deliberate and better informed.
+- **F-02.8 Governed Negotiation (V25):** When governance blocks an action during the agentic loop, the system now provides structured feedback (via `GovernanceFeedback`) instead of a generic `BLOCKED` message. The feedback includes the blocked action, the specific policy rule that triggered the block, and a set of alternative approaches. The model receives this feedback in-context and can adapt — choosing a lower-risk path, requesting owner approval, or decomposing the action into smaller steps. The user-visible effect is that Lancelot no longer stalls when blocked; it explains what was blocked and proposes alternatives.
+- **F-02.9 Task Experience Memory (V25):** After completing a task, the orchestrator records a `TaskExperience` in episodic memory under the `task_experience` namespace. Each record captures the original request, the reasoning artifact, capability gaps encountered, actions taken, the outcome, and duration. On future requests, the context compiler retrieves relevant past experiences during the deep reasoning pass, enabling Lancelot to learn from previous task outcomes. The user-visible effect is that repeated or similar requests benefit from accumulated knowledge — Lancelot avoids strategies that failed before and reuses approaches that succeeded.
+- **F-02.10 Capability Gap Identification (V25):** During the deep reasoning pass, the reasoning output is scanned for `CAPABILITY GAP:` markers that identify tools, skills, or knowledge the system lacks for the current task. These gaps are recorded in the `ReasoningArtifact` and the subsequent `TaskExperience`, making them available for future skill factory proposals and system improvement.
 
 ### FA-03: Multi-Provider Model Routing
 
@@ -233,6 +237,7 @@ Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as
   - `FEATURE_TOOLS_HOST_EXECUTION` — Enable/disable host (non-Docker) execution (default: false)
   - `FEATURE_GITHUB_SEARCH` — Enable/disable GitHub public API search (default: false)
   - `FEATURE_COMPETITIVE_SCAN` — Enable/disable competitive intelligence scanning (default: false)
+  - `FEATURE_DEEP_REASONING_LOOP` — Enable/disable deep reasoning pass, governed negotiation, and task experience memory (default: false)
 - **F-13.2 Configuration:** Flags read from environment variables at startup. Accept `true`, `1`, `yes` (case-insensitive).
 - **F-13.3 Runtime Reload:** `reload_flags()` re-reads flags from environment without restart.
 
@@ -309,13 +314,23 @@ Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as
   - VisionReceipt: screenshots (hashed), detected elements, actions, confidence scores
 - **F-15.6 Safe Mode:** Toggle restricts execution to local sandbox providers only, disabling optional/external providers.
 
-### FA-16: Competitive Intelligence (V24)
+### FA-16: Autonomy Loop v2 (V25)
+
+**Modules:** `src/core/orchestrator.py`, `src/core/reasoning_artifact.py`
+
+- **F-16A.1 Deep Reasoning Before Action:** When `FEATURE_DEEP_REASONING_LOOP` is enabled and the request meets complexity thresholds (multi-step, tool-heavy, or high-risk), a deep reasoning pass runs before the agentic loop. The user sees more thoughtful, strategically grounded responses on complex tasks.
+- **F-16A.2 Capability Gap Surfacing:** The reasoning pass identifies tools and skills the system lacks. These gaps are captured in the `ReasoningArtifact` and surfaced in task experience records. Over time, this data can drive skill factory proposals for missing capabilities.
+- **F-16A.3 Adaptive Governance Response:** Governed negotiation replaces hard `BLOCKED` stops with structured `GovernanceFeedback` that the model uses to adapt in-context. The user sees explanations and alternatives rather than dead ends.
+- **F-16A.4 Experiential Learning:** Task experience records in episodic memory enable the system to recall past task outcomes. Future requests of a similar nature benefit from accumulated successes and failures, improving reliability over time.
+- **F-16A.5 GitHub Search Reliability:** The `github_search` builtin skill now works correctly in all registration scenarios. A fallback path in `executor.run()` ensures the skill resolves even when the registry-based lookup fails, eliminating silent failures during competitive research.
+
+### FA-17: Competitive Intelligence (V24)
 
 **Modules:** `src/core/competitive_scan.py`, `src/tools/github_search.py`
 
-- **F-16.1 Sourced Intelligence:** When performing competitive research or external intelligence gathering, Lancelot must cite specific source URLs for each finding. Unsourced claims must not be presented as verified intelligence. This requirement is enforced via a Soul `tone_invariant` that rejects intelligence outputs lacking provenance URLs.
-- **F-16.2 GitHub Search:** When `FEATURE_GITHUB_SEARCH` is enabled, Lancelot can search GitHub's public API for repositories, commits, issues/PRs, and releases. Results include browseable source URLs that satisfy the sourced-intelligence requirement (F-16.1). Searches are executed through the Tool Fabric WebOps capability and produce standard tool receipts.
-- **F-16.3 Competitive Scan Memory:** When both `FEATURE_COMPETITIVE_SCAN` and `FEATURE_MEMORY_VNEXT` are enabled, competitive research results are stored in episodic memory with a `competitive_scan` provenance tag. Subsequent scans of the same target retrieve previous scan results from memory and produce a change-analysis summary highlighting new, removed, and modified findings since the last scan.
+- **F-17.1 Sourced Intelligence:** When performing competitive research or external intelligence gathering, Lancelot must cite specific source URLs for each finding. Unsourced claims must not be presented as verified intelligence. This requirement is enforced via a Soul `tone_invariant` that rejects intelligence outputs lacking provenance URLs.
+- **F-17.2 GitHub Search:** When `FEATURE_GITHUB_SEARCH` is enabled, Lancelot can search GitHub's public API for repositories, commits, issues/PRs, and releases. Results include browseable source URLs that satisfy the sourced-intelligence requirement (F-17.1). Searches are executed through the Tool Fabric WebOps capability and produce standard tool receipts.
+- **F-17.3 Competitive Scan Memory:** When both `FEATURE_COMPETITIVE_SCAN` and `FEATURE_MEMORY_VNEXT` are enabled, competitive research results are stored in episodic memory with a `competitive_scan` provenance tag. Subsequent scans of the same target retrieve previous scan results from memory and produce a change-analysis summary highlighting new, removed, and modified findings since the last scan.
 
 ---
 

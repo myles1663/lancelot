@@ -2246,6 +2246,7 @@ class LancelotOrchestrator:
                 context_str=context_str,
             )
 
+        from feature_flags import FEATURE_DEEP_REASONING_LOOP
         tools = self._build_openai_tool_declarations()
 
         # V22: Local model has a 4K context window — use a minimal system
@@ -2363,9 +2364,24 @@ class LancelotOrchestrator:
                         sentry_blocked = True
 
                 if sentry_blocked:
-                    result_content = f"BLOCKED: {skill_name} requires Commander approval. Approve in War Room."
-                    if sentry_req_id:
-                        result_content += f" (Approval ID: {sentry_req_id})"
+                    if FEATURE_DEEP_REASONING_LOOP:
+                        # V25: Governed Negotiation — structured feedback (Phase 3)
+                        from src.core.reasoning_artifact import GovernanceFeedback
+                        feedback = GovernanceFeedback(
+                            skill_name=skill_name,
+                            action_detail=str(inputs)[:200],
+                            blocked_reason="Requires Commander approval",
+                            permission_state="PENDING" if sentry_req_id else "DENIED",
+                            trust_record_summary=self._get_trust_summary(skill_name, inputs),
+                            alternatives=self._suggest_alternatives(skill_name, inputs),
+                            resolution_hint="Commander can approve in War Room > Governance Dashboard",
+                            request_id=sentry_req_id or "",
+                        )
+                        result_content = feedback.to_tool_result()
+                    else:
+                        result_content = f"BLOCKED: {skill_name} requires Commander approval. Approve in War Room."
+                        if sentry_req_id:
+                            result_content += f" (Approval ID: {sentry_req_id})"
                     tool_receipts.append({
                         "skill": skill_name,
                         "inputs": inputs,
@@ -2534,7 +2550,7 @@ class LancelotOrchestrator:
             print("V7: Forcing tool use on first iteration (mode=ANY)")
 
         # V23: Structured output — force JSON schema on text responses
-        from feature_flags import FEATURE_STRUCTURED_OUTPUT, FEATURE_CLAIM_VERIFICATION
+        from feature_flags import FEATURE_STRUCTURED_OUTPUT, FEATURE_CLAIM_VERIFICATION, FEATURE_DEEP_REASONING_LOOP
         _use_structured_output = FEATURE_STRUCTURED_OUTPUT
         if _use_structured_output:
             print("V23: Structured output enabled — responses will be JSON schema-constrained")
@@ -2560,6 +2576,8 @@ class LancelotOrchestrator:
         # Track tool calls for receipts and cost
         tool_receipts = []
         total_est_tokens = 0
+        # V25: Expose receipts for task experience recording
+        self._last_tool_receipts = tool_receipts
 
         for iteration in range(MAX_ITERATIONS):
             print(f"V6 agentic loop iteration {iteration + 1}/{MAX_ITERATIONS}")
@@ -2750,13 +2768,29 @@ class LancelotOrchestrator:
                         sentry_blocked = True
 
                 if sentry_blocked:
-                    escalation_msg = (
-                        f"BLOCKED: {skill_name} requires Commander approval. "
-                        "Approve in the War Room Governance Dashboard."
-                    )
-                    if sentry_req_id:
-                        escalation_msg += f" (Approval ID: {sentry_req_id})"
-                    result_data = {"error": escalation_msg}
+                    if FEATURE_DEEP_REASONING_LOOP:
+                        # V25: Governed Negotiation — structured feedback (Phase 3)
+                        from src.core.reasoning_artifact import GovernanceFeedback
+                        feedback = GovernanceFeedback(
+                            skill_name=skill_name,
+                            action_detail=str(inputs)[:200],
+                            blocked_reason="Requires Commander approval" if not allow_writes else "Escalated by security classification",
+                            permission_state="PENDING" if sentry_req_id else "DENIED",
+                            trust_record_summary=self._get_trust_summary(skill_name, inputs),
+                            alternatives=self._suggest_alternatives(skill_name, inputs),
+                            resolution_hint="Commander can approve in War Room > Governance Dashboard",
+                            request_id=sentry_req_id or "",
+                        )
+                        result_data = {"governance_feedback": feedback.to_tool_result()}
+                    else:
+                        # Legacy behavior
+                        escalation_msg = (
+                            f"BLOCKED: {skill_name} requires Commander approval. "
+                            "Approve in the War Room Governance Dashboard."
+                        )
+                        if sentry_req_id:
+                            escalation_msg += f" (Approval ID: {sentry_req_id})"
+                        result_data = {"error": escalation_msg}
                     tool_receipts.append({
                         "skill": skill_name,
                         "inputs": inputs,
@@ -2970,6 +3004,345 @@ class LancelotOrchestrator:
         if level == "off":
             return None
         return {"thinking_level": level}
+
+    # ── Autonomy Loop v2 (V25) ────────────────────────────────────────
+
+    def _should_use_deep_reasoning(self, user_message: str) -> bool:
+        """Determine if a request warrants a deep reasoning pass.
+
+        Returns True for complex/analytical/research requests.
+        Returns False for conversational, simple, or continuation messages.
+        """
+        # Short messages are likely conversational
+        if len(user_message) < 30:
+            return False
+
+        lower = user_message.lower()
+        words = set(lower.split())
+
+        # Conversational keywords — skip reasoning
+        conversational = {
+            "hello", "hi", "hey", "thanks", "thank", "bye", "ok", "okay",
+            "yes", "no", "sure", "status", "who",
+        }
+        if words.issubset(conversational) or len(words) <= 2:
+            return False
+
+        # Continuations — skip reasoning (context already established)
+        if self._is_continuation(user_message):
+            return False
+
+        # Research/reasoning indicators — use deep reasoning
+        reasoning_indicators = {
+            "analyze", "analyse", "compare", "research", "investigate",
+            "evaluate", "assess", "review", "explain", "diagnose",
+            "strategy", "recommend", "design", "architect", "plan",
+            "competitive", "intelligence", "news about", "updates on",
+        }
+        if words & reasoning_indicators:
+            return True
+
+        # Phrase-level indicators
+        reasoning_phrases = [
+            "what should", "how should", "help me think",
+            "what's the best", "pros and cons", "trade-off",
+            "deep dive", "thorough", "comprehensive",
+        ]
+        if any(phrase in lower for phrase in reasoning_phrases):
+            return True
+
+        # Research-oriented queries (reuse existing detector)
+        if self._needs_research(user_message):
+            return True
+
+        # Long messages with question marks likely need reasoning
+        if len(user_message) > 100 and "?" in user_message:
+            return True
+
+        # Default: use reasoning for long messages
+        return len(user_message) > 200
+
+    def _build_reasoning_instruction(self) -> str:
+        """Build a reasoning-focused system instruction for the deep reasoning pass.
+
+        Focuses on analytical thinking. Omits tool-calling details.
+        Includes capability inventory so the model can identify gaps.
+        """
+        # Soul identity
+        if self.soul:
+            identity = (
+                f"You are Lancelot, a governed autonomous agent.\n"
+                f"Mission: {self.soul.mission}\n"
+                f"Allegiance: {self.soul.allegiance}\n"
+            )
+        else:
+            identity = (
+                "You are Lancelot, a governed autonomous agent "
+                "serving your bonded user.\n"
+            )
+
+        # Self-knowledge (V24 architecture reference)
+        self_knowledge = (
+            "YOUR ARCHITECTURE:\n"
+            "- Soul: Constitutional governance — mission, allegiance, tone invariants, risk rules\n"
+            "- Memory: Tiered persistence — core blocks, working (24h), episodic (30-day), archival\n"
+            "- Skills: Modular capabilities — manifest+execute pattern, security pipeline\n"
+            "- Tool Fabric: Provider-agnostic execution — shell, file, repo, web, deploy, vision\n"
+            "- Receipt System: Immutable audit trail for all tool calls\n"
+            "- Scheduler: Gated automation — cron/interval jobs with approval rules\n"
+            "- War Room: Operator dashboard — health, memory, skills, kill switches\n"
+            "- Structured Output: JSON schema responses with claim checking\n"
+        )
+
+        # Available capabilities inventory
+        capabilities = (
+            "AVAILABLE TOOLS (you will use these in the execution phase):\n"
+            "- network_client: HTTP requests (GET/POST/PUT/DELETE) for APIs, web research\n"
+            "- github_search: Search GitHub repos, commits, issues, releases — structured data with URLs\n"
+            "- command_runner: Shell commands on the system\n"
+            "- repo_writer: Create/edit/delete files in the workspace\n"
+            "- telegram_send: Send messages/files to Telegram\n"
+            "- warroom_send: Push notifications to the War Room\n"
+            "- schedule_job: Create/list/delete scheduled tasks\n"
+            "- service_runner: Docker service management\n"
+            "- document_creator: Generate formatted documents\n"
+        )
+
+        # Memory context
+        ctx = self.context_env.get_context_string() if self.context_env else ""
+        memory_block = f"CURRENT CONTEXT:\n{ctx}\n" if ctx else ""
+
+        # Quality + reasoning directives
+        directives = (
+            "REASONING DIRECTIVES:\n"
+            "1. Think deeply about this task before any action is taken.\n"
+            "2. What information do you need to find? What do you already know?\n"
+            "3. What approaches should you consider? What are the trade-offs?\n"
+            "4. What would a thorough, well-grounded answer look like?\n"
+            "5. Acknowledge uncertainty — never fabricate facts or sources.\n"
+            "6. If completing this task well requires a tool or skill that doesn't "
+            "exist in the inventory above, note it as: CAPABILITY GAP: <description>\n"
+            "7. Do NOT call tools or take actions. Just reason about the task.\n"
+            "8. Produce analysis you would stake your reputation on.\n"
+        )
+
+        return f"{identity}\n{self_knowledge}\n{capabilities}\n{memory_block}\n{directives}"
+
+    def _deep_reasoning_pass(
+        self,
+        user_message: str,
+        past_experiences: str = "",
+    ):
+        """Execute a reasoning-only LLM call before the agentic loop.
+
+        Uses the deep model with high thinking level, no tools.
+        Returns a ReasoningArtifact. Failure is non-fatal (empty artifact).
+
+        Cost: One additional LLM call per qualifying request.
+        """
+        from reasoning_artifact import ReasoningArtifact
+
+        deep_model = self._get_deep_model()
+        reasoning_instruction = self._build_reasoning_instruction()
+
+        # Include past experiences if available
+        if past_experiences:
+            reasoning_instruction += (
+                f"\nRELEVANT PAST EXPERIENCES:\n{past_experiences}\n"
+                "Consider what worked and what didn't in similar past tasks.\n"
+            )
+
+        try:
+            msg = self.provider.build_user_message(user_message)
+            messages = [msg]
+
+            result = self._llm_call_with_retry(
+                lambda: self.provider.generate(
+                    model=deep_model,
+                    messages=messages,
+                    system_instruction=reasoning_instruction,
+                    config={"thinking": {"thinking_level": "high"}},
+                )
+            )
+
+            reasoning_text = result.text if result.text else ""
+            token_estimate = len(reasoning_text) // 4
+
+            # Parse capability gaps from the reasoning output
+            gaps = ReasoningArtifact.parse_capability_gaps(reasoning_text)
+
+            print(f"V25: Deep reasoning pass complete ({deep_model}, ~{token_estimate} tokens, {len(gaps)} capability gaps)")
+
+            return ReasoningArtifact(
+                reasoning_text=reasoning_text,
+                model_used=deep_model,
+                thinking_level="high",
+                token_count_estimate=token_estimate,
+                capability_gaps=gaps,
+            )
+        except Exception as e:
+            print(f"V25: Deep reasoning pass failed (non-fatal): {e}")
+            return ReasoningArtifact(
+                reasoning_text="[Reasoning pass unavailable]",
+                model_used=deep_model,
+                thinking_level="high",
+            )
+
+    def _retrieve_task_experiences(self, user_message: str, limit: int = 3) -> str:
+        """Retrieve relevant past task experiences from episodic memory.
+
+        Returns formatted string of past experiences, or empty string.
+        Non-fatal on failure.
+        """
+        try:
+            _mem_mgr = getattr(self, '_memory_store_manager', None)
+            if _mem_mgr is None:
+                from memory.sqlite_store import MemoryStoreManager
+                self._memory_store_manager = MemoryStoreManager(
+                    data_dir=getattr(self, 'data_dir', '/home/lancelot/data')
+                )
+                _mem_mgr = self._memory_store_manager
+
+            results = _mem_mgr.episodic.search(
+                query=user_message[:200],
+                namespace="task_experience",
+                limit=limit,
+            )
+
+            if not results:
+                return ""
+
+            lines = ["Past similar tasks:"]
+            for item in results:
+                lines.append(f"- {item.content}")
+
+            print(f"V25: Retrieved {len(results)} past task experiences")
+            return "\n".join(lines)
+
+        except Exception as e:
+            print(f"V25: Task experience retrieval failed (non-fatal): {e}")
+            return ""
+
+    def _record_task_experience(
+        self,
+        user_message: str,
+        response_text: str,
+        tool_receipts: list,
+        reasoning_artifact=None,
+        duration_ms: float = 0.0,
+    ) -> None:
+        """Record a TaskExperience in episodic memory after task completion.
+
+        Best-effort operation — failures are logged but don't affect the response.
+        """
+        try:
+            from reasoning_artifact import TaskExperience
+            from memory.schemas import (
+                MemoryItem, MemoryTier, Provenance, ProvenanceType, generate_id,
+            )
+
+            # Extract tool usage stats from receipts
+            stats = TaskExperience.from_tool_receipts(tool_receipts or [])
+
+            # Determine outcome
+            has_errors = "Error" in (response_text or "")
+            has_tools = bool(stats["tools_succeeded"])
+            outcome = "success" if has_tools and not has_errors else "partial" if has_tools else "failed"
+
+            experience = TaskExperience(
+                task_summary=user_message[:200],
+                approach_taken=response_text[:300] if response_text else "No response",
+                outcome=outcome,
+                reasoning_was_used=reasoning_artifact is not None and reasoning_artifact.reasoning_text != "[Reasoning pass unavailable]",
+                duration_ms=duration_ms,
+                capability_gaps=reasoning_artifact.capability_gaps if reasoning_artifact else [],
+                **stats,
+            )
+
+            _mem_mgr = getattr(self, '_memory_store_manager', None)
+            if _mem_mgr is None:
+                from memory.sqlite_store import MemoryStoreManager
+                self._memory_store_manager = MemoryStoreManager(
+                    data_dir=getattr(self, 'data_dir', '/home/lancelot/data')
+                )
+                _mem_mgr = self._memory_store_manager
+
+            item = MemoryItem(
+                id=generate_id(),
+                tier=MemoryTier.episodic,
+                namespace="task_experience",
+                title=f"Task: {user_message[:80]}",
+                content=experience.to_memory_content(),
+                tags=["task_experience", "autonomy_v2", outcome],
+                confidence=0.7 if outcome == "success" else 0.4,
+                decay_half_life_days=60,
+                provenance=[Provenance(
+                    type=ProvenanceType.agent_inference,
+                    ref="autonomy_loop_v2",
+                    snippet=user_message[:100],
+                )],
+                metadata={
+                    "reasoning_used": experience.reasoning_was_used,
+                    "duration_ms": duration_ms,
+                    "outcome": outcome,
+                    "capability_gaps": experience.capability_gaps,
+                    "tools_used": stats["tools_used"],
+                },
+                token_count=len(experience.to_memory_content()) // 4,
+            )
+
+            _mem_mgr.episodic.insert(item)
+            print(f"V25: Task experience recorded (id={item.id}, outcome={outcome})")
+
+        except Exception as e:
+            print(f"V25: Task experience recording failed (non-fatal): {e}")
+
+    def _get_trust_summary(self, skill_name: str, inputs: dict) -> str:
+        """Get trust record summary for a skill. Returns descriptive string."""
+        try:
+            if hasattr(self, 'trust_ledger') and self.trust_ledger:
+                scope = str(inputs.get("url", inputs.get("command", inputs.get("path", "default"))))
+                record = self.trust_ledger.get_record(skill_name, scope)
+                if record:
+                    return (
+                        f"Tier: {record.current_tier.name}, "
+                        f"{record.consecutive_successes} consecutive successes, "
+                        f"{record.total_failures} failures"
+                    )
+        except Exception:
+            pass
+        return "Trust data unavailable"
+
+    def _suggest_alternatives(self, skill_name: str, inputs: dict) -> list:
+        """Suggest alternative approaches when a skill is blocked."""
+        alternatives_map = {
+            "command_runner": [
+                "Use repo_writer for file operations instead of shell commands",
+                "Use network_client for API calls instead of curl",
+                "Break the command into smaller, pre-approved operations",
+            ],
+            "repo_writer": [
+                "Use repo_writer with 'edit' action instead of 'delete'",
+                "Write to a workspace-scoped temporary location",
+                "Queue the file operation for Commander approval",
+            ],
+            "network_client": [
+                "Use GET to read-only fetch data first",
+                "Use github_search for GitHub-specific queries",
+                "Queue the write operation for Commander approval",
+            ],
+            "service_runner": [
+                "Use command_runner for status checks instead",
+                "Request service changes via the War Room",
+            ],
+        }
+        return alternatives_map.get(skill_name, [
+            "Try a read-only approach to gather the needed information",
+            "Break the operation into smaller, lower-risk steps",
+            "Note the limitation and suggest the Commander approve via War Room",
+        ])
+
+    # ── End Autonomy Loop v2 ─────────────────────────────────────────
 
     def _init_context_cache(self):
         """Creates a context cache for static memory content (RULES.md, USER.md, MEMORY_SUMMARY.md).
@@ -3887,7 +4260,7 @@ class LancelotOrchestrator:
                 print(f"V24: Competitive scan pre-processing error: {e}")
 
             # Fix Pack V6/V8: Agentic loop — tool access for autonomous research
-            from feature_flags import FEATURE_AGENTIC_LOOP, FEATURE_LOCAL_AGENTIC
+            from feature_flags import FEATURE_AGENTIC_LOOP, FEATURE_LOCAL_AGENTIC, FEATURE_DEEP_REASONING_LOOP
             # V14: When file_parts present (images/PDFs), skip local model — no vision support
             has_vision_input = bool(file_parts)
             # V23: Use unified classifier result for continuation if available
@@ -3962,6 +4335,32 @@ class LancelotOrchestrator:
                         print(f"V10: Research query detected — forcing tool use (writes={'enabled' if allow_writes else 'disabled'})")
                     else:
                         print("V6: Routing KNOWLEDGE_REQUEST through agentic loop")
+
+                    # V25: Autonomy Loop v2 — Deep Reasoning Pass (Phase 1)
+                    reasoning_artifact = None
+                    if FEATURE_DEEP_REASONING_LOOP and self._should_use_deep_reasoning(user_message):
+                        print("V25: Deep reasoning pass triggered")
+                        past_exp = self._retrieve_task_experiences(user_message)
+                        reasoning_artifact = self._deep_reasoning_pass(user_message, past_exp)
+
+                        if (reasoning_artifact and reasoning_artifact.reasoning_text
+                                and reasoning_artifact.reasoning_text != "[Reasoning pass unavailable]"):
+                            # Inject reasoning as context for the agentic loop
+                            reasoning_block = reasoning_artifact.to_context_block()
+                            context_str = (context_str or "") + "\n\n" + reasoning_block
+                            print(f"V25: Reasoning artifact injected ({len(reasoning_artifact.reasoning_text)} chars)")
+
+                            # If reasoning identified capability gaps, append to system instruction
+                            if reasoning_artifact.capability_gaps:
+                                gaps_note = "\n\nCAPABILITY GAPS IDENTIFIED IN REASONING:\n"
+                                for gap in reasoning_artifact.capability_gaps:
+                                    gaps_note += f"- {gap}\n"
+                                gaps_note += "Work around these gaps using available tools. Note unresolvable gaps in your response.\n"
+                                system_instruction = (system_instruction or self._build_system_instruction()) + gaps_note
+                                print(f"V25: {len(reasoning_artifact.capability_gaps)} capability gap(s) noted")
+                        else:
+                            print("V25: Deep reasoning pass returned empty — proceeding without")
+
                     raw_response = self._agentic_generate(
                         prompt=user_message,
                         system_instruction=system_instruction,
@@ -4030,6 +4429,21 @@ class LancelotOrchestrator:
                             )
                 except Exception as e:
                     print(f"V24: Competitive scan post-processing error: {e}")
+
+            # V25: Record task experience (Autonomy Loop v2 Phase 6)
+            if FEATURE_DEEP_REASONING_LOOP and sanitized_response:
+                try:
+                    _v25_duration = int((__import__("time").time() - start_time) * 1000)
+                    _v25_artifact = locals().get('reasoning_artifact', None)
+                    self._record_task_experience(
+                        user_message=user_message,
+                        response_text=sanitized_response,
+                        tool_receipts=getattr(self, '_last_tool_receipts', []),
+                        reasoning_artifact=_v25_artifact,
+                        duration_ms=_v25_duration,
+                    )
+                except Exception as e:
+                    print(f"V25: Task experience recording failed (non-fatal): {e}")
 
             # S6: Add to History
             self.context_env.add_history("assistant", sanitized_response)
