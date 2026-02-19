@@ -5,6 +5,24 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.16] - 2026-02-19
+
+### Fixed — V29: Response Assembler Tuning
+- **Channel-aware truncation**: Response assembler now respects the delivery channel. War Room gets full content (500-line limit), Telegram stays tight (60 lines), API default (80 lines). Previously all channels were truncated to 80 lines — meaning War Room research results were cut short.
+- **Narration-without-content detection**: After tool-heavy agentic loops (3+ tool calls), detects when the model returns narration ("I now have comprehensive data. Let me compile...") instead of actual content. Automatically triggers a follow-up synthesis call with a fresh output-token budget to produce the real report.
+- **Auto-document creation**: When response content exceeds 200 lines or 8,000 characters, automatically creates a PDF document via the `document_creator` skill so full research results are persisted even if chat display truncates.
+- **War Room artifact delivery**: Assembled artifacts (research reports, plan details, tool traces) are now broadcast to connected War Room clients via EventBus → WebSocket. Previously artifacts were generated but never delivered.
+- **New `RESEARCH_REPORT` artifact type**: Full research content is preserved as a War Room artifact with metadata (char count, line count, auto-document flag).
+
+### Technical Details
+- `OutputPolicy.enforce_chat_limits()` now accepts `channel` parameter (`warroom`/`telegram`/`api`)
+- `OutputPolicy.needs_auto_document()` detects content exceeding auto-document thresholds
+- `ResponseAssembler.assemble()` accepts `channel` parameter, passed through from orchestrator
+- `_is_narration_without_content()` checks 25+ narration patterns against short responses after tool-heavy loops
+- `_force_synthesis()` appends narration to conversation, sends follow-up prompt, uses `generate()` (not `generate_with_tools`) for fresh max_tokens budget
+- `_deliver_war_room_artifacts()` broadcasts via EventBus, triggers auto-document for `RESEARCH_REPORT` type
+- `_auto_create_document()` parses markdown into structured sections and creates PDF via `document_creator` skill
+
 ## [0.2.15] - 2026-02-19
 
 ### Fixed — V28 OAuth Beta Header

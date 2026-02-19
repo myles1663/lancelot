@@ -27,6 +27,7 @@ class ArtifactType(str, Enum):
     VERIFIER_REPORT = "VERIFIER_REPORT"
     TOOL_TRACE = "TOOL_TRACE"
     SECURITY_ENFORCEMENT_LOG = "SECURITY_ENFORCEMENT_LOG"
+    RESEARCH_REPORT = "RESEARCH_REPORT"  # V29: Auto-document for long research content
 
 
 @dataclass

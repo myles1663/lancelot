@@ -4,6 +4,9 @@ Response Assembler — produces clean chat output + War Room artifacts.
 The assembler is the final stage before returning a response to the user.
 It separates verbose scaffolding (assumptions, risks, decision points, traces)
 into War Room artifacts and returns only clean, concise chat output.
+
+V29: Channel-aware assembly — War Room gets full content, Telegram stays tight.
+     Auto-document creation for long research results.
 """
 
 from __future__ import annotations
@@ -48,6 +51,7 @@ class ResponseAssembler:
         task_run=None,
         receipts: Optional[List[Any]] = None,
         honesty_status: Optional[str] = None,
+        channel: str = "api",
     ) -> AssembledResponse:
         """Assemble a response from pipeline outputs.
 
@@ -58,6 +62,8 @@ class ResponseAssembler:
             task_run: TaskRun dataclass (optional)
             receipts: List of Receipt objects (optional)
             honesty_status: Honesty gate status string (optional)
+            channel: Delivery channel — "warroom", "telegram", or "api" (default).
+                     V29: Controls truncation limits and auto-document behavior.
 
         Returns:
             AssembledResponse with clean chat and War Room artifacts.
@@ -105,8 +111,27 @@ class ResponseAssembler:
                 session_id=self.session_id,
             ))
 
-        # Enforce chat limits
-        chat = OutputPolicy.enforce_chat_limits(chat)
+        # V29: Auto-document creation for long content
+        # When content exceeds the threshold, save full text as a War Room
+        # artifact and optionally trigger document creation
+        if chat and OutputPolicy.needs_auto_document(chat):
+            logger.info("V29: Content exceeds auto-document threshold (%d chars, %d lines) — "
+                        "preserving full content as artifact",
+                        len(chat), len(chat.split("\n")))
+            artifacts.append(WarRoomArtifact(
+                type="RESEARCH_REPORT",
+                content={
+                    "full_text": chat,
+                    "char_count": len(chat),
+                    "line_count": len(chat.split("\n")),
+                    "channel": channel,
+                    "auto_document": True,
+                },
+                session_id=self.session_id,
+            ))
+
+        # V29: Enforce chat limits — channel-aware
+        chat = OutputPolicy.enforce_chat_limits(chat, channel=channel)
 
         return AssembledResponse(
             chat_response=chat.strip(),

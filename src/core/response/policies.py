@@ -1,11 +1,16 @@
 """
 Output Hygiene Policies — enforces chat cleanliness and War Room routing.
 
+V29: Channel-aware limits — War Room gets full content, Telegram stays tight.
+
 Rules:
 - Chat output: goal (1 line) + plan summary (<=15 lines) + status (1-3 lines)
   + next actions (<=5 bullets) + optional permission prompt.
 - Verbose content (assumptions, risks, decision points, tool traces, verifier
   output) routes to War Room by default.
+- War Room: Full web UI — no aggressive truncation (500 line limit).
+- Telegram: Tight limit (60 lines) — 4096 char max.
+- API/default: Standard limit (80 lines).
 """
 
 from __future__ import annotations
@@ -54,10 +59,17 @@ _FUNCTION_CALL = re.compile(
 class OutputPolicy:
     """Defines limits and routing rules for response output."""
 
-    MAX_CHAT_LINES = 80
+    MAX_CHAT_LINES = 80           # Default / API
+    MAX_CHAT_LINES_WARROOM = 500  # War Room — full web UI, generous limit
+    MAX_CHAT_LINES_TELEGRAM = 60  # Telegram — 4096 char limit
     MAX_PLAN_SUMMARY_LINES = 15
     MAX_NEXT_ACTIONS = 5
     MAX_STATUS_LINES = 3
+
+    # V29: Auto-document thresholds — content exceeding these triggers
+    # automatic document creation so nothing gets lost
+    AUTO_DOCUMENT_LINES = 200
+    AUTO_DOCUMENT_CHARS = 8000
 
     # Sections that are always routed to War Room (never in chat by default)
     VERBOSE_SECTIONS = [
@@ -115,14 +127,43 @@ class OutputPolicy:
         return section_name.lower() in OutputPolicy.VERBOSE_SECTIONS
 
     @staticmethod
-    def enforce_chat_limits(text: str) -> str:
-        """Truncate chat output to MAX_CHAT_LINES with an overflow indicator."""
+    def enforce_chat_limits(text: str, channel: str = "api") -> str:
+        """Truncate chat output based on delivery channel.
+
+        V29: Channel-aware limits:
+        - warroom: 500 lines (full web UI)
+        - telegram: 60 lines (4096 char constraint)
+        - api/default: 80 lines
+        """
         lines = text.split("\n")
-        if len(lines) <= OutputPolicy.MAX_CHAT_LINES:
+
+        if channel == "warroom":
+            max_lines = OutputPolicy.MAX_CHAT_LINES_WARROOM
+        elif channel == "telegram":
+            max_lines = OutputPolicy.MAX_CHAT_LINES_TELEGRAM
+        else:
+            max_lines = OutputPolicy.MAX_CHAT_LINES
+
+        if len(lines) <= max_lines:
             return text
-        truncated = lines[:OutputPolicy.MAX_CHAT_LINES]
-        truncated.append("\n*(Full details available in War Room)*")
+
+        truncated = lines[:max_lines]
+        if channel == "warroom":
+            truncated.append("\n*(Response truncated — full report saved as document)*")
+        else:
+            truncated.append("\n*(Full details available in War Room)*")
         return "\n".join(truncated)
+
+    @staticmethod
+    def needs_auto_document(text: str) -> bool:
+        """Check if content is long enough to warrant automatic document creation.
+
+        V29: Triggers document_creator for long research results so full
+        content is persisted even if chat display truncates.
+        """
+        lines = text.split("\n")
+        return (len(lines) > OutputPolicy.AUTO_DOCUMENT_LINES
+                or len(text) > OutputPolicy.AUTO_DOCUMENT_CHARS)
 
     @staticmethod
     def extract_verbose_sections(markdown: str) -> tuple:

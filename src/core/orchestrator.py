@@ -448,10 +448,14 @@ class LancelotOrchestrator:
 
         # Assemble status line
         if self.assembler:
+            _channel = getattr(self, "_current_channel", "api")
             assembled = self.assembler.assemble(
                 task_graph=active_graph,
                 task_run=self.task_store.get_run(run.id),
+                channel=_channel,
             )
+            if assembled.war_room_artifacts:
+                self._deliver_war_room_artifacts(assembled.war_room_artifacts)
             if content:
                 return content + "\n\n---\n" + assembled.chat_response
             return assembled.chat_response
@@ -2704,6 +2708,22 @@ class LancelotOrchestrator:
                 if tool_receipts:
                     print(f"V6 agentic loop completed after {len(tool_receipts)} tool calls")
 
+                # V29: Detect narration-without-content after tool-heavy loops.
+                # When the model says "Let me compile..." instead of producing
+                # the actual report, force a fresh synthesis call with the full
+                # conversation context (all tool results are in `messages`).
+                if tool_receipts and len(tool_receipts) >= 3 and self._is_narration_without_content(text):
+                    print(f"V29: Narration-without-content detected ({len(text)} chars after "
+                          f"{len(tool_receipts)} tool calls) — forcing synthesis")
+                    synthesis_text = self._force_synthesis(
+                        messages, result.raw, system_instruction, prompt
+                    )
+                    if synthesis_text and len(synthesis_text) > len(text):
+                        text = synthesis_text
+                        print(f"V29: Synthesis produced {len(text)} chars")
+                    else:
+                        print("V29: Synthesis did not improve — keeping original response")
+
                 # V23: Structured output — reformat via a separate generate call
                 # (structured output can't be combined with generate_with_tools)
                 if _use_structured_output and text and tool_receipts:
@@ -3654,6 +3674,180 @@ class LancelotOrchestrator:
 
         return cleaned if cleaned else text  # Never return empty
 
+    def _is_narration_without_content(self, text: str) -> bool:
+        """V29: Detect when the model narrates intent instead of producing content.
+
+        After a tool-heavy agentic loop (3+ tool calls), the model sometimes
+        returns a brief statement like "I now have comprehensive fresh data.
+        Let me compile the full competitive analysis." instead of the actual
+        report. This detects that pattern so we can force a synthesis call.
+        """
+        if not text:
+            return True  # Empty response after tool calls = needs synthesis
+        if len(text.strip()) > 2000:
+            return False  # Already has substantial content
+
+        narration_patterns = [
+            "let me compile", "let me now compile",
+            "let me put together", "let me create",
+            "let me synthesize", "let me format",
+            "let me now put", "let me now create",
+            "let me build", "let me draft",
+            "i now have comprehensive", "i have gathered",
+            "i now have the", "i have the information",
+            "i'll now compile", "i'll compile",
+            "i will now compile", "i will compile",
+            "i have comprehensive", "comprehensive fresh data",
+            "let me organize", "let me assemble",
+            "i'll put together", "i will put together",
+            "i'll now create", "i will now create",
+        ]
+        text_lower = text.lower()
+        return any(p in text_lower for p in narration_patterns)
+
+    def _force_synthesis(self, messages: list, last_raw, system_instruction: str, prompt: str) -> str:
+        """V29: Force actual content synthesis when model narrated intent.
+
+        Appends the model's narration to the conversation history, then sends
+        a follow-up message demanding the actual report. Uses generate()
+        (not generate_with_tools) so the model produces text with a fresh
+        output-token budget instead of calling more tools.
+
+        The conversation `messages` already contains all tool call results,
+        so the model has full context to synthesize from.
+        """
+        try:
+            # Append the model's narration response to conversation
+            raw_msg = last_raw
+            if isinstance(raw_msg, dict):
+                raw_msg = {k: v for k, v in raw_msg.items() if k in ("role", "content")}
+            messages.append(raw_msg)
+
+            # Send follow-up demanding actual content (not more narration)
+            synthesis_msg = self.provider.build_user_message(
+                "You just said you would compile the analysis, but you need to "
+                "produce the ACTUAL CONTENT now. Do NOT describe what you will do — "
+                "write the comprehensive report with all findings, data, comparisons, "
+                "and recommendations. Include specific details from the research data "
+                "you gathered via the tool calls above. This is the final response "
+                "the user will see. Be thorough and detailed."
+            )
+            messages.append(synthesis_msg)
+
+            # Use generate() with fresh max_tokens budget (no tools needed)
+            result = self._llm_call_with_retry(
+                lambda: self.provider.generate(
+                    model=self._route_model(prompt),
+                    messages=messages,
+                    system_instruction=system_instruction,
+                    config={"thinking": self._get_thinking_config()},
+                )
+            )
+            return result.text if result.text else ""
+        except Exception as e:
+            print(f"V29: Forced synthesis failed: {e}")
+            return ""
+
+    def _deliver_war_room_artifacts(self, artifacts: list) -> None:
+        """V29: Broadcast War Room artifacts via EventBus → WebSocket.
+
+        Pushes assembled artifacts (research reports, plan details, tool traces)
+        to connected War Room clients. Also triggers auto-document creation
+        for RESEARCH_REPORT artifacts.
+        """
+        try:
+            from event_bus import event_bus, Event
+        except ImportError:
+            try:
+                from src.core.event_bus import event_bus, Event
+            except ImportError:
+                _gov_logger.debug("V29: event_bus not available — skipping artifact delivery")
+                return
+
+        for artifact in artifacts:
+            try:
+                # Auto-create document for long research reports
+                a_type = artifact.type if isinstance(artifact.type, str) else artifact.type.value
+                if a_type == "RESEARCH_REPORT":
+                    content = artifact.content or {}
+                    full_text = content.get("full_text", "")
+                    if full_text and content.get("auto_document"):
+                        doc_path = self._auto_create_document(full_text)
+                        if doc_path:
+                            content["document_path"] = doc_path
+                            _gov_logger.info("V29: Auto-document created: %s", doc_path)
+
+                # Broadcast artifact to War Room
+                event = Event(
+                    type="warroom_artifact",
+                    payload={
+                        "artifact_id": artifact.id,
+                        "artifact_type": a_type,
+                        "content": artifact.content,
+                        "session_id": artifact.session_id,
+                        "created_at": artifact.created_at,
+                    },
+                )
+                event_bus.publish_sync(event)
+            except Exception as e:
+                _gov_logger.warning("V29: Failed to deliver artifact %s: %s", artifact.id, e)
+
+    def _auto_create_document(self, content: str, title: str = "Research Report") -> str:
+        """V29: Auto-create a document from long content via document_creator skill.
+
+        Returns the document path if successful, empty string otherwise.
+        """
+        if not self.skill_executor:
+            return ""
+        try:
+            import time as _t
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"report_{timestamp}.pdf"
+
+            # Build structured content for document_creator
+            sections = []
+            current_section = {"heading": "", "paragraphs": []}
+            for line in content.split("\n"):
+                line = line.strip()
+                if line.startswith("## "):
+                    if current_section["paragraphs"] or current_section["heading"]:
+                        sections.append(current_section)
+                    current_section = {"heading": line[3:], "paragraphs": []}
+                elif line.startswith("# "):
+                    if current_section["paragraphs"] or current_section["heading"]:
+                        sections.append(current_section)
+                    current_section = {"heading": line[2:], "paragraphs": []}
+                elif line.startswith("- "):
+                    # Treat bullets as paragraphs for simplicity
+                    current_section.setdefault("bullets", []).append(line[2:])
+                elif line:
+                    current_section["paragraphs"].append(line)
+            if current_section["paragraphs"] or current_section["heading"]:
+                sections.append(current_section)
+
+            doc_content = {
+                "title": title,
+                "subtitle": f"Generated {datetime.now().strftime('%B %d, %Y')}",
+                "sections": sections,
+            }
+
+            from skills.executor import SkillContext
+            ctx = SkillContext(skill_name="document_creator", caller="assembler")
+            result = self.skill_executor.run(
+                "document_creator",
+                {"format": "pdf", "path": filename, "content": doc_content},
+                context=ctx,
+            )
+            if result.success:
+                return result.outputs.get("path", "")
+            else:
+                _gov_logger.warning("V29: Auto-document creation failed: %s", result.error)
+                return ""
+        except Exception as e:
+            _gov_logger.warning("V29: Auto-document creation error: %s", e)
+            return ""
+
     def _validate_llm_response(self, response_text: str) -> str:
         """S10: Sanitizes LLM output before further processing.
 
@@ -4210,14 +4404,18 @@ class LancelotOrchestrator:
 
                 # Fix Pack V1: Route through assembler if available
                 if self.assembler and pipeline_result.artifact:
-                    assembled = self.assembler.assemble(plan_artifact=pipeline_result.artifact)
+                    assembled = self.assembler.assemble(plan_artifact=pipeline_result.artifact, channel=channel)
                     self.context_env.add_history("assistant", assembled.chat_response)
+                    if assembled.war_room_artifacts:
+                        self._deliver_war_room_artifacts(assembled.war_room_artifacts)
                     return assembled.chat_response
 
                 # Fallback: route rendered markdown through assembler for section stripping
                 if self.assembler and pipeline_result.rendered_output:
-                    assembled = self.assembler.assemble(raw_planner_output=pipeline_result.rendered_output)
+                    assembled = self.assembler.assemble(raw_planner_output=pipeline_result.rendered_output, channel=channel)
                     self.context_env.add_history("assistant", assembled.chat_response)
+                    if assembled.war_room_artifacts:
+                        self._deliver_war_room_artifacts(assembled.war_room_artifacts)
                     return assembled.chat_response
 
                 self.context_env.add_history("assistant", pipeline_result.rendered_output)
@@ -4255,13 +4453,17 @@ class LancelotOrchestrator:
 
             # Fallback: show clean plan via assembler
             if self.assembler and pipeline_result.artifact:
-                assembled = self.assembler.assemble(plan_artifact=pipeline_result.artifact)
+                assembled = self.assembler.assemble(plan_artifact=pipeline_result.artifact, channel=channel)
                 self.context_env.add_history("assistant", assembled.chat_response)
+                if assembled.war_room_artifacts:
+                    self._deliver_war_room_artifacts(assembled.war_room_artifacts)
                 return assembled.chat_response
 
             if self.assembler and pipeline_result.rendered_output:
-                assembled = self.assembler.assemble(raw_planner_output=pipeline_result.rendered_output)
+                assembled = self.assembler.assemble(raw_planner_output=pipeline_result.rendered_output, channel=channel)
                 self.context_env.add_history("assistant", assembled.chat_response)
+                if assembled.war_room_artifacts:
+                    self._deliver_war_room_artifacts(assembled.war_room_artifacts)
                 return assembled.chat_response
 
             # Last resort fallback
@@ -4536,9 +4738,16 @@ class LancelotOrchestrator:
             final_response = self._parse_response(sanitized_response)
 
             # Fix Pack V1: Route LLM output through assembler for output hygiene
+            # V29: Pass delivery channel for channel-aware truncation + auto-document
             if self.assembler and final_response:
-                assembled = self.assembler.assemble(raw_planner_output=final_response)
+                assembled = self.assembler.assemble(
+                    raw_planner_output=final_response,
+                    channel=channel,
+                )
                 final_response = assembled.chat_response
+                # V29: Deliver War Room artifacts (research reports, auto-documents)
+                if assembled.war_room_artifacts:
+                    self._deliver_war_room_artifacts(assembled.war_room_artifacts)
 
             # Store conversation turn in episodic memory if enabled
             if self._memory_enabled and self.context_compiler:
