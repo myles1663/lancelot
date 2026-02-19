@@ -2890,11 +2890,13 @@ class LancelotOrchestrator:
                             if skill_name == "document_creator" and result_data.get("path"):
                                 doc_abs = result_data["path"]
                                 _ws = os.getenv("LANCELOT_WORKSPACE", "/home/lancelot/workspace")
+                                _tok = os.getenv("LANCELOT_API_TOKEN", "")
                                 doc_rel = doc_abs.replace(f"{_ws}/", "").lstrip("/")
-                                result_data["download_url"] = f"/api/files/{doc_rel}"
+                                _dl_url = f"/api/files/{doc_rel}?token={_tok}" if _tok else f"/api/files/{doc_rel}"
+                                result_data["download_url"] = _dl_url
                                 result_data["download_note"] = (
                                     f"Document created. Include this link in your response so "
-                                    f"the user can download it: [Download {Path(doc_abs).name}](/api/files/{doc_rel})"
+                                    f"the user can download it: [Download {Path(doc_abs).name}]({_dl_url})"
                                 )
                             result_str = str(result_data)
                             if len(result_str) > 8000:
@@ -3911,6 +3913,7 @@ class LancelotOrchestrator:
             return response
         links = []
         _ws = os.getenv("LANCELOT_WORKSPACE", "/home/lancelot/workspace")
+        _tok = os.getenv("LANCELOT_API_TOKEN", "")
         for path in doc_paths:
             fname = Path(path).name
             # Determine relative path from workspace root
@@ -3920,7 +3923,8 @@ class LancelotOrchestrator:
                 "pdf": "PDF", "docx": "Word", "xlsx": "Excel",
                 "pptx": "PowerPoint", "csv": "CSV", "md": "Markdown",
             }.get(ext, ext.upper())
-            links.append(f"- [{fname}](/api/files/{rel}) ({type_label})")
+            _dl_url = f"/api/files/{rel}?token={_tok}" if _tok else f"/api/files/{rel}"
+            links.append(f"- [{fname}]({_dl_url}) ({type_label})")
 
         link_block = "\n\n---\n**Attached Documents:**\n" + "\n".join(links)
         return response + link_block
