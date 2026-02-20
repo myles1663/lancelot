@@ -2163,6 +2163,54 @@ class LancelotOrchestrator:
         except Exception as e:
             print(f"V18: Failed to update USER.md: {e}")
 
+    def _previous_was_substantive(self) -> bool:
+        """V30: Check if the last exchange involved tools, long responses, or actions.
+
+        When the previous assistant response was substantive (used tools, was
+        a long response, etc.), follow-up messages should route to flagship
+        with full context. The local model's 4K context window can't carry
+        enough history for meaningful follow-ups to complex conversations.
+
+        Returns True if follow-ups should skip local model routing.
+        """
+        if not hasattr(self, 'context_env') or not self.context_env:
+            return False
+
+        history = self.context_env.history
+        if len(history) < 2:
+            return False
+
+        # Look at the last 2 entries (should be user + assistant)
+        recent = history[-2:]
+        for entry in recent:
+            content = entry.get("content", "")
+            role = entry.get("role", "")
+
+            # Long assistant response indicates substantive interaction
+            if role == "assistant" and len(content) > 200:
+                return True
+
+            # Tool call indicators in assistant response
+            if role == "assistant" and any(marker in content for marker in [
+                "scheduled", "created", "executed", "searched", "fetched",
+                "Tool:", "Result:", "ACTION:", "SKILL:",
+            ]):
+                return True
+
+        # Check recent receipts — if tools were used in last exchange
+        if hasattr(self.context_env, 'receipts') and self.context_env.receipts:
+            import time
+            now = time.time()
+            # Receipts within the last 2 minutes suggest active tool use
+            recent_receipts = [
+                r for r in self.context_env.receipts[-5:]
+                if now - r.get("timestamp", 0) < 120
+            ]
+            if recent_receipts:
+                return True
+
+        return False
+
     def _is_continuation(self, message: str) -> bool:
         """Detect messages that are conversational continuations of a prior thread.
 
@@ -2305,17 +2353,20 @@ class LancelotOrchestrator:
         from feature_flags import FEATURE_DEEP_REASONING_LOOP
         tools = self._build_openai_tool_declarations()
 
-        # V22: Local model has a 4K context window — use a minimal system
-        # prompt and truncate context to fit. Full system instruction is
-        # too large (2000+ tokens of persona, guardrails, principles).
-        _LOCAL_CTX_BUDGET = 2500  # chars (~625 tokens), leaves room for tools + response
+        # V22/V30: Local model has a 4K context window. Budget increased from
+        # 2500→4000 chars. Use a condensed but informative system prompt that
+        # includes core capabilities so the model doesn't hallucinate.
+        _LOCAL_CTX_BUDGET = 4000  # chars (~1000 tokens), leaves room for tools + response
         ctx = context_str or self.context_env.get_context_string()
         if len(ctx) > _LOCAL_CTX_BUDGET:
             ctx = ctx[-_LOCAL_CTX_BUDGET:]  # Keep most recent context
-            print(f"V22: Truncated context for local model ({len(ctx)} chars)")
+            print(f"V30: Truncated context for local model ({len(ctx)} chars)")
         sys_msg = (
-            "You are Lancelot, an AI assistant. Answer the user's question concisely. "
-            "Use tools when needed. Never claim to have done something you haven't."
+            "You are Lancelot, an autonomous AI agent. Answer the user concisely. "
+            "Use tools when needed. Never claim to have done something you haven't actually done via a tool call. "
+            "You have access to tools including: schedule_job, network_client, file_operations, memory. "
+            "When the user refers to a previous message or adds to a prior request, use the conversation "
+            "history in context to understand what they mean."
         )
 
         messages = [
@@ -4572,7 +4623,16 @@ class LancelotOrchestrator:
                         objective=user_message,
                         mode="crusader" if crusader_mode else "normal",
                     )
+                    # V30: Memory vNext compiler provides core blocks, working memory,
+                    # and retrieval items — but NOT conversation history or receipts.
+                    # Append those from ContextEnvironment so the LLM has full context.
+                    history_str = self.context_env.get_history_string(limit=30, channel=channel)
+                    receipts_str = self.context_env.get_recent_receipts(limit=10)
                     context_str = compiled.rendered_prompt
+                    if receipts_str and receipts_str.strip():
+                        context_str += f"\n\n{receipts_str}"
+                    if history_str and history_str.strip():
+                        context_str += f"\n\n{history_str}"
                 except Exception as mem_err:
                     print(f"Memory compilation failed, falling back: {mem_err}")
                     context_str = self.context_env.get_context_string(channel=channel)
@@ -4617,14 +4677,23 @@ class LancelotOrchestrator:
             has_vision_input = bool(file_parts)
             # V23: Use unified classifier result for continuation if available
             is_continuation = (_unified_result.is_continuation if _unified_result else self._is_continuation(user_message))
+
+            # V30: Check if the previous exchange was substantive (used tools,
+            # long response, or action intent). If so, follow-ups should go to
+            # flagship to preserve full context — local model can't see enough.
+            _prev_substantive = self._previous_was_substantive()
+            if _prev_substantive:
+                print("V30: Previous exchange was substantive — forcing flagship for follow-up")
+
             if FEATURE_AGENTIC_LOOP:
                 # V13: Conversational messages bypass agentic loop entirely
                 # (no tools needed for "call me Myles", "hello", "thanks", etc.)
                 # Route to local model first to save flagship tokens.
                 # V17: BUT if it's a continuation ("yes", "go ahead", etc.),
                 # skip conversational bypass — needs full context + tools.
+                # V30: Also skip local routing if previous exchange was substantive.
                 _is_conv = (_unified_result.intent == "conversational" if _unified_result else self._is_conversational(user_message))
-                if _is_conv and not has_vision_input and not is_continuation:
+                if _is_conv and not has_vision_input and not is_continuation and not _prev_substantive:
                     if FEATURE_LOCAL_AGENTIC and self.local_model and self.local_model.is_healthy():
                         print("V13: Conversational message — routing to local model (no tools)")
                         raw_response = self._local_agentic_generate(
@@ -4655,7 +4724,8 @@ class LancelotOrchestrator:
                     )
                 # V8: Try local model for simple queries to save flagship tokens
                 # V23: Use unified classifier's confidence for local routing
-                elif FEATURE_LOCAL_AGENTIC and (
+                # V30: Skip local model if previous exchange was substantive
+                elif not _prev_substantive and FEATURE_LOCAL_AGENTIC and (
                     (_unified_result.intent == "question" and not _unified_result.requires_tools)
                     if _unified_result else self._is_simple_for_local(user_message)
                 ):

@@ -1,8 +1,11 @@
 """
 Unified Intent Classifier — single LLM call replaces 7 heuristic functions (V23).
 
-Uses Gemini structured output to classify user intent in a single call with
-a JSON schema response. Replaces the V1-V22 chain of:
+Uses the active provider to classify user intent in a single call with
+a JSON response. Provider-aware: uses Gemini's response_schema when available,
+falls back to JSON-in-prompt for Anthropic/OpenAI/xAI.
+
+Replaces the V1-V22 chain of:
     classify_intent() -> _verify_intent_with_llm() -> _is_continuation()
     -> _needs_research() -> _is_low_risk_exec() -> _is_conversational()
     -> _is_simple_for_local()
@@ -89,28 +92,48 @@ INTENT_SCHEMA = {
 
 # Compact system prompt for the classifier — NOT the full Lancelot system prompt.
 # Purpose-built for classification only (~200 tokens).
-CLASSIFIER_SYSTEM_PROMPT = """You are an intent classifier for an AI assistant. Classify the user's message into exactly one category.
+_CLASSIFIER_RULES = """You are an intent classifier for an AI assistant. Classify the user's message into exactly one category.
 
 Categories:
 - question: Asking for information, explanation, or clarification. "What is X?", "How does Y work?", "Tell me about Z"
-- action_low_risk: Wants something done NOW that is read-only or low-risk. Search, lookup, summarize, analyze, compare, draft, check, list, fetch
+- action_low_risk: Wants something done NOW that is read-only or low-risk. Search, lookup, summarize, analyze, compare, draft, check, list, fetch, schedule
 - action_high_risk: Wants something done NOW that modifies state. Send email, deploy, delete, install, execute commands, commit, push, restart services
 - plan_request: Wants a PLAN, DESIGN, STRATEGY, or ARCHITECTURE — not immediate action. "Plan how to...", "Design a system for...", "What approach should we take?"
-- continuation: Modifying, correcting, or redirecting a PREVIOUS request. "No, change it to...", "Actually send that to telegram", "Use the other one", "Wait, not that"
+- continuation: Modifying, correcting, or adding to a PREVIOUS request. "No, change it to...", "Actually send that to telegram", "Use the other one", "Wait, not that", "include links", "also add X", "but make it Y"
 - conversational: Greetings, thanks, small talk, acknowledgments. "Hello", "Thanks", "OK cool", "Got it"
 
 Rules:
-- If the message references or corrects something said before, it's "continuation"
+- If the message references, corrects, or adds requirements to something said before, it's "continuation"
+- If there is conversation history and the message adds to the previous request, it's "continuation"
 - "Search for X" or "Look up X" is action_low_risk, not question
 - "Send X to Y" or "Deploy X" is action_high_risk
+- "Schedule X" or "Set up a daily/weekly Y" is action_low_risk
 - Only classify as plan_request if they explicitly want a plan/design/strategy
 - Default to "question" when uncertain"""
+
+# Gemini gets structured output via response_schema
+CLASSIFIER_SYSTEM_PROMPT_GEMINI = _CLASSIFIER_RULES
+
+# Non-Gemini providers must be told to respond as JSON
+CLASSIFIER_SYSTEM_PROMPT_JSON = _CLASSIFIER_RULES + """
+
+You MUST respond with ONLY a JSON object (no markdown, no explanation). Format:
+{"intent": "<category>", "confidence": <0.0-1.0>, "is_continuation": <true/false>, "requires_tools": <true/false>, "reasoning": "<brief>"}"""
+
+# Default classification models per provider (cheapest/fastest tier)
+_DEFAULT_CLASSIFIER_MODELS = {
+    "gemini": "gemini-3-flash-preview",
+    "anthropic": "claude-haiku-4-5-20251001",
+    "openai": "gpt-4o-mini",
+    "xai": "grok-2",
+}
 
 
 class UnifiedClassifier:
     """Single-call LLM intent classification with structured output.
 
-    Uses Gemini's response_schema to get a validated JSON response in one call.
+    Provider-aware: uses Gemini response_schema when available, otherwise
+    instructs the model to respond in JSON and parses the output.
     Falls back to the keyword classifier on any failure.
     """
 
@@ -118,10 +141,16 @@ class UnifiedClassifier:
         """Initialize with a ProviderClient instance.
 
         Args:
-            provider: A ProviderClient (typically GeminiProviderClient).
+            provider: A ProviderClient (Gemini, Anthropic, OpenAI, or xAI).
         """
         self._provider = provider
-        self._model = os.getenv("CLASSIFIER_MODEL", "gemini-3-flash-preview")
+        self._provider_type = getattr(provider, "provider_name", "gemini")
+        # Use env override if set, otherwise pick the right model for the provider
+        self._model = os.getenv(
+            "CLASSIFIER_MODEL",
+            _DEFAULT_CLASSIFIER_MODELS.get(self._provider_type, "gemini-3-flash-preview"),
+        )
+        self._is_gemini = self._provider_type == "gemini"
 
     def classify(
         self,
@@ -130,7 +159,8 @@ class UnifiedClassifier:
     ) -> ClassificationResult:
         """Classify user intent with a single LLM call.
 
-        Uses Gemini structured output — returns validated JSON, never free text.
+        Provider-aware: uses Gemini response_schema when available, otherwise
+        instructs the model to respond in JSON via the system prompt.
         Falls back to keyword classifier on any failure.
 
         Args:
@@ -154,20 +184,30 @@ class UnifiedClassifier:
             context_msg = self._build_context(message, history)
             user_msg = self._provider.build_user_message(context_msg)
 
+            # Gemini: use structured output (response_schema).
+            # Other providers: use JSON-in-prompt approach.
+            if self._is_gemini:
+                config = {
+                    "response_mime_type": "application/json",
+                    "response_schema": INTENT_SCHEMA,
+                }
+                sys_prompt = CLASSIFIER_SYSTEM_PROMPT_GEMINI
+            else:
+                config = {}
+                sys_prompt = CLASSIFIER_SYSTEM_PROMPT_JSON
+
             result = self._provider.generate(
                 model=self._model,
                 messages=[user_msg],
-                system_instruction=CLASSIFIER_SYSTEM_PROMPT,
-                config={
-                    "response_mime_type": "application/json",
-                    "response_schema": INTENT_SCHEMA,
-                },
+                system_instruction=sys_prompt,
+                config=config,
             )
 
             parsed = self._parse(result.text)
             if parsed:
                 logger.debug(
-                    "V23 unified classifier: intent=%s confidence=%.2f reasoning=%s",
+                    "V23 unified classifier (%s/%s): intent=%s confidence=%.2f reasoning=%s",
+                    self._provider_type, self._model,
                     parsed.intent, parsed.confidence, parsed.reasoning,
                 )
                 return parsed
@@ -204,12 +244,30 @@ class UnifiedClassifier:
         return "\n".join(parts)
 
     def _parse(self, raw_text: str) -> Optional[ClassificationResult]:
-        """Parse the JSON response into a ClassificationResult."""
+        """Parse the JSON response into a ClassificationResult.
+
+        Handles both clean JSON (Gemini structured output) and JSON wrapped
+        in markdown fences or surrounded by text (Anthropic/OpenAI).
+        """
         if not raw_text:
             return None
 
+        text = raw_text.strip()
+        # Strip markdown code fences if present (```json ... ```)
+        if text.startswith("```"):
+            lines = text.split("\n")
+            # Remove first line (```json) and last line (```)
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            text = "\n".join(lines).strip()
+
+        # Try to extract JSON object from text
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            text = text[start:end + 1]
+
         try:
-            data = json.loads(raw_text)
+            data = json.loads(text)
         except json.JSONDecodeError:
             return None
 

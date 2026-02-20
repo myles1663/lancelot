@@ -64,6 +64,11 @@ class JobToggleResponse(BaseModel):
     enabled: bool
 
 
+class JobDeleteResponse(BaseModel):
+    id: str
+    deleted: bool
+
+
 class JobTimezoneRequest(BaseModel):
     timezone: str
 
@@ -187,6 +192,26 @@ def disable_job(job_id: str):
     except Exception as exc:
         if "not found" in str(exc).lower():
             raise HTTPException(status_code=404, detail=str(exc))
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+@router.delete("/jobs/{job_id}", response_model=JobDeleteResponse)
+def delete_job(job_id: str):
+    """Delete a scheduled job permanently."""
+    if _service is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Scheduler service not initialized"},
+        )
+    record = _service.get_job(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
+    try:
+        _service.delete_job(job_id)
+        logger.info("Deleted scheduled job '%s'", job_id)
+        return JobDeleteResponse(id=job_id, deleted=True)
+    except Exception as exc:
+        logger.exception("Failed to delete job %s", job_id)
         return JSONResponse(status_code=500, content={"error": str(exc)})
 
 

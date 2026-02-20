@@ -5,6 +5,17 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.21] - 2026-02-20
+
+### Fixed — V30: Conversation Context Loss + Classifier Provider Awareness
+- **Unified classifier 404 on Anthropic**: The V23 unified intent classifier was hardcoded to use `gemini-3-flash-preview` as the classification model, causing a 404 error when the active provider is Anthropic. The classifier is now provider-aware — auto-selects `claude-haiku-4-5-20251001` for Anthropic, `gpt-4o-mini` for OpenAI, `grok-2` for xAI, and keeps `gemini-3-flash-preview` for Gemini. Non-Gemini providers use JSON-in-prompt instead of `response_schema`.
+- **Conversation history lost with Memory vNext**: When `FEATURE_MEMORY_VNEXT` was enabled, the context compiler replaced `get_context_string()` entirely, providing only core memory blocks (50 tokens) with no chat history or receipts. Follow-up messages had zero conversation context. Now appends the last 30 messages of chat history and 10 recent receipts to the compiled context.
+- **Follow-ups misrouted to local model**: Short follow-up messages (e.g., "include links", "and what about Tokyo?") were routed to the local model with only 4K context, losing conversation continuity. Added `_previous_was_substantive()` check (V30) that detects when the last exchange involved tools or long responses, and forces follow-ups to flagship with full context.
+- **Local model context budget too small**: Increased `_LOCAL_CTX_BUDGET` from 2,500 to 4,000 chars (~1,000 tokens). Also improved the local model system prompt to include awareness of available tools (schedule_job, network_client, etc.) and instruction to use conversation history.
+- **Classifier JSON parsing robustness**: `_parse()` now handles JSON wrapped in markdown code fences or surrounded by explanation text — common with Anthropic/OpenAI models that don't have structured output.
+- **Scheduler delete endpoint**: Added `DELETE /api/scheduler/jobs/{job_id}` endpoint. Previously, jobs could only be disabled but never deleted.
+- **Continuation detection improvements**: Updated classifier rules to recognize messages that add requirements to previous requests ("include links", "also add X", "but make it Y") as continuations rather than standalone questions.
+
 ## [0.2.20] - 2026-02-20
 
 ### Fixed — V31: OAuth Provider + Model Discovery Bootstrap
