@@ -28,6 +28,7 @@ export async function saveState(completedSteps, config) {
     completedSteps,
     config: {
       provider: config.provider,
+      authMode: config.authMode,
       commsType: config.commsType,
       telegramChatId: config.telegramChatId,
       hasGpu: config.hasGpu,
