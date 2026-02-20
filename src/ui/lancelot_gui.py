@@ -16,7 +16,7 @@ import webbrowser
 DOCKER_CHECK_CMD = "docker info"
 COMPOSE_UP_CMD = "docker-compose up -d"
 GUI_TITLE = "🛡️ Lancelot - The Paladin's Visage"
-WAR_ROOM_URL = "http://localhost:8501"
+WAR_ROOM_URL = "http://localhost:8000"
 
 class LancelotLauncher:
     def __init__(self):

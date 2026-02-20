@@ -104,7 +104,7 @@ curl -X POST http://localhost:8000/chat \
   -d '{"text": "hello"}'
 ```
 
-Open the **War Room** at `http://localhost:8501` to see the operator dashboard.
+Open the **War Room** at `http://localhost:8000` to see the operator dashboard.
 
 ![War Room Overview Dashboard](docs/images/war-room-overview-dashboard.png)
 

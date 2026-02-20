@@ -4,7 +4,7 @@
 # ──────────────────────────────────────────────────────────
 set -e
 
-WAR_ROOM_URL="http://localhost:8501"
+WAR_ROOM_URL="http://localhost:8000"
 HEALTH_URL="http://localhost:8000/health/live"
 MAX_WAIT=120  # seconds
 ISSUES_URL="https://github.com/myles1663/lancelot/issues"

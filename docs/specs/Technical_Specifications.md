@@ -36,7 +36,7 @@
 |     lancelot-core         |       |     local-llm      |
 |                           |       |                    |
 |  FastAPI Gateway (:8000)  | HTTP  |  GGUF Model Server |
-|  Streamlit War Room(:8501)|------>|  (:8080)           |
+|  War Room React SPA      |------>|  (:8080)           |
 |  Orchestrator             |       |  /health           |
 |  Model Router             |       |  /v1/completions   |
 |  Soul / Skills / Health   |       +--------------------+
@@ -2081,7 +2081,7 @@ All API endpoints follow these rules:
 
 | Service | Container | Ports | Dependencies |
 |---------|-----------|-------|-------------|
-| `lancelot-core` | `lancelot_core` | 8000 (FastAPI), 8501 (Streamlit) | local-llm (healthy) |
+| `lancelot-core` | `lancelot_core` | 8000 (FastAPI + War Room React SPA) | local-llm (healthy) |
 | `local-llm` | `lancelot_local_llm` | 8080 | None |
 
 **Networking:** Both services on `lancelot_net` bridge network.

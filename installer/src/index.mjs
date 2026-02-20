@@ -238,7 +238,7 @@ export async function run(opts) {
     });
 
     // Auto-open War Room in the default browser
-    const warRoomUrl = 'http://localhost:8501';
+    const warRoomUrl = 'http://localhost:8000';
     const platform = process.platform;
     const openCmd = platform === 'win32' ? `start ${warRoomUrl}`
                   : platform === 'darwin' ? `open ${warRoomUrl}`

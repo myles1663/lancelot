@@ -2,7 +2,7 @@
 # Lancelot Launcher — starts Docker and opens the War Room
 # ──────────────────────────────────────────────────────────
 
-$WarRoomUrl = "http://localhost:8501"
+$WarRoomUrl = "http://localhost:8000"
 $HealthUrl = "http://localhost:8000/health/live"
 $MaxWait = 120
 $IssuesUrl = "https://github.com/myles1663/lancelot/issues"

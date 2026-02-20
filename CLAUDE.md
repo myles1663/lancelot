@@ -88,7 +88,7 @@ C:\Users\SSAdministrator\lancelot\
 ### Service Topology
 
 ```
-lancelot-core (:8000 FastAPI, :8501 Streamlit)
+lancelot-core (:8000 FastAPI + War Room React SPA)
     |
     |-- HTTP --> local-llm (:8080 GGUF server)
     |-- HTTPS --> Gemini API / OpenAI API / Anthropic API / xAI API
@@ -124,10 +124,10 @@ gateway.py (FastAPI + startup init)
 
 ```yaml
 # lancelot-core
-- Ports: 8000 (FastAPI), 8501 (Streamlit War Room)
-- Volumes: ./lancelot_data → /home/lancelot/data, . → /home/lancelot/app
+- Ports: 8000 (FastAPI + War Room React SPA)
+- Volumes: lancelot_data (named), lancelot_workspace (named)
 - PYTHONPATH: src/core, src/ui, src/agents, src/memory, src/shared, src/integrations, src/
-- Command: uvicorn gateway:app --host 0.0.0.0 --port 8000 & streamlit run src/ui/war_room.py --server.port 8501
+- Command: uvicorn gateway:app --host 0.0.0.0 --port 8000
 - Depends on: local-llm (healthy)
 
 # local-llm

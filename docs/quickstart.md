@@ -45,8 +45,8 @@ When it finishes, the **War Room** opens automatically in your default browser a
   ╔══════════════════════════════════════════╗
   ║        LANCELOT IS READY!                ║
   ╠══════════════════════════════════════════╣
-  ║  War Room: http://localhost:8501         ║
-  ║  API:      http://localhost:8000         ║
+  ║  War Room: http://localhost:8000         ║
+  ║  API:      http://localhost:8000/api     ║
   ╚══════════════════════════════════════════╝
 ```
 
@@ -59,7 +59,7 @@ When it finishes, the **War Room** opens automatically in your default browser a
 The War Room opens automatically after install. If you need to open it manually:
 
 ```
-http://localhost:8501
+http://localhost:8000
 ```
 
 **Starting Lancelot after first install:**

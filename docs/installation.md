@@ -75,8 +75,7 @@ Docker Compose is the primary and recommended deployment method. It runs two con
 
 | Container | Port | Purpose |
 |-----------|------|---------|
-| `lancelot_core` | 8000 | FastAPI gateway, API endpoints |
-| `lancelot_core` | 8501 | War Room (Streamlit operator dashboard) |
+| `lancelot_core` | 8000 | FastAPI gateway, API endpoints, War Room React SPA |
 | `lancelot_local_llm` | 8080 | Local GGUF model inference server |
 
 Both containers communicate on an internal bridge network (`lancelot_net`). The core container depends on the local LLM being healthy before starting.
@@ -111,7 +110,7 @@ The installer handles:
 | `--skip-model` | Skip the local model download |
 | `--resume` | Resume an interrupted installation |
 
-When the installer finishes, it automatically opens the **War Room** in your default browser at `http://localhost:8501`.
+When the installer finishes, it automatically opens the **War Room** in your default browser at `http://localhost:8000`.
 
 ---
 
@@ -167,7 +166,7 @@ FEATURE_AGENTIC_LOOP=true
 FEATURE_LOCAL_AGENTIC=true
 ```
 
-> **Tip:** If you skip the security tokens, the in-app onboarding at `http://localhost:8501` will auto-generate them on first launch.
+> **Tip:** If you skip the security tokens, the in-app onboarding at `http://localhost:8000` will auto-generate them on first launch.
 
 ### 3. Download the local model
 
@@ -221,7 +220,7 @@ lancelot_local_llm  | INFO:     Model loaded successfully
 .\launch.ps1           # PowerShell (Windows)
 ```
 
-Or open `http://localhost:8501` manually. The in-app onboarding will guide you through any remaining configuration (provider selection, API key validation, comms setup, security tokens).
+Or open `http://localhost:8000` manually. The in-app onboarding will guide you through any remaining configuration (provider selection, API key validation, comms setup, security tokens).
 
 ### 7. Verify
 
@@ -401,8 +400,7 @@ Configure all three API keys in `.env`. Lancelot will use the primary provider f
 
 | Port | Service | Purpose |
 |------|---------|---------|
-| 8000 | lancelot-core | FastAPI gateway + API |
-| 8501 | lancelot-core | War Room (Streamlit dashboard) |
+| 8000 | lancelot-core | FastAPI gateway, API, War Room React SPA |
 | 8080 | local-llm | Local model inference |
 
 Both are configurable in `docker-compose.yml` under the `ports` section.
@@ -425,7 +423,7 @@ To allow additional domains (for connectors or integrations), add them to this f
 
 ### Firewall considerations
 
-- **Inbound:** Only ports 8000, 8501, and 8080 need to be accessible (localhost only by default)
+- **Inbound:** Only ports 8000 and 8080 need to be accessible (localhost only by default)
 - **Outbound:** Allow HTTPS (443) to the domains in your allowlist
 - The War Room is designed for local access only — do not expose it to the public internet without additional authentication
 
@@ -523,7 +521,7 @@ Should return a governed response with receipt IDs.
 
 ### 6. War Room
 
-Open `http://localhost:8501` in a browser. You should see the operator dashboard with health, governance, and system panels.
+Open `http://localhost:8000` in a browser. You should see the operator dashboard with health, governance, and system panels.
 
 ---
 
