@@ -145,13 +145,14 @@ export async function downloadModel(installDir, onProgress) {
       }
     });
 
-    res.on('end', resolve);
-    res.on('error', reject);
     res.pipe(fileStream);
+    // Wait for the write stream to finish flushing to disk, not just the
+    // response read end.  Listening on res 'end' caused a race on Windows
+    // where the file handle wasn't released before the rename below.
+    fileStream.on('finish', resolve);
     fileStream.on('error', reject);
+    res.on('error', (err) => { fileStream.destroy(); reject(err); });
   });
-
-  fileStream.close();
 
   // Verify checksum
   if (!isPlaceholderHash(hash)) {
