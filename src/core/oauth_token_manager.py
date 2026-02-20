@@ -229,7 +229,17 @@ class OAuthTokenManager:
     # ── Background Refresh ───────────────────────────────────────
 
     def start_background_refresh(self) -> None:
-        """Start daemon thread that proactively refreshes tokens."""
+        """Start daemon thread that proactively refreshes tokens.
+
+        Also loads any existing valid token from vault into the env var
+        so the provider can pick it up on startup.
+        """
+        # Hydrate env var from vault if tokens already exist (e.g. restart)
+        token = self.get_valid_token()
+        if token:
+            os.environ[ENV_OAUTH_TOKEN] = token
+            logger.info("OAuth token loaded from vault into env (restart recovery)")
+
         if self._refresh_thread and self._refresh_thread.is_alive():
             return
         self._stop_event.clear()

@@ -737,6 +737,27 @@ async def startup_event():
             set_oauth_manager(_oauth_mgr)
             _oauth_mgr.start_background_refresh()
             logger.info("OAuth token manager initialized.")
+
+            # V30: If OAuth token is now available and provider wasn't initialized
+            # at module load (no API key at that point), re-init the provider.
+            if main_orchestrator.provider is None and os.getenv("ANTHROPIC_OAUTH_TOKEN"):
+                logger.info("Re-initializing provider with OAuth token...")
+                main_orchestrator._init_provider()
+                if main_orchestrator.provider:
+                    logger.info("Provider initialized via OAuth (post-startup recovery).")
+
+            # V30: Update onboarding from oauth_pending if OAuth is connected
+            if os.getenv("ANTHROPIC_OAUTH_TOKEN"):
+                try:
+                    snap = onboarding_orch.snapshot
+                    if snap.credential_status in ("oauth_pending", "none"):
+                        snap.credential_status = "verified"
+                        if snap.state != "READY":
+                            snap.state = "READY"
+                        snap.save()
+                        logger.info("Onboarding auto-updated to READY (OAuth token found).")
+                except Exception as _e:
+                    logger.warning("Onboarding OAuth recovery failed: %s", _e)
         else:
             logger.warning("OAuth token manager skipped — connector vault not available.")
     except Exception as e:
@@ -1498,6 +1519,24 @@ async def oauth_anthropic_callback(request: Request):
             raise RuntimeError("OAuth manager not initialized")
         success = manager.exchange_code(code, state)
         if success:
+            # V30: Re-init provider if it wasn't initialized at startup
+            if main_orchestrator.provider is None:
+                main_orchestrator._init_provider()
+                if main_orchestrator.provider:
+                    logger.info("Provider hot-initialized via OAuth callback.")
+
+            # V30: Update onboarding snapshot from oauth_pending → verified
+            try:
+                snap = onboarding_orch.snapshot
+                if snap.credential_status in ("oauth_pending", "none"):
+                    snap.credential_status = "verified"
+                    if snap.state != "READY":
+                        snap.state = "READY"
+                    snap.save()
+                    logger.info("Onboarding credential_status updated to verified (OAuth complete).")
+            except Exception as _e:
+                logger.warning("Could not update onboarding after OAuth: %s", _e)
+
             return HTMLResponse(
                 "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
                 "<h2 style='color:#22c55e'>Authorization Successful</h2>"
