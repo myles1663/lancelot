@@ -79,6 +79,7 @@ export function generateEnvContent(config) {
     '# Feature Flags — Intelligence',
     'FEATURE_UNIFIED_CLASSIFICATION=true',
     'FEATURE_CLAIM_VERIFICATION=true',
+    'FEATURE_STRUCTURED_OUTPUT=true',
     '',
     '# Feature Flags — Security',
     'FEATURE_SKILL_SECURITY_PIPELINE=true',
