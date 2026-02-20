@@ -5,6 +5,14 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.22] - 2026-02-20
+
+### Added — Daily AI News Briefing
+- **`daily_news_brief` built-in skill**: Fetches breaking AI news from 5 RSS feeds (TechCrunch AI, The Verge AI, Ars Technica, VentureBeat AI, MIT Technology Review), filters to the last 24 hours, deduplicates by title, and delivers a formatted Telegram briefing with headlines, summaries, and links.
+- **Scheduled at 5:45 AM EST daily**: New `daily_news_brief` cron job in `scheduler.yaml` with `America/New_York` timezone.
+- **Zero new dependencies**: Uses only Python stdlib (`urllib`, `xml.etree.ElementTree`, `email.utils`) for HTTP and XML parsing.
+- **Graceful degradation**: Individual feed failures are logged and skipped; the briefing still sends with whatever feeds succeed.
+
 ## [0.2.21] - 2026-02-20
 
 ### Fixed — V30: Conversation Context Loss + Classifier Provider Awareness

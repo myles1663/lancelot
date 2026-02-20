@@ -41,3 +41,18 @@ jobs:
     timeout_s: 300
     skill: credential_rotation
     description: "Monthly credential rotation (requires owner approval)."
+
+  - id: daily_news_brief
+    name: "Daily AI News Briefing"
+    trigger:
+      type: cron
+      expression: "45 5 * * *"
+    enabled: true
+    requires_ready: true
+    requires_approvals: []
+    timeout_s: 120
+    skill: daily_news_brief
+    inputs:
+      max_articles: 15
+    timezone: "America/New_York"
+    description: "Fetch breaking AI news and deliver via Telegram at 5:45 AM EST."

@@ -66,9 +66,9 @@ def _load_builtin_execute(module_name: str) -> SkillExecuteFunc:
     """Lazily load execute function from a builtins module."""
     def _wrapper(context: SkillContext, inputs: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            from src.core.skills.builtins import repo_writer, command_runner, service_runner, network_client, telegram_send, warroom_send, schedule_job, health_check, document_creator, skill_manager, github_search
+            from src.core.skills.builtins import repo_writer, command_runner, service_runner, network_client, telegram_send, warroom_send, schedule_job, health_check, document_creator, skill_manager, github_search, daily_news_brief
         except ImportError:
-            from skills.builtins import repo_writer, command_runner, service_runner, network_client, telegram_send, warroom_send, schedule_job, health_check, document_creator, skill_manager, github_search
+            from skills.builtins import repo_writer, command_runner, service_runner, network_client, telegram_send, warroom_send, schedule_job, health_check, document_creator, skill_manager, github_search, daily_news_brief
 
         module_map = {
             "repo_writer": repo_writer,
@@ -82,6 +82,7 @@ def _load_builtin_execute(module_name: str) -> SkillExecuteFunc:
             "document_creator": document_creator,
             "skill_manager": skill_manager,
             "github_search": github_search,
+            "daily_news_brief": daily_news_brief,
         }
         mod = module_map.get(module_name)
         if mod is None:
@@ -103,6 +104,7 @@ _BUILTIN_SKILLS: Dict[str, SkillExecuteFunc] = {
     "document_creator": _load_builtin_execute("document_creator"),
     "skill_manager": _load_builtin_execute("skill_manager"),
     "github_search": _load_builtin_execute("github_search"),
+    "daily_news_brief": _load_builtin_execute("daily_news_brief"),
 }
 
 
