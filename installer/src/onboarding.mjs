@@ -33,9 +33,10 @@ export async function markOnboardingComplete(installDir, config) {
 
   // Write USER.md — required by _determine_state() in onboarding.py
   // Without this file, onboarding returns "WELCOME" state
+  const ownerName = config.ownerName || 'Commander';
   const userMd = [
     '# User Profile',
-    '- Name: Commander',
+    `- Name: ${ownerName}`,
     '- Role: Owner',
     '- Bonded: True',
     `- OnboardingComplete: True`,

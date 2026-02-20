@@ -11,7 +11,7 @@ import { PROVIDERS, COMMS } from './constants.mjs';
 import { showBanner, showStep, showSuccess, showError, showInfo } from './ui.mjs';
 import { runAllChecks } from './prereqs.mjs';
 import {
-  promptInstallDir, promptProvider, promptAuthMethod, promptApiKey,
+  promptInstallDir, promptOwnerName, promptProvider, promptAuthMethod, promptApiKey,
   promptCommsChannel, promptTelegramToken, promptTelegramChatId,
   promptGoogleChatSpace, promptConfirm,
 } from './prompts.mjs';
@@ -43,6 +43,7 @@ export async function run(opts) {
   let config = {
     startedAt: new Date().toISOString(),
     installDir: null,
+    ownerName: null,
     provider: opts.provider || null,
     authMode: null,  // 'api_key' or 'oauth'
     apiKey: null,
@@ -85,6 +86,12 @@ export async function run(opts) {
       const dir = await promptInstallDir(opts.directory);
       config.installDir = path.resolve(dir);
       completed.push('directory');
+      await saveState(completed, config);
+    }
+
+    // ── Step 2b: Owner name ──
+    if (!config.ownerName) {
+      config.ownerName = await promptOwnerName();
       await saveState(completed, config);
     }
 

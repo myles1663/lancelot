@@ -16,6 +16,19 @@ export async function promptInstallDir(defaultDir) {
   return dir;
 }
 
+export async function promptOwnerName() {
+  return await input({
+    message: 'What should Lancelot call you?',
+    default: 'Commander',
+    validate: (val) => {
+      if (!val || val.trim().length < 1) {
+        return 'Please enter a name';
+      }
+      return true;
+    },
+  });
+}
+
 export async function promptProvider(preselected) {
   if (preselected && PROVIDERS[preselected]) {
     return preselected;
@@ -153,6 +166,7 @@ export async function promptConfirm(config) {
 
   console.log('');
   console.log(chalk.white.bold('  Configuration Summary:'));
+  console.log(chalk.gray(`    Owner:      ${config.ownerName || 'Commander'}`));
   console.log(chalk.gray(`    Location:   ${config.installDir}`));
   const authLabel = config.authMode === 'oauth'
     ? `${providerInfo?.name || config.provider} (OAuth — browser sign-in)`
