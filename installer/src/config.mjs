@@ -11,6 +11,11 @@ function generateToken() {
   return crypto.randomBytes(32).toString('base64url');
 }
 
+function generateFernetKey() {
+  // Python Fernet requires 44-char base64url WITH padding (=)
+  return crypto.randomBytes(32).toString('base64url') + '=';
+}
+
 export function generateEnvContent(config) {
   const providerInfo = PROVIDERS[config.provider];
   const lines = [
@@ -34,7 +39,7 @@ export function generateEnvContent(config) {
   // Generate security tokens — store API token in config for OAuth flow
   const ownerToken = generateToken();
   const apiToken = generateToken();
-  const vaultKey = generateToken();
+  const vaultKey = generateFernetKey();
   config._generatedApiToken = apiToken;
 
   lines.push(
