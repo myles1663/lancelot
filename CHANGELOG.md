@@ -5,6 +5,15 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.20] - 2026-02-20
+
+### Fixed — V31: OAuth Provider + Model Discovery Bootstrap
+- **OnboardingState enum fix**: OAuth callback and startup recovery code was assigning string `"READY"` instead of `OnboardingState.READY` enum, causing `'str' object has no attribute 'value'` error on snapshot save. Onboarding state now correctly transitions to READY after OAuth.
+- **Model discovery after OAuth**: When the provider is hot-initialized via OAuth callback (or startup recovery), model discovery is now bootstrapped and wired into the Provider API. Previously, completing OAuth would initialize the provider but leave `_discovery` as None, so the War Room showed no model stack or lane selectors.
+- **`LANCELOT_PROVIDER_MODE` missing**: The onboarding `_determine_state()` check requires `LANCELOT_PROVIDER_MODE` to be set, but neither the installer nor `.env` template included it. Added `LANCELOT_PROVIDER_MODE=sdk` to both the installer config generator and the default `.env`.
+- **Extracted `_bootstrap_model_discovery()` helper**: Model discovery initialization is now a reusable function called from both startup and OAuth callback, eliminating code duplication.
+- **Missing core feature flags in installer**: The installer and `.env` template were missing `FEATURE_AGENTIC_LOOP`, `FEATURE_MEMORY_VNEXT`, and `FEATURE_TOOLS_FABRIC`. Without these, the agent had no multi-step execution, no tiered memory, and no tool fabric — most kill switches appeared OFF after fresh install.
+
 ## [0.2.18] - 2026-02-19
 
 ### Fixed — V30: Docker Desktop Windows Compatibility

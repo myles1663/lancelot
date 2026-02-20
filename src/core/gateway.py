@@ -435,6 +435,63 @@ def _shutdown_bal(objects):
     logger.info("BAL shut down.")
 
 
+def _bootstrap_model_discovery():
+    """Create ModelDiscovery + wire into Provider API when provider becomes available.
+
+    Called at startup and again after OAuth hot-initializes the provider.
+    Safe to call multiple times — skips if provider is still None.
+    """
+    if main_orchestrator.provider is None:
+        return False
+
+    try:
+        from model_discovery import ModelDiscovery
+        from providers.api import init_provider_api, load_persisted_config
+
+        _persisted_config = load_persisted_config()
+        _persisted_lane_overrides = _persisted_config.get("lane_overrides", {})
+
+        _lane_overrides = {}
+        try:
+            from provider_profile import ProfileRegistry
+            _registry = ProfileRegistry()
+            _prov_name = main_orchestrator.provider.provider_name
+            if _registry.has_provider(_prov_name):
+                _profile = _registry.get_profile(_prov_name)
+                _lane_overrides["fast"] = _profile.fast.model
+                _lane_overrides["deep"] = _profile.deep.model
+                if _profile.cache:
+                    _lane_overrides["cache"] = _profile.cache.model
+        except Exception:
+            pass
+
+        _lane_overrides.update(_persisted_lane_overrides)
+
+        discovery = ModelDiscovery(
+            provider=main_orchestrator.provider,
+            profiles_path="config/model_profiles.yaml",
+            lane_overrides=_lane_overrides,
+        )
+        discovery.refresh()
+
+        for _lane, _model_id in _persisted_lane_overrides.items():
+            try:
+                main_orchestrator.set_lane_model(_lane, _model_id)
+            except Exception as _e:
+                logger.warning("Failed to apply lane override %s=%s: %s", _lane, _model_id, _e)
+
+        init_provider_api(discovery, orchestrator=main_orchestrator)
+        logger.info(
+            "Model discovery: %d models found, lanes: %s",
+            len(discovery.discovered_models),
+            discovery.lane_assignments,
+        )
+        return True
+    except Exception as e:
+        logger.warning("Model discovery bootstrap failed: %s", e)
+        return False
+
+
 @app.on_event("startup")
 async def startup_event():
     global _startup_time
@@ -731,6 +788,7 @@ async def startup_event():
     # ===== OAUTH TOKEN MANAGER (V28) =====
     try:
         from oauth_token_manager import OAuthTokenManager, set_oauth_manager
+        from onboarding_snapshot import OnboardingState
         _oauth_vault = _connector_vault if '_connector_vault' in dir() else None
         if _oauth_vault:
             _oauth_mgr = OAuthTokenManager(vault=_oauth_vault)
@@ -752,8 +810,8 @@ async def startup_event():
                     snap = onboarding_orch.snapshot
                     if snap.credential_status in ("oauth_pending", "none"):
                         snap.credential_status = "verified"
-                        if snap.state != "READY":
-                            snap.state = "READY"
+                        if snap.state != OnboardingState.READY:
+                            snap.state = OnboardingState.READY
                         snap.save()
                         logger.info("Onboarding auto-updated to READY (OAuth token found).")
                 except Exception as _e:
@@ -813,15 +871,11 @@ async def startup_event():
 
     # ===== PHASE 7: MODEL DISCOVERY + PROVIDER API =====
     try:
-        from model_discovery import ModelDiscovery
         from providers.api import router as provider_router, init_provider_api, load_persisted_config
 
-        # Load persisted provider config (from previous session)
+        # If a persisted provider differs from current, hot-swap
         _persisted_config = load_persisted_config()
         _persisted_provider = _persisted_config.get("active_provider")
-        _persisted_lane_overrides = _persisted_config.get("lane_overrides", {})
-
-        # If a persisted provider differs from current, hot-swap
         if _persisted_provider and main_orchestrator.provider:
             _current_prov = main_orchestrator.provider.provider_name
             if _persisted_provider != _current_prov:
@@ -832,50 +886,10 @@ async def startup_event():
                     logger.warning("Failed to restore persisted provider '%s': %s — keeping %s",
                                    _persisted_provider, _e, _current_prov)
 
-        if main_orchestrator.provider:
-            # Build lane overrides: start from models.yaml, then apply persisted overrides
-            _lane_overrides = {}
-            try:
-                from provider_profile import ProfileRegistry
-                _registry = ProfileRegistry()
-                _prov_name = main_orchestrator.provider.provider_name
-                if _registry.has_provider(_prov_name):
-                    _profile = _registry.get_profile(_prov_name)
-                    _lane_overrides["fast"] = _profile.fast.model
-                    _lane_overrides["deep"] = _profile.deep.model
-                    if _profile.cache:
-                        _lane_overrides["cache"] = _profile.cache.model
-            except Exception:
-                pass
-
-            # Persisted lane overrides take priority
-            _lane_overrides.update(_persisted_lane_overrides)
-
-            _model_discovery = ModelDiscovery(
-                provider=main_orchestrator.provider,
-                profiles_path="config/model_profiles.yaml",
-                lane_overrides=_lane_overrides,
-            )
-            _model_discovery.refresh()
-
-            # Apply persisted lane overrides to orchestrator
-            for _lane, _model_id in _persisted_lane_overrides.items():
-                try:
-                    main_orchestrator.set_lane_model(_lane, _model_id)
-                except Exception as _e:
-                    logger.warning("Failed to apply persisted lane override %s=%s: %s", _lane, _model_id, _e)
-
-            init_provider_api(_model_discovery, orchestrator=main_orchestrator)
-            app.include_router(provider_router)
-            logger.info(
-                "Model discovery: %d models found, lanes: %s",
-                len(_model_discovery.discovered_models),
-                _model_discovery.lane_assignments,
-            )
-        else:
+        if not _bootstrap_model_discovery():
             init_provider_api(None, orchestrator=main_orchestrator)
-            app.include_router(provider_router)
             logger.warning("Provider not initialized — model discovery skipped")
+        app.include_router(provider_router)
     except Exception as e:
         logger.warning(f"Model discovery initialization failed: {e}")
 
@@ -1525,13 +1539,17 @@ async def oauth_anthropic_callback(request: Request):
                 if main_orchestrator.provider:
                     logger.info("Provider hot-initialized via OAuth callback.")
 
+            # V31: Bootstrap model discovery so lanes appear in War Room
+            _bootstrap_model_discovery()
+
             # V30: Update onboarding snapshot from oauth_pending → verified
             try:
+                from onboarding_snapshot import OnboardingState
                 snap = onboarding_orch.snapshot
                 if snap.credential_status in ("oauth_pending", "none"):
                     snap.credential_status = "verified"
-                    if snap.state != "READY":
-                        snap.state = "READY"
+                    if snap.state != OnboardingState.READY:
+                        snap.state = OnboardingState.READY
                     snap.save()
                     logger.info("Onboarding credential_status updated to verified (OAuth complete).")
             except Exception as _e:
