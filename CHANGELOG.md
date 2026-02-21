@@ -5,13 +5,17 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
-## [0.2.22] - 2026-02-20
+## [0.2.22] - 2026-02-21
 
-### Added — Daily AI News Briefing
-- **`daily_news_brief` built-in skill**: Fetches breaking AI news from 5 RSS feeds (TechCrunch AI, The Verge AI, Ars Technica, VentureBeat AI, MIT Technology Review), filters to the last 24 hours, deduplicates by title, and delivers a formatted Telegram briefing with headlines, summaries, and links.
-- **Scheduled at 5:45 AM EST daily**: New `daily_news_brief` cron job in `scheduler.yaml` with `America/New_York` timezone.
-- **Zero new dependencies**: Uses only Python stdlib (`urllib`, `xml.etree.ElementTree`, `email.utils`) for HTTP and XML parsing.
-- **Graceful degradation**: Individual feed failures are logged and skipped; the briefing still sends with whatever feeds succeed.
+### Improved — Daily AI News Briefing v2.0.0
+- **19+ RSS/Atom sources across 4 categories**: Expanded from 5 feeds to 19 diverse sources organized into Major Tech News (TechCrunch, The Verge, Ars Technica, VentureBeat, Wired, CNBC), AI-Specific Publications (MIT Tech Review, Synced AI, AI News, Towards Data Science, Marktechpost, The Decoder), Research & Labs (Google AI Blog, OpenAI Blog, Hugging Face Blog), and Business & Industry (Bloomberg, InfoQ, The Register, ZDNet).
+- **Google News RSS supplemental discovery**: 3 search queries ("artificial intelligence news today", "AI breakthrough", "AI startup funding") fetch articles from outlets not in the direct RSS list, automatically extracting the real source name from Google News titles.
+- **Source diversity balancing**: Round-robin selection with configurable per-source cap (default 3) ensures no single outlet dominates the briefing. Articles are grouped by source, sorted by date, capped, then selected in round-robin order.
+- **AI-relevance keyword filtering**: General tech feeds (Ars Technica, CNBC, MIT Tech Review, Bloomberg, etc.) are filtered against 40+ AI keywords so only relevant articles make the cut.
+- **Parallel fetching**: All feeds fetched concurrently via `ThreadPoolExecutor(max_workers=8)` for faster aggregation.
+- **Title-based deduplication**: Normalized title fingerprints prevent duplicate stories that appear across multiple feeds.
+- **Configurable inputs**: `max_articles` (default 15), `max_per_source` (default 3), `hours_lookback` (default 24), `chat_id` override.
+- **Zero new dependencies**: Uses only Python stdlib for HTTP, XML, and threading.
 
 ## [0.2.21] - 2026-02-20
 
