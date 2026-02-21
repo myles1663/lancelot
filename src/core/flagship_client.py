@@ -58,9 +58,13 @@ class FlagshipClient:
         if env_var:
             self._api_key = os.environ.get(env_var)
 
-        # V28: Check for OAuth token (Anthropic only)
+        # V28: Check for OAuth token (Anthropic only) — via in-memory cache (F-009)
         if provider == "anthropic":
-            self._oauth_token = os.environ.get("ANTHROPIC_OAUTH_TOKEN")
+            try:
+                from oauth_token_manager import get_oauth_token
+                self._oauth_token = get_oauth_token()
+            except ImportError:
+                self._oauth_token = os.environ.get("ANTHROPIC_OAUTH_TOKEN")
 
     def is_configured(self) -> bool:
         """Check if the API key (or OAuth token) is available."""
@@ -95,9 +99,13 @@ class FlagshipClient:
                 f"(set {_API_KEY_VARS.get(self._provider, 'UNKNOWN')})"
             )
 
-        # V28: Refresh OAuth token from env (background refresh thread updates it)
+        # V28: Refresh OAuth token from cache (background refresh thread updates it)
         if self._provider == "anthropic" and not self._api_key:
-            self._oauth_token = os.environ.get("ANTHROPIC_OAUTH_TOKEN", self._oauth_token)
+            try:
+                from oauth_token_manager import get_oauth_token
+                self._oauth_token = get_oauth_token() or self._oauth_token
+            except ImportError:
+                self._oauth_token = os.environ.get("ANTHROPIC_OAUTH_TOKEN", self._oauth_token)
 
         lane_config = self._get_lane_config(lane)
         effective_max = max_tokens or lane_config.max_tokens

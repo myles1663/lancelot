@@ -53,8 +53,18 @@ VAULT_ACCESS_TOKEN = "anthropic.oauth.access_token"
 VAULT_REFRESH_TOKEN = "anthropic.oauth.refresh_token"
 VAULT_TOKEN_EXPIRY = "anthropic.oauth.token_expiry"
 
-# Env var set at runtime so FlagshipClient can pick it up
-ENV_OAUTH_TOKEN = "ANTHROPIC_OAUTH_TOKEN"
+# In-memory token cache (replaces os.environ for security — F-009)
+# Avoids /proc/PID/environ exposure on Linux
+ENV_OAUTH_TOKEN = "ANTHROPIC_OAUTH_TOKEN"  # kept for backward compat naming
+_oauth_token_cache: Dict[str, str] = {}
+
+
+def get_oauth_token() -> Optional[str]:
+    """Retrieve the current OAuth access token from the in-memory cache.
+
+    Used by FlagshipClient and gateway instead of os.environ.
+    """
+    return _oauth_token_cache.get("access_token")
 
 
 # ── PKCE Helpers ─────────────────────────────────────────────────────
@@ -223,7 +233,8 @@ class OAuthTokenManager:
                     self._vault.delete(key)
             except Exception:
                 pass
-        os.environ.pop(ENV_OAUTH_TOKEN, None)
+        _oauth_token_cache.pop("access_token", None)
+        os.environ.pop(ENV_OAUTH_TOKEN, None)  # clean up legacy env if present
         logger.info("OAuth tokens revoked")
 
     # ── Background Refresh ───────────────────────────────────────
@@ -234,11 +245,11 @@ class OAuthTokenManager:
         Also loads any existing valid token from vault into the env var
         so the provider can pick it up on startup.
         """
-        # Hydrate env var from vault if tokens already exist (e.g. restart)
+        # Hydrate in-memory cache from vault if tokens already exist (e.g. restart)
         token = self.get_valid_token()
         if token:
-            os.environ[ENV_OAUTH_TOKEN] = token
-            logger.info("OAuth token loaded from vault into env (restart recovery)")
+            _oauth_token_cache["access_token"] = token
+            logger.info("OAuth token loaded from vault into cache (restart recovery)")
 
         if self._refresh_thread and self._refresh_thread.is_alive():
             return
@@ -267,8 +278,8 @@ class OAuthTokenManager:
         self._vault.store(VAULT_ACCESS_TOKEN, access_token, type="oauth_token")
         self._vault.store(VAULT_REFRESH_TOKEN, refresh_token, type="oauth_token")
         self._vault.store(VAULT_TOKEN_EXPIRY, expiry_ts, type="metadata")
-        # Set env var for FlagshipClient runtime access
-        os.environ[ENV_OAUTH_TOKEN] = access_token
+        # Update in-memory cache for FlagshipClient runtime access (F-009)
+        _oauth_token_cache["access_token"] = access_token
 
     def _refresh_token(self) -> bool:
         """Refresh the access token using the single-use refresh token."""

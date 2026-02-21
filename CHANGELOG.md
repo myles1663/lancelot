@@ -5,6 +5,18 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.23] - 2026-02-21
+
+### Fixed — Security Hardening (Audit Findings F-002 through F-009)
+- **F-002: Dev mode auth bypass (High)**: `verify_token()` now fails closed when `LANCELOT_API_TOKEN` is not set. Dev mode requires explicit `LANCELOT_DEV_MODE=true` to bypass authentication. Previously, all requests were accepted without auth when the token was unset.
+- **F-003: WebSocket authentication (High)**: War Room WebSocket (`/ws/warroom`) now requires authentication via first-message handshake: `{"type": "auth", "token": "<token>"}`. Server responds `{"type": "auth_ok"}` or closes with 4401. Legacy query-param auth still supported but logged as deprecated. Updated React `useWebSocket` hook to send auth on connect.
+- **F-004: CORS hardening (High)**: Replaced wildcard `allow_methods=["*"]` and `allow_headers=["*"]` with explicit lists: `["GET", "POST", "DELETE", "PATCH", "OPTIONS"]` and `["Authorization", "Content-Type"]`.
+- **F-005: HTTP security headers (Medium)**: Added middleware setting `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, and `Permissions-Policy: camera=(), microphone=(), geolocation=()`.
+- **F-009: OAuth token exposure (Medium)**: OAuth access tokens no longer stored in `os.environ` (was readable via `/proc/PID/environ`). Replaced with in-memory module-level cache (`_oauth_token_cache`). FlagshipClient and gateway now use `get_oauth_token()` getter instead of `os.environ`.
+
+### Added — Security Whitepaper
+- **Lancelot Security Whitepaper v1.0**: Comprehensive security assessment document covering STRIDE threat model, 15 categorized findings (1 Critical, 3 High, 5 Medium, 3 Low, 3 Info), OWASP Top 10 mapping, NIST AI RMF alignment, CIS Docker Benchmark mapping, and a prioritized remediation roadmap.
+
 ## [0.2.22] - 2026-02-21
 
 ### Improved — Daily AI News Briefing v2.0.0

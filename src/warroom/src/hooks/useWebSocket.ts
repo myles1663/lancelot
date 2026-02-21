@@ -37,7 +37,12 @@ export function useWebSocket({
     const ws = new WebSocket(fullUrl)
     wsRef.current = ws
 
-    ws.onopen = () => setStatus('connected')
+    ws.onopen = () => {
+      // F-003: Send auth message as first frame
+      const token = localStorage.getItem('lancelot_api_token') || ''
+      ws.send(JSON.stringify({ type: 'auth', token }))
+      setStatus('connected')
+    }
 
     ws.onmessage = (e) => {
       try {

@@ -74,14 +74,26 @@ class RateLimiter:
 
 app = FastAPI()
 
-# S11: CORS middleware
+# S11: CORS middleware — explicit methods/headers (F-004 hardening)
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:8501,http://localhost:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=True,
 )
+
+
+# F-005: Security headers middleware
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    return response
 
 # --- Subsystem Gate Middleware ---
 # Routes for feature-gated subsystems are always mounted but gated here.
@@ -114,16 +126,28 @@ async def subsystem_gate_middleware(request: Request, call_next):
 
 # --- API Authentication ---
 API_TOKEN = os.getenv("LANCELOT_API_TOKEN")
+DEV_MODE = os.getenv("LANCELOT_DEV_MODE", "").lower() in ("true", "1", "yes")
 
 
 def verify_token(request: Request) -> bool:
-    """Validates Bearer token from Authorization header."""
+    """Validates Bearer token from Authorization header.
+
+    Security: When LANCELOT_API_TOKEN is not set, authentication is only
+    bypassed if LANCELOT_DEV_MODE is explicitly enabled. Otherwise, all
+    requests are rejected (fail-closed).
+    """
     if not API_TOKEN:
-        logger.warning(
-            "SECURITY: Gateway running in dev mode — no authentication token configured. "
-            "Set LANCELOT_API_TOKEN for production."
+        if DEV_MODE:
+            logger.warning(
+                "SECURITY: Gateway running in dev mode (LANCELOT_DEV_MODE=true) — "
+                "all requests accepted without authentication."
+            )
+            return True
+        logger.error(
+            "SECURITY: No LANCELOT_API_TOKEN configured and dev mode not enabled. "
+            "Set LANCELOT_API_TOKEN for production or LANCELOT_DEV_MODE=true for development."
         )
-        return True
+        return False
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
         return hmac.compare_digest(auth_header[7:], API_TOKEN)
@@ -798,14 +822,15 @@ async def startup_event():
 
             # V30: If OAuth token is now available and provider wasn't initialized
             # at module load (no API key at that point), re-init the provider.
-            if main_orchestrator.provider is None and os.getenv("ANTHROPIC_OAUTH_TOKEN"):
+            from oauth_token_manager import get_oauth_token as _get_oauth
+            if main_orchestrator.provider is None and _get_oauth():
                 logger.info("Re-initializing provider with OAuth token...")
                 main_orchestrator._init_provider()
                 if main_orchestrator.provider:
                     logger.info("Provider initialized via OAuth (post-startup recovery).")
 
             # V30: Update onboarding from oauth_pending if OAuth is connected
-            if os.getenv("ANTHROPIC_OAUTH_TOKEN"):
+            if _get_oauth():
                 try:
                     snap = onboarding_orch.snapshot
                     if snap.credential_status in ("oauth_pending", "none"):
