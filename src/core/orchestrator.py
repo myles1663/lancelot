@@ -446,6 +446,18 @@ class LancelotOrchestrator:
                 print("V5: No real skill results — falling back to LLM execution")
                 content = self._execute_with_llm(active_graph)
 
+        # V26: When LLM execution succeeds, update the TaskRun status to
+        # SUCCEEDED. The TaskRunner may have failed on generic template steps
+        # but the agentic loop did the real work successfully.
+        if content and content.strip():
+            try:
+                stored_run = self.task_store.get_run(run.id)
+                if stored_run and hasattr(stored_run, 'status'):
+                    stored_run.status = "SUCCEEDED"
+                    stored_run.last_error = None
+            except Exception:
+                pass
+
         # Assemble status line
         if self.assembler:
             _channel = getattr(self, "_current_channel", "api")
@@ -2010,6 +2022,7 @@ class LancelotOrchestrator:
             "commit", "merge", "rebase",
             "shut down", "shutdown", "restart", "reboot", "kill",
             "move", "rename", "overwrite",
+            "create", "write", "save", "update", "modify", "edit",
         ]
         if any(phrase in prompt_lower for phrase in high_risk):
             return False

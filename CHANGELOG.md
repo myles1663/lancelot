@@ -5,6 +5,13 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.27] - 2026-02-22
+
+### Fixed — Stress Test Findings
+- **Assembler empty response bug**: Response Assembler used a whitelist for `##` section headers — any agentic loop response with non-whitelisted headers (e.g., skills lists, research reports) was routed entirely to War Room artifacts, returning empty chat. Fixed by switching to a blocklist approach: only explicitly verbose sections (Assumptions, Risks, Decision Points, etc.) are routed out; all other `##` sections stay in chat.
+- **Low-risk classifier bypass**: `_is_low_risk_exec` was missing "create", "write", "save", "update", "modify", "edit" from high-risk signals. File creation requests bypassed the governance pipeline and executed without permission via the just-do-it path. Added 6 new high-risk signals.
+- **TaskRun status mismatch**: When the agentic loop (`_execute_with_llm`) successfully executed a task, the TaskRun status still showed the TaskRunner's template-step failure (e.g., "FAILED: Command 'Analyze' not in whitelist"). The status line now shows `SUCCEEDED` when LLM execution produces content.
+
 ## [0.2.26] - 2026-02-22
 
 ### Added — Google OAuth 2.0 (Gmail + Calendar)

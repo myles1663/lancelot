@@ -42,6 +42,8 @@ The orchestrator classifies the message into one of five intent types:
 | `PLAN_REQUEST` | Complex goal requiring multi-step planning | Planning Pipeline |
 | `EXEC_REQUEST` | Direct action request (high-risk) | Planning Pipeline → Permission |
 | `EXEC_REQUEST` | Direct action request (low-risk: search, draft, summarize) | Agentic Loop (just-do-it) |
+
+> **v0.2.27 Low-Risk Classifier Fix:** The `_is_low_risk_exec` method now includes write-oriented action verbs (`create`, `write`, `save`, `update`, `modify`, `edit`) in its high-risk signal list. Previously, requests containing these verbs could be classified as low-risk and routed directly to the agentic loop, bypassing the PlanningPipeline, TaskGraph, and Permission flow. This fix ensures that all write-oriented actions go through full governance.
 | `MIXED_REQUEST` | Contains both planning and execution | Planning Pipeline |
 | `KNOWLEDGE_REQUEST` | Information retrieval / research | Flagship Fast/Deep |
 | `CONVERSATIONAL` | General conversation | Local or Flagship Fast |
@@ -102,6 +104,8 @@ Each step generates a receipt linked to the parent plan via `parent_id` and `que
 **Phase 3 — Governed Negotiation.** When governance blocks an action, the system no longer returns a generic `BLOCKED` message. Instead, it constructs a `GovernanceFeedback` dataclass (from `reasoning_artifact.py`) containing the blocked action, the policy rule that triggered the block, and a set of structured alternative approaches the model can pursue. This feedback is injected back into the agentic loop context, allowing the model to adapt its plan — choosing a lower-risk path, requesting approval, or decomposing the action — rather than stalling.
 
 **Phase 6 — Task Experience Memory.** After task completion, the orchestrator calls `_record_task_experience()`, which stores a `TaskExperience` dataclass (from `reasoning_artifact.py`) in episodic memory under the `task_experience` namespace. Each experience record captures the original request, the reasoning artifact, capability gaps encountered, actions taken, the outcome, and a duration. On future requests, the context compiler can retrieve relevant past experiences, enabling Lancelot to learn from previous successes and failures — avoiding repeated mistakes and reusing strategies that worked.
+
+**v0.2.27 TaskRun Status Fix.** After `_execute_with_llm` succeeds in the agentic loop, the TaskRun status is now explicitly updated to `SUCCEEDED`. Previously, the TaskRun status reflected the TaskRunner's template-step failure even though the agentic loop had successfully completed the task. This fix ensures that the TaskRun status accurately reflects the actual outcome of execution.
 
 ### 6. Risk Classification & Governance
 
@@ -337,6 +341,8 @@ Execution:     Command denylist → Path traversal → Workspace boundary → Do
                                     ↓
 Output:        Receipt generation → PII redaction → Structured output parsing → Claim verification → Presentation → Response assembly
 ```
+
+**v0.2.27 Assembler Fix (Response Assembly):** The `extract_verbose_sections` function in `src/core/response/policies.py` was changed from a **whitelist** to a **blocklist** approach. Previously, any `##` section not matching the `_CHAT_HEADERS` whitelist was routed to War Room artifacts, which caused empty chat responses when agentic loop output contained `##` headers not on the whitelist. Now, only sections matching `_VERBOSE_HEADERS` (Assumptions, Decision Points, Risks, Done When, Context, MVP Path, Test Plan, Estimate, References) are routed to verbose/War Room artifacts — everything else stays in the chat response.
 
 **Key principles:**
 - The model is treated as **untrusted logic** inside a governed system
