@@ -103,3 +103,38 @@ export const validateCredentials = (connectorId: string) =>
   apiPost<ValidateCredentialResponse>(
     `/connectors/${connectorId}/credentials/validate`,
   )
+
+// ── Google OAuth API  (/api/google-oauth/*) ──────────────────
+
+export interface GoogleOAuthStartResponse {
+  auth_url: string
+  message: string
+  request_id: string
+}
+
+export interface GoogleOAuthStatusResponse {
+  configured: boolean
+  valid: boolean
+  status: string
+  has_client_credentials: boolean
+  has_access_token: boolean
+  has_refresh_token: boolean
+  expires_at?: string
+  expires_in_seconds?: number
+  scopes: string[]
+  refresh_thread_alive?: boolean
+  feature_enabled: boolean
+  request_id: string
+}
+
+export const startGoogleOAuth = (clientId: string, clientSecret: string) =>
+  apiPost<GoogleOAuthStartResponse>('/api/google-oauth/start', {
+    client_id: clientId,
+    client_secret: clientSecret,
+  })
+
+export const fetchGoogleOAuthStatus = () =>
+  apiGet<GoogleOAuthStatusResponse>('/api/google-oauth/status')
+
+export const revokeGoogleOAuth = () =>
+  apiPost<{ status: string; message: string; request_id: string }>('/api/google-oauth/revoke')

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { usePolling } from '@/hooks'
 import {
   fetchConnectors,
@@ -8,9 +8,15 @@ import {
   storeCredential,
   deleteCredential,
   validateCredentials,
+  startGoogleOAuth,
+  fetchGoogleOAuthStatus,
+  revokeGoogleOAuth,
 } from '@/api'
-import type { ConnectorInfo, CredentialInfo } from '@/api/connectors'
+import type { ConnectorInfo, CredentialInfo, GoogleOAuthStatusResponse } from '@/api/connectors'
 import { StatusDot, ConfirmDialog } from '@/components'
+
+// ── Google OAuth vault keys that are managed by the OAuth flow ──
+const GOOGLE_OAUTH_KEYS = new Set(['email.gmail_token', 'calendar.google_token'])
 
 // ── Credential Status Helper ────────────────────────────────────
 function credentialState(creds: CredentialInfo[]): 'healthy' | 'degraded' | 'inactive' {
@@ -43,6 +49,76 @@ export function Connectors() {
   const [validationResult, setValidationResult] = useState<Record<string, { valid: boolean; error?: string }>>({})
   const [deleteConfirm, setDeleteConfirm] = useState<{ connectorId: string; vaultKey: string; name: string } | null>(null)
   const [disableConfirm, setDisableConfirm] = useState<string | null>(null)
+
+  // Google OAuth state
+  const [googleOAuthStatus, setGoogleOAuthStatus] = useState<GoogleOAuthStatusResponse | null>(null)
+  const [googleClientId, setGoogleClientId] = useState('')
+  const [googleClientSecret, setGoogleClientSecret] = useState('')
+  const [googleOAuthLoading, setGoogleOAuthLoading] = useState(false)
+  const [googleOAuthMessage, setGoogleOAuthMessage] = useState('')
+  const [revokeConfirm, setRevokeConfirm] = useState(false)
+
+  // Fetch Google OAuth status on mount and periodically
+  useEffect(() => {
+    const fetchStatus = () => {
+      fetchGoogleOAuthStatus()
+        .then(res => setGoogleOAuthStatus(res))
+        .catch(() => {})
+    }
+    fetchStatus()
+    const id = setInterval(fetchStatus, 10000)
+    return () => clearInterval(id)
+  }, [])
+
+  // Check if a connector uses Google OAuth tokens
+  const usesGoogleOAuth = (connector: ConnectorInfo): boolean => {
+    return connector.credentials.some(c => GOOGLE_OAUTH_KEYS.has(c.vault_key) && c.type === 'oauth_token')
+  }
+
+  const handleGoogleOAuthStart = async () => {
+    if (!googleClientId.trim() || !googleClientSecret.trim()) return
+    setGoogleOAuthLoading(true)
+    setGoogleOAuthMessage('')
+    try {
+      const res = await startGoogleOAuth(googleClientId.trim(), googleClientSecret.trim())
+      if (res.auth_url) {
+        window.open(res.auth_url, '_blank', 'noopener,noreferrer')
+        setGoogleOAuthMessage('Opened Google consent in new tab. Complete authorization there.')
+        // Poll for completion
+        const pollId = setInterval(async () => {
+          try {
+            const status = await fetchGoogleOAuthStatus()
+            setGoogleOAuthStatus(status)
+            if (status.valid) {
+              clearInterval(pollId)
+              setGoogleOAuthMessage('Google account connected successfully!')
+              setGoogleClientId('')
+              setGoogleClientSecret('')
+              refetch()
+            }
+          } catch { /* ignore */ }
+        }, 3000)
+        // Stop polling after 5 minutes
+        setTimeout(() => clearInterval(pollId), 300000)
+      }
+    } catch {
+      setGoogleOAuthMessage('Failed to start Google OAuth flow.')
+    } finally {
+      setGoogleOAuthLoading(false)
+    }
+  }
+
+  const handleGoogleOAuthRevoke = async () => {
+    setRevokeConfirm(false)
+    try {
+      await revokeGoogleOAuth()
+      setGoogleOAuthStatus(null)
+      setGoogleOAuthMessage('Google OAuth tokens revoked.')
+      refetch()
+    } catch {
+      setGoogleOAuthMessage('Failed to revoke Google tokens.')
+    }
+  }
 
   const connectors = data?.connectors ?? []
 
@@ -292,7 +368,99 @@ export function Connectors() {
                           Credentials ({connector.credentials.filter(c => c.present).length}/{connector.credentials.length} configured)
                         </span>
 
-                        {connector.credentials.map(cred => (
+                        {/* Google OAuth section — shown for connectors using Google OAuth tokens */}
+                        {usesGoogleOAuth(connector) && googleOAuthStatus?.feature_enabled && (
+                          <div className="mt-3 p-3 bg-surface-input/50 rounded-lg border border-border-default">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">
+                                Google OAuth
+                              </span>
+                              {googleOAuthStatus?.valid && (
+                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-state-healthy/15 text-state-healthy">
+                                  CONNECTED
+                                </span>
+                              )}
+                              {googleOAuthStatus?.status === 'expired' && (
+                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-state-error/15 text-state-error">
+                                  EXPIRED
+                                </span>
+                              )}
+                              {googleOAuthStatus?.status === 'expiring_soon' && (
+                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-state-degraded/15 text-state-degraded">
+                                  EXPIRING
+                                </span>
+                              )}
+                            </div>
+
+                            {googleOAuthStatus?.valid ? (
+                              <div>
+                                <p className="text-[11px] text-text-secondary mb-2">
+                                  Google account connected. Token auto-refreshes before expiry.
+                                  {googleOAuthStatus.expires_in_seconds != null && (
+                                    <span className="text-text-muted ml-1">
+                                      (expires in {Math.round(googleOAuthStatus.expires_in_seconds / 60)} min)
+                                    </span>
+                                  )}
+                                </p>
+                                <button
+                                  onClick={() => setRevokeConfirm(true)}
+                                  className="px-3 py-1.5 text-[11px] font-medium rounded bg-state-error/10 text-state-error hover:bg-state-error/20 transition-colors"
+                                >
+                                  Disconnect Google
+                                </button>
+                              </div>
+                            ) : (
+                              <div>
+                                <p className="text-[11px] text-text-muted mb-2">
+                                  Enter your Google Cloud OAuth credentials to connect Gmail and Calendar.
+                                </p>
+                                <div className="space-y-2">
+                                  <input
+                                    type="text"
+                                    placeholder="Client ID (e.g. 123456.apps.googleusercontent.com)"
+                                    value={googleClientId}
+                                    onChange={(e) => setGoogleClientId(e.target.value)}
+                                    className="w-full bg-surface-input border border-border-default rounded px-2 py-1.5 text-xs font-mono text-text-primary placeholder:text-text-muted/50 focus:outline-none focus:border-accent-primary"
+                                  />
+                                  <input
+                                    type="password"
+                                    placeholder="Client Secret"
+                                    value={googleClientSecret}
+                                    onChange={(e) => setGoogleClientSecret(e.target.value)}
+                                    className="w-full bg-surface-input border border-border-default rounded px-2 py-1.5 text-xs font-mono text-text-primary placeholder:text-text-muted/50 focus:outline-none focus:border-accent-primary"
+                                  />
+                                  <button
+                                    onClick={handleGoogleOAuthStart}
+                                    disabled={googleOAuthLoading || !googleClientId.trim() || !googleClientSecret.trim()}
+                                    className={`px-3 py-1.5 text-[11px] font-medium rounded transition-colors ${
+                                      googleClientId.trim() && googleClientSecret.trim()
+                                        ? 'bg-accent-primary text-white hover:bg-accent-primary/80'
+                                        : 'bg-surface-input text-text-muted cursor-not-allowed'
+                                    } disabled:opacity-50`}
+                                  >
+                                    {googleOAuthLoading ? 'Opening...' : 'Authorize with Google'}
+                                  </button>
+                                </div>
+                                {googleOAuthMessage && (
+                                  <p className={`text-[11px] mt-2 ${
+                                    googleOAuthMessage.includes('successfully') ? 'text-state-healthy' :
+                                    googleOAuthMessage.includes('Failed') ? 'text-state-error' :
+                                    'text-text-muted'
+                                  }`}>
+                                    {googleOAuthMessage}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {connector.credentials.map(cred => {
+                          // Skip manual input for Google OAuth-managed credentials when OAuth is connected
+                          if (GOOGLE_OAUTH_KEYS.has(cred.vault_key) && cred.type === 'oauth_token' && googleOAuthStatus?.feature_enabled) {
+                            return null
+                          }
+                          return (
                           <div key={cred.vault_key} className="mt-3">
                             <div className="flex items-center gap-2 mb-1">
                               <span className="text-[11px] font-medium text-text-primary">{cred.name}</span>
@@ -342,7 +510,8 @@ export function Connectors() {
                               </div>
                             )}
                           </div>
-                        ))}
+                          )
+                        })}
 
                         {/* Test Connection */}
                         <div className="flex items-center gap-2 mt-4 pt-3 border-t border-border-default/50">
@@ -390,6 +559,16 @@ export function Connectors() {
         confirmLabel="Delete"
         onConfirm={handleDeleteCred}
         onCancel={() => setDeleteConfirm(null)}
+      />
+
+      <ConfirmDialog
+        open={revokeConfirm}
+        title="Disconnect Google Account"
+        description="This will revoke the Google OAuth tokens and disconnect both Gmail and Calendar. You will need to re-authorize to use these connectors again. Continue?"
+        variant="destructive"
+        confirmLabel="Disconnect"
+        onConfirm={handleGoogleOAuthRevoke}
+        onCancel={() => setRevokeConfirm(false)}
       />
     </div>
   )
