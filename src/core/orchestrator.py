@@ -563,6 +563,7 @@ class LancelotOrchestrator:
                     system_instruction=sys_instruction,
                     allow_writes=False,
                     force_tool_use=True,
+                    skip_structured_reformat=True,
                 )
             else:
                 msg = self.provider.build_user_message(
@@ -648,6 +649,7 @@ class LancelotOrchestrator:
                     system_instruction=system_instruction,
                     allow_writes=True,
                     force_tool_use=True,
+                    skip_structured_reformat=True,
                 )
             else:
                 msg = self.provider.build_user_message(
@@ -2042,6 +2044,75 @@ class LancelotOrchestrator:
         ]
         return any(phrase in prompt_lower for phrase in low_risk)
 
+    # V28: Simple action patterns → skill mapping for single-action EXEC_REQUESTs
+    _SIMPLE_ACTION_MAP = {
+        "file_writer": [
+            "create a file", "create file", "make a file", "write a file",
+            "write file", "create a new file", "make file",
+        ],
+        "telegram": [
+            "send a message to telegram", "send telegram", "message on telegram",
+            "send a telegram message", "telegram message",
+        ],
+        "email": [
+            "send an email", "send email", "email to", "send a mail",
+        ],
+        "command_runner": [
+            "run command", "execute command", "run script", "run a command",
+            "execute a command", "run a script",
+        ],
+    }
+
+    def _build_simple_action_plan(self, user_message: str):
+        """V28: Build a targeted PlanArtifact for simple single-action requests.
+
+        Detects requests that map to a single skill (file creation, message
+        sending, command execution) and produces a 3-step plan that skips
+        the generic plan builder and LLM enrichment.
+
+        Returns:
+            PlanArtifact if simple action detected, None otherwise.
+        """
+        msg_lower = user_message.lower()
+
+        matched_skill = None
+        for skill, patterns in self._SIMPLE_ACTION_MAP.items():
+            if any(p in msg_lower for p in patterns):
+                matched_skill = skill
+                break
+
+        if not matched_skill:
+            return None
+
+        print(f"V28: Simple action detected — skill={matched_skill}, skipping plan builder + enrichment")
+
+        from plan_types import PlanArtifact, RiskItem
+
+        # Extract a clean goal from the user message
+        goal = user_message.strip()
+        if goal and not goal.endswith((".", "!", "?")):
+            goal += "."
+
+        artifact = PlanArtifact(
+            goal=goal,
+            context=[f"Single-action request mapped to skill: {matched_skill}"],
+            assumptions=["User request is a straightforward single-skill operation."],
+            plan_steps=[
+                f"{user_message.strip()}",
+                "Verify the operation completed successfully",
+                "Report the result to the user",
+            ],
+            decision_points=["Confirm the action details before execution"],
+            risks=[RiskItem(
+                risk="Action may have unintended side effects",
+                mitigation="Permission gate ensures user approval before execution",
+            )],
+            done_when=[f"The requested action ({matched_skill}) has been completed and confirmed"],
+            next_action=user_message.strip(),
+        )
+
+        return artifact
+
     def _extract_literal_terms(self, text: str) -> list:
         """V22: Extract high-confidence proper nouns and quoted strings to preserve verbatim.
 
@@ -2626,6 +2697,7 @@ class LancelotOrchestrator:
         context_str: str = None,
         force_tool_use: bool = False,
         image_parts: list = None,
+        skip_structured_reformat: bool = False,
     ) -> str:
         """Core agentic loop: LLM + function calling via skills.
 
@@ -2643,6 +2715,9 @@ class LancelotOrchestrator:
             context_str: Optional pre-built context string
             force_tool_use: If True, first iteration forces tool call via mode=ANY
             image_parts: Optional list of (bytes, mime_type) tuples for multimodal
+            skip_structured_reformat: V28 — skip the structured JSON reformat step.
+                Set True when called from execution/enrichment paths where free-form
+                output is expected and JSON schema reformat always fails.
 
         Returns:
             The final text response from the LLM
@@ -2671,7 +2746,7 @@ class LancelotOrchestrator:
 
         # V23: Structured output — force JSON schema on text responses
         from feature_flags import FEATURE_STRUCTURED_OUTPUT, FEATURE_CLAIM_VERIFICATION, FEATURE_DEEP_REASONING_LOOP
-        _use_structured_output = FEATURE_STRUCTURED_OUTPUT
+        _use_structured_output = FEATURE_STRUCTURED_OUTPUT and not skip_structured_reformat
         if _use_structured_output:
             print("V23: Structured output enabled — responses will be JSON schema-constrained")
 
@@ -4442,6 +4517,21 @@ class LancelotOrchestrator:
         # SECURITY: Sanitize Input
         user_message = self.sanitizer.sanitize(user_message)
 
+        # V28: Injection detection gate — clear refusal instead of cryptic pipeline fallback
+        if user_message.startswith("[SUSPICIOUS INPUT DETECTED]"):
+            import logging
+            logging.getLogger("lancelot.security").warning(
+                "Prompt injection attempt blocked (channel=%s): %.200s", channel, user_message
+            )
+            refusal = (
+                "I detected patterns in your message that resemble prompt injection "
+                "or instruction override attempts. I can't process this request.\n\n"
+                "If this was a legitimate question, please rephrase it without "
+                "instruction-like syntax (e.g., avoid phrases like 'ignore previous "
+                "instructions' or 'you are now')."
+            )
+            self.context_env.add_history("assistant", refusal)
+            return refusal
 
         # ── V18: Detect and persist name preferences ──
         self._check_name_update(user_message)
@@ -4575,6 +4665,21 @@ class LancelotOrchestrator:
                 # Fall through to KNOWLEDGE_REQUEST handling below
 
         if intent == IntentType.EXEC_REQUEST:
+            # V28: Simple action detector — skip pipeline for single-skill operations
+            simple_artifact = self._build_simple_action_plan(user_message)
+            if simple_artifact:
+                self._last_plan_artifact = simple_artifact
+                # Compile directly to TaskGraph → Permission (skip enrichment)
+                if self.plan_compiler and self.task_store:
+                    session_id = getattr(self, '_current_session_id', '')
+                    graph = self.plan_compiler.compile_plan_artifact(
+                        simple_artifact, session_id=session_id,
+                    )
+                    self.task_store.save_graph(graph)
+                    result = self._request_permission(graph)
+                    self.context_env.add_history("assistant", result)
+                    return result
+
             # Fix Pack V2: Route through PlanningPipeline → TaskGraph → Permission
             pipeline_result = self.planning_pipeline.process(user_message)
 

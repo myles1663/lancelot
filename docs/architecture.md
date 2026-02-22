@@ -33,6 +33,8 @@ User Input
 
 The input layer is a hard boundary. Prompt injection attempts are detected and blocked before the message reaches any LLM.
 
+**V28 Injection Detection Gate** (v0.2.28): After `InputSanitizer.sanitize()` in `chat()`, if the `[SUSPICIOUS INPUT DETECTED]` prefix is present, the method returns a clear refusal immediately instead of routing the flagged input through the pipeline. This short-circuits processing of detected injection attempts before any downstream subsystem is invoked.
+
 ### 2. Intent Classification
 
 The orchestrator classifies the message into one of five intent types:
@@ -77,6 +79,8 @@ The `ProviderProfile` dataclass carries a `mode` field (`"sdk"` | `"api"`) and e
 
 ### 4. Planning Pipeline (for complex requests)
 
+**V28 Simple Action Detector** (v0.2.28): In the `EXEC_REQUEST` path, the orchestrator's `_build_simple_action_plan()` method detects single-action requests (create file, send message, run command) via a keyword→skill mapping. When matched, it produces a targeted 3-step `PlanArtifact` directly, bypassing the generic plan builder and LLM enrichment. This saves an API call and produces cleaner permission requests for straightforward actions.
+
 For `PLAN_REQUEST` or `MIXED_REQUEST` intents, the Planning Pipeline builds a structured plan:
 
 1. **Classify** — Confirm the intent and extract the goal
@@ -106,6 +110,8 @@ Each step generates a receipt linked to the parent plan via `parent_id` and `que
 **Phase 6 — Task Experience Memory.** After task completion, the orchestrator calls `_record_task_experience()`, which stores a `TaskExperience` dataclass (from `reasoning_artifact.py`) in episodic memory under the `task_experience` namespace. Each experience record captures the original request, the reasoning artifact, capability gaps encountered, actions taken, the outcome, and a duration. On future requests, the context compiler can retrieve relevant past experiences, enabling Lancelot to learn from previous successes and failures — avoiding repeated mistakes and reusing strategies that worked.
 
 **v0.2.27 TaskRun Status Fix.** After `_execute_with_llm` succeeds in the agentic loop, the TaskRun status is now explicitly updated to `SUCCEEDED`. Previously, the TaskRun status reflected the TaskRunner's template-step failure even though the agentic loop had successfully completed the task. This fix ensures that the TaskRun status accurately reflects the actual outcome of execution.
+
+**V28 Structured Reformat Gate** (v0.2.28): `_agentic_generate()` now accepts a `skip_structured_reformat` parameter. When called from `_execute_with_llm()` or `_enrich_plan_with_llm()`, the structured JSON reformat step is skipped — it always failed for free-form output, wasting an API call. This eliminates a redundant LLM round-trip on execution and plan enrichment paths.
 
 ### 6. Risk Classification & Governance
 

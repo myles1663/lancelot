@@ -5,6 +5,13 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.28] - 2026-02-22
+
+### Fixed — Stress Test Quality Improvements
+- **Simple action detector**: Single-action EXEC_REQUESTs (create file, send message, run command) now produce a targeted 3-step plan instead of a generic 5-step boilerplate template. Skips the plan builder and LLM enrichment call, saving an API round-trip and producing clearer permission requests.
+- **Structured output reformat gate**: Added `skip_structured_reformat` parameter to `_agentic_generate()`. Execution and enrichment paths now skip the structured JSON reformat step, which always failed for free-form agentic output. Eliminates a wasted API call per agentic loop completion when `FEATURE_STRUCTURED_OUTPUT` is enabled.
+- **Injection detection gate**: When `InputSanitizer` detects prompt injection patterns (e.g., "ignore previous instructions"), the chat endpoint now returns a clear refusal message immediately instead of routing the mangled text through the pipeline and producing a cryptic "I need more details" fallback.
+
 ## [0.2.27] - 2026-02-22
 
 ### Fixed — Stress Test Findings
