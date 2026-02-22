@@ -48,6 +48,160 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# F-001: Docker Run Validator
+# =============================================================================
+
+
+class DockerRunValidator:
+    """Validates Docker run parameters before execution.
+
+    Ensures every ``docker run`` invocation uses only approved images,
+    stays within resource limits, and never requests dangerous capabilities.
+    Works alongside the Docker socket proxy sidecar to provide defense-in-depth.
+    """
+
+    ALLOWED_IMAGES: set = {"python:3.11-slim"}
+    MAX_MEMORY_MB: int = 512
+
+    # Flags that must never appear in a docker run command
+    BLOCKED_FLAGS: set = {
+        "--privileged",
+        "--cap-add",
+        "--pid=host",
+        "--ipc=host",
+        "--userns=host",
+        "--security-opt=seccomp=unconfined",
+    }
+
+    # Mount targets that must never be used
+    BLOCKED_MOUNT_TARGETS: set = {
+        "/",
+        "/etc",
+        "/root",
+        "/home",
+        "/proc",
+        "/sys",
+        "/dev",
+        "/var/run/docker.sock",
+    }
+
+    @classmethod
+    def validate(cls, docker_cmd: list) -> str | None:
+        """Validate a docker run command list.
+
+        Returns None if the command is safe, or an error message string
+        if it violates any security policy.
+        """
+        cmd_str = " ".join(docker_cmd)
+
+        # 1. Check for blocked flags
+        for flag in cls.BLOCKED_FLAGS:
+            if flag in docker_cmd:
+                logger.warning("SECURITY BLOCK: Blocked Docker flag '%s' in: %s", flag, cmd_str[:200])
+                return f"Blocked Docker flag: {flag}"
+
+        # Also catch --user root
+        for i, arg in enumerate(docker_cmd):
+            if arg == "--user" and i + 1 < len(docker_cmd) and docker_cmd[i + 1] == "root":
+                logger.warning("SECURITY BLOCK: Docker --user root in: %s", cmd_str[:200])
+                return "Cannot run Docker container as root"
+            if arg.startswith("--user=root"):
+                logger.warning("SECURITY BLOCK: Docker --user=root in: %s", cmd_str[:200])
+                return "Cannot run Docker container as root"
+
+        # 2. Validate image (argument just before "sh" or the last non-flag arg)
+        image = cls._extract_image(docker_cmd)
+        if image and image not in cls.ALLOWED_IMAGES:
+            logger.warning("SECURITY BLOCK: Unapproved Docker image '%s'", image)
+            return f"Docker image not in allowlist: {image}"
+
+        # 3. Validate memory limit
+        for arg in docker_cmd:
+            if arg.startswith("--memory="):
+                mem_str = arg.split("=", 1)[1].lower()
+                mem_mb = cls._parse_memory_mb(mem_str)
+                if mem_mb is not None and mem_mb > cls.MAX_MEMORY_MB:
+                    logger.warning("SECURITY BLOCK: Memory %dMB exceeds %dMB limit", mem_mb, cls.MAX_MEMORY_MB)
+                    return f"Memory limit {mem_mb}MB exceeds maximum {cls.MAX_MEMORY_MB}MB"
+
+        # 4. Validate volume mounts
+        for i, arg in enumerate(docker_cmd):
+            mount_value = None
+            if arg == "-v" and i + 1 < len(docker_cmd):
+                mount_value = docker_cmd[i + 1]
+            elif arg.startswith("-v="):
+                mount_value = arg[3:]
+            elif arg.startswith("--volume="):
+                mount_value = arg[9:]
+
+            if mount_value:
+                # Format: host_path:container_path[:options]
+                parts = mount_value.split(":")
+                if len(parts) >= 2:
+                    host_source = parts[0]
+                    container_target = parts[1]
+                    # Block mounting sensitive host paths as source
+                    for blocked in cls.BLOCKED_MOUNT_TARGETS:
+                        if host_source == blocked or host_source.rstrip("/") == blocked:
+                            logger.warning(
+                                "SECURITY BLOCK: Mount from blocked host path '%s'",
+                                host_source,
+                            )
+                            return f"Mount from blocked host path: {host_source}"
+                    # Block mounting to sensitive container paths
+                    for blocked in cls.BLOCKED_MOUNT_TARGETS:
+                        if container_target == blocked or container_target.rstrip("/") == blocked:
+                            logger.warning(
+                                "SECURITY BLOCK: Mount to blocked target '%s'",
+                                container_target,
+                            )
+                            return f"Mount to blocked container path: {container_target}"
+
+        return None  # All checks passed
+
+    @classmethod
+    def _extract_image(cls, docker_cmd: list) -> str | None:
+        """Extract the Docker image name from a docker run command."""
+        # The image is the first argument after all flags/options
+        # In our format: docker run --rm --memory=X --cpus=1 [--network=none] [-v ...] IMAGE sh -c CMD
+        skip_next = False
+        past_run = False
+        for arg in docker_cmd:
+            if arg == "run":
+                past_run = True
+                continue
+            if not past_run:
+                continue
+            if skip_next:
+                skip_next = False
+                continue
+            # Arguments that take a value
+            if arg in ("-v", "-e", "-w", "--name", "--network", "--user", "--workdir"):
+                skip_next = True
+                continue
+            # Flags with values attached
+            if arg.startswith("-") or arg.startswith("--"):
+                continue
+            # First non-flag, non-option argument is the image
+            return arg
+        return None
+
+    @staticmethod
+    def _parse_memory_mb(mem_str: str) -> int | None:
+        """Parse a Docker memory string (e.g. '512m', '1g') to megabytes."""
+        try:
+            if mem_str.endswith("g"):
+                return int(float(mem_str[:-1]) * 1024)
+            if mem_str.endswith("m"):
+                return int(mem_str[:-1])
+            if mem_str.endswith("k"):
+                return max(1, int(int(mem_str[:-1]) / 1024))
+            return int(mem_str) // (1024 * 1024)  # bytes to MB
+        except (ValueError, TypeError):
+            return None
+
+
+# =============================================================================
 # Configuration
 # =============================================================================
 
@@ -284,6 +438,18 @@ class LocalSandboxProvider(BaseProvider):
             network=use_network,
             timeout_s=timeout_s,
         )
+
+        # F-001: Validate Docker command before execution
+        validation_error = DockerRunValidator.validate(docker_cmd)
+        if validation_error:
+            return ExecResult(
+                exit_code=126,
+                stdout="",
+                stderr=f"Docker security validation failed: {validation_error}",
+                duration_ms=int((time.time() - start_time) * 1000),
+                command=cmd_str,
+                working_dir=cwd,
+            )
 
         # Execute
         try:

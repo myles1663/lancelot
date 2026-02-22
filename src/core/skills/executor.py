@@ -12,7 +12,9 @@ Public API:
 from __future__ import annotations
 
 import importlib.util
+import json
 import logging
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -112,8 +114,53 @@ _BUILTIN_SKILLS: Dict[str, SkillExecuteFunc] = {
 # Executor
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# F-007: Sandbox runner — executed inside the Docker container
+# ---------------------------------------------------------------------------
+
+_SKILL_SANDBOX_RUNNER = r'''
+import json, sys, importlib.util, os
+try:
+    payload = json.loads(sys.stdin.read())
+    skill_dir = "/skill"
+    execute_py = os.path.join(skill_dir, "execute.py")
+    if not os.path.exists(execute_py):
+        json.dump({"success": False, "error": "execute.py not found in skill directory"}, sys.stdout)
+        sys.exit(0)
+    spec = importlib.util.spec_from_file_location("skill_module", execute_py)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    func = getattr(mod, "execute", None)
+    if not callable(func):
+        json.dump({"success": False, "error": "No callable execute() in skill module"}, sys.stdout)
+        sys.exit(0)
+
+    class _Ctx:
+        def __init__(self, d):
+            self.skill_name = d.get("skill_name", "")
+            self.request_id = d.get("request_id", "")
+            self.caller = d.get("caller", "system")
+            self.metadata = d.get("metadata", {})
+
+    ctx = _Ctx(payload.get("context", {}))
+    result = func(ctx, payload.get("inputs", {}))
+    json.dump({"success": True, "outputs": result}, sys.stdout)
+except Exception as exc:
+    json.dump({"success": False, "error": str(exc)}, sys.stdout)
+'''
+
+# Sandbox configuration for skill execution
+_SKILL_SANDBOX_IMAGE = "python:3.11-slim"
+_SKILL_SANDBOX_MEMORY = "256m"
+_SKILL_SANDBOX_TIMEOUT_S = 60
+
+
 class SkillExecutor:
-    """Loads and runs skills by name."""
+    """Loads and runs skills by name.
+
+    Built-in skills run in-process for performance.
+    Non-builtin skills (user/marketplace) run in isolated Docker containers (F-007).
+    """
 
     def __init__(self, registry: SkillRegistry):
         self._registry = registry
@@ -190,7 +237,11 @@ class SkillExecutor:
         raise SkillError(f"No execute function found for skill '{entry.name}'")
 
     def _load_module_execute(self, path: Path, skill_name: str) -> SkillExecuteFunc:
-        """Safely load an execute function from a Python module."""
+        """Safely load an execute function from a Python module.
+
+        Only used for builtin skills that have been loaded in-process.
+        Non-builtin skills use _run_skill_in_sandbox() instead.
+        """
         module_name = f"skill_{skill_name}"
         try:
             spec = importlib.util.spec_from_file_location(module_name, str(path))
@@ -210,6 +261,143 @@ class SkillExecutor:
             raise
         except Exception as exc:
             raise SkillError(f"Failed to load skill module {path}: {exc}") from exc
+
+    @staticmethod
+    def _is_builtin(entry: SkillEntry) -> bool:
+        """Check if a skill should run in-process (builtin) or sandboxed."""
+        return (
+            entry.name in _BUILTIN_SKILLS
+            or entry.ownership == SkillOwnership.SYSTEM
+        )
+
+    def _run_skill_in_sandbox(
+        self,
+        entry: SkillEntry,
+        context: SkillContext,
+        inputs: Dict[str, Any],
+    ) -> SkillResult:
+        """F-007: Execute a non-builtin skill inside a Docker sandbox container.
+
+        The skill directory is mounted read-only at /skill. A lightweight
+        runner script reads JSON from stdin, loads execute.py, and writes
+        JSON results to stdout. The container has no network access, limited
+        memory (256MB), and a 60-second timeout.
+        """
+        if not entry.manifest_path:
+            return SkillResult(success=False, error="Skill has no manifest_path for sandbox execution")
+
+        skill_dir = Path(entry.manifest_path).parent
+        execute_py = skill_dir / "execute.py"
+        if not execute_py.exists():
+            return SkillResult(success=False, error=f"execute.py not found in {skill_dir}")
+
+        # Build JSON payload for the sandbox runner
+        payload = json.dumps({
+            "context": {
+                "skill_name": context.skill_name,
+                "request_id": context.request_id,
+                "caller": context.caller,
+                "metadata": context.metadata,
+            },
+            "inputs": inputs,
+        })
+
+        # Build Docker command
+        docker_cmd = [
+            "docker", "run", "--rm",
+            f"--memory={_SKILL_SANDBOX_MEMORY}",
+            "--cpus=1",
+            "--network=none",
+            "-v", f"{skill_dir.resolve()}:/skill:ro",
+            "-i",  # Keep stdin open for payload
+            _SKILL_SANDBOX_IMAGE,
+            "python", "-c", _SKILL_SANDBOX_RUNNER,
+        ]
+
+        self._emit_receipt(
+            "skill_sandbox_start",
+            skill=entry.name,
+            image=_SKILL_SANDBOX_IMAGE,
+            memory=_SKILL_SANDBOX_MEMORY,
+            timeout_s=_SKILL_SANDBOX_TIMEOUT_S,
+        )
+
+        start = time.monotonic()
+        try:
+            result = subprocess.run(
+                docker_cmd,
+                input=payload,
+                capture_output=True,
+                text=True,
+                timeout=_SKILL_SANDBOX_TIMEOUT_S + 5,
+            )
+            duration_ms = (time.monotonic() - start) * 1000
+
+            if result.returncode != 0:
+                error = f"Sandbox exited with code {result.returncode}: {result.stderr[:500]}"
+                self._emit_receipt(
+                    "skill_sandbox_failed",
+                    skill=entry.name,
+                    error=error,
+                    duration_ms=round(duration_ms, 2),
+                )
+                return SkillResult(success=False, error=error, duration_ms=duration_ms)
+
+            # Parse JSON output from sandbox
+            try:
+                output = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                error = f"Sandbox produced invalid JSON: {result.stdout[:300]}"
+                self._emit_receipt(
+                    "skill_sandbox_failed",
+                    skill=entry.name,
+                    error=error,
+                    duration_ms=round(duration_ms, 2),
+                )
+                return SkillResult(success=False, error=error, duration_ms=duration_ms)
+
+            if not output.get("success", False):
+                error = output.get("error", "Unknown sandbox error")
+                self._emit_receipt(
+                    "skill_sandbox_failed",
+                    skill=entry.name,
+                    error=error,
+                    duration_ms=round(duration_ms, 2),
+                )
+                return SkillResult(success=False, error=error, duration_ms=duration_ms)
+
+            receipt = self._emit_receipt(
+                "skill_sandbox_ran",
+                skill=entry.name,
+                duration_ms=round(duration_ms, 2),
+            )
+            return SkillResult(
+                success=True,
+                outputs=output.get("outputs", {}),
+                duration_ms=duration_ms,
+                receipt=receipt,
+            )
+
+        except subprocess.TimeoutExpired:
+            duration_ms = (time.monotonic() - start) * 1000
+            error = f"Sandbox timed out after {_SKILL_SANDBOX_TIMEOUT_S}s"
+            self._emit_receipt(
+                "skill_sandbox_failed",
+                skill=entry.name,
+                error=error,
+                duration_ms=round(duration_ms, 2),
+            )
+            return SkillResult(success=False, error=error, duration_ms=duration_ms)
+        except Exception as exc:
+            duration_ms = (time.monotonic() - start) * 1000
+            error = f"Sandbox execution error: {str(exc)[:300]}"
+            self._emit_receipt(
+                "skill_sandbox_failed",
+                skill=entry.name,
+                error=error,
+                duration_ms=round(duration_ms, 2),
+            )
+            return SkillResult(success=False, error=error, duration_ms=duration_ms)
 
     def run(
         self,
@@ -252,6 +440,15 @@ class SkillExecutor:
             self._emit_receipt("skill_failed", skill=skill_name, error=error)
             return SkillResult(success=False, error=error)
 
+        # F-007: Route non-builtin skills to Docker sandbox
+        if not self._is_builtin(entry):
+            logger.info(
+                "Routing non-builtin skill '%s' (ownership=%s) to Docker sandbox",
+                skill_name, entry.ownership.value,
+            )
+            return self._run_skill_in_sandbox(entry, context, inputs)
+
+        # Builtin skills run in-process
         try:
             execute_func = self._load_execute_func(entry)
         except SkillError as exc:

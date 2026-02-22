@@ -58,8 +58,7 @@ RUN cd src/warroom && npm ci && npm run build && rm -rf node_modules
 # Change ownership of the application directory to the non-root user
 RUN chown -R lancelot:lancelot /home/lancelot
 
-# Add lancelot to docker group so it can use the mounted socket
-RUN groupadd docker 2>/dev/null; usermod -aG docker lancelot
+# F-001: Docker group no longer needed — socket proxy used instead of direct mount
 
 # Install gosu for dropping privileges in entrypoint
 RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*

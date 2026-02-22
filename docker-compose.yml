@@ -6,12 +6,8 @@ services:
       # Named volumes — managed by Docker, writable on all platforms
       - lancelot_data:/home/lancelot/data
       - lancelot_workspace:/home/lancelot/workspace
-      # Docker socket for sandbox provider (sibling containers)
-      - /var/run/docker.sock:/var/run/docker.sock
       # Mount Google OAuth credentials (ADC) from host (uncomment if using Google OAuth)
       # - ${APPDATA}/gcloud/application_default_credentials.json:/home/lancelot/.config/gcloud/application_default_credentials.json:ro
-    group_add:
-      - "0"  # root group to access Docker socket (owned root:root on Docker Desktop)
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file:
@@ -25,9 +21,13 @@ services:
       # Host Agent bridge — set HOST_AGENT_TOKEN in .env to match host_agent
       - HOST_AGENT_URL=http://host.docker.internal:9111
       - HOST_AGENT_TOKEN=${HOST_AGENT_TOKEN:-lancelot-host-agent}
+      # F-001: Docker socket proxy — no direct socket mount
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
     depends_on:
       local-llm:
         condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
     ports:
       - "8000:8000"
     command: uvicorn gateway:app --host 0.0.0.0 --port 8000
@@ -38,6 +38,37 @@ services:
       start_period: 60s
       retries: 3
     restart: unless-stopped
+    networks:
+      - lancelot_net
+
+  # F-001: Docker Socket Proxy — restricts Docker API access for sandbox provider.
+  # Only allows container operations (create, start, wait, remove, logs).
+  # Blocks network/volume/swarm/exec/build operations.
+  # See: https://github.com/Tecnativa/docker-socket-proxy
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: lancelot_docker_proxy
+    restart: unless-stopped
+    environment:
+      # Allow container lifecycle (needed for sandbox execution)
+      - CONTAINERS=1
+      - POST=1
+      - IMAGES=1
+      - INFO=1
+      # Block everything else
+      - NETWORKS=0
+      - VOLUMES=0
+      - SERVICES=0
+      - SWARM=0
+      - NODES=0
+      - BUILD=0
+      - EXEC=0
+      - PLUGINS=0
+      - SECRETS=0
+      - CONFIGS=0
+      - TASKS=0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - lancelot_net
 

@@ -5,6 +5,20 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.25] - 2026-02-21
+
+### Fixed — Security Hardening (Audit Findings F-001, F-006, F-007, F-013, F-014)
+- **F-001: Docker socket access (Critical)**: Replaced direct Docker socket mount with a Docker socket proxy sidecar (`tecnativa/docker-socket-proxy`). The `lancelot-core` container no longer mounts `/var/run/docker.sock` — it communicates with Docker via `DOCKER_HOST=tcp://docker-socket-proxy:2375`. The proxy only allows container lifecycle operations (create, start, wait, remove, logs) and blocks network/volume/swarm/exec/build operations. Added `DockerRunValidator` class in `local_sandbox.py` that validates every `docker run` invocation against an image allowlist, memory limits, blocked flags (`--privileged`, `--cap-add`, `--pid=host`), and blocked mount targets (`/`, `/etc`, `/proc`, `/var/run/docker.sock`). Removed Docker group membership from the Dockerfile.
+- **F-007: Skill runtime sandboxing (Medium)**: Non-builtin skills (user/marketplace) now execute inside isolated Docker containers instead of via `exec_module()` in the main process. Skills are mounted read-only at `/skill`, run with `--network=none`, 256MB memory limit, 1 CPU, and 60-second timeout. A lightweight sandbox runner reads JSON from stdin, loads the skill's `execute.py`, and writes JSON results to stdout. Built-in skills (12 system skills) continue running in-process for performance.
+- **F-006: Encryption at rest (Medium)**: Documented volume-level encryption as a deployment requirement in `docs/production-hardening.md`. Covers BitLocker (Windows) and LUKS/dm-crypt (Linux) with step-by-step instructions. Zero code changes — the OS/filesystem handles encryption transparently.
+- **F-013: Vault key management (Info)**: Documented vault key operational guidance in `docs/production-hardening.md`. Covers key generation, `.env` configuration, backup/recovery procedures, and verification steps. Auto-generation flagged as dev-only behavior.
+- **F-014: Host execution flag (Info)**: Documented `FEATURE_TOOLS_HOST_EXECUTION` operational guidance in `docs/production-hardening.md`. Explicitly warns against enabling in production, explains the security implications, and provides verification commands.
+
+### Added
+- **Production Hardening Guide** (`docs/production-hardening.md`): Comprehensive operational security guide with pre-deployment checklist covering authentication, encryption, feature flags, network, Docker, and monitoring.
+- **Docker Socket Proxy** sidecar service in `docker-compose.yml` for restricted Docker API access.
+- **DockerRunValidator** class for defense-in-depth Docker command validation.
+
 ## [0.2.24] - 2026-02-21
 
 ### Fixed — Security Hardening (Audit Findings F-008, F-010, F-011, F-012, F-015)
