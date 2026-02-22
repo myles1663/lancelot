@@ -78,6 +78,17 @@ class JobTimezoneResponse(BaseModel):
     timezone: str
 
 
+class JobApprovalResponse(BaseModel):
+    id: str
+    approved: bool
+    message: str
+
+
+class PendingApprovalsResponse(BaseModel):
+    pending: dict
+    count: int
+
+
 class JobTriggerResponse(BaseModel):
     id: str
     executed: bool
@@ -257,6 +268,42 @@ def trigger_job(job_id: str):
     except Exception as exc:
         logger.exception("Failed to trigger job %s", job_id)
         return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+@router.post("/jobs/{job_id}/approve", response_model=JobApprovalResponse)
+def approve_job(job_id: str):
+    """Approve a scheduled job that requires owner approval (F-008)."""
+    if _executor is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Job executor not initialized"},
+        )
+    record = _service.get_job(job_id) if _service else None
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
+
+    approved = _executor.approve_job(job_id)
+    if approved:
+        return JobApprovalResponse(
+            id=job_id, approved=True,
+            message=f"Job '{job_id}' approved. Will execute on next scheduler tick.",
+        )
+    return JobApprovalResponse(
+        id=job_id, approved=False,
+        message=f"Job '{job_id}' has no pending approval request.",
+    )
+
+
+@router.get("/approvals/pending", response_model=PendingApprovalsResponse)
+def list_pending_approvals():
+    """List all jobs awaiting owner approval (F-008)."""
+    if _executor is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Job executor not initialized"},
+        )
+    pending = _executor.pending_approvals
+    return PendingApprovalsResponse(pending=pending, count=len(pending))
 
 
 @router.patch("/jobs/{job_id}/timezone", response_model=JobTimezoneResponse)

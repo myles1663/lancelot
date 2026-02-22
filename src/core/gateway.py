@@ -53,16 +53,26 @@ def error_response(status_code: int, message: str, detail: str = None, request_i
 
 
 class RateLimiter:
-    """S11: Sliding-window rate limiter per IP address."""
+    """S11: Sliding-window rate limiter per IP address.
+
+    F-012: Includes periodic cleanup of stale IP entries to prevent
+    unbounded memory growth.
+    """
+
+    _CLEANUP_INTERVAL_S = 300  # Clean up every 5 minutes
 
     def __init__(self, max_requests=60, window_seconds=60):
         self.max_requests = max_requests
         self.window = window_seconds
         self._requests = {}  # ip -> [timestamps]
+        self._last_cleanup = time.time()
 
     def check(self, ip: str) -> bool:
         """Returns True if request is allowed."""
         now = time.time()
+        # F-012: Periodic stale IP cleanup
+        if now - self._last_cleanup > self._CLEANUP_INTERVAL_S:
+            self._cleanup_stale(now)
         if ip not in self._requests:
             self._requests[ip] = []
         self._requests[ip] = [t for t in self._requests[ip] if t > now - self.window]
@@ -70,6 +80,18 @@ class RateLimiter:
             return False
         self._requests[ip].append(now)
         return True
+
+    def _cleanup_stale(self, now: float) -> None:
+        """Remove IPs with no recent requests to prevent memory growth."""
+        stale_ips = [
+            ip for ip, timestamps in self._requests.items()
+            if not timestamps or all(t <= now - self.window for t in timestamps)
+        ]
+        for ip in stale_ips:
+            del self._requests[ip]
+        self._last_cleanup = now
+        if stale_ips:
+            logger.debug("Rate limiter: cleaned %d stale IP entries", len(stale_ips))
 
 
 app = FastAPI()

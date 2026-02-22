@@ -5,6 +5,15 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.24] - 2026-02-21
+
+### Fixed — Security Hardening (Audit Findings F-008, F-010, F-011, F-012, F-015)
+- **F-008: Scheduler approval flow (Medium)**: Jobs with `requires_approvals` now emit a `scheduler_approval_required` event to the War Room WebSocket and block until explicitly approved via `POST /api/scheduler/jobs/{id}/approve`. Added `GET /api/scheduler/approvals/pending` endpoint. Previously, jobs with approvals were silently skipped with no mechanism to grant approval.
+- **F-010: Network allowlist auto-reload (Low)**: `NetworkInterceptor` now logs a warning when `config/network_allowlist.yaml` is missing (previously silent). Added periodic auto-reload every 300 seconds so config changes take effect without restart.
+- **F-011: Audit log hash chaining (Low)**: `AuditLogger` now produces tamper-evident logs — each entry includes a `PrevHash:` field containing the SHA-256 hash of the previous entry. Modifying, deleting, or reordering any entry invalidates all subsequent entries in the chain. Chain recovers last hash from existing log on startup.
+- **F-012: Rate limiter stale IP cleanup (Low)**: `RateLimiter` now periodically removes stale IP entries (every 5 minutes) to prevent unbounded memory growth from accumulating unique IP addresses.
+- **F-015: CognitionGovernor file locking (Info)**: Added `threading.Lock` to all file I/O operations in `CognitionGovernor` and atomic writes via `os.replace()` to prevent concurrent read/write corruption of `usage_stats.json`.
+
 ## [0.2.23] - 2026-02-21
 
 ### Fixed — Security Hardening (Audit Findings F-002 through F-009)

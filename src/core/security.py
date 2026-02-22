@@ -1,10 +1,14 @@
 import hashlib
 import ipaddress
+import logging
 import os
 import datetime
 import re
 import socket
+import threading
 from urllib.parse import urlparse, unquote
+
+_security_logger = logging.getLogger("lancelot.security")
 
 class InputSanitizer:
     BANNED_PHRASES = [
@@ -97,34 +101,72 @@ class InputSanitizer:
         return sanitized_text
 
 class AuditLogger:
+    """F-011: Tamper-evident audit logger with hash chaining.
+
+    Each log entry includes the SHA-256 hash of the previous entry,
+    creating a chain where any modification invalidates all subsequent
+    entries. The chain starts with a zero hash on initialization.
+    """
+
     def __init__(self, log_path="/home/lancelot/data/audit.log"):
         self.log_path = log_path
+        self._lock = threading.Lock()
+        self._prev_hash = self._recover_last_hash()
+
+    def _recover_last_hash(self) -> str:
+        """Recover the last entry's hash from the log file for chain continuity."""
+        try:
+            with open(self.log_path, "rb") as f:
+                # Read last non-empty line
+                f.seek(0, 2)
+                pos = f.tell()
+                if pos == 0:
+                    return "0" * 64
+                # Scan backward for the last complete line
+                lines = []
+                while pos > 0:
+                    pos = max(pos - 4096, 0)
+                    f.seek(pos)
+                    lines = f.read().decode("utf-8", errors="replace").strip().split("\n")
+                    if len(lines) >= 1:
+                        break
+                last_line = lines[-1].strip() if lines else ""
+                if last_line:
+                    return hashlib.sha256(last_line.encode()).hexdigest()
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+        return "0" * 64
+
+    def _write_entry(self, entry_content: str) -> None:
+        """Write an entry with hash chaining."""
+        with self._lock:
+            # Build chained entry: includes previous hash
+            entry = f"{entry_content} | PrevHash: {self._prev_hash}\n"
+            try:
+                with open(self.log_path, "a") as f:
+                    f.write(entry)
+                self._prev_hash = hashlib.sha256(entry.strip().encode()).hexdigest()
+            except Exception as e:
+                _security_logger.critical("Failed to write to audit log: %s", e)
 
     def log_command(self, command: str, user: str = "System"):
         """Hashes and logs execution commands."""
         timestamp = datetime.datetime.utcnow().isoformat()
         cmd_hash = hashlib.sha256(command.encode()).hexdigest()
-        entry = f"[{timestamp}] User: {user} | Hash: {cmd_hash} | Command: {command}\n"
-        
-        try:
-            with open(self.log_path, "a") as f:
-                f.write(entry)
-        except Exception as e:
-            print(f"CRITICAL: Failed to write to audit log: {e}")
+        self._write_entry(
+            f"[{timestamp}] User: {user} | Hash: {cmd_hash} | Command: {command}"
+        )
 
     def log_event(self, event_type: str, details: str, user: str = "System"):
         """Logs a structured event (mode changes, auto-pause triggers, etc.)."""
         timestamp = datetime.datetime.utcnow().isoformat()
         detail_hash = hashlib.sha256(details.encode()).hexdigest()
-        entry = (
+        self._write_entry(
             f"[{timestamp}] Event: {event_type} | User: {user} "
-            f"| Hash: {detail_hash} | Details: {details}\n"
+            f"| Hash: {detail_hash} | Details: {details}"
         )
-        try:
-            with open(self.log_path, "a") as f:
-                f.write(entry)
-        except Exception as e:
-            print(f"CRITICAL: Failed to write to audit log: {e}")
 
 class NetworkInterceptor:
     # Core domains that are always allowed (infrastructure, not user-configurable)
@@ -150,9 +192,14 @@ class NetworkInterceptor:
         ipaddress.ip_network("0.0.0.0/8"),
     ]
 
+    # F-010: Auto-reload interval in seconds (0 = disabled)
+    _RELOAD_INTERVAL_S = 300
+
     def __init__(self):
         self.ALLOW_LIST = list(self._CORE_DOMAINS)
+        self._reload_timer: threading.Timer | None = None
         self._load_config_domains()
+        self._schedule_reload()
 
     def _load_config_domains(self):
         """Load domains from config/network_allowlist.yaml and merge with core domains."""
@@ -165,10 +212,36 @@ class NetworkInterceptor:
             merged = set(self._CORE_DOMAINS)
             merged.update(d.strip().lower() for d in config_domains if d and d.strip())
             self.ALLOW_LIST = list(merged)
+            _security_logger.debug(
+                "Network allowlist loaded: %d domains (%d from config)",
+                len(self.ALLOW_LIST), len(config_domains),
+            )
         except FileNotFoundError:
-            pass  # No config file — use core domains only
+            _security_logger.warning(
+                "Network allowlist config not found at %s — using %d core domains only. "
+                "Create this file with a 'domains:' YAML list to add allowed domains.",
+                self._ALLOWLIST_CONFIG, len(self._CORE_DOMAINS),
+            )
         except Exception as e:
-            print(f"WARNING: Failed to load network allowlist config: {e}")
+            _security_logger.error("Failed to load network allowlist config: %s", e)
+
+    def _schedule_reload(self):
+        """F-010: Schedule periodic auto-reload of the allowlist."""
+        if self._RELOAD_INTERVAL_S <= 0:
+            return
+        self._reload_timer = threading.Timer(
+            self._RELOAD_INTERVAL_S, self._auto_reload,
+        )
+        self._reload_timer.daemon = True
+        self._reload_timer.start()
+
+    def _auto_reload(self):
+        """Periodic reload callback."""
+        try:
+            self._load_config_domains()
+        except Exception as e:
+            _security_logger.error("Auto-reload of network allowlist failed: %s", e)
+        self._schedule_reload()
 
     def reload_allowlist(self):
         """Reload the allowlist from config (called after Kill Switches UI updates)."""
@@ -236,62 +309,77 @@ class NetworkInterceptor:
             return False
 
 class CognitionGovernor:
-    """Limits the agent's improved cognition to prevent runaway costs or infinite loops."""
+    """Limits the agent's improved cognition to prevent runaway costs or infinite loops.
+
+    F-015: All file I/O is guarded by a threading.Lock to prevent
+    concurrent read/write corruption of usage_stats.json.
+    """
     LIMITS = {
         "tokens_daily": 2_000_000,
         "tool_calls_daily": 1000,
-        "actions_per_minute": 60 
+        "actions_per_minute": 60
     }
 
     def __init__(self, data_dir="/home/lancelot/data"):
         self.data_dir = data_dir
         self.usage_file = os.path.join(data_dir, "usage_stats.json")
+        self._file_lock = threading.Lock()
         self._load_usage()
 
     def _load_usage(self):
         import json
-        if os.path.exists(self.usage_file):
-            try:
-                with open(self.usage_file, "r") as f:
-                    self.usage = json.load(f)
-            except Exception:
+        with self._file_lock:
+            if os.path.exists(self.usage_file):
+                try:
+                    with open(self.usage_file, "r") as f:
+                        self.usage = json.load(f)
+                except Exception:
+                    self.usage = {}
+            else:
                 self.usage = {}
-        else:
-            self.usage = {}
-            
-        # Reset if new day (simple logic)
-        today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
-        if self.usage.get("date") != today:
-            self.usage = {"date": today, "tokens": 0, "tool_calls": 0, "actions": 0}
-            self._save_usage()
+
+            # Reset if new day (simple logic)
+            today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+            if self.usage.get("date") != today:
+                self.usage = {"date": today, "tokens": 0, "tool_calls": 0, "actions": 0}
+                self._save_usage_locked()
+
+    def _save_usage_locked(self):
+        """Write usage file (caller must hold _file_lock)."""
+        import json
+        try:
+            tmp_path = self.usage_file + ".tmp"
+            with open(tmp_path, "w") as f:
+                json.dump(self.usage, f)
+            os.replace(tmp_path, self.usage_file)
+        except Exception as e:
+            _security_logger.warning("Failed to save usage stats: %s", e)
 
     def _save_usage(self):
         import json
-        try:
-            with open(self.usage_file, "w") as f:
-                json.dump(self.usage, f)
-        except Exception:
-            pass
+        with self._file_lock:
+            self._save_usage_locked()
 
     def check_limit(self, metric: str, cost: int = 1) -> bool:
         """Returns True if the action is allowed, False if blocked."""
-        self._load_usage() # Sync
-        
+        self._load_usage()  # Sync
+
         if metric == "tokens":
             if self.usage.get("tokens", 0) + cost > self.LIMITS["tokens_daily"]:
-                print("GOVERNANCE BLOCK: Daily token limit exceeded.")
+                _security_logger.warning("GOVERNANCE BLOCK: Daily token limit exceeded.")
                 return False
         elif metric == "tool_calls":
-             if self.usage.get("tool_calls", 0) + cost > self.LIMITS["tool_calls_daily"]:
-                 print("GOVERNANCE BLOCK: Daily tool call limit exceeded.")
-                 return False
-                 
+            if self.usage.get("tool_calls", 0) + cost > self.LIMITS["tool_calls_daily"]:
+                _security_logger.warning("GOVERNANCE BLOCK: Daily tool call limit exceeded.")
+                return False
+
         return True
 
     def log_usage(self, metric: str, cost: int = 1):
         """Updates internal counters."""
-        self.usage[metric] = self.usage.get(metric, 0) + cost
-        self._save_usage()
+        with self._file_lock:
+            self.usage[metric] = self.usage.get(metric, 0) + cost
+            self._save_usage_locked()
 
 
 class Sentry:

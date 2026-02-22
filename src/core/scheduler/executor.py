@@ -26,6 +26,13 @@ from src.core.scheduler.service import SchedulerService
 
 logger = logging.getLogger(__name__)
 
+# Optional: import event_bus for War Room notifications
+try:
+    from event_bus import event_bus, Event
+    _HAS_EVENT_BUS = True
+except ImportError:
+    _HAS_EVENT_BUS = False
+
 
 # ---------------------------------------------------------------------------
 # Gate protocol
@@ -120,6 +127,9 @@ class JobExecutor:
         self._stop_event = threading.Event()
         self._job_locks: Dict[str, threading.Lock] = {}
         self._job_locks_guard = threading.Lock()
+        # F-008: Pending approval tracking
+        self._pending_approvals: Dict[str, Dict[str, Any]] = {}
+        self._granted_approvals: Dict[str, str] = {}  # job_id -> ISO timestamp
 
     @property
     def receipts(self) -> List[Dict[str, Any]]:
@@ -331,24 +341,28 @@ class JobExecutor:
                     receipt=receipt,
                 )
 
-        # Check approvals (placeholder — just log if required)
+        # F-008: Check approvals — skip unless owner has granted approval
         if job.requires_approvals:
-            logger.info(
-                "Job '%s' requires approvals: %s (auto-skipping in current impl)",
-                job_id, job.requires_approvals,
-            )
-            receipt = self._emit_receipt(
-                "scheduled_job_skipped",
-                job_id=job_id,
-                reason="Approvals required but not granted",
-                required_approvals=job.requires_approvals,
-            )
-            return JobExecutionResult(
-                job_id=job_id,
-                skipped=True,
-                skip_reason="Approvals required but not granted",
-                receipt=receipt,
-            )
+            if job_id in self._granted_approvals:
+                # Approval was granted — consume it and proceed
+                del self._granted_approvals[job_id]
+                self._pending_approvals.pop(job_id, None)
+                logger.info("Job '%s' approval granted, executing", job_id)
+            else:
+                # Request approval via War Room notification
+                self._request_approval(job_id, job.name, job.requires_approvals)
+                receipt = self._emit_receipt(
+                    "scheduled_job_awaiting_approval",
+                    job_id=job_id,
+                    reason="Awaiting owner approval",
+                    required_approvals=job.requires_approvals,
+                )
+                return JobExecutionResult(
+                    job_id=job_id,
+                    skipped=True,
+                    skip_reason="Awaiting owner approval",
+                    receipt=receipt,
+                )
 
         # Execute — pass job inputs to skill
         job_inputs = job.inputs if isinstance(job.inputs, dict) else {}
@@ -392,3 +406,61 @@ class JobExecutor:
                 duration_ms=duration_ms,
                 receipt=receipt,
             )
+
+    # ------------------------------------------------------------------
+    # F-008: Approval workflow
+    # ------------------------------------------------------------------
+
+    def _request_approval(self, job_id: str, job_name: str, required: List[str]) -> None:
+        """Emit a War Room event requesting owner approval for a job."""
+        if job_id in self._pending_approvals:
+            return  # Already requested, don't spam
+
+        self._pending_approvals[job_id] = {
+            "job_name": job_name,
+            "required_approvals": required,
+            "requested_at": datetime.now(timezone.utc).isoformat(),
+        }
+        logger.info(
+            "Job '%s' requires approvals %s — notifying via War Room",
+            job_id, required,
+        )
+
+        if _HAS_EVENT_BUS:
+            import asyncio
+            try:
+                event = Event(
+                    type="scheduler_approval_required",
+                    payload={
+                        "job_id": job_id,
+                        "job_name": job_name,
+                        "required_approvals": required,
+                        "message": f"Scheduled job '{job_name}' requires owner approval to execute.",
+                    },
+                )
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.ensure_future(event_bus.emit(event))
+                else:
+                    loop.run_until_complete(event_bus.emit(event))
+            except Exception as exc:
+                logger.warning("Failed to emit approval request event: %s", exc)
+
+    def approve_job(self, job_id: str) -> bool:
+        """Grant approval for a pending job. Returns True if approval was pending."""
+        if job_id not in self._pending_approvals:
+            return False
+        self._granted_approvals[job_id] = datetime.now(timezone.utc).isoformat()
+        logger.info("Approval granted for job '%s'", job_id)
+
+        self._emit_receipt(
+            "scheduled_job_approved",
+            job_id=job_id,
+            approved_at=self._granted_approvals[job_id],
+        )
+        return True
+
+    @property
+    def pending_approvals(self) -> Dict[str, Dict[str, Any]]:
+        """Return a copy of pending approval requests."""
+        return dict(self._pending_approvals)
