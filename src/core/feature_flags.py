@@ -50,6 +50,9 @@ Competitive Intelligence (V24) Environment variables:
 
 Autonomy Loop v2 (V25) Environment variables:
     FEATURE_DEEP_REASONING_LOOP      — default: false (deep reasoning pass before agentic execution)
+
+Google OAuth (V26) Environment variables:
+    FEATURE_GOOGLE_OAUTH             — default: false (Google OAuth 2.0 for Gmail + Calendar)
 """
 
 from __future__ import annotations
@@ -174,6 +177,9 @@ FEATURE_COMPETITIVE_SCAN: bool = _env_bool("FEATURE_COMPETITIVE_SCAN", default=F
 # Autonomy Loop v2 (V25) — deep reasoning before action
 FEATURE_DEEP_REASONING_LOOP: bool = _env_bool("FEATURE_DEEP_REASONING_LOOP", default=False)  # Reasoning-only LLM pass before agentic loop + task experience memory
 
+# Google OAuth (V26) — Google OAuth flow for Gmail + Calendar connectors
+FEATURE_GOOGLE_OAUTH: bool = _env_bool("FEATURE_GOOGLE_OAUTH", default=False)  # OAuth 2.0 Authorization Code + PKCE for Gmail and Google Calendar
+
 
 # All flags are now hot-toggleable via SubsystemManager — no restart required.
 RESTART_REQUIRED_FLAGS = frozenset()
@@ -234,6 +240,7 @@ def reload_flags() -> None:
     global FEATURE_STRUCTURED_OUTPUT, FEATURE_CLAIM_VERIFICATION, FEATURE_UNIFIED_CLASSIFICATION
     global FEATURE_GITHUB_SEARCH, FEATURE_COMPETITIVE_SCAN
     global FEATURE_DEEP_REASONING_LOOP
+    global FEATURE_GOOGLE_OAUTH
 
     # vNext2 flags
     FEATURE_SOUL = _env_bool("FEATURE_SOUL")
@@ -293,6 +300,9 @@ def reload_flags() -> None:
 
     # Autonomy Loop v2 (V25)
     FEATURE_DEEP_REASONING_LOOP = _env_bool("FEATURE_DEEP_REASONING_LOOP", default=False)
+
+    # Google OAuth (V26)
+    FEATURE_GOOGLE_OAUTH = _env_bool("FEATURE_GOOGLE_OAUTH", default=False)
 
 
 def get_all_flags() -> dict[str, bool]:
@@ -362,4 +372,8 @@ def log_feature_flags() -> None:
     logger.info(
         "Autonomy Loop v2 flags: DEEP_REASONING_LOOP=%s",
         FEATURE_DEEP_REASONING_LOOP,
+    )
+    logger.info(
+        "Google OAuth flags: GOOGLE_OAUTH=%s",
+        FEATURE_GOOGLE_OAUTH,
     )

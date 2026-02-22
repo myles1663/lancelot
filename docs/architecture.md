@@ -290,6 +290,23 @@ SQLite-backed job scheduler supporting cron and interval triggers.
 
 **Fallback:** When the feature flag is disabled or no OAuth token is present, the Anthropic provider falls back to API key authentication. OAuth and API key auth are mutually exclusive per session; OAuth takes priority when a valid token exists.
 
+### Google OAuth Manager (Gmail + Calendar)
+
+**v0.2.26** (`FEATURE_GOOGLE_OAUTH`, default disabled): `src/core/google_oauth_manager.py` provides OAuth 2.0 Authorization Code + PKCE flow for Google APIs, enabling Gmail and Calendar connectors to authenticate with properly scoped, vault-stored, auto-refreshing credentials.
+
+**How it works:**
+1. **Initiation** — `POST /api/google-oauth/start` generates a PKCE challenge, builds the Google consent URL with Gmail + Calendar scopes, and returns it to the owner.
+2. **Callback** — `GET /google/callback` receives the authorization code, exchanges it for access + refresh tokens, encrypts them, and stores them in the vault.
+3. **Token fan-out** — A single OAuth grant is stored under both `email.gmail_token` and `calendar.google_token` vault keys, so both connectors resolve credentials from one token without duplicate OAuth flows.
+4. **Background refresh** — A daemon thread wakes every 5 minutes and proactively refreshes tokens before expiry. Thread safety via `threading.Lock`.
+5. **Startup recovery** — On container start, existing tokens are loaded from vault and the refresh thread resumes automatically.
+6. **Revocation** — `POST /api/google-oauth/revoke` invalidates tokens at Google and removes them from the vault.
+7. **Status** — `GET /api/google-oauth/status` returns token validity, expiry, and scope binding.
+
+**Network allowlist:** Requires `accounts.google.com` and `oauth2.googleapis.com` in `config/network_allowlist.yaml`.
+
+**Fallback:** When the feature flag is disabled or no Google OAuth token is present, Gmail and Calendar connectors are unavailable. The flag has no effect on other providers or subsystems.
+
 ### War Room (Operator Dashboard)
 
 The War Room is a React SPA (Vite + React 18 + TypeScript + Tailwind) providing full system observability:
@@ -348,9 +365,10 @@ A core architectural principle: **any subsystem can be disabled without breaking
 | Deep Reasoning Loop | No pre-execution reasoning pass; agentic loop runs without strategic analysis |
 | Provider SDK | Falls back to API mode (FlagshipClient REST); extended thinking and native tool calling unavailable |
 | Anthropic OAuth | Falls back to API key authentication for Anthropic; all other providers unaffected |
+| Google OAuth | Gmail and Calendar connectors unavailable; all other providers and subsystems unaffected |
 | Tool Fabric | No tool execution, conversation-only mode |
 
-This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FEATURE_DEEP_REASONING_LOOP`, `FEATURE_PROVIDER_SDK`, `FEATURE_ANTHROPIC_OAUTH`, etc.) that gate each subsystem at initialization. When a subsystem is disabled, its code paths are skipped and its API endpoints return appropriate "not available" responses.
+This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FEATURE_DEEP_REASONING_LOOP`, `FEATURE_PROVIDER_SDK`, `FEATURE_ANTHROPIC_OAUTH`, `FEATURE_GOOGLE_OAUTH`, etc.) that gate each subsystem at initialization. When a subsystem is disabled, its code paths are skipped and its API endpoints return appropriate "not available" responses.
 
 ---
 
@@ -365,7 +383,7 @@ This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FE
 | Data Validation | Pydantic v2 |
 | Configuration | PyYAML |
 | LLM Providers | Google GenAI, OpenAI, Anthropic, xAI SDKs (SDK mode) / REST via FlagshipClient (API mode) |
-| Auth | OAuth 2.0 PKCE (Anthropic), API keys (all providers), vault-backed token storage |
+| Auth | OAuth 2.0 PKCE (Anthropic, Google), API keys (all providers), vault-backed token storage |
 | Local Inference | llama-cpp-python (GGUF format) |
 | Persistence | SQLite (scheduler, memory), JSON (registries, receipts) |
 | Encryption | cryptography library |

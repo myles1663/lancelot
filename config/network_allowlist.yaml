@@ -48,5 +48,9 @@ domains:
 - techcrunch.com
 - news.ycombinator.com
 
+# ── Google OAuth ───────────────────────────────────────────
+- accounts.google.com
+- oauth2.googleapis.com
+
 # ── Business / SaaS ────────────────────────────────────────
 - salesforce.com

@@ -5,6 +5,17 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.26] - 2026-02-22
+
+### Added — Google OAuth 2.0 (Gmail + Calendar)
+- **GoogleOAuthManager** (`src/core/google_oauth_manager.py`): Full OAuth 2.0 Authorization Code + PKCE flow for Google APIs. Users enter their Google Cloud Client ID + Secret and Lancelot handles the browser consent redirect, authorization code exchange, encrypted token storage in the credential vault, and automatic background refresh. Follows the same pattern as the existing Anthropic OAuth manager.
+- **Gateway endpoints**: `POST /api/google-oauth/start` (accepts client credentials, returns consent URL), `GET /google/callback` (receives authorization code from Google, exchanges for tokens), `GET /api/google-oauth/status` (token health), `POST /api/google-oauth/revoke` (clears all stored tokens).
+- **Token fan-out**: A single Google OAuth token is stored under both `email.gmail_token` and `calendar.google_token` vault keys so both the Gmail and Calendar connectors receive Bearer token injection automatically via ConnectorProxy.
+- **Background refresh thread**: Checks token expiry every 5 minutes and refreshes proactively before expiry.
+- **Startup recovery**: On container restart, existing tokens are loaded from the vault and the refresh thread is started automatically.
+- **`FEATURE_GOOGLE_OAUTH`** feature flag (default: disabled) — gates all Google OAuth endpoints and startup initialization.
+- **Network allowlist**: Added `accounts.google.com` and `oauth2.googleapis.com` for Google OAuth consent and token exchange.
+
 ## [0.2.25] - 2026-02-21
 
 ### Fixed — Security Hardening (Audit Findings F-001, F-006, F-007, F-013, F-014)

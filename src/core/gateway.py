@@ -868,6 +868,22 @@ async def startup_event():
     except Exception as e:
         logger.warning("OAuth token manager initialization failed: %s", e)
 
+    # ===== GOOGLE OAUTH MANAGER (V26) =====
+    try:
+        from google_oauth_manager import GoogleOAuthManager, set_google_oauth_manager
+        from feature_flags import FEATURE_GOOGLE_OAUTH
+        if FEATURE_GOOGLE_OAUTH and '_connector_vault' in dir() and _connector_vault:
+            _google_mgr = GoogleOAuthManager(vault=_connector_vault)
+            set_google_oauth_manager(_google_mgr)
+            if _google_mgr.recover_from_vault():
+                logger.info("Google OAuth tokens recovered on startup.")
+            else:
+                logger.info("Google OAuth: no existing tokens, awaiting user setup.")
+        else:
+            logger.info("Google OAuth disabled (FEATURE_GOOGLE_OAUTH=%s).", FEATURE_GOOGLE_OAUTH)
+    except Exception as e:
+        logger.warning("Google OAuth initialization failed: %s", e)
+
     # ===== SETUP & RECOVERY API =====
     try:
         from setup_api import router as setup_router, init_setup_api
@@ -987,6 +1003,14 @@ async def shutdown_event():
             _oauth_mgr = get_oauth_manager()
             if _oauth_mgr:
                 _oauth_mgr.stop_background_refresh()
+        except Exception:
+            pass
+        # V26: Stop Google OAuth background refresh
+        try:
+            from google_oauth_manager import get_google_oauth_manager
+            _google_mgr = get_google_oauth_manager()
+            if _google_mgr:
+                _google_mgr.stop_background_refresh()
         except Exception:
             pass
         main_orchestrator.audit_logger.log_event("GATEWAY_SHUTDOWN", "Graceful shutdown initiated")
@@ -1626,6 +1650,169 @@ async def oauth_anthropic_callback(request: Request):
             "</body></html>",
             status_code=500,
         )
+
+
+# --- V26: Google OAuth 2.0 Endpoints (Gmail + Calendar) ---
+
+@app.post("/api/google-oauth/start")
+async def google_oauth_start(request: Request):
+    """Accept client_id + client_secret, store in vault, return Google consent URL."""
+    request_id = str(uuid.uuid4())[:8]
+    if not verify_token(request):
+        return error_response(401, "Unauthorized", request_id=request_id)
+
+    from feature_flags import FEATURE_GOOGLE_OAUTH
+    if not FEATURE_GOOGLE_OAUTH:
+        return error_response(
+            403, "Google OAuth is disabled. Set FEATURE_GOOGLE_OAUTH=true.",
+            request_id=request_id,
+        )
+
+    try:
+        from google_oauth_manager import (
+            GoogleOAuthManager, get_google_oauth_manager, set_google_oauth_manager,
+        )
+        manager = get_google_oauth_manager()
+        # Lazy-init: if flag was toggled at runtime (via War Room), create manager now
+        if not manager:
+            try:
+                from credential_api import _vault as _lazy_vault
+                if _lazy_vault:
+                    manager = GoogleOAuthManager(vault=_lazy_vault)
+                    set_google_oauth_manager(manager)
+                    logger.info("Google OAuth manager lazy-initialized (flag toggled at runtime)")
+            except Exception as _e:
+                logger.warning("Google OAuth lazy-init failed: %s", _e)
+        if not manager:
+            return error_response(500, "Google OAuth manager not initialized", request_id=request_id)
+
+        data = await request.json()
+        client_id = data.get("client_id", "").strip()
+        client_secret = data.get("client_secret", "").strip()
+
+        if not client_id or not client_secret:
+            return error_response(400, "Both client_id and client_secret are required", request_id=request_id)
+
+        auth_url = manager.generate_auth_url(client_id, client_secret)
+        return {
+            "auth_url": auth_url,
+            "message": "Open this URL in your browser to authorize Gmail and Calendar access.",
+            "request_id": request_id,
+        }
+    except Exception as e:
+        logger.error("[%s] Google OAuth start error: %s", request_id, e)
+        return error_response(500, "Internal server error", request_id=request_id)
+
+
+@app.get("/google/callback")
+async def google_oauth_callback(request: Request):
+    """Receive Google OAuth authorization code from browser redirect.
+
+    V26: Unauthenticated route — browser redirect from Google after consent.
+    Protected by state nonce validation in exchange_code().
+    """
+    error = request.query_params.get("error")
+    if error:
+        desc = request.query_params.get("error_description", error)
+        return HTMLResponse(
+            "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+            f"<h2>Authorization Failed</h2><p>{desc}</p>"
+            "</body></html>",
+            status_code=400,
+        )
+
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    if not code or not state:
+        return HTMLResponse(
+            "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+            "<h2>Missing Parameters</h2><p>No authorization code received.</p>"
+            "</body></html>",
+            status_code=400,
+        )
+
+    try:
+        from google_oauth_manager import get_google_oauth_manager
+        manager = get_google_oauth_manager()
+        if manager is None:
+            raise RuntimeError("Google OAuth manager not initialized")
+        success = manager.exchange_code(code, state)
+        if success:
+            return HTMLResponse(
+                "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+                "<h2 style='color:#22c55e'>Google Authorization Successful</h2>"
+                "<p>Lancelot is now connected to your Google account.</p>"
+                "<p>Gmail and Calendar access is now active.</p>"
+                "<p style='color:#888'>You may close this tab.</p>"
+                "<script>setTimeout(function(){window.close()},3000)</script>"
+                "</body></html>"
+            )
+        else:
+            return HTMLResponse(
+                "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+                "<h2>Authorization Failed</h2>"
+                "<p>Invalid or expired authorization state. Please try again from Lancelot.</p>"
+                "</body></html>",
+                status_code=400,
+            )
+    except Exception as e:
+        logger.error("Google OAuth callback error: %s", e)
+        return HTMLResponse(
+            "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+            f"<h2>Error</h2><p>{e}</p>"
+            "</body></html>",
+            status_code=500,
+        )
+
+
+@app.get("/api/google-oauth/status")
+async def google_oauth_status(request: Request):
+    """Return current Google OAuth token health."""
+    request_id = str(uuid.uuid4())[:8]
+    if not verify_token(request):
+        return error_response(401, "Unauthorized", request_id=request_id)
+
+    try:
+        from google_oauth_manager import get_google_oauth_manager
+        from feature_flags import FEATURE_GOOGLE_OAUTH
+        manager = get_google_oauth_manager()
+        if not manager:
+            return {
+                "status": "not_configured",
+                "feature_enabled": FEATURE_GOOGLE_OAUTH,
+                "request_id": request_id,
+            }
+        status = manager.get_status()
+        status["feature_enabled"] = FEATURE_GOOGLE_OAUTH
+        status["request_id"] = request_id
+        return status
+    except Exception as e:
+        logger.error("[%s] Google OAuth status error: %s", request_id, e)
+        return error_response(500, "Internal server error", request_id=request_id)
+
+
+@app.post("/api/google-oauth/revoke")
+async def google_oauth_revoke(request: Request):
+    """Revoke Google OAuth tokens and clear stored credentials."""
+    request_id = str(uuid.uuid4())[:8]
+    if not verify_token(request):
+        return error_response(401, "Unauthorized", request_id=request_id)
+
+    try:
+        from google_oauth_manager import get_google_oauth_manager
+        manager = get_google_oauth_manager()
+        if not manager:
+            return error_response(500, "Google OAuth manager not initialized", request_id=request_id)
+
+        manager.revoke()
+        return {
+            "status": "revoked",
+            "message": "All Google OAuth tokens have been cleared.",
+            "request_id": request_id,
+        }
+    except Exception as e:
+        logger.error("[%s] Google OAuth revoke error: %s", request_id, e)
+        return error_response(500, "Internal server error", request_id=request_id)
 
 
 # --- V29: Workspace File Download Endpoint ---
