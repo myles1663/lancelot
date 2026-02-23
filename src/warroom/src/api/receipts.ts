@@ -51,3 +51,14 @@ export function fetchReceipt(id: string) {
 export function fetchReceiptStats(since?: string) {
   return apiGet<{ stats: ReceiptStats }>('/api/receipts/stats', since ? { since } : undefined)
 }
+
+// V29: Receipt context — children, parent, quest sibling count
+export interface ReceiptContext {
+  children: ReceiptItem[]
+  quest_receipts_count: number | null
+  parent: { id: string; action_name: string; action_type: string; status: string } | null
+}
+
+export function fetchReceiptContext(id: string) {
+  return apiGet<ReceiptContext>(`/api/receipts/${id}/context`)
+}

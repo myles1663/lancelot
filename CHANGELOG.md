@@ -5,6 +5,14 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.29] - 2026-02-23
+
+### Enhanced — Receipt Explorer UI Polish
+- **Action type column & filter**: Receipts table now shows a color-coded action type badge (Tool Call, LLM Call, Plan Step, File Op, etc.) with a dropdown filter. Makes it easy to see what kind of operation each receipt represents at a glance.
+- **Context endpoint**: New `GET /api/receipts/{id}/context` endpoint returns child receipts, parent summary, and quest sibling count in a single call — using existing `ReceiptService.get_children()` and `get_quest_receipts()` methods.
+- **Richer expanded detail panel**: Clicking a receipt now shows a context bar with clickable quest/parent chips, human-readable key-value I/O (instead of raw JSON dumps), metadata pills, and a child operations list. Quest chips filter the table to show all related receipts.
+- **Quest filter mode**: Clicking a quest chip adds a filter banner and shows only receipts from that quest, making it easy to trace an entire operation's lifecycle.
+
 ## [0.2.28] - 2026-02-22
 
 ### Fixed — Stress Test Quality Improvements

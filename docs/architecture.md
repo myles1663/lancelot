@@ -175,6 +175,8 @@ Every action — LLM call, tool execution, file operation, memory edit, schedule
 
 Receipts form the ground truth of system behavior. They are persisted to `lancelot_data/receipts/` and are searchable through the War Room.
 
+**V29 Receipt Context Endpoint** (v0.2.29): `GET /api/receipts/{id}/context` returns the receipt's child receipts, parent summary, and quest sibling count in a single response. This powers the Receipt Explorer's context connections panel, enabling drill-down from any receipt to its parent chain, child operations, and sibling receipts within the same quest — without requiring multiple API calls.
+
 ---
 
 ## Subsystem Details
@@ -337,6 +339,8 @@ The War Room is a React SPA (Vite + React 18 + TypeScript + Tailwind) providing 
 - **Memory** — Tier sizes, quarantine queue, recent commits
 
 The War Room communicates with Lancelot exclusively through the Gateway REST API — it has no direct access to internal objects.
+
+**V29 Receipt Explorer UI Polish** (v0.2.29): The Receipts panel received a comprehensive UI upgrade. A new Gateway endpoint `GET /api/receipts/{id}/context` returns child receipts, parent summary, and quest sibling count for any given receipt, enabling the frontend to render full operation context without multiple round-trips. The receipt table now includes an **action type** column with color-coded badges (e.g. `llm_call`, `tool_exec`, `governance_decision`), making it possible to visually scan receipt streams by operation category. The expanded detail panel shows **context connections** — quest links to trace the originating quest, parent links to navigate up the receipt chain, and child operation counts to drill down — alongside **human-readable I/O** (decoded inputs and outputs instead of raw JSON) and **metadata pills** for duration, token count, and cognition tier. A new **quest filter mode** allows filtering the receipt table to a single `quest_id`, tracing an entire operation lifecycle from initial request through planning, execution, and verification steps.
 
 ---
 

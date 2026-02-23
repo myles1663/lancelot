@@ -92,6 +92,52 @@ async def receipt_stats(
         return _safe_error(500, "Failed to get receipt stats")
 
 
+@router.get("/{receipt_id}/context")
+async def get_receipt_context(receipt_id: str):
+    """V29: Get a receipt's relational context — children, parent summary, quest sibling count.
+
+    Called by the Receipt Explorer when a row is expanded to provide
+    context about what the receipt is connected to.
+    """
+    try:
+        if _receipt_service is None:
+            return _safe_error(400, "Receipt service not initialised")
+
+        receipt = _receipt_service.get(receipt_id)
+        if receipt is None:
+            return _safe_error(404, f"Receipt {receipt_id} not found")
+
+        # Children
+        children = _receipt_service.get_children(receipt_id)
+
+        # Parent summary
+        parent_summary = None
+        if receipt.parent_id:
+            parent = _receipt_service.get(receipt.parent_id)
+            if parent:
+                parent_summary = {
+                    "id": parent.id,
+                    "action_name": parent.action_name,
+                    "action_type": parent.action_type,
+                    "status": parent.status,
+                }
+
+        # Quest sibling count
+        quest_receipts_count = None
+        if receipt.quest_id:
+            quest_siblings = _receipt_service.get_quest_receipts(receipt.quest_id)
+            quest_receipts_count = len(quest_siblings)
+
+        return {
+            "children": [_receipt_to_dict(c) for c in children],
+            "quest_receipts_count": quest_receipts_count,
+            "parent": parent_summary,
+        }
+    except Exception as exc:
+        logger.error("get_receipt_context error: %s", exc)
+        return _safe_error(500, "Failed to get receipt context")
+
+
 @router.get("/{receipt_id}")
 async def get_receipt(receipt_id: str):
     """Get a single receipt by ID."""
