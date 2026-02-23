@@ -14,6 +14,7 @@ All notable changes to Project Lancelot will be documented in this file.
 - **Gateway channel passthrough**: The `/chat` endpoint previously hardcoded `channel="warroom"`, ignoring any client-supplied channel field. Now reads `channel` from the JSON body (default: `"warroom"`), enabling proper Telegram truncation (60-line limit) when the Telegram bot or API clients specify `channel="telegram"`.
 - **Unified classifier governance bypass**: When the unified classifier returned `action_low_risk`, write operations (create, delete, send, deploy) bypassed the governance pipeline entirely. Now cross-checks for write verbs before routing to the agentic loop — read/search actions are trusted, write actions are kept in the EXEC_REQUEST governance path.
 - **Continuation governance bypass**: EXEC_REQUEST continuations were rerouted to the agentic loop (skipping permission gates). Now only PLAN_REQUEST and MIXED_REQUEST continuations bypass the pipeline — EXEC_REQUEST continuations stay in the governance flow.
+- **Telegram URL fragment leak**: Telegram message chunking used a naive 4000-character split that could break markdown links mid-URL, causing orphaned URL fragments (e.g., `5WWgweTg1cGFkdy1LR2s?oc=5)`) to appear at the top of subsequent messages. Replaced with line-boundary-aware chunking and added orphan URL fragment cleanup to `_sanitize_for_telegram`.
 
 ## [0.2.27] - 2026-02-22
 

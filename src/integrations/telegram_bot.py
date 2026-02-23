@@ -80,9 +80,46 @@ class TelegramBot:
         text = re.sub(r"print\s*\([^)]*\)", "", text, flags=re.IGNORECASE)
         # Clean up empty parens left behind
         text = re.sub(r"\(\s*\)", "", text)
+        # V28: Strip orphaned URL fragments — bare tails like "5WWge...?oc=5)"
+        # that leak when markdown links get split or mangled
+        text = re.sub(r"^[A-Za-z0-9_/+=\-]{10,}\?[^\s)]*\)?\s*$", "", text, flags=re.MULTILINE)
+        # V28: Strip bare markdown link tails — lines that are just "...end-of-url)"
+        text = re.sub(r"^\S*\?oc=\d+\)?\s*$", "", text, flags=re.MULTILINE)
         # Clean up excess blank lines
         text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
+
+    @staticmethod
+    def _chunk_by_lines(text: str, max_size: int = 4000) -> list:
+        """V28: Split text into chunks at line boundaries.
+
+        Avoids breaking markdown links mid-URL which causes orphaned
+        URL fragments to appear at the top of the next Telegram message.
+        Falls back to hard split only for single lines exceeding max_size.
+        """
+        lines = text.split("\n")
+        chunks = []
+        current_lines = []
+        current_len = 0
+
+        for line in lines:
+            line_len = len(line) + 1  # +1 for newline
+            if current_len + line_len > max_size and current_lines:
+                chunks.append("\n".join(current_lines))
+                current_lines = []
+                current_len = 0
+            # Single line exceeds max_size — hard split as fallback
+            if len(line) > max_size:
+                for i in range(0, len(line), max_size):
+                    chunks.append(line[i:i + max_size])
+            else:
+                current_lines.append(line)
+                current_len += line_len
+
+        if current_lines:
+            chunks.append("\n".join(current_lines))
+
+        return chunks if chunks else [text]
 
     def send_message(self, text: str, chat_id: str = None):
         """Sends a message to the configured chat.
@@ -99,7 +136,8 @@ class TelegramBot:
         url = TG_API.format(token=self.token, method="sendMessage")
 
         # Telegram limit is 4096 chars per message; chunk if needed
-        chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)]
+        # V28: Split at line boundaries to avoid breaking markdown links mid-URL
+        chunks = TelegramBot._chunk_by_lines(text, max_size=4000)
         total_chunks = len(chunks)
         failed_chunks = []
 
