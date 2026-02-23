@@ -1067,6 +1067,8 @@ async def chat_webhook(request: Request):
         data = await request.json()
         message = data.get("text", "")
         user = data.get("user", "Unknown")
+        # V28: Allow clients to specify delivery channel for channel-aware output limits
+        req_channel = data.get("channel", "warroom")
 
         logger.info(f"[{request_id}] Message from {user}: {message[:50]}...")
 
@@ -1107,14 +1109,14 @@ async def chat_webhook(request: Request):
                     )
                 else:
                     response_text = main_orchestrator.chat(
-                        message, crusader_mode=True, channel="warroom"
+                        message, crusader_mode=True, channel=req_channel
                     )
                     response_text = crusader_adapter.format_response(
                         response_text
                     )
             else:
                 # Standard mode
-                response_text = main_orchestrator.chat(message, channel="warroom")
+                response_text = main_orchestrator.chat(message, channel=req_channel)
 
         return {
             "response": response_text,

@@ -35,6 +35,8 @@ The input layer is a hard boundary. Prompt injection attempts are detected and b
 
 **V28 Injection Detection Gate** (v0.2.28): After `InputSanitizer.sanitize()` in `chat()`, if the `[SUSPICIOUS INPUT DETECTED]` prefix is present, the method returns a clear refusal immediately instead of routing the flagged input through the pipeline. This short-circuits processing of detected injection attempts before any downstream subsystem is invoked.
 
+**V28 Gateway Channel Passthrough** (v0.2.28): The `/chat` endpoint previously hardcoded `channel="warroom"`, ignoring client-supplied channel values. It now reads `channel` from the JSON body (default: `"warroom"`), enabling proper Telegram truncation when API clients specify `channel="telegram"`.
+
 ### 2. Intent Classification
 
 The orchestrator classifies the message into one of five intent types:
@@ -46,6 +48,8 @@ The orchestrator classifies the message into one of five intent types:
 | `EXEC_REQUEST` | Direct action request (low-risk: search, draft, summarize) | Agentic Loop (just-do-it) |
 
 > **v0.2.27 Low-Risk Classifier Fix:** The `_is_low_risk_exec` method now includes write-oriented action verbs (`create`, `write`, `save`, `update`, `modify`, `edit`) in its high-risk signal list. Previously, requests containing these verbs could be classified as low-risk and routed directly to the agentic loop, bypassing the PlanningPipeline, TaskGraph, and Permission flow. This fix ensures that all write-oriented actions go through full governance.
+
+> **V28 Unified Classifier Write-Verb Guard** (v0.2.28): When the unified classifier returns `action_low_risk`, the orchestrator now cross-checks for write verbs (create, delete, send, deploy, etc.) before routing to the agentic loop. Read/search actions are trusted as low-risk. Write actions are kept in the `EXEC_REQUEST` governance path with permission gates, preventing the classifier from inadvertently bypassing governance for destructive operations.
 | `MIXED_REQUEST` | Contains both planning and execution | Planning Pipeline |
 | `KNOWLEDGE_REQUEST` | Information retrieval / research | Flagship Fast/Deep |
 | `CONVERSATIONAL` | General conversation | Local or Flagship Fast |
@@ -80,6 +84,8 @@ The `ProviderProfile` dataclass carries a `mode` field (`"sdk"` | `"api"`) and e
 ### 4. Planning Pipeline (for complex requests)
 
 **V28 Simple Action Detector** (v0.2.28): In the `EXEC_REQUEST` path, the orchestrator's `_build_simple_action_plan()` method detects single-action requests (create file, send message, run command) via a keyword→skill mapping. When matched, it produces a targeted 3-step `PlanArtifact` directly, bypassing the generic plan builder and LLM enrichment. This saves an API call and produces cleaner permission requests for straightforward actions.
+
+**V28 EXEC_REQUEST Continuation Guard** (v0.2.28): `EXEC_REQUEST` continuations are no longer rerouted to the agentic loop, which would bypass permission gates. Only `PLAN_REQUEST` and `MIXED_REQUEST` continuations bypass the planning pipeline — `EXEC_REQUEST` continuations stay in the governance flow, preserving the approval and permission gates for all high-risk action requests across multi-turn conversations.
 
 For `PLAN_REQUEST` or `MIXED_REQUEST` intents, the Planning Pipeline builds a structured plan:
 

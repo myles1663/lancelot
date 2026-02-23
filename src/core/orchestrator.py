@@ -4605,18 +4605,44 @@ class LancelotOrchestrator:
         # V17/V23: Continuation and research rerouting
         if _unified_result is not None:
             # V23: Unified classifier already handles continuations and research detection
-            if _unified_result.is_continuation and intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST, IntentType.EXEC_REQUEST):
+            if _unified_result.is_continuation and intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST):
                 print("V23: Continuation detected by unified classifier — routing to agentic loop")
                 intent = IntentType.KNOWLEDGE_REQUEST
+            elif _unified_result.is_continuation and intent == IntentType.EXEC_REQUEST:
+                # V28: EXEC_REQUEST continuations still need governance — don't bypass permission
+                print("V28: Continuation detected but intent is EXEC_REQUEST — keeping in governance pipeline")
             elif _unified_result.intent == "action_low_risk":
-                print("V23: Low-risk action — routing to agentic loop (just-do-it)")
-                intent = IntentType.KNOWLEDGE_REQUEST
+                # V28: Cross-check for write verbs — if the message contains a write
+                # action verb, the classifier may be wrong about "low risk" and we
+                # should route through governance. Read/search actions are trusted.
+                _write_verbs = [
+                    "create", "write", "save", "update", "modify", "edit",
+                    "delete", "remove", "drop", "destroy",
+                    "send", "post", "notify", "message", "email",
+                    "deploy", "push", "publish", "install",
+                    "execute", "run command", "run script",
+                    "move", "rename", "overwrite",
+                ]
+                _msg_lower = user_message.lower()
+                if any(v in _msg_lower for v in _write_verbs):
+                    print("V28: Unified classifier said low-risk but write verb detected — keeping as EXEC_REQUEST")
+                    intent = IntentType.EXEC_REQUEST
+                else:
+                    print("V23: Low-risk action — routing to agentic loop (just-do-it)")
+                    intent = IntentType.KNOWLEDGE_REQUEST
         else:
             # Legacy continuation/research detection (V17/V18)
-            if intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST, IntentType.EXEC_REQUEST):
+            # V28: Only reroute PLAN/MIXED continuations — EXEC_REQUEST must stay in governance
+            if intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST):
                 if self._is_continuation(user_message):
                     print("V17: Continuation detected — routing through agentic loop instead of PlanningPipeline")
                     intent = IntentType.KNOWLEDGE_REQUEST
+                elif self._needs_research(user_message):
+                    print("V18: Tool-action or research intent — routing through agentic loop")
+                    intent = IntentType.KNOWLEDGE_REQUEST
+            elif intent == IntentType.EXEC_REQUEST:
+                if self._is_continuation(user_message):
+                    print("V28: Continuation detected but intent is EXEC_REQUEST — keeping in governance pipeline")
                 elif self._needs_research(user_message):
                     print("V18: Tool-action or research intent — routing through agentic loop")
                     intent = IntentType.KNOWLEDGE_REQUEST
