@@ -3681,7 +3681,8 @@ class LancelotOrchestrator:
             "execute_command",
             {"command": command},
             tier=CognitionTier.DETERMINISTIC,
-            parent_id=parent_id
+            parent_id=parent_id,
+            quest_id=getattr(self, '_current_quest_id', None),
         )
         self.receipt_service.create(receipt)
         start_time = __import__("time").time()
@@ -4507,6 +4508,11 @@ class LancelotOrchestrator:
         self.wake_up("User Chat")
         self._current_channel = channel
         self._telegram_already_sent = False  # V15: Reset duplicate-send guard
+        # V29: Quest ID — groups all receipts from a single chat() invocation
+        import uuid as _uuid
+        self._current_quest_id = str(_uuid.uuid4())
+        if hasattr(self, 'context_env') and self.context_env:
+            self.context_env._current_quest_id = self._current_quest_id
         start_time = __import__("time").time()
 
         # Governance: Check Token Limit (Estimate)
@@ -4753,7 +4759,14 @@ class LancelotOrchestrator:
         print(f"Model Router: Selected {selected_model}")
 
         # Create Receipt for LLM Call
-        receipt = create_receipt(ActionType.LLM_CALL, "chat_generation", {"user_message": user_message, "model": selected_model}, tier=CognitionTier.CLASSIFICATION)
+        receipt = create_receipt(
+            ActionType.LLM_CALL, "chat_generation",
+            {"user_message": user_message, "model": selected_model},
+            tier=CognitionTier.CLASSIFICATION,
+            quest_id=getattr(self, '_current_quest_id', None),
+            metadata={"model": selected_model, "channel": channel,
+                      "provider": getattr(self.provider, 'provider_name', 'unknown')},
+        )
         self.receipt_service.create(receipt)
 
         if not self.provider:

@@ -32,6 +32,7 @@ class ContextEnvironment:
         self.items: Dict[str, ContextItem] = {}
         self.history: List[Dict[str, str]] = []
         self.current_tokens = 0
+        self._current_quest_id: Optional[str] = None  # V29: Set by orchestrator per chat() call
         self._load_history()
         
     def _chat_dir(self) -> str:
@@ -155,7 +156,8 @@ class ContextEnvironment:
             "read_context",
             {"path": file_path},
             tier=CognitionTier.DETERMINISTIC,
-            parent_id=parent_id
+            parent_id=parent_id,
+            quest_id=self._current_quest_id,
         )
         self.receipt_service.create(receipt)
         
@@ -207,7 +209,8 @@ class ContextEnvironment:
             "read_context_blocked",
             {"path": path, "reason": reason},
             tier=CognitionTier.DETERMINISTIC,
-            parent_id=parent_id
+            parent_id=parent_id,
+            quest_id=self._current_quest_id,
         )
         self.receipt_service.create(receipt)
         self.receipt_service.update(receipt.complete({"status": "blocked"}, 0))
@@ -282,7 +285,7 @@ class ContextEnvironment:
         count = 0
         
         # Receipt for search
-        receipt = create_receipt(ActionType.FILE_OP, "search_workspace", {"query": query}, tier=CognitionTier.DETERMINISTIC)
+        receipt = create_receipt(ActionType.FILE_OP, "search_workspace", {"query": query}, tier=CognitionTier.DETERMINISTIC, quest_id=self._current_quest_id)
         self.receipt_service.create(receipt)
         start_time = time.time()
         
@@ -336,7 +339,7 @@ class ContextEnvironment:
         if not self._is_safe_path(full_path) or not os.path.exists(full_path):
              return "File access error."
 
-        receipt = create_receipt(ActionType.FILE_OP, "read_outline", {"path": file_path}, tier=CognitionTier.DETERMINISTIC)
+        receipt = create_receipt(ActionType.FILE_OP, "read_outline", {"path": file_path}, tier=CognitionTier.DETERMINISTIC, quest_id=self._current_quest_id)
         self.receipt_service.create(receipt)
         start_time = time.time()
 
@@ -381,7 +384,7 @@ class ContextEnvironment:
 
     def get_workspace_diff(self, staged: bool = False) -> str:
         """Returns git status and diff summary."""
-        receipt = create_receipt(ActionType.TOOL_CALL, "read_diff", {"staged": staged}, tier=CognitionTier.DETERMINISTIC)
+        receipt = create_receipt(ActionType.TOOL_CALL, "read_diff", {"staged": staged}, tier=CognitionTier.DETERMINISTIC, quest_id=self._current_quest_id)
         self.receipt_service.create(receipt)
         start_time = time.time()
         
@@ -437,7 +440,7 @@ class ContextEnvironment:
         if not os.path.exists(full_path):
              return "Directory not found."
              
-        receipt = create_receipt(ActionType.FILE_OP, "read_dir", {"path": dir_path}, tier=CognitionTier.DETERMINISTIC)
+        receipt = create_receipt(ActionType.FILE_OP, "read_dir", {"path": dir_path}, tier=CognitionTier.DETERMINISTIC, quest_id=self._current_quest_id)
         self.receipt_service.create(receipt)
         start_time = time.time()
         
