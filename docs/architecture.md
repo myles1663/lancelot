@@ -10,6 +10,8 @@ For how to get the system running, see the [Quickstart](quickstart.md). For the 
 
 Lancelot is composed of independent, kill-switchable subsystems coordinated by a central orchestrator. Every subsystem can be disabled via feature flags without breaking the rest of the system.
 
+**V30 Orchestrator Decomposition — Phase 1** (v0.2.30): The monolithic `orchestrator.py` has been decomposed into the orchestrator proper plus a `src/core/orch_helpers/` package containing 13 extracted pure functions across three modules: `intent_helpers.py` (6 functions), `safety_helpers.py` (5 functions), and `response_helpers.py` (2 functions). The orchestrator retains thin delegator methods that call the extracted helpers, preserving the existing call-site interface. Phase 1 is conservative — only stateless pure functions were extracted; stateful methods and anything touching `self` remain in `orchestrator.py`.
+
 <p align="center">
   <img src="images/fig1_system_architecture.svg" alt="Lancelot System Architecture — Subsystem Relationships and Data Flows" width="900">
 </p>
@@ -53,6 +55,8 @@ The orchestrator classifies the message into one of five intent types:
 | `MIXED_REQUEST` | Contains both planning and execution | Planning Pipeline |
 | `KNOWLEDGE_REQUEST` | Information retrieval / research | Flagship Fast/Deep |
 | `CONVERSATIONAL` | General conversation | Local or Flagship Fast |
+
+**V30 Intent Helper Extraction** (v0.2.30): The six intent-classification helper functions (including keyword matching, low-risk detection, and continuation logic) have been extracted from `orchestrator.py` into `src/core/orch_helpers/intent_helpers.py`. The orchestrator's classification methods now delegate to these pure functions, making them independently testable without instantiating the full orchestrator.
 
 **V23 Unified Classifier** (`FEATURE_UNIFIED_CLASSIFICATION`): When enabled, a single Gemini Flash call with structured output replaces the multi-function keyword chain. Returns intent, confidence, is_continuation, and requires_tools in one JSON response. Falls back to the keyword chain on failure.
 
@@ -118,6 +122,8 @@ Each step generates a receipt linked to the parent plan via `parent_id` and `que
 **v0.2.27 TaskRun Status Fix.** After `_execute_with_llm` succeeds in the agentic loop, the TaskRun status is now explicitly updated to `SUCCEEDED`. Previously, the TaskRun status reflected the TaskRunner's template-step failure even though the agentic loop had successfully completed the task. This fix ensures that the TaskRun status accurately reflects the actual outcome of execution.
 
 **V28 Structured Reformat Gate** (v0.2.28): `_agentic_generate()` now accepts a `skip_structured_reformat` parameter. When called from `_execute_with_llm()` or `_enrich_plan_with_llm()`, the structured JSON reformat step is skipped — it always failed for free-form output, wasting an API call. This eliminates a redundant LLM round-trip on execution and plan enrichment paths.
+
+**V30 Safety & Response Helper Extraction** (v0.2.30): Five safety-related pure functions (risk checks, governance validations, input boundary enforcement) were extracted into `src/core/orch_helpers/safety_helpers.py`, and two response-assembly helpers were extracted into `src/core/orch_helpers/response_helpers.py`. Together with the intent helpers, this completes Phase 1 of the orchestrator decomposition — 13 stateless functions moved out, thin delegators left in place.
 
 ### 6. Risk Classification & Governance
 
@@ -410,6 +416,7 @@ This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FE
 | Persistence | SQLite (scheduler, memory), JSON (registries, receipts) |
 | Encryption | cryptography library |
 | Containerization | Docker + Docker Compose |
+| Dependency Management | uv (deterministic lockfile via `pyproject.toml` + `uv.lock`) |
 | Testing | pytest (1900+ tests) |
 
 ---
@@ -431,3 +438,7 @@ This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FE
 7. **Docker-first deployment.** The Tool Fabric relies on Docker for execution sandboxing. Bare-metal is supported but loses the container isolation that makes tool execution safe.
 
 **V29 Launcher pre-flight checks** (v0.2.15): The launcher scripts (`launch.ps1`, `launch.sh`) run a pre-flight sequence before `docker compose up`: verify the Docker CLI is installed, verify the Docker daemon is running, and check that ports 8000 and 8080 are available. Any failure produces a human-readable error with a suggested fix and a link to the GitHub issues page (`https://github.com/myles1663/lancelot/issues`) for support.
+
+**V30 uv dependency locking** (v0.2.30): Docker builds now use [uv](https://github.com/astral-sh/uv) instead of pip for Python dependency management. Dependencies are declared in `pyproject.toml` and locked via `uv.lock`, providing deterministic, reproducible builds — the exact same package versions are installed every time regardless of when or where the image is built. This eliminates a class of "works on my machine" issues caused by floating pip resolution.
+
+**V30 Orchestrator decomposition strategy** (v0.2.30): Phase 1 extracts only stateless pure functions from the orchestrator into `src/core/orch_helpers/`, keeping the existing call-site interface intact via thin delegators. This is a deliberate incremental approach — the orchestrator's stateful methods and `self`-dependent logic remain untouched, minimizing regression risk while improving testability and readability of the extracted helpers.

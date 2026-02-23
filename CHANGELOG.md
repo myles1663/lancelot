@@ -5,6 +5,19 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.30] - 2026-02-23
+
+### Changed — EGOS Audit: Dependency Locking
+- **uv dependency management**: Migrated from flat `requirements.txt` to `pyproject.toml` + `uv.lock` for deterministic, reproducible builds. The Dockerfile now installs dependencies via `uv sync --frozen` instead of `pip install -r requirements.txt`. All 362 transitive packages are pinned in the lockfile. `requirements.txt` is retained as a compatibility fallback.
+
+### Changed — EGOS Audit: Orchestrator Decomposition (Phase 1)
+- **Extracted 13 pure functions** from `orchestrator.py` into `src/core/orch_helpers/`:
+  - `intent_helpers.py`: `is_conversational`, `is_continuation`, `needs_research`, `wants_action`, `is_low_risk_exec`, `extract_literal_terms` — intent classification functions
+  - `safety_helpers.py`: `classify_tool_call_safety`, `is_narration_without_content`, `strip_failure_narration`, `validate_rule_content`, `generate_honest_replacement` — safety gate functions
+  - `response_helpers.py`: `format_tool_receipts`, `append_download_links` — response formatting functions
+- All extracted functions are **stateless pure functions** — no `self` state, no side effects. Orchestrator methods replaced with thin delegators that call the extracted functions. Zero behavior change.
+- Orchestrator reduced by ~400 lines; extracted functions are now independently testable.
+
 ## [0.2.29] - 2026-02-23
 
 ### Enhanced — Receipt Explorer UI Polish

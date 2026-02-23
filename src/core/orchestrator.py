@@ -25,6 +25,27 @@ from verifier import Verifier
 from planning_pipeline import PlanningPipeline
 from intent_classifier import classify_intent, IntentType
 
+# V30: Extracted pure functions (EGOS audit Phase 1)
+from orch_helpers.intent_helpers import (
+    is_conversational as _is_conversational_fn,
+    is_continuation as _is_continuation_fn,
+    needs_research as _needs_research_fn,
+    wants_action as _wants_action_fn,
+    is_low_risk_exec as _is_low_risk_exec_fn,
+    extract_literal_terms as _extract_literal_terms_fn,
+)
+from orch_helpers.safety_helpers import (
+    classify_tool_call_safety as _classify_tool_call_safety_fn,
+    is_narration_without_content as _is_narration_without_content_fn,
+    strip_failure_narration as _strip_failure_narration_fn,
+    validate_rule_content as _validate_rule_content_fn,
+    generate_honest_replacement as _generate_honest_replacement_fn,
+)
+from orch_helpers.response_helpers import (
+    format_tool_receipts as _format_tool_receipts_fn,
+    append_download_links as _append_download_links_fn,
+)
+
 # vNext4 Governance imports (conditional)
 import logging as _logging
 _gov_logger = _logging.getLogger(__name__)
@@ -1548,87 +1569,8 @@ class LancelotOrchestrator:
         return declarations
 
     def _classify_tool_call_safety(self, skill_name: str, inputs: dict) -> str:
-        """Classify a tool call as 'auto' (safe, read-only) or 'escalate' (needs approval).
-
-        Read-only operations execute automatically during research.
-        Write operations within the workspace are auto-approved (T1 risk tier).
-        Sensitive writes (.env, system config) and operations outside workspace escalate.
-        """
-        READ_ONLY_COMMANDS = (
-            # Linux/Unix
-            "ls", "cat", "grep", "head", "tail", "find", "wc",
-            "git status", "git log", "git diff", "git branch",
-            "echo", "pwd", "whoami", "date", "df", "du",
-            "docker ps", "docker logs", "uname", "hostname",
-            # Windows (read-only info commands)
-            "ver", "systeminfo", "ipconfig", "netstat",
-            "tasklist", "dir", "type", "where", "set",
-        )
-
-        # Sensitive file patterns that always require approval
-        SENSITIVE_PATTERNS = (".env", ".secret", "credentials", "token", "password", "key.pem")
-
-        if skill_name == "network_client":
-            method = inputs.get("method", "").upper()
-            if method in ("GET", "HEAD"):
-                return "auto"
-            return "escalate"
-
-        if skill_name == "github_search":
-            # V24: All GitHub search actions are read-only API calls
-            return "auto"
-
-        if skill_name == "command_runner":
-            cmd = inputs.get("command", "").strip()
-            for safe_prefix in READ_ONLY_COMMANDS:
-                if cmd.startswith(safe_prefix):
-                    return "auto"
-            return "escalate"
-
-        if skill_name == "telegram_send":
-            # Auto-execute: only sends to the pre-configured owner chat_id
-            return "auto"
-
-        if skill_name == "warroom_send":
-            # Auto-execute: pushes notification to the War Room dashboard
-            return "auto"
-
-        if skill_name == "schedule_job":
-            # Auto-execute: manages scheduled jobs (create/list/delete)
-            return "auto"
-
-        if skill_name == "document_creator":
-            # Document creation within workspace is auto-approved (T1 risk)
-            return "auto"
-
-        if skill_name == "skill_manager":
-            action = inputs.get("action", "").lower()
-            # Read-only listing and proposals are auto-approved
-            # (proposals still require owner approval before installation)
-            if action in ("list_proposals", "list_skills", "propose"):
-                return "auto"
-            # run_skill executes arbitrary dynamic skills — escalate
-            return "escalate"
-
-        if skill_name == "repo_writer":
-            action = inputs.get("action", "").lower()
-            target_path = inputs.get("path", "").lower()
-
-            # Delete operations always need approval
-            if action == "delete":
-                return "escalate"
-
-            # Sensitive files always need approval
-            for pattern in SENSITIVE_PATTERNS:
-                if pattern in target_path:
-                    return "escalate"
-
-            # Workspace create/edit/patch operations are auto-approved (T1 risk)
-            if action in ("create", "edit", "patch"):
-                return "auto"
-
-        # service_runner and anything else → escalate
-        return "escalate"
+        """Classify tool call safety. V30: Delegates to orchestrator.safety_helpers."""
+        return _classify_tool_call_safety_fn(skill_name, inputs)
 
     # ------------------------------------------------------------------
     # Fix Pack V8: Local agentic routing
@@ -1918,131 +1860,16 @@ class LancelotOrchestrator:
         return False  # Default: flagship model (conservative)
 
     def _needs_research(self, prompt: str) -> bool:
-        """Detect queries requiring tool-backed research.
-
-        Fix Pack V10: Returns True for open-ended exploratory queries where
-        Gemini should use network_client to research before answering.
-        Prevents Gemini from generating "I will research..." text that gets
-        blocked by the response governor.
-        """
-        prompt_lower = prompt.lower()
-
-        research_phrases = [
-            "figure out", "find out", "look into", "look up",
-            "research", "investigate", "explore options",
-            "find a way", "find me", "what options",
-            "what are the options", "what tools", "what services",
-            "is there a way", "are there any",
-            "can you find", "can you figure",
-            "how can we", "how could we",
-            "recommend", "suggest",
-            # V14: Additional research triggers
-            "what about", "have you heard of", "do you know about",
-            "see if", "check if", "check out",
-            "alternative", "alternatives", "other options",
-            "compare", "comparison", "pricing",
-            "how much does", "how much is",
-            "is there a free", "free way to", "free option",
-            "what's the best", "what is the best",
-            "come up with a plan", "plan for",
-            # V18/V20: Tool-action triggers — specific phrases only (not bare keywords)
-            "send a message", "send me a message",
-            "send a telegram message", "send via telegram", "send on telegram",
-            "send to telegram", "send to the war room", "send to warroom",
-            "notify me via", "message me on",
-            "post to the dashboard", "push to command center",
-            # V19: Scheduling triggers — specific phrases
-            "schedule a", "set an alarm", "set a reminder",
-            "wake me up", "wake-up call",
-            "set up a recurring", "every morning at", "every day at", "every hour",
-            "remind me to", "remind me at", "create a reminder",
-            "cron job", "set up a job", "create a job",
-            "cancel the job", "delete the job", "list my jobs", "list scheduled jobs",
-        ]
-        if any(phrase in prompt_lower for phrase in research_phrases):
-            return True
-
-        # Open-ended "can/could you/we" + action verbs suggesting exploration or action
-        import re
-        if re.search(
-            r'\b(?:can|could)\s+(?:you|we)\b.*\b(?:communicate|connect|set up|build|get|chat|talk|use|send|notify|message|tell)\b',
-            prompt_lower,
-        ):
-            return True
-
-        # "What about X?" pattern — user is suggesting a specific service/tool to research
-        if re.search(r'\bwhat\s+about\s+\w+', prompt_lower):
-            return True
-
-        # V15: Delegation patterns — "prompt X to do Y", "ask X to do Y"
-        if re.search(
-            r'\b(?:prompt|ask|tell|invoke|use)\s+\w+(?:\s+\w+)?\s+to\b',
-            prompt_lower,
-        ):
-            return True
-
-        return False
+        """Detect queries requiring research. V30: Delegates to orchestrator.intent_helpers."""
+        return _needs_research_fn(prompt)
 
     def _wants_action(self, prompt: str) -> bool:
-        """Detect queries where the user wants Lancelot to take action.
-
-        Fix Pack V12: Returns True when the user expects code writing,
-        file creation, or system configuration — not just information.
-        Used to set allow_writes=True in the agentic loop.
-        """
-        prompt_lower = prompt.lower()
-        action_phrases = [
-            "set up", "create", "build", "write", "implement", "configure",
-            "make", "develop", "code", "install", "deploy", "set it up",
-            "figure out a way", "figure out a plan", "figure out how",
-            "figure out", "find a way", "get it working",
-            "hook up", "wire up", "connect", "enable",
-            "send", "notify", "message", "tell",
-            "schedule", "alarm", "remind", "wake up", "cancel",
-        ]
-        return any(phrase in prompt_lower for phrase in action_phrases)
+        """Detect action requests. V30: Delegates to orchestrator.intent_helpers."""
+        return _wants_action_fn(prompt)
 
     def _is_low_risk_exec(self, prompt: str) -> bool:
-        """V21: Detect execution requests that are low-risk (read-only or text generation).
-
-        Used by just-do-it mode to skip PlanningPipeline → TaskGraph → Permission
-        for actions that have no destructive side effects. These go straight to
-        the agentic loop where Gemini can use tools immediately.
-
-        Low-risk: search, draft, summarize, check status, list, compare, analyze
-        High-risk (still needs pipeline): deploy, delete, send, install, execute commands
-        """
-        prompt_lower = prompt.lower()
-
-        # High-risk signals — if ANY of these are present, keep in pipeline
-        high_risk = [
-            "deploy", "push", "ship", "release", "publish",
-            "delete", "remove", "drop", "destroy", "wipe",
-            "send", "post", "notify", "message", "email", "telegram",
-            "install", "migrate", "upgrade", "downgrade",
-            "execute", "run command", "run script", "run the",
-            "commit", "merge", "rebase",
-            "shut down", "shutdown", "restart", "reboot", "kill",
-            "move", "rename", "overwrite",
-            "create", "write", "save", "update", "modify", "edit",
-        ]
-        if any(phrase in prompt_lower for phrase in high_risk):
-            return False
-
-        # Low-risk signals — read-only or text-generation actions
-        low_risk = [
-            "search", "find", "look up", "look for", "lookup",
-            "draft", "compose", "write a draft", "write a summary",
-            "summarize", "summary of", "recap",
-            "check", "status", "health check", "what's the status",
-            "list", "show me", "display", "show all",
-            "compare", "analyze", "analyse", "review",
-            "explain", "describe", "tell me",
-            "fetch", "get", "retrieve", "pull up",
-            "count", "how many", "calculate",
-            "test", "verify", "validate", "check if",
-        ]
-        return any(phrase in prompt_lower for phrase in low_risk)
+        """Detect low-risk execution. V30: Delegates to orchestrator.intent_helpers."""
+        return _is_low_risk_exec_fn(prompt)
 
     # V28: Simple action patterns → skill mapping for single-action EXEC_REQUESTs
     _SIMPLE_ACTION_MAP = {
@@ -2114,98 +1941,12 @@ class LancelotOrchestrator:
         return artifact
 
     def _extract_literal_terms(self, text: str) -> list:
-        """V22: Extract high-confidence proper nouns and quoted strings to preserve verbatim.
-
-        Returns a list of terms that should NOT be corrected, substituted,
-        or interpreted by the LLM. These are injected into the agentic loop
-        prompt to prevent autocorrection (e.g., "Clawd Bot" → "Claude").
-
-        Conservative — only extracts terms with high confidence of being intentional:
-        - Quoted strings: "Clawd Bot", 'ACME Corp' (user explicitly quoted = always preserve)
-        - Multi-word capitalized sequences: Clawd Bot, New York Times (2+ capitalized
-          words together = almost certainly a proper noun, not a typo)
-
-        Does NOT extract single capitalized words — those could be sentence starters,
-        common nouns, or actual misspellings. This avoids locking in typos.
-        """
-        terms = []
-
-        # 1. Quoted strings (user explicitly quoted them — always preserve)
-        quoted = re.findall(r'["\']([^"\']{2,50})["\']', text)
-        terms.extend(quoted)
-
-        # 2. Multi-word capitalized sequences: "Clawd Bot", "New York Times"
-        # 2+ consecutive capitalized words = very likely a proper noun
-        proper_nouns = re.findall(r'\b([A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*)+)\b', text)
-        # Filter out common multi-word patterns that aren't proper nouns
-        _COMMON_PHRASES = {
-            "Search For", "Look For", "Find Out", "Tell Me", "Show Me",
-            "Send To", "Let Me", "Can You", "How Do", "What Is",
-        }
-        for noun in proper_nouns:
-            if noun not in _COMMON_PHRASES:
-                terms.append(noun)
-
-        # Deduplicate while preserving order
-        seen = set()
-        unique = []
-        for t in terms:
-            if t.lower() not in seen:
-                seen.add(t.lower())
-                unique.append(t)
-
-        return unique
+        """Extract literal terms to preserve. V30: Delegates to orchestrator.intent_helpers."""
+        return _extract_literal_terms_fn(text)
 
     def _is_conversational(self, prompt: str) -> bool:
-        """Detect purely conversational messages that need no tools.
-
-        Fix Pack V13: Prevents simple chat (greetings, name preferences,
-        thanks) from entering the agentic loop where Gemini may hallucinate
-        tool calls for messages that just need a text response.
-
-        Fix Pack V17b: Split into two categories:
-        - Always-conversational (greetings, thanks, farewells) — match on prefix
-        - Confirmation words ("yes", "ok", "sure") — only conversational if the
-          message is JUST the word (+ optional punctuation/filler). If there's
-          substantive content after ("ok, create the file"), NOT conversational.
-        """
-        prompt_lower = prompt.lower().strip()
-
-        if len(prompt_lower) < 60:
-            # Group 1: Always conversational regardless of what follows
-            always_conversational = [
-                "call me ", "my name is ", "i'm ", "i am ",
-                "hello", "hi ", "hey ", "yo", "sup",
-                "thanks", "thank you", "cheers",
-                "good morning", "good afternoon", "good evening",
-                "how are you", "what's up", "whats up",
-                "bye", "goodbye", "see you", "later",
-                "never mind", "nevermind", "forget it",
-                "no worries", "no problem", "you're welcome",
-                "nice to meet", "pleased to meet",
-            ]
-            if any(prompt_lower.startswith(p) or prompt_lower == p
-                   for p in always_conversational):
-                return True
-
-            # Group 2: Confirmation words — only conversational if the message
-            # is JUST the word, optionally with punctuation or filler
-            confirmation_words = [
-                "yes", "no", "yep", "nope", "yeah", "nah",
-                "ok", "okay", "sure", "alright", "cool",
-            ]
-            stripped = prompt_lower.rstrip('.,!? ')
-            if stripped in confirmation_words:
-                return True
-            # Match with trailing filler: "yes please", "ok thanks", "sure thing"
-            filler = ["please", "thanks", "thank you", "mate", "man", "thing"]
-            for word in confirmation_words:
-                if prompt_lower.startswith(word):
-                    remainder = prompt_lower[len(word):].strip().lstrip('.,!').strip()
-                    if remainder in filler:
-                        return True
-
-        return False
+        """Detect purely conversational messages. V30: Delegates to orchestrator.intent_helpers."""
+        return _is_conversational_fn(prompt)
 
     def _check_name_update(self, message: str):
         """V18: Detect 'call me X' / 'my name is X' and persist to USER.md.
@@ -2296,58 +2037,8 @@ class LancelotOrchestrator:
         return False
 
     def _is_continuation(self, message: str) -> bool:
-        """Detect messages that are conversational continuations of a prior thread.
-
-        V17: Short messages that reference previous context ("it", "that", "this",
-        "the spec", "the plan") should flow through the agentic loop where the
-        full conversation history provides context, rather than being routed to
-        the template-based PlanningPipeline which has no conversation awareness.
-        """
-        if len(message) > 150:
-            return False
-
-        msg_lower = message.lower().strip()
-
-        continuation_signals = [
-            "that", "this", "it ", "those", "these",
-            "the same", "the other", "the one",
-            "what about", "how about",
-            "instead", "rather", "actually",
-            "never mind", "scratch that", "forget that",
-            "which one", "the first", "the second",
-            "option", "go with", "go ahead",
-            "sounds good", "let's do", "lets do", "let's go",
-            "the spec", "the plan", "the previous",
-            "like i said", "as i said", "i meant",
-            "can you also", "also add", "and also",
-            "what else", "anything else",
-            "yes", "yeah", "yep", "no", "nah", "nope",
-            "ok do", "okay do", "sure do", "sure,",
-            # V17b: Confirmation + comma implies more content follows
-            "ok,", "okay,", "alright,", "cool,",
-            "yes,", "yeah,", "yep,", "no,", "nah,",
-            # V17b: Common action follow-ups
-            "do it", "try it", "run it", "send it", "save it",
-            "delete it", "rename it", "retry", "try again",
-            "go for it", "proceed", "continue", "carry on",
-            # V20: Correction / redirect signals
-            "correction", "change it to", "switch to", "redirect",
-            "no no", "wait", "hold on", "not that",
-            "use telegram", "use slack", "use email",
-        ]
-
-        if any(signal in msg_lower for signal in continuation_signals):
-            return True
-
-        # V17b: "it" at end of string (word boundary) — "ok create it", "just do it"
-        if msg_lower.endswith(" it") or msg_lower == "it":
-            return True
-
-        # Very short messages with a question mark are usually follow-ups
-        if len(msg_lower) < 60 and "?" in msg_lower:
-            return True
-
-        return False
+        """Detect continuations of prior thread. V30: Delegates to orchestrator.intent_helpers."""
+        return _is_continuation_fn(message)
 
     def _verify_intent_with_llm(self, user_message: str, keyword_intent: "IntentType") -> "IntentType":
         """V21: Use local model to verify ambiguous keyword classifications.
@@ -3176,16 +2867,8 @@ class LancelotOrchestrator:
         )
 
     def _format_tool_receipts(self, receipts: list, error: str = "", note: str = "") -> str:
-        """Format tool call receipts into a readable summary."""
-        lines = []
-        if note:
-            lines.append(note)
-        if error:
-            lines.append(f"Error: {error}")
-        for r in receipts:
-            status = r.get("result", "unknown")
-            lines.append(f"- {r['skill']}: {status}")
-        return "\n".join(lines) if lines else "No results."
+        """Format tool receipts. V30: Delegates to orchestrator.response_helpers."""
+        return _format_tool_receipts_fn(receipts, error, note)
 
     def _text_only_generate(
         self,
@@ -3740,26 +3423,8 @@ class LancelotOrchestrator:
             return f"Error retrieving memory: {e}"
 
     def _validate_rule_content(self, content: str) -> tuple:
-        """Validates rule content before writing to RULES.md.
-
-        Returns:
-            (True, "") if valid, (False, reason) if rejected.
-        """
-        # S9: Max length check
-        if len(content) > 500:
-            return (False, "Rule content exceeds maximum length of 500 characters")
-
-        # S9: Dangerous code patterns
-        dangerous_patterns = ["subprocess", "os.system", "exec(", "eval(", "import "]
-        for pattern in dangerous_patterns:
-            if pattern in content:
-                return (False, f"Rule content contains forbidden pattern: '{pattern}'")
-
-        # S9: Block URLs in rules
-        if "http://" in content or "https://" in content:
-            return (False, "Rule content contains URL which is not allowed")
-
-        return (True, "")
+        """Validate rule content. V30: Delegates to orchestrator.safety_helpers."""
+        return _validate_rule_content_fn(content)
 
     def _log_rule_candidate(self, content: str):
         """Writes a candidate rule to RULE_CANDIDATES.md for human review."""
@@ -3806,70 +3471,12 @@ class LancelotOrchestrator:
 
 
     def _strip_failure_narration(self, text: str) -> str:
-        """V22: Remove tool-failure narration from LLM response.
-
-        Gemini tends to narrate failures even when instructed not to:
-        'I encountered an issue with X. Let me try a different approach...'
-
-        This strips common failure narration patterns while preserving
-        the actual useful content that follows.
-        """
-        if not text:
-            return text
-
-        # Patterns that indicate failure narration (case-insensitive)
-        _NARRATION_PATTERNS = [
-            r"I encountered an? (?:issue|error|problem) (?:with|due to|when).*?(?:\.|!\n)",
-            r"(?:Unfortunately|Sadly),? (?:the|I|my) .*?(?:failed|unavailable|not available|invalid|couldn't).*?(?:\.\s*|\n)",
-            r"Let me try a different (?:approach|method|way).*?(?:\.\s*|\n)",
-            r"I(?:'ll| will) (?:try|use|switch to) (?:a |an )?(?:different|alternative|another).*?(?:\.\s*|\n)",
-            r"(?:The|My) (?:API key|credentials?|authentication|token) (?:was|were|is|are) (?:invalid|missing|unavailable|expired).*?(?:\.\s*|\n)",
-            r"(?:Due to|Because of) (?:the|an?|this) (?:error|issue|problem|limitation).*?(?:\.\s*|\n)",
-        ]
-
-        cleaned = text
-        for pattern in _NARRATION_PATTERNS:
-            cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
-
-        # Clean up leftover whitespace (double newlines, leading spaces)
-        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-        cleaned = cleaned.strip()
-
-        if cleaned != text:
-            print(f"V22: Stripped failure narration ({len(text)} → {len(cleaned)} chars)")
-
-        return cleaned if cleaned else text  # Never return empty
+        """Strip failure narration. V30: Delegates to orchestrator.safety_helpers."""
+        return _strip_failure_narration_fn(text)
 
     def _is_narration_without_content(self, text: str) -> bool:
-        """V29: Detect when the model narrates intent instead of producing content.
-
-        After a tool-heavy agentic loop (3+ tool calls), the model sometimes
-        returns a brief statement like "I now have comprehensive fresh data.
-        Let me compile the full competitive analysis." instead of the actual
-        report. This detects that pattern so we can force a synthesis call.
-        """
-        if not text:
-            return True  # Empty response after tool calls = needs synthesis
-        if len(text.strip()) > 2000:
-            return False  # Already has substantial content
-
-        narration_patterns = [
-            "let me compile", "let me now compile",
-            "let me put together", "let me create",
-            "let me synthesize", "let me format",
-            "let me now put", "let me now create",
-            "let me build", "let me draft",
-            "i now have comprehensive", "i have gathered",
-            "i now have the", "i have the information",
-            "i'll now compile", "i'll compile",
-            "i will now compile", "i will compile",
-            "i have comprehensive", "comprehensive fresh data",
-            "let me organize", "let me assemble",
-            "i'll put together", "i will put together",
-            "i'll now create", "i will now create",
-        ]
-        text_lower = text.lower()
-        return any(p in text_lower for p in narration_patterns)
+        """Detect narration without content. V30: Delegates to orchestrator.safety_helpers."""
+        return _is_narration_without_content_fn(text)
 
     def _force_synthesis(self, messages: list, last_raw, system_instruction: str, prompt: str) -> str:
         """V29: Force actual content synthesis when model narrated intent.
@@ -4044,30 +3651,8 @@ class LancelotOrchestrator:
 
     @staticmethod
     def _append_download_links(response: str, doc_paths: list) -> str:
-        """V29b: Append download links for auto-created documents to the chat response.
-
-        Converts absolute workspace paths to /api/files/ URLs so the War Room
-        markdown renderer produces clickable download links.
-        """
-        if not doc_paths:
-            return response
-        links = []
-        _ws = os.getenv("LANCELOT_WORKSPACE", "/home/lancelot/workspace")
-        _tok = os.getenv("LANCELOT_API_TOKEN", "")
-        for path in doc_paths:
-            fname = Path(path).name
-            # Determine relative path from workspace root
-            rel = path.replace(f"{_ws}/", "").lstrip("/")
-            ext = Path(fname).suffix.lower().lstrip(".")
-            type_label = {
-                "pdf": "PDF", "docx": "Word", "xlsx": "Excel",
-                "pptx": "PowerPoint", "csv": "CSV", "md": "Markdown",
-            }.get(ext, ext.upper())
-            _dl_url = f"/api/files/{rel}?token={_tok}" if _tok else f"/api/files/{rel}"
-            links.append(f"- [{fname}]({_dl_url}) ({type_label})")
-
-        link_block = "\n\n---\n**Attached Documents:**\n" + "\n".join(links)
-        return response + link_block
+        """Append download links. V30: Delegates to orchestrator.response_helpers."""
+        return _append_download_links_fn(response, doc_paths)
 
     def _validate_llm_response(self, response_text: str) -> str:
         """S10: Sanitizes LLM output before further processing.
@@ -5193,45 +4778,8 @@ class LancelotOrchestrator:
         return cleaned
 
     def _generate_honest_replacement(self, original_text: str, reason: str) -> str:
-        """Generate an honest replacement for a blocked fake work proposal.
-
-        Instead of stripping individual phrases (which leaves incoherent
-        remnants), this produces a complete honest response acknowledging
-        what the user asked for and what Lancelot can and cannot do.
-        """
-        import re
-
-        print(f"HONESTY GATE BLOCKED: {reason}")
-
-        # Try to extract the core topic from the original text
-        sentences = re.split(r'[.!?\n]', original_text)
-        topic_hint = ""
-        for s in sentences:
-            s = s.strip()
-            if len(s) > 20 and not any(
-                kw in s.lower() for kw in [
-                    "feasibility", "phase 1", "phase 2", "i will",
-                    "i recommend", "prototype", "research phase",
-                    "i'll", "assessment", "viability",
-                ]
-            ):
-                topic_hint = s
-                break
-
-        if topic_hint:
-            return (
-                f"I understand you're asking about: {topic_hint}\n\n"
-                "I attempted to research this but ran into some limitations. "
-                "Here's what I can tell you based on my knowledge:\n\n"
-                "I can help further if you tell me which direction interests you most, "
-                "and I'll research specific options in more detail."
-            )
-        else:
-            return (
-                "I wasn't able to complete my research on this topic. "
-                "Could you tell me more about what you need? "
-                "I'll focus my research on the specific area that matters most to you."
-            )
+        """Generate honest replacement. V30: Delegates to orchestrator.safety_helpers."""
+        return _generate_honest_replacement_fn(original_text, reason)
 
     def set_state(self, new_state: RuntimeState):
         """Updates the runtime state with audit logging."""

@@ -29,11 +29,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends docker-ce-cli nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements.txt first to leverage Docker cache
-COPY requirements.txt .
+# Install uv for deterministic dependency resolution
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy dependency files first to leverage Docker cache
+COPY pyproject.toml uv.lock ./
+
+# Install Python dependencies via uv (frozen = use lockfile exactly)
+RUN uv sync --frozen --no-dev --no-editable
+
+# Add venv to PATH so uvicorn, playwright, etc. are available system-wide
+ENV PATH="/home/lancelot/app/.venv/bin:$PATH"
 
 # Install Playwright Chromium + OS-level dependencies (fonts, libs)
 # Install as root for system deps, then set shared browser path
