@@ -42,6 +42,11 @@ class EventBus:
     def __init__(self) -> None:
         self._subscribers: dict[str, list[Subscriber]] = {}
         self._global_subscribers: list[Subscriber] = []
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Capture the main asyncio event loop for cross-thread publishing."""
+        self._loop = loop
 
     def subscribe(self, event_type: str, callback: Subscriber) -> None:
         """Subscribe to a specific event type."""
@@ -63,13 +68,25 @@ class EventBus:
                 logger.error("Event subscriber error for %s: %s", event.type, exc)
 
     def publish_sync(self, event: Event) -> None:
-        """Publish from a synchronous context (creates a task on the running loop)."""
+        """Publish from a synchronous context (thread-safe).
+
+        Works from both the asyncio event loop thread and from sync worker
+        threads (e.g. orchestrator.chat running in uvicorn's thread pool).
+        """
+        # Try 1: already on the event loop thread
         try:
             loop = asyncio.get_running_loop()
             loop.create_task(self.publish(event))
+            return
         except RuntimeError:
-            # No running loop — log and skip
-            logger.debug("No event loop for sync publish of %s", event.type)
+            pass
+
+        # Try 2: use the captured main loop (cross-thread safe)
+        if self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(self.publish(event), self._loop)
+            return
+
+        logger.debug("No event loop for sync publish of %s", event.type)
 
 
 # Global singleton

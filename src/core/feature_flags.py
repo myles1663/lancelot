@@ -180,6 +180,10 @@ FEATURE_DEEP_REASONING_LOOP: bool = _env_bool("FEATURE_DEEP_REASONING_LOOP", def
 # Google OAuth (V26) — Google OAuth flow for Gmail + Calendar connectors
 FEATURE_GOOGLE_OAUTH: bool = _env_bool("FEATURE_GOOGLE_OAUTH", default=False)  # OAuth 2.0 Authorization Code + PKCE for Gmail and Google Calendar
 
+# Tool Flow Streaming + ActionCards (V31) — real-time progress + interactive buttons
+FEATURE_TOOL_FLOW_STREAMING: bool = _env_bool("FEATURE_TOOL_FLOW_STREAMING", default=False)  # Real-time tool execution progress events via EventBus
+FEATURE_ACTION_CARDS: bool = _env_bool("FEATURE_ACTION_CARDS", default=False)  # Channel-agnostic interactive buttons for approvals and actions
+
 
 # All flags are now hot-toggleable via SubsystemManager — no restart required.
 RESTART_REQUIRED_FLAGS = frozenset()
@@ -241,6 +245,7 @@ def reload_flags() -> None:
     global FEATURE_GITHUB_SEARCH, FEATURE_COMPETITIVE_SCAN
     global FEATURE_DEEP_REASONING_LOOP
     global FEATURE_GOOGLE_OAUTH
+    global FEATURE_TOOL_FLOW_STREAMING, FEATURE_ACTION_CARDS
 
     # vNext2 flags
     FEATURE_SOUL = _env_bool("FEATURE_SOUL")
@@ -303,6 +308,10 @@ def reload_flags() -> None:
 
     # Google OAuth (V26)
     FEATURE_GOOGLE_OAUTH = _env_bool("FEATURE_GOOGLE_OAUTH", default=False)
+
+    # Tool Flow Streaming + ActionCards (V31)
+    FEATURE_TOOL_FLOW_STREAMING = _env_bool("FEATURE_TOOL_FLOW_STREAMING", default=False)
+    FEATURE_ACTION_CARDS = _env_bool("FEATURE_ACTION_CARDS", default=False)
 
 
 def get_all_flags() -> dict[str, bool]:
@@ -376,4 +385,8 @@ def log_feature_flags() -> None:
     logger.info(
         "Google OAuth flags: GOOGLE_OAUTH=%s",
         FEATURE_GOOGLE_OAUTH,
+    )
+    logger.info(
+        "Tool Flow + ActionCards flags: TOOL_FLOW_STREAMING=%s, ACTION_CARDS=%s",
+        FEATURE_TOOL_FLOW_STREAMING, FEATURE_ACTION_CARDS,
     )

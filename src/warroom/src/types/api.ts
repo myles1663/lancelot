@@ -509,3 +509,60 @@ export interface SkillsListResponse {
   skills: InstalledSkill[]
   total: number
 }
+
+// ------------------------------------------------------------------
+// Tool Flow  (toolflow.* WebSocket events)
+// ------------------------------------------------------------------
+
+export interface ToolFlowStep {
+  iteration: number
+  toolName: string
+  status: 'running' | 'success' | 'failed' | 'blocked'
+  outputSummary?: string
+  timestamp: number
+}
+
+export interface ToolFlowState {
+  questId: string
+  steps: ToolFlowStep[]
+  status: 'running' | 'completed' | 'failed'
+  currentIteration: number
+  maxIterations: number
+}
+
+// ------------------------------------------------------------------
+// Action Cards  (actioncard_* WebSocket events + REST API)
+// ------------------------------------------------------------------
+
+export type ActionCardType = 'approval' | 'confirmation' | 'choice' | 'info'
+
+export type ActionCardButtonStyle = 'primary' | 'danger' | 'secondary'
+
+export interface ActionCardButton {
+  id: string
+  label: string
+  style: ActionCardButtonStyle
+}
+
+export interface ActionCardData {
+  cardId: string
+  cardType: ActionCardType
+  title: string
+  description: string
+  buttons: ActionCardButton[]
+  resolved: boolean
+  resolvedAction?: string
+  resolvedChannel?: string
+  presentedAt: number
+  resolvedAt?: number
+}
+
+export interface ActionCardsPendingResponse {
+  cards: ActionCardData[]
+  count: number
+}
+
+export interface ActionCardResolveResponse {
+  status: string
+  message: string
+}

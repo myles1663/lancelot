@@ -202,6 +202,11 @@ class LancelotOrchestrator:
         self._memory_enabled = False
         self.context_compiler = None
 
+        # V31: ToolFlow streaming — emitter injected by gateway when feature flag on
+        self.toolflow_emitter = None
+        # V31: ActionCard factory — injected by gateway when feature flag on
+        self.actioncard_factory = None
+
         # Fix Pack V1: Execution authority + tasking + response assembler
         self._init_fix_pack_v1()
 
@@ -2270,6 +2275,18 @@ class LancelotOrchestrator:
                         "result": "ESCALATED — needs Commander approval",
                         "approval_id": sentry_req_id,
                     })
+                    # V31: Create ActionCard for approval
+                    if self.actioncard_factory:
+                        try:
+                            _quest_id_here = getattr(self, "_current_quest_id", None) or ""
+                            self.actioncard_factory.from_sentry_request(
+                                req_id=sentry_req_id or f"block-{skill_name}",
+                                tool_name=skill_name,
+                                params=inputs or {},
+                                quest_id=_quest_id_here,
+                            )
+                        except Exception as _ac_exc:
+                            print(f"V31: ActionCard creation failed: {_ac_exc}")
                 else:
                     # Execute the skill
                     self.governor.log_usage("tool_calls", 1)
@@ -2436,8 +2453,10 @@ class LancelotOrchestrator:
             print("V7: Forcing tool use on first iteration (mode=ANY)")
 
         # V23: Structured output — force JSON schema on text responses
+        # V31: Skip structured output for Telegram — users need natural text, not JSON
         from feature_flags import FEATURE_STRUCTURED_OUTPUT, FEATURE_CLAIM_VERIFICATION, FEATURE_DEEP_REASONING_LOOP
-        _use_structured_output = FEATURE_STRUCTURED_OUTPUT and not skip_structured_reformat
+        _channel = getattr(self, "_current_channel", "api")
+        _use_structured_output = FEATURE_STRUCTURED_OUTPUT and not skip_structured_reformat and _channel != "telegram"
         if _use_structured_output:
             print("V23: Structured output enabled — responses will be JSON schema-constrained")
 
@@ -2465,8 +2484,19 @@ class LancelotOrchestrator:
         # V25: Expose receipts for task experience recording
         self._last_tool_receipts = tool_receipts
 
+        # V31: Emit quest_started for tool flow streaming
+        _quest_id = getattr(self, "_current_quest_id", None) or ""
+        _channel = getattr(self, "_current_channel", "api")
+        _agentic_start_ms = int(_time.time() * 1000)
+        if self.toolflow_emitter:
+            self.toolflow_emitter.quest_started(_quest_id, _channel, MAX_ITERATIONS)
+
         for iteration in range(MAX_ITERATIONS):
             print(f"V6 agentic loop iteration {iteration + 1}/{MAX_ITERATIONS}")
+
+            # V31: Emit iteration_started
+            if self.toolflow_emitter:
+                self.toolflow_emitter.iteration_started(_quest_id, iteration + 1, _channel)
 
             # Cost guard: check governance limit before each LLM call
             iter_est_tokens = sum(len(str(m)) for m in messages) // 4
@@ -2501,6 +2531,10 @@ class LancelotOrchestrator:
                 )
             except Exception as e:
                 print(f"V6 agentic loop LLM call failed: {e}")
+                # V31: Emit quest_failed on LLM error
+                if self.toolflow_emitter:
+                    _dur = int(_time.time() * 1000) - _agentic_start_ms
+                    self.toolflow_emitter.quest_failed(_quest_id, str(e), _dur, _channel)
                 if tool_receipts:
                     # V23: Try structured reformat to produce a clean summary
                     if _use_structured_output:
@@ -2551,6 +2585,14 @@ class LancelotOrchestrator:
                 text = result.text or ""
                 if tool_receipts:
                     print(f"V6 agentic loop completed after {len(tool_receipts)} tool calls")
+
+                # V31: Emit quest_completed
+                if self.toolflow_emitter and tool_receipts:
+                    _ok = sum(1 for r in tool_receipts if r.get("result") == "SUCCESS")
+                    _dur = int(_time.time() * 1000) - _agentic_start_ms
+                    self.toolflow_emitter.quest_completed(
+                        _quest_id, len(tool_receipts), _ok, _dur, _channel,
+                    )
 
                 # V29: Detect narration-without-content after tool-heavy loops.
                 # When the model says "Let me compile..." instead of producing
@@ -2639,6 +2681,12 @@ class LancelotOrchestrator:
                 inputs = tc.args
                 print(f"V6 tool call: {skill_name}({inputs})")
 
+                # V31: Emit tool_call_started before safety/execution
+                if self.toolflow_emitter:
+                    self.toolflow_emitter.tool_call_started(
+                        _quest_id, iteration + 1, skill_name, inputs, _channel,
+                    )
+
                 # V13: Guard against hallucinated tool names
                 if skill_name not in _DECLARED_TOOL_NAMES:
                     result_data = {
@@ -2651,6 +2699,12 @@ class LancelotOrchestrator:
                         "inputs": inputs,
                         "result": f"REJECTED — undeclared tool '{skill_name}'",
                     })
+                    # V31: Emit tool_call_completed for rejected call
+                    if self.toolflow_emitter:
+                        self.toolflow_emitter.tool_call_completed(
+                            _quest_id, iteration + 1, skill_name,
+                            "REJECTED", "undeclared tool", _channel,
+                        )
                     print(f"V13: Rejected hallucinated tool call: {skill_name}")
                     tool_results.append((tc.id, skill_name, str(result_data)))
                     continue
@@ -2707,6 +2761,23 @@ class LancelotOrchestrator:
                         "result": "ESCALATED — needs Commander approval",
                         "approval_id": sentry_req_id,
                     })
+                    # V31: Emit tool_call_blocked
+                    if self.toolflow_emitter:
+                        self.toolflow_emitter.tool_call_blocked(
+                            _quest_id, iteration + 1, skill_name,
+                            sentry_req_id or "", _channel,
+                        )
+                    # V31: Create ActionCard for approval
+                    if self.actioncard_factory:
+                        try:
+                            self.actioncard_factory.from_sentry_request(
+                                req_id=sentry_req_id or f"block-{skill_name}-{_quest_id[:8]}",
+                                tool_name=skill_name,
+                                params=inputs or {},
+                                quest_id=_quest_id,
+                            )
+                        except Exception as _ac_exc:
+                            print(f"V31: ActionCard creation failed: {_ac_exc}")
                 else:
                     # Execute the skill
                     self.governor.log_usage("tool_calls", 1)
@@ -2759,6 +2830,16 @@ class LancelotOrchestrator:
                             "inputs": inputs,
                             "result": f"EXCEPTION: {e}",
                         })
+
+                    # V31: Emit tool_call_completed with status from the last receipt
+                    if self.toolflow_emitter and tool_receipts:
+                        _last = tool_receipts[-1]
+                        _result_status = _last.get("result", "UNKNOWN")
+                        _out_summary = str(_last.get("outputs", ""))[:200] if _exec_success else ""
+                        self.toolflow_emitter.tool_call_completed(
+                            _quest_id, iteration + 1, skill_name,
+                            _result_status, _out_summary, _channel,
+                        )
 
                     # Record governance event for trust ledger tracking
                     try:
@@ -2827,6 +2908,14 @@ class LancelotOrchestrator:
 
         # Max iterations reached — model never returned a text response
         print(f"V6 agentic loop hit max iterations ({MAX_ITERATIONS})")
+
+        # V31: Emit quest_completed even on max-iterations
+        if self.toolflow_emitter and tool_receipts:
+            _ok = sum(1 for r in tool_receipts if r.get("result") == "SUCCESS")
+            _dur = int(_time.time() * 1000) - _agentic_start_ms
+            self.toolflow_emitter.quest_completed(
+                _quest_id, len(tool_receipts), _ok, _dur, _channel,
+            )
 
         # V23: When structured output is enabled, try to produce a clean
         # summary via the presenter instead of raw receipt list

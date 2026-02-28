@@ -52,6 +52,10 @@ class ActionType(str, Enum):
     BAL_REPURPOSE_EVENT = "bal_repurpose_event"
     BAL_DELIVERY_EVENT = "bal_delivery_event"
     BAL_BILLING_EVENT = "bal_billing_event"
+    # Tool Flow Streaming + ActionCards (V31)
+    TOOL_FLOW_EVENT = "tool_flow_event"
+    ACTION_CARD_PRESENTED = "action_card_presented"
+    ACTION_CARD_RESOLVED = "action_card_resolved"
 
 
 class ReceiptStatus(str, Enum):

@@ -73,6 +73,8 @@ class SkillFactory:
 
     def __init__(self, data_dir: str = "data"):
         self._data_dir = Path(data_dir)
+        # V31: ActionCard factory — set by gateway.py for cross-channel notifications
+        self.actioncard_factory = None
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._proposals_path = self._data_dir / _PROPOSALS_FILE
 
@@ -180,6 +182,17 @@ def test_{name}_returns_result():
         proposals = self._load_proposals()
         proposals.append(proposal)
         self._save_proposals(proposals)
+
+        # V31: Emit ActionCard for cross-channel approval notification
+        if self.actioncard_factory:
+            try:
+                self.actioncard_factory.from_skill_proposal(
+                    proposal_id=proposal.id,
+                    name=name,
+                    description=description,
+                )
+            except Exception as _ac_exc:
+                logger.warning("Failed to create ActionCard for skill proposal: %s", _ac_exc)
 
         logger.info("Skill proposal created: name=%s, id=%s", name, proposal.id)
         return proposal

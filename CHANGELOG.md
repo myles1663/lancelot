@@ -5,6 +5,42 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.31] - 2026-02-27
+
+### Added — Tool Flow Streaming
+- **ToolFlowEmitter**: Real-time progress events during the agentic loop (`_agentic_generate()`), emitted via EventBus. Events: `quest_started`, `iteration_started`, `tool_call_started`, `tool_call_completed`, `tool_call_blocked`, `quest_completed`, `quest_failed`. Feature-gated by `FEATURE_TOOL_FLOW_STREAMING`.
+- **War Room ToolFlowIndicator**: Animated step-by-step progress component rendered inline in the chat interface during active quests. Shows tool name, iteration counter, status icons (spinner/checkmark/X/blocked), and a progress bar. Collapses into a summary on completion.
+- **Telegram Progress Bridge**: Single edited Telegram message per quest showing tool call progress. Sends initial "Working..." message, edits it on each tool call start/complete, and shows a final summary. Avoids message spam — one message per quest.
+
+### Added — ActionCard Protocol
+- **ActionCard model + store**: Channel-agnostic interactive button cards persisted in SQLite (`data/actioncards.db`). Supports 4 card types (approval, confirmation, choice, info) with styled buttons (primary, danger, secondary). Includes double-resolve guard, expiry, and prefix lookup for Telegram's 64-byte callback_data limit.
+- **ActionCardFactory**: Builder methods for each approval subsystem — `from_sentry_request()`, `from_soul_proposal()`, `from_skill_proposal()`, `from_scheduler_approval()`, `create_custom()`. Emits `actioncard_presented` event on creation for cross-channel delivery.
+- **ActionCardResolver**: Routes button clicks to the correct approval subsystem handler. Handles card lookup, double-resolve guard, expiry check, handler dispatch, store update, cross-channel event emission, and audit receipt creation.
+- **ActionCard REST API**: `GET /api/actioncards`, `GET /api/actioncards/{id}`, `POST /api/actioncards/{id}/resolve/{button_id}`, `POST /api/actioncards/cleanup`.
+- **War Room ActionCardComponent**: Interactive button cards with type-specific icons and color-coded borders. Shows title, description, styled action buttons. Disabled/grayed when resolved, shows resolution channel.
+- **Telegram inline keyboards**: ActionCards rendered as Telegram `InlineKeyboardMarkup` with callback query handling. Buttons use `ac:{short_id}:{button_id}` format. `_handle_callback_query()` parses callbacks, routes through ActionCardResolver, edits message to show resolution.
+- **Cross-channel sync**: Resolving in Telegram updates War Room via WebSocket event; resolving in War Room updates Telegram message via `edit_message()`.
+- **Approval wiring**: Soul proposals, skill proposals, scheduler jobs, and governance T3 actions all emit ActionCards on creation. Resolution handlers registered for all 4 subsystems.
+
+### Fixed — Telegram Message Formatting (V33/V34)
+- **HTML parse_mode**: Switched all Telegram messages from Markdown v1 to HTML. `<pre>` blocks give true monospace rendering with perfect table alignment. Eliminates all Markdown v1 parsing failures (unbalanced `*`, `\_` escaping, nested bold).
+- **Mobile-fit tables**: `_table_to_monospace()` now caps table width to 45 chars for phone screens. Uses data-aware column widths (headers capped to data_width+3), emoji stripping in table cells, and progressive column dropping when tables exceed max width.
+- **Markdown-to-HTML converter**: `_markdown_to_html()` converts sanitizer output to HTML tags (`<b>`, `<pre>`, `<code>`) with proper `&amp;`/`&lt;`/`&gt;` entity escaping inside and outside code blocks.
+- **Telegram offset persistence**: Bot offset now persisted to `data/chat/telegram_offset.txt` across container restarts. Eliminates duplicate message processing (previously re-processed all messages on every restart).
+- **JSON guard**: Blocks raw JSON blobs (>500 chars) from being sent as message text. Defense-in-depth against tool result leaks.
+- **URL preview suppression**: All Telegram API calls now include `disable_web_page_preview: true` to prevent URL link previews appearing as file attachments.
+- **Progress bridge underscore fix**: Replaced broken `\_` Markdown v1 escaping with space substitution in tool names (Markdown v1 does not support `\` escaping — only MarkdownV2 does).
+- **Clean plain text fallback**: When HTML parse fails, retry strips `<b>`, `<pre>`, `<code>` tags and unescapes HTML entities for clean readable text.
+
+### Added — Feature Flags
+- `FEATURE_TOOL_FLOW_STREAMING` (default: false) — enables ToolFlowEmitter in the agentic loop
+- `FEATURE_ACTION_CARDS` (default: false) — enables ActionCard protocol (store, factory, resolver, API, cross-channel delivery)
+
+### Added — Receipt Types
+- `ActionType.TOOL_FLOW_EVENT` — receipt type for tool flow events
+- `ActionType.ACTION_CARD_PRESENTED` — receipt type for ActionCard presentation
+- `ActionType.ACTION_CARD_RESOLVED` — receipt type for ActionCard resolution
+
 ## [0.2.30] - 2026-02-23
 
 ### Changed — EGOS Audit: Dependency Locking

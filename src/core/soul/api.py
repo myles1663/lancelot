@@ -51,6 +51,15 @@ _SOUL_DIR: Optional[str] = os.environ.get("SOUL_DIR", None)
 _API_TOKEN = os.environ.get("LANCELOT_API_TOKEN", os.environ.get("API_TOKEN", ""))
 _proposals_lock = threading.Lock()
 
+# V31: ActionCard factory — set by gateway.py during startup
+_actioncard_factory = None
+
+
+def init_soul_actioncards(factory) -> None:
+    """Inject ActionCard factory for proposal notifications."""
+    global _actioncard_factory
+    _actioncard_factory = factory
+
 
 def _set_soul_dir(soul_dir: str) -> None:
     """Set the soul directory (used in tests)."""
@@ -204,6 +213,17 @@ async def propose_amendment(request: Request):
             author=author,
             soul_dir=_SOUL_DIR,
         )
+
+        # V31: Emit ActionCard for cross-channel approval notification
+        if _actioncard_factory:
+            try:
+                _actioncard_factory.from_soul_proposal(
+                    proposal_id=proposal.id,
+                    version=proposal.proposed_version,
+                    diff_summary=proposal.diff_summary or [],
+                )
+            except Exception as _ac_exc:
+                logger.warning("Failed to create ActionCard for soul proposal: %s", _ac_exc)
 
         return {
             "proposal_id": proposal.id,

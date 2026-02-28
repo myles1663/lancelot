@@ -21,6 +21,7 @@ router = APIRouter(prefix="/api/skills", tags=["skills"])
 _skill_factory = None
 _skill_registry = None
 _skill_executor = None
+_actioncard_factory = None
 
 
 class ApproveRequest(BaseModel):
@@ -31,12 +32,13 @@ class RejectRequest(BaseModel):
     reason: Optional[str] = None
 
 
-def init_skills_api(factory, registry, executor) -> None:
+def init_skills_api(factory, registry, executor, actioncard_factory=None) -> None:
     """Initialise the skills API with references to subsystems."""
-    global _skill_factory, _skill_registry, _skill_executor
+    global _skill_factory, _skill_registry, _skill_executor, _actioncard_factory
     _skill_factory = factory
     _skill_registry = registry
     _skill_executor = executor
+    _actioncard_factory = actioncard_factory
     logger.info("Skills API initialized.")
 
 

@@ -1,7 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { sendMessage, sendMessageWithFiles } from '@/api'
 import { fetchChatHistory } from '@/api/chat'
+import { resolveActionCard } from '@/api/actioncards'
 import { ChatMessage } from './ChatMessage'
+import { ToolFlowIndicator } from '@/components/ToolFlowIndicator'
+import { ActionCardComponent } from '@/components/ActionCardComponent'
+import { useLiveEvents } from '@/contexts/LiveEventsContext'
 
 interface Message {
   id: string
@@ -20,12 +24,16 @@ export function ChatInterface() {
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const { toolFlowState, pendingActionCards, resolveCard } = useLiveEvents()
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [])
 
   useEffect(scrollToBottom, [messages, scrollToBottom])
+
+  // Also scroll when tool flow or action cards update
+  useEffect(scrollToBottom, [toolFlowState, pendingActionCards, scrollToBottom])
 
   // Load conversation history from backend on mount
   useEffect(() => {
@@ -102,6 +110,25 @@ export function ChatInterface() {
     }
   }
 
+  // Resolve an action card via API + optimistic local update
+  const handleActionCardAction = useCallback(
+    async (cardId: string, buttonId: string) => {
+      resolveCard(cardId, buttonId, 'war_room')
+      try {
+        await resolveActionCard(cardId, buttonId)
+      } catch {
+        // Optimistic update already applied; backend will sync via WS if needed
+      }
+    },
+    [resolveCard],
+  )
+
+  // Determine if there are any running tool flows to show
+  const activeFlows = Array.from(toolFlowState.values()).filter((f) => f.status === 'running')
+
+  // Get action cards that are not yet resolved
+  const visibleActionCards = pendingActionCards
+
   return (
     <section className="bg-surface-card border border-border-default rounded-lg flex flex-col min-h-[400px] max-h-[600px]">
       <div className="px-4 py-3 border-b border-border-default">
@@ -112,7 +139,7 @@ export function ChatInterface() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-1">
-        {messages.length === 0 && (
+        {messages.length === 0 && !sending && (
           <div className="flex items-center justify-center h-full text-text-muted text-sm">
             Issue a command to Lancelot
           </div>
@@ -120,6 +147,63 @@ export function ChatInterface() {
         {messages.map((msg) => (
           <ChatMessage key={msg.id} {...msg} />
         ))}
+
+        {/* Tool Flow Indicators — shown while sending and agentic loop is active */}
+        {sending &&
+          activeFlows.map((flow) => (
+            <ToolFlowIndicator
+              key={flow.questId}
+              questId={flow.questId}
+              steps={flow.steps}
+              currentIteration={flow.currentIteration}
+              maxIterations={flow.maxIterations}
+              status={flow.status}
+            />
+          ))}
+
+        {/* Fallback sending indicator when no tool flow events are streaming */}
+        {sending && activeFlows.length === 0 && (
+          <div className="flex items-center gap-2 py-2 text-text-muted">
+            <svg
+              className="w-3.5 h-3.5 animate-spin text-accent-primary"
+              viewBox="0 0 16 16"
+              fill="none"
+            >
+              <circle
+                cx="8"
+                cy="8"
+                r="6"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeOpacity="0.25"
+              />
+              <path
+                d="M14 8a6 6 0 0 0-6-6"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+            <span className="text-xs">Processing...</span>
+          </div>
+        )}
+
+        {/* Action Cards — rendered inline */}
+        {visibleActionCards.map((card) => (
+          <ActionCardComponent
+            key={card.cardId}
+            cardId={card.cardId}
+            cardType={card.cardType}
+            title={card.title}
+            description={card.description}
+            buttons={card.buttons}
+            resolved={card.resolved}
+            resolvedAction={card.resolvedAction}
+            resolvedChannel={card.resolvedChannel}
+            onAction={handleActionCardAction}
+          />
+        ))}
+
         <div ref={messagesEndRef} />
       </div>
 

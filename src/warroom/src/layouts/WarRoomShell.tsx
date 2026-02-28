@@ -7,6 +7,7 @@ import { Toast } from '@/components/Toast'
 import { UpdateBanner } from '@/components/UpdateBanner'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 import { useWebSocket, WsEvent } from '@/hooks/useWebSocket'
+import { LiveEventsProvider, useLiveEvents } from '@/contexts/LiveEventsContext'
 
 export interface Notification {
   id: string
@@ -16,10 +17,12 @@ export interface Notification {
   read: boolean
 }
 
-export function WarRoomShell() {
+// Inner shell — has access to LiveEventsContext via useLiveEvents()
+function WarRoomShellInner() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [toasts, setToasts] = useState<Notification[]>([])
+  const { handleLiveEvent } = useLiveEvents()
 
   const handleWsEvent = useCallback((event: WsEvent) => {
     if (event.type === 'warroom_notification') {
@@ -33,7 +36,12 @@ export function WarRoomShell() {
       setNotifications(prev => [notif, ...prev].slice(0, 50))
       setToasts(prev => [...prev, notif])
     }
-  }, [])
+
+    // Route toolflow.* and actioncard_* events to LiveEventsContext
+    if (event.type.startsWith('toolflow.') || event.type.startsWith('actioncard_')) {
+      handleLiveEvent(event)
+    }
+  }, [handleLiveEvent])
 
   useWebSocket({
     url: '/ws/warroom',
@@ -94,5 +102,14 @@ export function WarRoomShell() {
         onClear={clearNotifications}
       />
     </div>
+  )
+}
+
+// Outer shell — wraps inner with LiveEventsProvider so context is available
+export function WarRoomShell() {
+  return (
+    <LiveEventsProvider>
+      <WarRoomShellInner />
+    </LiveEventsProvider>
   )
 }

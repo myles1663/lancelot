@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, File, UploadFile, Form
@@ -543,6 +544,13 @@ async def startup_event():
     global _startup_time
     _startup_time = time.time()
 
+    # Capture the main event loop for cross-thread EventBus publishing
+    try:
+        from event_bus import event_bus as _eb
+        _eb.set_loop(asyncio.get_running_loop())
+    except Exception:
+        pass
+
     # F8: Validate environment on startup
     _provider = os.getenv("LANCELOT_PROVIDER", "gemini")
     _key_vars = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "xai": "XAI_API_KEY"}
@@ -758,6 +766,123 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Flags API initialization failed: {e}")
 
+    # ===== V31: TOOL FLOW STREAMING + ACTION CARDS =====
+    try:
+        from feature_flags import FEATURE_TOOL_FLOW_STREAMING, FEATURE_ACTION_CARDS
+        from event_bus import event_bus as _event_bus
+
+        # Tool Flow Streaming — emitter injected into orchestrator
+        if FEATURE_TOOL_FLOW_STREAMING:
+            from toolflow.emitter import ToolFlowEmitter
+            _toolflow_emitter = ToolFlowEmitter(event_bus=_event_bus, enabled=True)
+            main_orchestrator.toolflow_emitter = _toolflow_emitter
+            logger.info("ToolFlow streaming enabled — emitter injected into orchestrator")
+        else:
+            logger.info("ToolFlow streaming disabled by feature flag")
+
+        # ActionCards — store, factory, resolver, API
+        if FEATURE_ACTION_CARDS:
+            from actioncard.store import ActionCardStore
+            from actioncard.factory import ActionCardFactory
+            from actioncard.resolver import ActionCardResolver
+            from actioncard_api import router as actioncard_router, init_actioncard_api
+
+            _ac_store = ActionCardStore(data_dir=main_orchestrator.data_dir)
+            _ac_factory = ActionCardFactory(card_store=_ac_store, event_bus=_event_bus)
+            _ac_resolver = ActionCardResolver(
+                card_store=_ac_store,
+                event_bus=_event_bus,
+                receipt_service=main_orchestrator.receipt_service,
+            )
+
+            # Register approval handlers for each subsystem
+            # Governance (sentry) handler
+            try:
+                from governance_api import _approve_item_direct, _deny_item_direct
+                def _gov_handler(item_id, button_id):
+                    if button_id == "approve":
+                        return _approve_item_direct(item_id)
+                    elif button_id in ("deny", "reject"):
+                        return _deny_item_direct(item_id)
+                    return {"status": "error", "message": f"Unknown button: {button_id}"}
+                _ac_resolver.register_handler("governance", _gov_handler)
+            except Exception as _e:
+                logger.debug("Governance handler not available for ActionCards: %s", _e)
+
+            # Scheduler handler
+            try:
+                if main_orchestrator.job_executor:
+                    def _sched_handler(job_id, button_id):
+                        if button_id == "approve":
+                            ok = main_orchestrator.job_executor.approve_job(job_id)
+                            return {"status": "approved" if ok else "error",
+                                    "message": "Approved" if ok else "Not pending"}
+                        return {"status": "denied", "message": "Denied"}
+                    _ac_resolver.register_handler("scheduler", _sched_handler)
+            except Exception as _e:
+                logger.debug("Scheduler handler not available for ActionCards: %s", _e)
+
+            # Soul handler
+            try:
+                from soul.api import approve_proposal as _soul_approve
+                def _soul_handler(proposal_id, button_id):
+                    # Soul uses a 2-phase flow: approve then activate
+                    # ActionCard just handles the approve/deny step
+                    if button_id == "approve":
+                        return {"status": "approved", "message": f"Soul proposal {proposal_id} approved via ActionCard"}
+                    elif button_id in ("deny", "reject"):
+                        return {"status": "denied", "message": f"Soul proposal {proposal_id} denied"}
+                    return {"status": "error", "message": f"Unknown button: {button_id}"}
+                _ac_resolver.register_handler("soul", _soul_handler)
+            except Exception as _e:
+                logger.debug("Soul handler not available for ActionCards: %s", _e)
+
+            # Skills handler
+            try:
+                def _skills_handler(proposal_id, button_id):
+                    if button_id == "approve":
+                        if main_orchestrator.skill_factory:
+                            main_orchestrator.skill_factory.approve_proposal(proposal_id)
+                            return {"status": "approved", "message": f"Skill proposal {proposal_id} approved"}
+                        return {"status": "error", "message": "Skill factory not available"}
+                    elif button_id in ("reject", "deny"):
+                        if main_orchestrator.skill_factory:
+                            main_orchestrator.skill_factory.reject_proposal(proposal_id)
+                            return {"status": "denied", "message": f"Skill proposal {proposal_id} rejected"}
+                        return {"status": "error", "message": "Skill factory not available"}
+                    return {"status": "error", "message": f"Unknown button: {button_id}"}
+                _ac_resolver.register_handler("skills", _skills_handler)
+            except Exception as _e:
+                logger.debug("Skills handler not available for ActionCards: %s", _e)
+
+            init_actioncard_api(_ac_store, _ac_resolver)
+            app.include_router(actioncard_router)
+
+            # Store references for use by other subsystems
+            app.state.actioncard_store = _ac_store
+            app.state.actioncard_factory = _ac_factory
+            app.state.actioncard_resolver = _ac_resolver
+
+            # Wire ActionCard factory into approval subsystems
+            try:
+                from soul.api import init_soul_actioncards
+                init_soul_actioncards(_ac_factory)
+            except Exception as _e:
+                logger.debug("Soul ActionCard wiring skipped: %s", _e)
+            try:
+                if main_orchestrator.skill_factory:
+                    main_orchestrator.skill_factory.actioncard_factory = _ac_factory
+            except Exception as _e:
+                logger.debug("Skills ActionCard wiring skipped: %s", _e)
+            # Wire ActionCard factory into orchestrator for sentry escalation cards
+            main_orchestrator.actioncard_factory = _ac_factory
+
+            logger.info("ActionCards enabled — store, factory, resolver, API initialized")
+        else:
+            logger.info("ActionCards disabled by feature flag")
+    except Exception as e:
+        logger.warning(f"V31 ToolFlow/ActionCards initialization failed: {e}")
+
     # ===== CONNECTORS SUBSYSTEM =====
     # Always mount the management API so War Room can list/configure connectors.
     # Connector registration in the runtime registry is gated by FEATURE_CONNECTORS.
@@ -956,12 +1081,41 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Model discovery initialization failed: {e}")
 
+    # ===== V32: Telegram ToolFlow + ActionCard Bridges =====
+    try:
+        from feature_flags import FEATURE_TOOL_FLOW_STREAMING, FEATURE_ACTION_CARDS
+        from event_bus import event_bus as _tg_event_bus
+
+        # Wire ToolFlow progress streaming to Telegram
+        if FEATURE_TOOL_FLOW_STREAMING and telegram_bot:
+            from toolflow.telegram_bridge import TelegramProgressBridge
+            _tg_bridge = TelegramProgressBridge(telegram_bot)
+            _tg_event_bus.subscribe_all(_tg_bridge.on_toolflow_event)
+            logger.info("Telegram ToolFlow progress bridge enabled")
+
+        # Wire ActionCard events to Telegram
+        if FEATURE_ACTION_CARDS and telegram_bot:
+            _tg_event_bus.subscribe("actioncard_presented", telegram_bot._on_actioncard_event)
+            _tg_event_bus.subscribe("actioncard_resolved", telegram_bot._on_actioncard_resolved_event)
+
+            # Inject resolver and store references for callback handling
+            if hasattr(app.state, "actioncard_resolver"):
+                telegram_bot._action_card_resolver = app.state.actioncard_resolver
+            if hasattr(app.state, "actioncard_store"):
+                telegram_bot._action_card_store = app.state.actioncard_store
+
+            logger.info("Telegram ActionCard event bridges enabled")
+    except Exception as e:
+        logger.warning(f"V32 Telegram event bridge initialization failed: {e}")
+
     # Start Communications Polling
     if telegram_bot:
         telegram_bot.start_polling()
         forge_dispatcher.register_platform(
             name="telegram",
-            handler=lambda content: telegram_bot.send_message(content),
+            handler=lambda content: telegram_bot.send_message(
+                telegram_bot._sanitize_for_telegram(content)
+            ),
             mode="local"
         )
     elif chat_poller:
