@@ -144,6 +144,24 @@ We compare across seven dimensions:
 
 ---
 
+## Unique to Lancelot
+
+Two capabilities have no direct equivalent in other agent frameworks:
+
+### Universal Application Bridge (UAB)
+
+UAB provides framework-level desktop application control — hooking into UI toolkits (Electron CDP, Qt, GTK, WPF, Flutter, Java, Office COM) to give structured, programmatic access to any desktop app. This is distinct from vision+mouse automation (brittle, pixel-dependent) and from requiring apps to expose APIs (unreliable for third-party apps).
+
+No other agent framework provides governed, receipt-traced, risk-classified desktop application control at the toolkit level.
+
+### Hive Agent Mesh
+
+Hive decomposes complex goals into ephemeral sub-agents with scoped Souls (always more restrictive than the parent), full operator intervention (pause/resume/kill/modify), and governance bridge integration. Unlike multi-agent frameworks (CrewAI, AutoGen) where agents are persistent and loosely constrained, Hive agents are ephemeral, constitutionally governed, and individually controllable.
+
+The monotonic restriction principle (scoped Souls can only tighten constraints, never loosen them) and the no-identical-retry rule (replans must produce new plans) have no equivalent in other frameworks.
+
+---
+
 ## The Governance Gap
 
 The common thread across all comparisons: **most frameworks leave governance as the developer's problem.** They provide tools for building agents but not for constraining them.

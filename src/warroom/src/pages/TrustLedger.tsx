@@ -1,11 +1,20 @@
-import { usePolling } from '@/hooks'
+import { useState } from 'react'
+import { usePolling, usePageTitle } from '@/hooks'
 import { fetchTrustRecords, fetchTrustProposals, fetchTrustTimeline, approveTrustProposal, declineTrustProposal } from '@/api'
-import { TierBadge, MetricCard } from '@/components'
+import { TierBadge, MetricCard, EmptyState, Pagination } from '@/components'
+import { formatDateOnly } from '@/utils/dateFormat'
+
+const RECORDS_PER_PAGE = 20
+const EVENTS_PER_PAGE = 20
 
 export function TrustLedger() {
+  usePageTitle('Trust Ledger')
   const { data: recordsData } = usePolling({ fetcher: fetchTrustRecords, interval: 15000 })
   const { data: proposalsData, refetch: refetchProposals } = usePolling({ fetcher: fetchTrustProposals, interval: 10000 })
   const { data: timelineData } = usePolling({ fetcher: fetchTrustTimeline, interval: 30000 })
+
+  const [recordsPage, setRecordsPage] = useState(1)
+  const [timelinePage, setTimelinePage] = useState(1)
 
   const records = recordsData?.records ?? []
   const proposals = proposalsData?.proposals ?? []
@@ -15,6 +24,16 @@ export function TrustLedger() {
   const avgSuccess = records.length > 0
     ? (records.reduce((a, r) => a + r.success_rate, 0) / records.length * 100).toFixed(0)
     : '--'
+
+  // Client-side pagination
+  const paginatedRecords = records.slice(
+    (recordsPage - 1) * RECORDS_PER_PAGE,
+    recordsPage * RECORDS_PER_PAGE,
+  )
+  const paginatedEvents = events.slice(
+    (timelinePage - 1) * EVENTS_PER_PAGE,
+    timelinePage * EVENTS_PER_PAGE,
+  )
 
   const handleProposal = async (id: string, action: 'approve' | 'decline') => {
     if (action === 'approve') await approveTrustProposal(id)
@@ -40,7 +59,7 @@ export function TrustLedger() {
           <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
             Per-Capability Trust
           </h3>
-          <div className="overflow-auto max-h-96">
+          <div className="overflow-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-text-muted uppercase tracking-wider border-b border-border-default">
@@ -51,7 +70,7 @@ export function TrustLedger() {
                 </tr>
               </thead>
               <tbody>
-                {records.map((r) => (
+                {paginatedRecords.map((r) => (
                   <tr key={`${r.capability}-${r.scope}`} className="border-b border-border-default">
                     <td className="px-3 py-2 text-text-primary font-mono truncate max-w-[200px]" title={r.capability}>
                       {r.capability}
@@ -73,6 +92,12 @@ export function TrustLedger() {
               </tbody>
             </table>
           </div>
+          <Pagination
+            currentPage={recordsPage}
+            totalPages={Math.ceil(records.length / RECORDS_PER_PAGE)}
+            onPageChange={setRecordsPage}
+            totalItems={records.length}
+          />
         </section>
 
         <div className="space-y-6">
@@ -82,7 +107,7 @@ export function TrustLedger() {
               Graduation Proposals ({proposals.length})
             </h3>
             {proposals.length === 0 ? (
-              <p className="text-sm text-text-muted">No pending proposals</p>
+              <EmptyState title="No Pending Proposals" description="No graduation proposals awaiting review." />
             ) : (
               <div className="space-y-3">
                 {proposals.map((p) => (
@@ -122,13 +147,13 @@ export function TrustLedger() {
               Graduation Timeline
             </h3>
             {events.length === 0 ? (
-              <p className="text-sm text-text-muted">No graduation events yet</p>
+              <EmptyState title="No Graduation Events" description="Trust tier progressions will appear here as capabilities earn higher autonomy." />
             ) : (
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {events.slice(0, 20).map((e, i) => (
+              <div className="space-y-2">
+                {paginatedEvents.map((e, i) => (
                   <div key={i} className="flex items-center gap-3 text-xs">
                     <span className="text-text-muted font-mono w-28 shrink-0">
-                      {new Date(e.timestamp).toLocaleDateString()}
+                      {formatDateOnly(e.timestamp)}
                     </span>
                     <TierBadge tier={e.from_tier} compact />
                     <span className="text-text-muted">&rarr;</span>
@@ -139,6 +164,12 @@ export function TrustLedger() {
                 ))}
               </div>
             )}
+            <Pagination
+              currentPage={timelinePage}
+              totalPages={Math.ceil(events.length / EVENTS_PER_PAGE)}
+              onPageChange={setTimelinePage}
+              totalItems={events.length}
+            />
           </section>
         </div>
       </div>

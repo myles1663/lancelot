@@ -17,7 +17,7 @@
 
 ## Session Rules
 
-- **Current version:** `0.2.22` (see `VERSION` file and `CHANGELOG.md`)
+- **Current version:** `0.2.32` (see `VERSION` file and `CHANGELOG.md`)
 - **Push after fix:** If we implement a fix on the local deployed version, we push the fixes to the git repo.
 - **Merge after test:** Once we test any branch and confirm it works, merge it back to `main` for a complete updated system.
 - **Always update CHANGELOG + VERSION:** When deploying a fix pack or feature, bump `VERSION` and add a new section to `CHANGELOG.md` (Added/Fixed/Changed subsections).
@@ -50,7 +50,7 @@ Lancelot is a **self-hosted Governed Autonomous System (GAS)** — not a chatbot
 
 ```
 C:\Users\SSAdministrator\lancelot\
-├── config/                        # YAML configs (models, router, scheduler)
+├── config/                        # YAML configs (models, router, scheduler, hive)
 ├── docs/                          # Specs, blueprints, operations runbooks
 │   ├── blueprints/
 │   ├── operations/runbooks/       # soul.md, health.md, scheduler.md, skills.md, memory.md, tools.md
@@ -61,17 +61,31 @@ C:\Users\SSAdministrator\lancelot\
 │   ├── server.py                  # llama-cpp-python server with post-processing
 │   └── Dockerfile
 ├── lancelot_data/                 # Runtime data (receipts, registries, databases)
+├── packages/                      # Host-side packages
+│   └── uab/                       # UAB daemon (Node.js, JSON-RPC 2.0, port 7900)
+├── scripts/                       # Setup and launch scripts
+│   ├── install-uab.sh             # UAB install (Linux/macOS)
+│   └── start-uab.bat              # UAB startup (Windows)
 ├── soul/                          # Constitutional identity
 │   ├── ACTIVE                     # Version pointer ("v1")
 │   ├── soul.yaml                  # Active constitutional document
+│   ├── overlays/                  # Subsystem governance overlays
+│   │   └── hive.yaml              # Hive Agent Mesh governance rules
 │   └── soul_versions/             # Historical versions (soul_v1.yaml, etc.)
 ├── src/
 │   ├── agents/                    # Planner, Verifier, Crusader, AntigravityEngine
 │   ├── core/                      # Core orchestration (~30 files)
 │   ├── integrations/              # Telegram, voice, MCP, calendar, API discovery
 │   ├── memory/                    # Librarian v1/v2, vault, indexer
+│   ├── hive/                      # Hive Agent Mesh (ephemeral sub-agents)
+│   │   ├── types.py, config.py, errors.py
+│   │   ├── registry.py, lifecycle.py, runtime.py
+│   │   ├── decomposer.py, scoped_soul.py, architect.py
+│   │   ├── receipts.py, receipt_manager.py, api.py
+│   │   └── integration/           # governance_bridge, uab_bridge, uab_executor
 │   ├── shared/                    # Receipts, sandbox, live_session
 │   ├── tools/                     # Tool Fabric (contracts, fabric, policies, providers)
+│   │   └── providers/uab_bridge.py  # UAB JSON-RPC 2.0 bridge
 │   └── ui/                        # War Room, launcher, panels
 ├── tests/                         # 102 test files, 1900+ tests
 ├── docker-compose.yml
@@ -92,9 +106,10 @@ lancelot-core (:8000 FastAPI + War Room React SPA)
     |
     |-- HTTP --> local-llm (:8080 GGUF server)
     |-- HTTPS --> Gemini API / OpenAI API / Anthropic API / xAI API
+    |-- JSON-RPC 2.0 --> UAB Daemon (:7900 on host, Node.js)
 ```
 
-Both services on `lancelot_net` bridge network.
+Both Docker services on `lancelot_net` bridge network. UAB daemon runs on host (outside Docker).
 
 ### Module Dependency Map (gateway.py is the entry point)
 
@@ -111,6 +126,13 @@ gateway.py (FastAPI + startup init)
     │   ├── planner.py, verifier.py, crusader.py
     │   └── security.py (InputSanitizer, AuditLogger, NetworkInterceptor)
     ├── control_plane.py (War Room REST API)
+    ├── hive/ (Hive Agent Mesh — see subsystem 12)
+    │   ├── architect.py (persistent orchestrator singleton)
+    │   ├── decomposer.py (LLM-powered task decomposition)
+    │   ├── lifecycle.py (agent spawn/execute/control)
+    │   ├── registry.py (thread-safe state machine)
+    │   ├── scoped_soul.py (monotonic Soul restriction)
+    │   └── integration/ (governance_bridge, uab_bridge, uab_executor)
     ├── soul/ (store, linter, amendments, api)
     ├── skills/ (schema, registry, executor, factory, governance)
     ├── health/ (types, api, monitor)
@@ -287,9 +309,61 @@ class ToolFabric:
     def git_status(self, workspace) -> str
 ```
 
-**Capabilities:** ShellExec, RepoOps, FileOps, WebOps, UIBuilder, DeployOps, VisionControl
+**Capabilities:** ShellExec, RepoOps, FileOps, WebOps, UIBuilder, DeployOps, VisionControl, AppControl
 **Execution pipeline:** PolicyEngine.evaluate() → ProviderRouter.select() → Provider.execute() → ToolReceipt
 **Security gates:** command denylist (shlex), path traversal, workspace boundary, sensitive paths, network policy, risk assessment
+
+### 11. Universal Application Bridge (`src/tools/providers/uab_bridge.py` + `packages/uab/`)
+
+Framework-level desktop app control via JSON-RPC 2.0 daemon on host.
+
+```python
+class UABProvider(BaseProvider):
+    def detect() -> List[DetectedApp]          # Scan for controllable apps
+    def connect(target) -> ConnectionResult    # Connect by PID or name
+    def enumerate(pid) -> List[UIElement]      # Full UI tree
+    def query(pid, selector) -> List[UIElement] # Search elements
+    def act(pid, element_id, action, params) -> AppActionResult  # Execute action
+    def state(pid) -> AppState                 # Window/element state
+    def execute_chain(chain) -> Dict           # Multi-step workflow
+    def health_check() -> ProviderHealth       # Daemon reachability
+```
+
+**8 frameworks:** Electron (CDP), Qt (UIA), GTK (UIA), WPF (UIA), Flutter (UIA), Java (JAB→UIA), Office (COM), Win32 (UIA)
+**Risk levels:** LOW (reads), MEDIUM (mutations), HIGH (destructive/irreversible)
+**Caching:** tree 5s, query 3s, state 2s TTL with mutation invalidation
+**Receipts:** AppControlReceipt per action, AppSessionEntry per session, stored in `data/receipts/uab/`
+**Daemon:** Node.js on host, port 7900, communicates via `http://host.docker.internal:7900`
+
+### 12. Hive Agent Mesh (`src/hive/`)
+
+Ephemeral sub-agent architecture with task decomposition and scoped souls.
+
+```python
+# ArchitectAgent — persistent orchestrator
+architect = ArchitectAgent(lifecycle, decomposer, receipt_mgr, config)
+result = await architect.execute_task(goal="...", context={})
+
+# AgentLifecycleManager — spawn/execute/control
+lifecycle.spawn(task_spec, quest_id) -> SubAgentRecord
+lifecycle.execute(agent_id, actions) -> Future[TaskResult]
+lifecycle.pause(agent_id, reason)
+lifecycle.resume(agent_id)
+lifecycle.kill(agent_id, reason)
+lifecycle.kill_all(reason) -> List[str]
+
+# ScopedSoulGenerator — task-specific souls (always more restrictive)
+scoped = generator.generate(parent_soul, task_spec)
+valid = generator.validate_more_restrictive(scoped, parent_soul)
+```
+
+**State machine:** SPAWNING → READY → EXECUTING ⟷ PAUSED → COMPLETING → COLLAPSED
+**Collapse reasons:** COMPLETED, OPERATOR_KILL, OPERATOR_KILL_ALL, SOUL_VIOLATION, GOVERNANCE_DENIED, TIMEOUT, ERROR, MAX_ACTIONS_EXCEEDED
+**Control methods:** FULLY_AUTONOMOUS, SUPERVISED, MANUAL_CONFIRM
+**Governance bridge:** RiskClassifier → TrustLedger → MCPSentry per action
+**Config:** `config/hive.yaml` (max 10 agents, 300s timeout, 50 actions/agent)
+**Soul overlay:** `soul/overlays/hive.yaml` (5 non-negotiable rules)
+**API:** `/api/hive/` — status, roster, agents, tasks, control, interventions
 
 ---
 
@@ -316,6 +390,9 @@ All read from environment variables. `true`/`1`/`yes` = enabled; everything else
 | `FEATURE_TASK_GRAPH_EXECUTION` | true | — | Task graph compilation |
 | `FEATURE_NETWORK_ALLOWLIST` | true | — | Network allowlist |
 | `FEATURE_VOICE_NOTES` | true | — | Voice note support |
+| `FEATURE_TOOLS_UAB` | false | — | UAB desktop app control (requires FEATURE_TOOLS_FABRIC) |
+| `FEATURE_HIVE` | false | — | Hive Agent Mesh (ephemeral sub-agents) |
+| `FEATURE_HIVE_UAB` | false | — | UAB for Hive sub-agents (requires FEATURE_HIVE + FEATURE_TOOLS_UAB) |
 
 ---
 
@@ -362,6 +439,21 @@ All read from environment variables. `true`/`1`/`yes` = enabled; everything else
 | POST | `/memory/edit` | Bearer | Governed memory edit |
 | POST | `/memory/compile` | None | Compile context |
 | GET | `/memory/search` | None | Search memory tiers |
+| GET | `/api/flags/uab-status` | None | UAB daemon health + connected apps |
+| GET | `/api/flags/uab-apps` | None | UAB connected app list |
+| GET | `/api/hive/status` | None | Hive mesh status (active/total agents) |
+| GET | `/api/hive/roster` | None | Full agent roster with state |
+| POST | `/api/hive/agents` | None | Submit goal for task decomposition |
+| GET | `/api/hive/agents/{id}` | None | Single agent detail |
+| GET | `/api/hive/agents/{id}/soul` | None | Agent's scoped Soul |
+| GET | `/api/hive/tasks` | None | All decomposed tasks |
+| GET | `/api/hive/tasks/{id}` | None | Single task detail |
+| POST | `/api/hive/agents/{id}/pause` | None | Pause agent (reason required) |
+| POST | `/api/hive/agents/{id}/resume` | None | Resume paused agent |
+| POST | `/api/hive/agents/{id}/kill` | None | Kill agent (reason required) |
+| POST | `/api/hive/agents/{id}/modify` | None | Modify agent (replan with feedback) |
+| POST | `/api/hive/kill-all` | None | Emergency kill all agents |
+| GET | `/api/hive/interventions` | None | Intervention audit log |
 
 ### Local LLM (`:8080`)
 
@@ -389,6 +481,10 @@ All read from environment variables. `true`/`1`/`yes` = enabled; everything else
 | Models config | YAML | `config/models.yaml` | Provider profiles |
 | Router config | YAML | `config/router.yaml` | Routing rules |
 | Scheduler config | YAML | `config/scheduler.yaml` | Job definitions |
+| Hive config | YAML | `config/hive.yaml` | Agent mesh settings |
+| Soul overlays | YAML | `soul/overlays/hive.yaml` | Hive governance overlay |
+| UAB receipts | JSON | `data/receipts/uab/` | Per-action + per-session UAB audit |
+| Hive state | In-memory | `AgentRegistry` | Ephemeral agent state (not persisted) |
 
 ---
 
@@ -505,6 +601,8 @@ docker cp local_file.py lancelot_core:/home/lancelot/app/src/core/
 | Docker CUDA version | Must match host driver (12.3), not latest |
 | libgomp1 | Required by CUDA wheel for OpenMP; not in nvidia/cuda base image |
 | War Room bare orchestrator | Streamlit = separate process, can't share objects — must call gateway API |
+| UAB daemon runs on host | Must run outside Docker (UI frameworks need host access); communicates via `host.docker.internal:7900` |
+| Hive agents are ephemeral | Agent state lives in-memory only — not persisted across container restarts |
 
 ---
 

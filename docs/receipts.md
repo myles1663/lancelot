@@ -226,3 +226,99 @@ The receipt system provides one fundamental guarantee:
 > **If there's no receipt, it didn't happen.**
 
 Every code path that performs an action emits a receipt. Missing receipts indicate a system issue (crash, bug) rather than a silent action. This makes receipts the authoritative record of what Lancelot did, when, why, and whether it succeeded.
+
+---
+
+## UAB Receipts (AppControlReceipt)
+
+The Universal Application Bridge emits specialized receipts for desktop app control actions.
+
+### AppControlReceipt Schema
+
+Each UAB action produces an `AppControlReceipt` with:
+
+| Field Group | Fields | Description |
+|------------|--------|-------------|
+| **Identity** | `receipt_id`, `timestamp`, `session_id`, `parent_receipt_id` | Unique identification and chain linking |
+| **App context** | `app_name`, `app_pid`, `app_framework`, `window_title`, `connection_method` | Target application details |
+| **Classification** | `action_type`, `mutating`, `risk_level` | Action category (detect/connect/enumerate/query/act/state) and risk (LOW/MEDIUM/HIGH) |
+| **Element** | `element_id`, `element_type`, `element_label`, `element_path` | Targeted UI element |
+| **Action** | `action_performed`, `action_params` | Specific action (click, type, etc.) and parameters |
+| **State** | `pre_state`, `post_state`, `state_changed` | Before/after snapshots for verification |
+| **Chain** | `chain_id`, `chain_name`, `step_index`, `total_steps` | Multi-step workflow context |
+| **Governance** | `governance_gate`, `approval_id` | Autonomous or required_approval |
+| **Result** | `success`, `error_message`, `duration_ms` | Outcome |
+
+### AppSessionEntry Schema
+
+Per-app session summaries track aggregate activity:
+
+| Field | Description |
+|-------|-------------|
+| `session_id` | Unique session identifier |
+| `app_name`, `app_pid`, `app_framework` | Target app identity |
+| `connected_at`, `disconnected_at` | Session duration |
+| `total_actions`, `mutating_actions`, `read_only_actions` | Action counts |
+| `action_summary` | Action type → count breakdown |
+| `elements_touched` | Unique element IDs interacted with |
+| `max_risk_level` | Highest risk level encountered |
+| `receipt_ids` | Links to individual action receipts |
+
+### UAB Receipt Storage
+
+```
+data/receipts/uab/
+├── {receipt_id}.json          # Individual action receipts
+└── sessions/
+    └── {session_id}.json      # Per-app session summaries
+```
+
+---
+
+## Hive Receipts
+
+The Hive Agent Mesh emits three categories of receipts for sub-agent lifecycle tracking.
+
+### HIVE_TASK_EVENT
+
+Task lifecycle receipts — emitted by the ArchitectAgent:
+
+| Event | When |
+|-------|------|
+| `task_received` | Goal submitted for decomposition |
+| `decomposition` | Subtasks created by TaskDecomposer |
+| `task_completed` | All agents finished |
+| `task_failed` | Decomposition or execution failed |
+| `replan` | MODIFY intervention triggered replan |
+
+### HIVE_AGENT_EVENT
+
+Agent lifecycle receipts — emitted per sub-agent:
+
+| Event | When |
+|-------|------|
+| `agent_spawned` | Agent registered and Soul generated |
+| `state_transition` | Agent state changed (with from/to states) |
+| `action_executed` | Agent performed an action |
+| `agent_paused` | Agent paused (with reason) |
+| `agent_resumed` | Agent resumed |
+| `agent_collapsed` | Agent terminated (with collapse reason) |
+
+### HIVE_INTERVENTION_EVENT
+
+Operator control receipts:
+
+| Event | When |
+|-------|------|
+| `intervention:pause` | Operator paused an agent |
+| `intervention:resume` | Operator resumed an agent |
+| `intervention:kill` | Operator killed an agent |
+| `intervention:modify` | Operator killed + triggered replan |
+| `intervention:kill_all` | Operator emergency kill-all |
+
+### Hive Receipt Hierarchy
+
+All Hive receipts are linked via:
+- **quest_id** — groups all receipts for a single high-level task
+- **parent_id** — links child receipts to parents (e.g., agent spawn links to decomposition receipt)
+- **metadata** — contains `hive_subsystem`, `hive_agent_id`, and intervention details

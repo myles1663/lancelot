@@ -60,9 +60,14 @@ const config: Config = {
           '0%': { transform: 'translateX(100%)', opacity: '0' },
           '100%': { transform: 'translateX(0)', opacity: '1' },
         },
+        shimmer: {
+          '0%': { backgroundPosition: '200% 0' },
+          '100%': { backgroundPosition: '-200% 0' },
+        },
       },
       animation: {
         'slide-in': 'slide-in 0.3s ease-out',
+        shimmer: 'shimmer 1.5s ease-in-out infinite',
       },
     },
   },

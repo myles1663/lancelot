@@ -1,0 +1,72 @@
+{
+  "name": "universal-app-bridge",
+  "version": "0.5.0",
+  "description": "Framework-level desktop app control for AI agents. Hook into Electron, Qt, GTK, WPF, Flutter, Java, and Office apps with a unified API.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "uab": "dist/cli.js",
+    "uab-daemon": "dist/daemon.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "npx tsc",
+    "daemon": "node dist/daemon.js",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.35",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.3"
+  },
+  "keywords": [
+    "desktop-automation",
+    "ui-automation",
+    "accessibility",
+    "electron",
+    "cdp",
+    "chrome-devtools-protocol",
+    "qt",
+    "gtk",
+    "wpf",
+    "flutter",
+    "java",
+    "office",
+    "ai-agent",
+    "app-control",
+    "framework-hook",
+    "uia",
+    "windows-automation"
+  ],
+  "author": "ClaudeClaw",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/myles1663/UAB"
+  },
+  "bugs": {
+    "url": "https://github.com/myles1663/UAB/issues"
+  },
+  "homepage": "https://github.com/myles1663/UAB#readme",
+  "dependencies": {
+    "ws": "^8.19.0"
+  }
+}

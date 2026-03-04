@@ -27,6 +27,13 @@ export class ApiClientError extends Error {
 
 async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
+    // Session expired — redirect to login
+    if (res.status === 401) {
+      localStorage.removeItem('lancelot_api_token')
+      localStorage.removeItem('lancelot_session_expires')
+      window.location.href = '/war-room/login'
+      throw new ApiClientError(401, { error: 'Session expired', status: 401 })
+    }
     let body: ApiError
     try {
       body = await res.json()

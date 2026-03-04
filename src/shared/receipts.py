@@ -56,6 +56,10 @@ class ActionType(str, Enum):
     TOOL_FLOW_EVENT = "tool_flow_event"
     ACTION_CARD_PRESENTED = "action_card_presented"
     ACTION_CARD_RESOLVED = "action_card_resolved"
+    # HIVE Agent Mesh
+    HIVE_TASK_EVENT = "hive_task_event"
+    HIVE_AGENT_EVENT = "hive_agent_event"
+    HIVE_INTERVENTION_EVENT = "hive_intervention_event"
 
 
 class ReceiptStatus(str, Enum):

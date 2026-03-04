@@ -2,6 +2,7 @@ import { apiGet, apiPost, apiDelete } from './client'
 import type {
   SystemInfoResponse,
   VaultKeysResponse,
+  VaultMaskedResponse,
   LogsResponse,
   SetupActionResponse,
   ConfigReloadResponse,
@@ -44,6 +45,11 @@ export function fetchLogs(lines = 200, file = 'audit') {
 /** GET /api/setup/vault/keys */
 export function fetchVaultKeys() {
   return apiGet<VaultKeysResponse>('/api/setup/vault/keys')
+}
+
+/** GET /api/setup/vault/masked */
+export function fetchVaultMasked() {
+  return apiGet<VaultMaskedResponse>('/api/setup/vault/masked')
 }
 
 /** DELETE /api/setup/vault/keys/{key} */

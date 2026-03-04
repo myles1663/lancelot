@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { usePolling } from '@/hooks'
+import { usePolling, usePageTitle } from '@/hooks'
 import {
   fetchUsageSummary, fetchUsageLanes, fetchUsageModels, fetchUsageMonthly,
   fetchProviderStack, refreshModelDiscovery,
@@ -9,6 +9,7 @@ import {
 } from '@/api'
 import type { DiscoveredModel, AvailableProvider, ProviderKeyInfo, OAuthStatusResponse } from '@/api'
 import { MetricCard } from '@/components'
+import { formatTimeOnly } from '@/utils/dateFormat'
 
 /** Format context window size for display */
 function formatCtx(tokens: number): string {
@@ -27,6 +28,7 @@ const LANE_LABELS: Record<string, string> = {
 }
 
 export function CostTracker() {
+  usePageTitle('Cost Tracker')
   const { data: summary } = usePolling({ fetcher: fetchUsageSummary, interval: 15000 })
   const { data: lanes } = usePolling({ fetcher: fetchUsageLanes, interval: 30000 })
   const { data: models } = usePolling({ fetcher: fetchUsageModels, interval: 30000 })
@@ -245,7 +247,7 @@ export function CostTracker() {
 
   // Format last refresh time
   const lastRefresh = stack?.last_refresh
-    ? new Date(stack.last_refresh).toLocaleTimeString()
+    ? formatTimeOnly(stack.last_refresh)
     : null
 
   return (

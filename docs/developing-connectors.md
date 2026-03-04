@@ -379,3 +379,18 @@ Registered connectors appear in the War Room Connector Status panel, showing:
 - Recent activity and errors
 
 The operator can enable, disable, or suspend any connector from the War Room at any time.
+
+---
+
+## UAB as a Provider Pattern
+
+The Universal Application Bridge (UAB) demonstrates a different provider pattern from traditional connectors. Rather than wrapping a REST API, UAB bridges to a host-side daemon via JSON-RPC 2.0:
+
+- **Host daemon** (Node.js, port 7900) manages framework plugins and desktop app connections
+- **UABProvider** (Python, inside container) communicates via JSON-RPC 2.0 over HTTP
+- The provider implements the `AppControlCapability` protocol (defined in `src/tools/contracts.py`)
+- Risk classification, receipt emission, and governance gates are handled in the Python bridge layer
+
+This pattern is useful when the capability requires host-level access that cannot run inside a Docker container (e.g., desktop UI frameworks, hardware interfaces, native APIs). The JSON-RPC bridge provides a clean separation between the host-side implementation and the container-side governance integration.
+
+See [UAB](uab.md) for the full architecture.

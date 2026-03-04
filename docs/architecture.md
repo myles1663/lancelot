@@ -156,7 +156,7 @@ Tool Request
   → ToolReceipt (sanitized inputs/outputs, policy decisions)
 ```
 
-Seven capability types are available: `ShellExec`, `RepoOps`, `FileOps`, `WebOps`, `UIBuilder`, `DeployOps`, `VisionControl`. Each has explicit security constraints.
+Eight capability types are available: `ShellExec`, `RepoOps`, `FileOps`, `WebOps`, `UIBuilder`, `DeployOps`, `VisionControl`, `AppControl` (UAB). Each has explicit security constraints.
 
 ### 8. Receipt Generation
 
@@ -273,6 +273,92 @@ The Tool Fabric provides sandboxed tool execution with seven capability protocol
 4. **ToolReceipt** captures sanitized inputs, outputs, and policy decisions
 
 **Security gates:** Command denylist (shlex-based token matching, not substring), path traversal detection, workspace boundary enforcement, sensitive file protection, network domain allowlist, and risk-tier assessment.
+
+### Universal Application Bridge (UAB)
+
+The Universal Application Bridge enables Lancelot to interact with desktop applications through native UI automation frameworks — not brittle vision+mouse simulation. UAB runs as a host-side daemon (Node.js, port 7900) that communicates with the Lancelot container via JSON-RPC 2.0.
+
+**Architecture:**
+
+```
+Lancelot Core (Docker)               Host Machine
+┌─────────────────────┐              ┌──────────────────────────┐
+│  UABProvider         │  JSON-RPC   │  UAB Daemon (:7900)      │
+│  (Python client)     │────────────→│  ├── Framework Plugins   │
+│                      │  over HTTP  │  │   ├── Electron (CDP)  │
+│  Registers as Tool   │             │  │   ├── Qt (UIA)        │
+│  Fabric provider     │             │  │   ├── WPF (UIA)       │
+│  (AppControl cap)    │             │  │   ├── GTK (UIA)       │
+└─────────────────────┘              │  │   ├── Flutter (UIA)   │
+                                     │  │   ├── Java (JAB→UIA)  │
+                                     │  │   ├── Office (COM)    │
+                                     │  │   └── Win32 (UIA)     │
+                                     │  └── Connection Manager  │
+                                     └──────────────────────────┘
+```
+
+**Supported frameworks (8):** Each framework has a dedicated plugin that hooks into the application's native accessibility or debug protocol. The daemon auto-detects which framework an application uses and selects the appropriate plugin.
+
+**Unified element model:** All framework interactions are normalized into a common set of dataclasses — `UIElement`, `DetectedApp`, `AppActionResult`, `AppState`, `ConnectionResult` — so the rest of Lancelot sees a single interface regardless of the underlying framework.
+
+**Risk classification (3-tier):**
+- **LOW** — read-only actions: detect, enumerate, query, state, screenshot
+- **MEDIUM** — mutating actions: click, type, select, scroll, keypress, hotkey
+- **HIGH** — destructive/irreversible: close, invoke, move, resize, sendEmail
+
+Sensitive applications (password managers, banking apps, email clients, shells) auto-escalate risk: read operations become MEDIUM, mutations become HIGH.
+
+**Receipt system:** Every UAB action produces an `AppControlReceipt` with risk classification, app name, action type, and success/failure. Per-session summaries are stored as `AppSessionEntry` records. Storage: `data/receipts/uab/`.
+
+**Feature flag:** `FEATURE_TOOLS_UAB` (default: false, requires `FEATURE_TOOLS_FABRIC`). The daemon must run on the host machine (not inside Docker) because UI frameworks require host-level access.
+
+For the full reference, see [UAB](uab.md).
+
+### Hive Agent Mesh
+
+The Hive Agent Mesh enables Lancelot to decompose complex multi-step goals into subtasks and execute them via ephemeral sub-agents — each with its own scoped Soul, governance bridge, and lifecycle.
+
+**Architecture:**
+
+```
+Operator Goal
+  → ArchitectAgent (LLM-powered decomposition via flagship_deep)
+    → TaskDecomposer → list of TaskSpec objects
+      → AgentLifecycleManager (spawns sub-agents per task)
+        → SubAgentRuntime (per-agent execution loop)
+          → GovernanceBridge (RiskClassifier → TrustLedger → MCPSentry)
+            → Action execution (Tool Fabric / UAB / LLM)
+              → Receipt emission
+```
+
+**Agent state machine:**
+
+```
+SPAWNING → READY → EXECUTING ⟷ PAUSED → COMPLETING → COLLAPSED
+```
+
+Transitions are driven by: lifecycle events (spawn complete), operator interventions (pause, resume, kill, modify), governance decisions (violation → collapse), and runtime events (timeout, max actions exceeded, error).
+
+**Control methods:** Each sub-agent is assigned a control level:
+- **FULLY_AUTONOMOUS** — executes without per-action confirmation (T3 still requires approval)
+- **SUPERVISED** — operator notified of actions but doesn't need to confirm
+- **MANUAL_CONFIRM** — every action requires operator approval
+
+**Scoped Soul governance:** Each sub-agent receives a scoped Soul derived from the parent with the **monotonic restriction principle** — scoped Souls can only be more restrictive, never less. The Soul overlay (`soul/overlays/hive.yaml`) adds five non-negotiable rules:
+
+1. `hive_no_autonomous_t3` — Sub-agents may NEVER autonomously execute T3 actions
+2. `hive_collapse_on_governance_violation` — Governance failure collapses the agent immediately
+3. `hive_scoped_soul_monotonic` — Scoped Souls can only tighten constraints
+4. `hive_intervention_requires_reason` — All interventions require a non-empty reason
+5. `hive_never_retry_identical` — Replans must produce a genuinely new plan (hash tracking)
+
+**Operator intervention:** Pause, resume, kill, modify (kill + replan with feedback), kill-all emergency. All interventions require a reason string for audit accountability.
+
+**UAB integration:** When `FEATURE_HIVE_UAB` is enabled, the `HiveUABExecutor` uses LLM-planned step sequences to drive desktop applications, with heuristic fallback for common patterns.
+
+**Feature flag:** `FEATURE_HIVE` (default: false). `FEATURE_HIVE_UAB` (default: false, requires both `FEATURE_HIVE` and `FEATURE_TOOLS_UAB`).
+
+For the full reference, see [Hive](hive.md). For governance details, see [Governance — Scoped Soul Governance](governance.md#scoped-soul-governance-hive-agent-mesh).
 
 ### Health Monitor (Heartbeat)
 
@@ -395,6 +481,9 @@ A core architectural principle: **any subsystem can be disabled without breaking
 | Anthropic OAuth | Falls back to API key authentication for Anthropic; all other providers unaffected |
 | Google OAuth | Gmail and Calendar connectors unavailable; all other providers and subsystems unaffected |
 | Tool Fabric | No tool execution, conversation-only mode |
+| UAB | No desktop app control; all other tool capabilities still available |
+| Hive | No sub-agent decomposition; single-agent execution still works |
+| Hive UAB | No UAB actions within Hive agents; standalone UAB and Hive still work independently |
 
 This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FEATURE_DEEP_REASONING_LOOP`, `FEATURE_PROVIDER_SDK`, `FEATURE_ANTHROPIC_OAUTH`, `FEATURE_GOOGLE_OAUTH`, etc.) that gate each subsystem at initialization. When a subsystem is disabled, its code paths are skipped and its API endpoints return appropriate "not available" responses.
 

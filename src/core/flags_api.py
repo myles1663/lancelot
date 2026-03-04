@@ -18,6 +18,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/flags", tags=["flags"])
 
+_audit_logger = None
+
+
+def init_flags_api(audit_logger=None):
+    """Inject audit logger (called from gateway startup)."""
+    global _audit_logger
+    _audit_logger = audit_logger
+
 # ── Flag Metadata Registry ───────────────────────────────────────────
 # Each entry: description, category, dependencies, conflicts, warnings
 
@@ -113,6 +121,15 @@ FLAG_META = {
         "confirm_enable": "\u26a0\ufe0f EXTREME DANGER \u26a0\ufe0f\n\nThis enables DESTRUCTIVE commands (rm, del, kill, shutdown, etc.) on your REAL HOST MACHINE.\n\nFiles deleted CANNOT be recovered. Services stopped may not restart. Registry edits can break your system.\n\nAll write commands still require your approval in the Sentry, but mistakes are IRREVERSIBLE.\n\nOnly enable this if you fully understand the risks.",
         "has_editor": "host_write_commands",
         "hidden": True,
+    },
+    "FEATURE_TOOLS_UAB": {
+        "description": "Universal App Bridge. Framework-level desktop app control — hooks into UI toolkits (Electron, Qt, GTK, WPF, Flutter, Java) to give Lancelot structured control of desktop applications via the UAB daemon on the host machine.",
+        "category": "Tool Fabric",
+        "requires": ["FEATURE_TOOLS_FABRIC", "FEATURE_TOOLS_HOST_BRIDGE"],
+        "conflicts": [],
+        "warning": "UAB connects to a local daemon (port 7900) on the host machine via the Host Bridge. The daemon can introspect and control running desktop applications — reading UI state, clicking buttons, typing text, and invoking actions. All actions are receipt-traced.",
+        "confirm_enable": "You are about to enable the Universal App Bridge (UAB).\n\nUAB gives Lancelot the ability to:\n  - Detect and connect to running desktop applications\n  - Read the full UI element tree of connected apps\n  - Perform actions (click, type, select) on UI elements\n  - Monitor application state changes in real-time\n\nThis operates on your actual desktop applications via the Host Bridge.\n\nThe UAB daemon must be running on the host.\nRun scripts\\install-uab.bat to install it as an auto-start service.\nAll actions produce auditable AppControl receipts.\n\nDo you accept this risk?",
+        "has_editor": "uab_panel",
     },
 
     # ── Execution & Runtime ───────────────────────────────────────
@@ -291,6 +308,22 @@ FLAG_META = {
         "requires": [],
         "conflicts": [],
         "warning": "Adds one extra LLM call (deep model with extended thinking) per qualifying request. Increases latency by 3-10 seconds and token cost by ~2000-8000 tokens per request. Disable if response time is critical.",
+    },
+
+    # ── HIVE Agent Mesh ──────────────────────────────────────────────
+    "FEATURE_HIVE": {
+        "description": "HIVE Agent Mesh — ephemeral sub-agent architecture. Decomposes complex tasks into governed sub-agents that execute via UAB under full operator pause/kill/modify control. Each sub-agent gets a Scoped Soul (more restrictive than parent), every action is receipt-traced, and the operator can intervene at any time.",
+        "category": "Core Subsystem",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Spawns ephemeral sub-agents that consume LLM tokens for decomposition and execution. Each agent runs in a thread with governance checks between actions. Monitor capacity via War Room HIVE page.",
+    },
+    "FEATURE_HIVE_UAB": {
+        "description": "HIVE UAB Bridge — enables HIVE sub-agents to control desktop applications via the Universal App Bridge. Without this flag, HIVE agents can only perform planning and decomposition.",
+        "category": "Core Subsystem",
+        "requires": ["FEATURE_HIVE", "FEATURE_TOOLS_UAB"],
+        "conflicts": [],
+        "warning": "Requires both HIVE and TOOLS_UAB. Sub-agents will be able to interact with desktop applications through the UAB daemon. All actions are governance-gated and receipt-traced.",
     },
 }
 
@@ -619,6 +652,16 @@ async def toggle_flag(name: str):
             except Exception:
                 pass  # Best-effort — agent may already be offline
 
+        # Audit log the toggle
+        if _audit_logger:
+            _audit_logger.log_event(
+                "WARROOM_FLAG_TOGGLE",
+                f"Flag {name} toggled to {new_val}" + (
+                    " (hot-toggled)" if hot_toggled else ""
+                ),
+                user="WarRoom",
+            )
+
         return {
             "flag": name,
             "enabled": new_val,
@@ -674,3 +717,108 @@ async def set_flag(name: str, value: bool = True):
     except Exception as exc:
         logger.error("set_flag error: %s", exc)
         return JSONResponse(status_code=500, content={"error": "Failed to set flag"})
+
+
+# ── UAB Panel Endpoints ──────────────────────────────────────────────
+# Inline editor endpoints for the Universal App Bridge panel in Kill Switches.
+
+UAB_DAEMON_URL = os.environ.get("UAB_DAEMON_URL", "http://host.docker.internal:7900")
+
+
+@router.get("/uab-status")
+async def get_uab_status():
+    """Check if the UAB daemon is reachable and return its status."""
+    import urllib.request
+    import json as _json
+    try:
+        payload = _json.dumps({
+            "jsonrpc": "2.0",
+            "method": "getStatus",
+            "params": {},
+            "id": 1,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            UAB_DAEMON_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        result = data.get("result", {})
+        return {
+            "reachable": True,
+            "version": result.get("version", "unknown"),
+            "connected_apps": result.get("connectedApps", 0),
+            "supported_frameworks": result.get("supportedFrameworks", []),
+            "uptime_seconds": result.get("uptimeSeconds", 0),
+        }
+    except Exception:
+        return {
+            "reachable": False,
+            "version": "",
+            "connected_apps": 0,
+            "supported_frameworks": [],
+            "uptime_seconds": 0,
+        }
+
+
+@router.get("/uab-apps")
+async def get_uab_connected_apps():
+    """Get list of currently connected apps from the UAB daemon."""
+    import urllib.request
+    import json as _json
+    try:
+        payload = _json.dumps({
+            "jsonrpc": "2.0",
+            "method": "getConnectedApps",
+            "params": {},
+            "id": 1,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            UAB_DAEMON_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        apps = data.get("result", [])
+        return {"apps": apps if isinstance(apps, list) else []}
+    except Exception:
+        return {"apps": []}
+
+
+@router.get("/uab-receipts")
+async def get_uab_receipts(
+    limit: int = 50,
+    app_name: Optional[str] = None,
+    mutating_only: bool = False,
+    action_type: Optional[str] = None,
+):
+    """Query recent UAB app control receipts."""
+    try:
+        from src.tools.receipts_uab import get_uab_receipt_store
+        store = get_uab_receipt_store()
+        receipts = store.get_recent_receipts(
+            limit=limit,
+            app_name=app_name,
+            mutating_only=mutating_only,
+            action_type=action_type,
+        )
+        return {"receipts": [r.to_dict() for r in receipts]}
+    except Exception as exc:
+        logger.warning("Failed to query UAB receipts: %s", exc)
+        return {"receipts": [], "error": str(exc)[:200]}
+
+
+@router.get("/uab-sessions")
+async def get_uab_sessions(limit: int = 20):
+    """Get UAB app session summaries (active + recent)."""
+    try:
+        from src.tools.receipts_uab import get_uab_receipt_store
+        store = get_uab_receipt_store()
+        return {"sessions": store.get_session_summaries(limit=limit)}
+    except Exception as exc:
+        logger.warning("Failed to query UAB sessions: %s", exc)
+        return {"sessions": [], "error": str(exc)[:200]}

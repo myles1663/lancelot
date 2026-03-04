@@ -1,28 +1,9 @@
-import { usePolling } from '@/hooks'
+import { usePolling, usePageTitle } from '@/hooks'
 import { fetchHealth, fetchHealthReady } from '@/api'
-import { MetricCard, StatusDot, EmptyState } from '@/components'
+import { MetricCard, StatusDot, EmptyState, Skeleton } from '@/components'
 import type { SystemState } from '@/components'
 import type { HealthCheckResponse, HealthReadyResponse } from '@/types/api'
-
-// ── Helpers ─────────────────────────────────────────────────────
-
-function formatUptime(seconds: number): string {
-  const d = Math.floor(seconds / 86400)
-  const h = Math.floor((seconds % 86400) / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  if (d > 0) return `${d}d ${h}h ${m}m`
-  if (h > 0) return `${h}h ${m}m`
-  return `${m}m`
-}
-
-function formatTimestamp(iso: string | null): string {
-  if (!iso) return 'Never'
-  try {
-    return new Date(iso).toLocaleString()
-  } catch {
-    return iso
-  }
-}
+import { formatUptime, formatTimestamp } from '@/utils/dateFormat'
 
 function componentState(status: string): SystemState {
   if (status === 'ok') return 'healthy'
@@ -50,6 +31,7 @@ function overallStatus(
 // ── Component ───────────────────────────────────────────────────
 
 export function HealthDashboard() {
+  usePageTitle('Health')
   const { data: health } = usePolling<HealthCheckResponse>({
     fetcher: fetchHealth,
     interval: 5000,
@@ -86,7 +68,11 @@ export function HealthDashboard() {
           Component Status
         </h3>
         {componentEntries.length === 0 ? (
-          <p className="text-sm text-text-muted">Loading...</p>
+          <div className="space-y-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} variant="row" />
+            ))}
+          </div>
         ) : (
           <div className="space-y-2">
             {componentEntries.map(([name, status]) => (
@@ -108,7 +94,11 @@ export function HealthDashboard() {
           Readiness
         </h3>
         {!ready ? (
-          <p className="text-sm text-text-muted">Loading...</p>
+          <div className="space-y-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} variant="row" />
+            ))}
+          </div>
         ) : (
           <div className="space-y-2">
             <div className="flex items-center justify-between p-3 bg-surface-card-elevated rounded-md">
@@ -148,7 +138,11 @@ export function HealthDashboard() {
           Degraded Reasons
         </h3>
         {!ready ? (
-          <p className="text-sm text-text-muted">Loading...</p>
+          <div className="space-y-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} variant="row" />
+            ))}
+          </div>
         ) : ready.degraded_reasons.length === 0 ? (
           <EmptyState
             title="All Clear"

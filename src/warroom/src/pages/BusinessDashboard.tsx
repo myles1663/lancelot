@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { usePolling } from '@/hooks'
+import { usePolling, usePageTitle } from '@/hooks'
 import { fetchBalClients, pauseClient, resumeClient, activateClient } from '@/api'
 import type { BalClient } from '@/api/business'
 import { MetricCard, StatusDot, EmptyState } from '@/components'
@@ -45,6 +45,7 @@ function formatDate(iso: string | null) {
 // ── Component ────────────────────────────────────────
 
 export function BusinessDashboard() {
+  usePageTitle('Business')
   const { data, loading, error, refetch } = usePolling({ fetcher: fetchBalClients, interval: 15000 })
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<string>('all')

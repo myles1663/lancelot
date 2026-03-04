@@ -61,3 +61,39 @@ export const saveHostWriteCommands = (raw: string) =>
 // Host Write Commands Sub-Toggle
 export const fetchHostWriteStatus = () => apiGet<{ enabled: boolean }>('/api/flags/host-write-status')
 export const toggleHostWriteCommands = () => apiPost<{ enabled: boolean }>('/api/flags/host-write-toggle')
+
+// UAB (Universal App Bridge)
+export interface UABStatus {
+  reachable: boolean
+  version: string
+  connected_apps: number
+  supported_frameworks: string[]
+  uptime_seconds: number
+}
+
+export interface UABConnectedApp {
+  pid: number
+  name: string
+  framework: string
+  connectionMethod: string
+  windowTitle: string
+}
+
+export const fetchUABStatus = () => apiGet<UABStatus>('/api/flags/uab-status')
+export const fetchUABApps = () => apiGet<{ apps: UABConnectedApp[] }>('/api/flags/uab-apps')
+export const fetchUABReceipts = (params?: {
+  limit?: number
+  app_name?: string
+  mutating_only?: boolean
+  action_type?: string
+}) => {
+  const qs = new URLSearchParams()
+  if (params?.limit) qs.set('limit', String(params.limit))
+  if (params?.app_name) qs.set('app_name', params.app_name)
+  if (params?.mutating_only) qs.set('mutating_only', 'true')
+  if (params?.action_type) qs.set('action_type', params.action_type)
+  const query = qs.toString()
+  return apiGet<{ receipts: any[] }>(`/api/flags/uab-receipts${query ? '?' + query : ''}`)
+}
+export const fetchUABSessions = (limit = 20) =>
+  apiGet<{ sessions: any[] }>(`/api/flags/uab-sessions?limit=${limit}`)

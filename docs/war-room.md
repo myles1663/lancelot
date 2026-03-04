@@ -358,6 +358,85 @@ A notification banner appears at the top of every War Room page when a new versi
 
 ---
 
+## Hive Agent Mesh
+
+The Hive Agent Mesh page provides real-time monitoring and control of ephemeral sub-agents.
+
+**Access:** Available in the sidebar when `FEATURE_HIVE` is enabled.
+
+### Agent Table
+
+The main view shows all active agents in a table:
+
+| Column | Description |
+|--------|-------------|
+| **Agent ID** | Truncated UUID with copy-to-clipboard |
+| **State** | Color-coded badge: gray (spawning), blue (ready), green (executing), yellow (paused), purple (completing), red (collapsed) |
+| **Task** | Subtask description from decomposition |
+| **Actions** | Action count / max actions |
+| **Control** | Autonomy level (fully_autonomous, supervised, manual_confirm) |
+| **Controls** | Pause/Resume/Kill/Modify buttons per agent |
+
+### Task Submission
+
+The top of the page has a goal input field. Enter a high-level goal and click Submit to trigger task decomposition and agent spawning.
+
+### Per-Agent Controls
+
+Each agent row has context-appropriate control buttons:
+- **Pause** (executing agents) — opens InterventionDialog with required reason
+- **Resume** (paused agents) — immediately resumes execution
+- **Kill** (any non-collapsed agent) — opens InterventionDialog with required reason
+- **Modify** (any non-collapsed agent) — opens InterventionDialog with reason and feedback fields
+
+### InterventionDialog
+
+A modal dialog that appears when pausing, killing, or modifying an agent:
+- **Type-specific title and description** — explains consequences of the action
+- **Required reason field** — must be non-empty to submit
+- **Optional feedback field** — shown only for MODIFY actions, used in replan context
+- **Type-specific button colors** — yellow (pause), red (kill), blue (modify)
+
+### Kill-All Emergency Button
+
+A prominent red button at the top collapses all active agents immediately. Opens InterventionDialog with required reason. Use only in emergencies.
+
+### History Tab
+
+Switch to the history tab to view archived (collapsed) agents with:
+- Collapse reason badge (color-coded: green for completed, red for kills, orange for violations, yellow for timeouts)
+- Collapse message
+- Final action count and duration
+
+**Polling:** The page polls every 3 seconds for live status updates.
+
+---
+
+## UAB Status Panel
+
+The UAB daemon status panel appears on the **Kill Switches** page when `FEATURE_TOOLS_UAB` is enabled.
+
+### What It Shows
+
+When the daemon is running:
+- **Status indicator** — green pulsing dot with "Running"
+- **Version** — UAB daemon version
+- **Connected apps** — count of apps with active connections
+- **Supported frameworks** — list of available framework plugins
+- **Connected apps table** — name, PID, framework, connection method per app
+
+When the daemon is offline:
+- **Status indicator** — red "Offline"
+- **Instructions** to start the daemon with the appropriate script
+
+### Activation
+
+The UAB panel appears automatically when the `FEATURE_TOOLS_UAB` flag is enabled and the flag metadata includes `has_editor: "uab_panel"`. No additional configuration is needed.
+
+**Polling:** The panel polls every 5 seconds for live daemon status.
+
+---
+
 ## Tips for Daily Operation
 
 1. **Start your session** by checking the Health panel — make sure everything is green

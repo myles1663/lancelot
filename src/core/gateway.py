@@ -38,6 +38,10 @@ MAX_REQUEST_SIZE = 20_971_520
 # F8: Startup timestamp for uptime tracking
 _startup_time = None
 
+# Error rate tracking
+_error_count = 0
+_total_requests = 0
+
 # Read version from VERSION file (single source of truth)
 from update_checker import read_current_version
 _app_version = read_current_version()
@@ -108,10 +112,14 @@ app.add_middleware(
 )
 
 
-# F-005: Security headers middleware
+# F-005: Security headers middleware + request counting
 @app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
+    global _total_requests, _error_count
+    _total_requests += 1
     response = await call_next(request)
+    if response.status_code >= 500:
+        _error_count += 1
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -128,6 +136,7 @@ _SUBSYSTEM_GATES = [
     ("/soul", "FEATURE_SOUL"),
     ("/api/scheduler", "FEATURE_SCHEDULER"),
     ("/api/v1/clients", "FEATURE_BAL"),
+    ("/api/hive", "FEATURE_HIVE"),
 ]
 
 
@@ -158,6 +167,8 @@ def verify_token(request: Request) -> bool:
     Security: When LANCELOT_API_TOKEN is not set, authentication is only
     bypassed if LANCELOT_DEV_MODE is explicitly enabled. Otherwise, all
     requests are rejected (fail-closed).
+
+    Also accepts War Room session tokens as a fallback.
     """
     if not API_TOKEN:
         if DEV_MODE:
@@ -166,6 +177,13 @@ def verify_token(request: Request) -> bool:
                 "all requests accepted without authentication."
             )
             return True
+        # Fall back to War Room session check
+        try:
+            from auth_api import verify_warroom_session
+            if verify_warroom_session(request):
+                return True
+        except ImportError:
+            pass
         logger.error(
             "SECURITY: No LANCELOT_API_TOKEN configured and dev mode not enabled. "
             "Set LANCELOT_API_TOKEN for production or LANCELOT_DEV_MODE=true for development."
@@ -173,8 +191,14 @@ def verify_token(request: Request) -> bool:
         return False
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
-        return hmac.compare_digest(auth_header[7:], API_TOKEN)
-    return False
+        if hmac.compare_digest(auth_header[7:], API_TOKEN):
+            return True
+    # Fall back to War Room session check
+    try:
+        from auth_api import verify_warroom_session
+        return verify_warroom_session(request)
+    except ImportError:
+        return False
 
 
 # F7: Generate unique request ID
@@ -482,6 +506,211 @@ def _shutdown_bal(objects):
     logger.info("BAL shut down.")
 
 
+# ── Tool Fabric Provider Subsystems ──────────────────────────────────
+# These init/shutdown functions let the SubsystemManager hot-toggle
+# individual providers inside the already-running ToolFabric.
+
+
+def _init_host_bridge():
+    """Hot-start the Host Bridge provider inside Tool Fabric."""
+    from src.tools.fabric import get_tool_fabric
+    from src.tools.providers.host_bridge import HostBridgeProvider
+
+    fabric = get_tool_fabric()
+    provider = HostBridgeProvider(workspace=fabric.config.default_workspace)
+    fabric.register_provider(provider)
+    fabric.update_router_preferences()
+    logger.warning(
+        "HOST BRIDGE hot-started — commands will be sent to host agent at %s",
+        provider.config.agent_url,
+    )
+    return {"provider": provider}
+
+
+def _shutdown_host_bridge(objects):
+    """Hot-stop the Host Bridge provider."""
+    from src.tools.fabric import get_tool_fabric
+    fabric = get_tool_fabric()
+    fabric.unregister_provider("host_bridge")
+    fabric.update_router_preferences()
+    logger.info("Host Bridge provider unregistered.")
+
+
+def _init_uab():
+    """Hot-start the UAB provider inside Tool Fabric."""
+    from src.tools.fabric import get_tool_fabric
+    from src.tools.providers.uab_bridge import UABProvider
+
+    fabric = get_tool_fabric()
+    provider = UABProvider()
+    fabric.register_provider(provider)
+    fabric.update_router_preferences()
+    logger.warning(
+        "UAB BRIDGE hot-started — desktop app control via daemon at %s",
+        provider.config.daemon_url,
+    )
+    return {"provider": provider}
+
+
+def _shutdown_uab(objects):
+    """Hot-stop the UAB provider."""
+    from src.tools.fabric import get_tool_fabric
+    fabric = get_tool_fabric()
+    fabric.unregister_provider("uab_bridge")
+    fabric.update_router_preferences()
+    logger.info("UAB Bridge provider unregistered.")
+
+
+# ── HIVE Agent Mesh Subsystem ──────────────────────────────────────────
+
+class _OrchestratorRouterAdapter:
+    """Adapts orchestrator's provider to the ModelRouter.route() interface.
+
+    The TaskDecomposer expects router.route(task_type, text) -> RouterResult,
+    but the orchestrator uses provider.generate() directly. This adapter bridges
+    the gap so HIVE can use the orchestrator's LLM provider for decomposition.
+    """
+
+    def __init__(self, orchestrator):
+        self._orch = orchestrator
+
+    def route(self, task_type: str, text: str, **kwargs):
+        from dataclasses import dataclass
+        from typing import Optional
+
+        @dataclass
+        class _Result:
+            output: Optional[str] = None
+
+        provider = self._orch.provider
+        if provider is None:
+            return _Result(output=None)
+
+        try:
+            # Use the deep model for decomposition (planning tasks)
+            deep_model = self._orch._get_deep_model()
+            messages = [{"role": "user", "content": text}]
+            result = provider.generate(
+                model=deep_model,
+                messages=messages,
+                system_instruction="You are a task decomposer. Return only valid JSON.",
+                config={"max_tokens": 4096},
+            )
+            return _Result(output=result.text if result and result.text else None)
+        except Exception as exc:
+            logger.error("HIVE router adapter LLM call failed: %s", exc)
+            # Fall back to the fast model
+            try:
+                messages = [{"role": "user", "content": text}]
+                result = provider.generate(
+                    model=self._orch.model_name,
+                    messages=messages,
+                    system_instruction="You are a task decomposer. Return only valid JSON.",
+                    config={"max_tokens": 4096},
+                )
+                return _Result(output=result.text if result and result.text else None)
+            except Exception:
+                return _Result(output=None)
+
+
+def _init_hive():
+    """Initialize the HIVE Agent Mesh subsystem."""
+    from src.hive.config import load_hive_config
+    from src.hive.registry import AgentRegistry
+    from src.hive.receipt_manager import HiveReceiptManager
+    from src.hive.scoped_soul import ScopedSoulGenerator
+    from src.hive.lifecycle import AgentLifecycleManager
+    from src.hive.decomposer import TaskDecomposer
+    from src.hive.architect import ArchitectAgent
+    from src.hive.api import init_hive_api
+    from src.hive.integration.uab_executor import HiveUABExecutor
+    from feature_flags import FEATURE_HIVE_UAB
+
+    config = load_hive_config()
+    registry = AgentRegistry(max_concurrent_agents=config.max_concurrent_agents)
+    data_dir = os.environ.get("LANCELOT_DATA_DIR", "lancelot_data")
+    receipt_mgr = HiveReceiptManager(data_dir=data_dir)
+    soul_gen = ScopedSoulGenerator()
+
+    # Bridge orchestrator's provider to the ModelRouter interface
+    router_adapter = _OrchestratorRouterAdapter(main_orchestrator)
+
+    # Create UAB action executor if UAB is enabled
+    action_executor = None
+    if FEATURE_HIVE_UAB:
+        uab_provider = _get_uab_provider()
+        if uab_provider:
+            action_executor = HiveUABExecutor(
+                uab_provider=uab_provider,
+                llm_router=router_adapter,
+            )
+            logger.info("HIVE UAB executor wired — sub-agents will execute real desktop actions")
+        else:
+            logger.warning("HIVE_UAB enabled but no UABProvider found — sub-agents will run without UAB")
+
+    lifecycle = AgentLifecycleManager(
+        config=config,
+        registry=registry,
+        receipt_manager=receipt_mgr,
+        soul_generator=soul_gen,
+        action_executor=action_executor,
+    )
+
+    decomposer = TaskDecomposer(model_router=router_adapter)
+
+    architect = ArchitectAgent(
+        config=config,
+        decomposer=decomposer,
+        lifecycle=lifecycle,
+        receipt_manager=receipt_mgr,
+    )
+
+    # Wire up API endpoints
+    init_hive_api(architect, lifecycle, registry, receipt_mgr, config, audit_logger=main_orchestrator.audit_logger)
+
+    logger.info(
+        "HIVE Agent Mesh initialized: max_agents=%d, timeout=%ds, uab_executor=%s",
+        config.max_concurrent_agents, config.default_task_timeout,
+        "active" if action_executor else "none",
+    )
+    return {
+        "config": config,
+        "registry": registry,
+        "receipt_mgr": receipt_mgr,
+        "lifecycle": lifecycle,
+        "architect": architect,
+    }
+
+
+def _get_uab_provider():
+    """Get the UABProvider instance from ToolFabric if available."""
+    try:
+        from src.tools.providers.uab_bridge import UABProvider
+        # Check if we can reach the daemon
+        provider = UABProvider()
+        health = provider.health_check()
+        if health.state.value == "healthy":
+            return provider
+        logger.warning("UAB provider health check: %s", health.state.value)
+        return provider  # Return anyway — daemon might come up later
+    except Exception as exc:
+        logger.warning("Failed to create UABProvider: %s", exc)
+        return None
+
+
+def _shutdown_hive(objects):
+    """Shut down the HIVE Agent Mesh subsystem."""
+    from src.hive.api import shutdown_hive_api
+
+    if objects.get("lifecycle"):
+        try:
+            objects["lifecycle"].shutdown()
+        except Exception:
+            pass
+    shutdown_hive_api()
+    logger.info("HIVE Agent Mesh shut down.")
+
+
 def _bootstrap_model_discovery():
     """Create ModelDiscovery + wire into Provider API when provider becomes available.
 
@@ -609,6 +838,12 @@ async def startup_event():
     except Exception as e:
         logger.warning("BAL Client API router mount failed: %s", e)
 
+    try:
+        from src.hive.api import router as hive_router
+        app.include_router(hive_router)
+    except Exception as e:
+        logger.warning("HIVE Agent Mesh API router mount failed: %s", e)
+
     # ===== REGISTER SUBSYSTEMS WITH HOT-TOGGLE MANAGER =====
     subsystem_manager.register("memory", "FEATURE_MEMORY_VNEXT", _init_memory, _shutdown_memory, ["/memory"])
     subsystem_manager.register("soul", "FEATURE_SOUL", _init_soul, _shutdown_soul, ["/soul"])
@@ -617,10 +852,16 @@ async def startup_event():
     subsystem_manager.register("health_monitor", "FEATURE_HEALTH_MONITOR", _init_health_monitor, _shutdown_health_monitor, ["/health"])
     subsystem_manager.register("bal", "FEATURE_BAL", _init_bal, _shutdown_bal, ["/api/v1/clients"])
 
+    # Tool Fabric provider subsystems (hot-toggle individual providers)
+    subsystem_manager.register("host_bridge", "FEATURE_TOOLS_HOST_BRIDGE", _init_host_bridge, _shutdown_host_bridge, [])
+    subsystem_manager.register("uab_bridge", "FEATURE_TOOLS_UAB", _init_uab, _shutdown_uab, [])
+    subsystem_manager.register("hive", "FEATURE_HIVE", _init_hive, _shutdown_hive, ["/api/hive"])
+
     # ===== CONDITIONALLY START SUBSYSTEMS =====
     from feature_flags import (
         FEATURE_MEMORY_VNEXT, FEATURE_SOUL, FEATURE_SKILLS,
         FEATURE_SCHEDULER, FEATURE_HEALTH_MONITOR, FEATURE_BAL,
+        FEATURE_TOOLS_HOST_BRIDGE, FEATURE_TOOLS_UAB, FEATURE_HIVE,
     )
 
     if FEATURE_MEMORY_VNEXT:
@@ -660,6 +901,28 @@ async def startup_event():
             subsystem_manager.start("scheduler")
         except Exception as e:
             logger.warning("Scheduler initialization failed: %s", e)
+
+    # ===== MARK PROVIDER SUBSYSTEMS RUNNING IF ALREADY BOOTED =====
+    # _setup_default_providers() already registered these at ToolFabric init,
+    # so just mark the SubsystemManager entries as running (no double-init).
+    if FEATURE_TOOLS_HOST_BRIDGE:
+        entry = subsystem_manager._subsystems.get("host_bridge")
+        if entry and not entry.running:
+            entry.running = True
+            logger.info("Host Bridge provider marked running (booted at init)")
+    if FEATURE_TOOLS_UAB:
+        entry = subsystem_manager._subsystems.get("uab_bridge")
+        if entry and not entry.running:
+            entry.running = True
+            logger.info("UAB Bridge provider marked running (booted at init)")
+
+    if FEATURE_HIVE:
+        try:
+            subsystem_manager.start("hive")
+        except Exception as e:
+            logger.warning("HIVE Agent Mesh initialization failed: %s", e)
+    else:
+        logger.info("HIVE Agent Mesh disabled by feature flag.")
 
     # ===== PHASE 4b: LOCAL MODEL CLIENT (V8) =====
     try:
@@ -760,7 +1023,8 @@ async def startup_event():
 
     # ===== FLAGS API =====
     try:
-        from flags_api import router as flags_router
+        from flags_api import router as flags_router, init_flags_api
+        init_flags_api(audit_logger=main_orchestrator.audit_logger)
         app.include_router(flags_router)
         logger.info("Flags API initialized.")
     except Exception as e:
@@ -1008,6 +1272,15 @@ async def startup_event():
             logger.info("Google OAuth disabled (FEATURE_GOOGLE_OAUTH=%s).", FEATURE_GOOGLE_OAUTH)
     except Exception as e:
         logger.warning("Google OAuth initialization failed: %s", e)
+
+    # ===== AUTH API =====
+    try:
+        from auth_api import router as auth_router, init_auth_api
+        init_auth_api(audit_logger=main_orchestrator.audit_logger)
+        app.include_router(auth_router)
+        logger.info("Auth API initialized.")
+    except Exception as e:
+        logger.warning(f"Auth API initialization failed: {e}")
 
     # ===== SETUP & RECOVERY API =====
     try:
@@ -1407,6 +1680,9 @@ def health_check():
             "components": components,
             "crusader_mode": crusader_mode.is_active,
             "uptime_seconds": uptime,
+            "error_count": _error_count,
+            "total_requests": _total_requests,
+            "error_rate": round(_error_count / max(_total_requests, 1) * 100, 2),
         }
     except Exception as exc:
         logger.error("Health check error: %s", exc)

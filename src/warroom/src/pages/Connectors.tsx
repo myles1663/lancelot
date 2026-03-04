@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { usePolling } from '@/hooks'
+import { usePolling, usePageTitle } from '@/hooks'
 import {
   fetchConnectors,
   enableConnector,
@@ -39,6 +39,7 @@ function credentialLabel(creds: CredentialInfo[]): string {
 
 // ── Main Page ────────────────────────────────────────────────────
 export function Connectors() {
+  usePageTitle('Connectors')
   const { data, refetch } = usePolling({ fetcher: fetchConnectors, interval: 10000 })
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [configuring, setConfiguring] = useState<Set<string>>(new Set())

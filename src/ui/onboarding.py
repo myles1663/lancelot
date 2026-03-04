@@ -1222,7 +1222,19 @@ class OnboardingOrchestrator:
             self._write_env_values(tokens, "Security Tokens (auto-generated — keep secret)")
             generated.append(f"Security tokens generated ({len(tokens)} tokens)")
 
-        # 2. Write default feature flags if missing
+        # 2. Generate War Room credentials if missing
+        warroom_creds = {}
+        warroom_password = None
+        if not self._get_env_value("WARROOM_USERNAME"):
+            warroom_creds["WARROOM_USERNAME"] = "admin"
+        if not self._get_env_value("WARROOM_PASSWORD"):
+            warroom_password = secrets.token_urlsafe(16)
+            warroom_creds["WARROOM_PASSWORD"] = warroom_password
+        if warroom_creds:
+            self._write_env_values(warroom_creds, "War Room Credentials (auto-generated)")
+            generated.append("War Room credentials generated")
+
+        # 3. Write default feature flags if missing
         flags_written = {}
         for flag, val in _DEFAULT_FEATURE_FLAGS.items():
             if not self._get_env_value(flag):
@@ -1246,6 +1258,24 @@ class OnboardingOrchestrator:
 
         provider_mode = self._get_env_value("LANCELOT_PROVIDER_MODE") or "sdk"
 
+        # 4. Check UAB daemon reachability (non-blocking)
+        uab_running = False
+        try:
+            import urllib.request
+            uab_url = os.environ.get("UAB_DAEMON_URL", "http://host.docker.internal:7900")
+            payload = json.dumps({
+                "jsonrpc": "2.0", "method": "getStatus", "params": {}, "id": 1,
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                uab_url, data=payload,
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                uab_data = json.loads(resp.read().decode("utf-8"))
+            uab_running = "result" in uab_data
+        except Exception:
+            pass
+
         msg = "**Final Configuration Complete**\n\n"
         msg += "**System Summary:**\n"
         msg += f"- LLM Provider: {provider_name} ({provider_mode.upper()} mode)\n"
@@ -1253,6 +1283,16 @@ class OnboardingOrchestrator:
         msg += f"- Communications: {comms_display}\n"
         msg += f"- Security: Tokens configured\n"
         msg += f"- Feature Flags: Set\n"
+        if uab_running:
+            msg += f"- UAB Daemon: Running\n"
+        else:
+            msg += f"- UAB Daemon: Not running — run `scripts\\install-uab.bat` on the host for auto-start\n"
+
+        if warroom_password:
+            msg += f"\n**War Room Login Credentials:**\n"
+            msg += f"- Username: `admin`\n"
+            msg += f"- Password: `{warroom_password}`\n"
+            msg += f"*Save these credentials — you will need them to access the War Room.*\n"
 
         if generated:
             msg += f"\n*Auto-configured: {', '.join(generated)}*\n"

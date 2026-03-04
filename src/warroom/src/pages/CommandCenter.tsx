@@ -1,11 +1,12 @@
 import { useCallback } from 'react'
-import { usePolling } from '@/hooks'
+import { usePolling, usePageTitle } from '@/hooks'
 import { fetchReceipts } from '@/api/receipts'
 import { fetchReceiptStats } from '@/api/receipts'
 import type { ReceiptItem } from '@/api/receipts'
 import { StatusDot } from '@/components'
 import { ChatInterface } from './command/ChatInterface'
 import { ControlsPanel } from './command/ControlsPanel'
+import { formatTimeOnly } from '@/utils/dateFormat'
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -16,10 +17,6 @@ function receiptStatusState(status: string): 'healthy' | 'error' | 'degraded' | 
   return 'inactive'
 }
 
-function formatReceiptTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString('en-US', { hour12: false })
-}
-
 function formatActionName(name: string): string {
   return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
@@ -27,6 +24,7 @@ function formatActionName(name: string): string {
 // ── Component ───────────────────────────────────────────────────
 
 export function CommandCenter() {
+  usePageTitle('Command Center')
   const recentFetcher = useCallback(() => fetchReceipts({ limit: 8 }), [])
   const { data: receiptsData } = usePolling({ fetcher: recentFetcher, interval: 15000 })
   const { data: statsData } = usePolling({ fetcher: fetchReceiptStats, interval: 30000 })
@@ -80,7 +78,7 @@ export function CommandCenter() {
                         </span>
                       )}
                       <span className="text-[10px] text-text-muted font-mono">
-                        {formatReceiptTime(r.timestamp)}
+                        {formatTimeOnly(r.timestamp)}
                       </span>
                     </div>
                   </div>

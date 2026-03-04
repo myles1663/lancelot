@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { usePolling } from '@/hooks'
+import { usePolling, usePageTitle } from '@/hooks'
 import {
   fetchOnboardingStatus,
   sendOnboardingCommand,
@@ -11,7 +11,7 @@ import {
   restartContainer,
   shutdownContainer,
   fetchLogs,
-  fetchVaultKeys,
+  fetchVaultMasked,
   deleteVaultKey,
   fetchTokens,
   revokeToken,
@@ -25,31 +25,12 @@ import {
 } from '@/api'
 import { fetchReceiptStats } from '@/api/receipts'
 import { MetricCard, StatusDot, ConfirmDialog, EmptyState } from '@/components'
+import { formatTimestamp, formatUptime } from '@/utils/dateFormat'
 import type {
   SystemInfoResponse,
-  VaultKeyEntry,
+  VaultMaskedEntry,
   ExecutionToken,
 } from '@/types/api'
-
-// ── Helpers ─────────────────────────────────────────────────────
-
-function formatUptime(seconds: number): string {
-  const d = Math.floor(seconds / 86400)
-  const h = Math.floor((seconds % 86400) / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  if (d > 0) return `${d}d ${h}h ${m}m`
-  if (h > 0) return `${h}h ${m}m`
-  return `${m}m`
-}
-
-function formatTimestamp(iso: string): string {
-  if (!iso) return 'N/A'
-  try {
-    return new Date(iso).toLocaleString()
-  } catch {
-    return iso
-  }
-}
 
 // ── Tab definitions ─────────────────────────────────────────────
 
@@ -107,6 +88,7 @@ function ActionButton({
 // ── Main Component ──────────────────────────────────────────────
 
 export function SetupRecovery() {
+  usePageTitle('Setup & Recovery')
   const [tab, setTab] = useState<TabId>('system')
 
   return (
@@ -319,7 +301,7 @@ function SystemTab() {
 
 function DataTab() {
   const { data: vaultData, refetch: refetchVault } = usePolling({
-    fetcher: fetchVaultKeys,
+    fetcher: fetchVaultMasked,
     interval: 30000,
   })
   const { data: tokensData, refetch: refetchTokens } = usePolling({
@@ -378,7 +360,7 @@ function DataTab() {
           <EmptyState title="No Credentials" description="No credentials stored in the vault." />
         ) : (
           <div className="space-y-2">
-            {vaultData.keys.map((entry: VaultKeyEntry) => (
+            {vaultData.keys.map((entry: VaultMaskedEntry) => (
               <div
                 key={entry.key}
                 className="flex items-center justify-between p-3 bg-surface-card-elevated rounded-md"
@@ -387,6 +369,7 @@ function DataTab() {
                   <span className="text-sm font-mono text-text-primary">{entry.key}</span>
                   <div className="flex gap-3 mt-0.5">
                     <span className="text-[10px] text-text-muted">Type: {entry.type}</span>
+                    <span className="text-[10px] font-mono text-text-muted">{entry.masked_value}</span>
                     {entry.created_at && (
                       <span className="text-[10px] text-text-muted">
                         Created: {formatTimestamp(entry.created_at)}
@@ -405,7 +388,7 @@ function DataTab() {
           </div>
         )}
         <p className="text-[10px] text-text-muted mt-2">
-          Credential values are never shown. Only keys and metadata are displayed.
+          Values are masked (first 4 + last 4 characters shown). Full values are never displayed.
         </p>
       </Section>
 

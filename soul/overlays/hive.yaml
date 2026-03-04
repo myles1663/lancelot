@@ -1,0 +1,71 @@
+# ===========================================================================
+# HIVE Soul Overlay — Sub-Agent Governance Rules
+# ===========================================================================
+# This overlay is loaded ADDITIVELY on top of the base Soul when
+# FEATURE_HIVE is enabled.  It CANNOT weaken, remove, or override
+# any base Soul rules — it only appends additional governance.
+#
+# Feature flag: FEATURE_HIVE
+
+overlay_name: "hive"
+feature_flag: "FEATURE_HIVE"
+description: >-
+  HIVE Agent Mesh governance overlay.  Adds sub-agent lifecycle rules,
+  scoped soul constraints, and operator intervention requirements.
+
+risk_rules:
+  - name: "hive_no_autonomous_t3"
+    description: >-
+      HIVE sub-agents may never autonomously execute T3 (irreversible)
+      actions.  All T3 actions require explicit operator approval even
+      when the sub-agent control method is fully_autonomous.
+    enforced: true
+
+  - name: "hive_collapse_on_governance_violation"
+    description: >-
+      Any sub-agent that fails a governance check must be immediately
+      collapsed.  No retry is allowed for governance violations.
+    enforced: true
+
+  - name: "hive_scoped_soul_monotonic"
+    description: >-
+      Scoped Souls generated for sub-agents can only be MORE restrictive
+      than the parent Soul, never less.  Constraints are additive only.
+    enforced: true
+
+  - name: "hive_intervention_requires_reason"
+    description: >-
+      All operator interventions (pause, kill, modify, kill_all) must
+      include a non-empty reason string for audit trail accountability.
+    enforced: true
+
+  - name: "hive_never_retry_identical"
+    description: >-
+      After a failed task or intervention, the Architect must produce
+      a NEW plan.  Retrying an identical plan is forbidden.
+    enforced: true
+
+tone_invariants:
+  - "Never claim sub-agent actions occurred without receipt evidence"
+  - "Always surface operator intervention options when agent actions fail"
+
+memory_ethics:
+  - "Sub-agent working memory is ephemeral — destroyed on collapse"
+  - "Task decomposition context must not leak between unrelated quests"
+
+autonomy_posture:
+  allowed_autonomous:
+    - "hive_task_decompose"
+    - "hive_agent_spawn"
+    - "hive_agent_collapse_completed"
+    - "hive_receipt_emit"
+    - "hive_status_query"
+  requires_approval:
+    - "hive_agent_t3_action"
+    - "hive_kill_all"
+    - "hive_modify_constraints"
+
+scheduling_boundaries: >-
+  HIVE tasks are ephemeral — they do not persist across restarts.
+  Sub-agents must complete or be collapsed within their timeout.
+  Paused agents count toward the concurrent agent limit.

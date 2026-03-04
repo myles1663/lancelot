@@ -5,6 +5,53 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.32] - 2026-03-03
+
+### Added — Universal Application Bridge (UAB)
+- **UAB Host Daemon** (`packages/uab/`): Node.js JSON-RPC 2.0 daemon (port 7900) for framework-level desktop app control. Supports 8 UI frameworks: Electron (CDP), Qt 5/6 (UIA), GTK 3/4 (UIA), WPF/.NET (UIA), Flutter (UIA), Java Swing/FX (JAB→UIA), Office (COM), Win32 (UIA fallback). Unified element model maps all frameworks to common `UIElement`, `DetectedApp`, `AppActionResult`, `AppState` types.
+- **UABProvider** (`src/tools/providers/uab_bridge.py`): Python bridge implementing `AppControlCapability` protocol. Communicates with host daemon via JSON-RPC 2.0 over HTTP. Supports detect, connect, enumerate, query, act, state, keyboard input, window management, screenshots, action chains, and Office operations.
+- **UAB Receipt System** (`src/tools/receipts_uab.py`): `AppControlReceipt` (per-action audit trail) and `AppSessionEntry` (per-session summaries) with `AppControlReceiptStore` persistence to `data/receipts/uab/`. Risk classification: LOW (read-only), MEDIUM (mutating), HIGH (destructive). Sensitive app auto-escalation for password managers, banking, financial, email, and shell apps.
+- **UAB Smart Caching**: Element tree (5s TTL), query (3s TTL), and state (2s TTL) caches with automatic invalidation on mutating actions. Connection health monitoring at 30-second intervals with exponential backoff reconnection.
+- **UAB Action Chains**: Multi-step workflow executor with action, wait, conditional, delay, keypress, hotkey, and typeText step types. Full receipt tracing per step via chain_id linkage.
+- **UAB War Room Panel**: Status panel on Kill Switches page showing daemon health, version, connected apps, and supported frameworks. 5-second polling with offline instructions.
+- **UAB Installation Scripts**: `scripts/install-uab.sh` (Linux/macOS) and `scripts/install-uab.bat` (Windows) for daemon setup with auto-start on login via Windows Scheduled Task. `scripts/uninstall-uab.bat` for removal. `scripts/start-uab.bat` for manual foreground startup (debugging).
+- **UAB Onboarding Detection**: `_handle_final_checks()` now probes the UAB daemon and shows "UAB Daemon: Running/Not running" in the onboarding summary with install instructions.
+
+### Added — Hive Agent Mesh
+- **Hive Architecture** (`src/hive/`): Ephemeral sub-agent system with ArchitectAgent (persistent orchestrator), TaskDecomposer (LLM-powered via flagship_deep), AgentLifecycleManager (spawn/execute/control), AgentRegistry (thread-safe state machine), ScopedSoulGenerator, and GovernanceBridge.
+- **Agent State Machine**: SPAWNING → READY → EXECUTING ⟷ PAUSED → COMPLETING → COLLAPSED. Seven collapse reasons: COMPLETED, OPERATOR_KILL, OPERATOR_KILL_ALL, SOUL_VIOLATION, GOVERNANCE_DENIED, TIMEOUT, ERROR, MAX_ACTIONS_EXCEEDED.
+- **Task Decomposition**: LLM-powered goal decomposition into parallel execution groups. Each subtask gets a TaskSpec with control method (FULLY_AUTONOMOUS, SUPERVISED, MANUAL_CONFIRM), priority, timeout, max_actions, and allowed categories.
+- **Scoped Souls**: Task-specific Soul generation with monotonic restriction principle — scoped Souls can only be more restrictive than the parent. SHA256 hashing for audit linkage. Validated via `validate_more_restrictive()`.
+- **Soul Overlay** (`soul/overlays/hive.yaml`): Five non-negotiable Hive governance rules: no autonomous T3, collapse on violation, monotonic restriction, intervention requires reason, no identical retry.
+- **Operator Intervention**: Pause, resume, kill, modify (kill + replan with feedback), and kill_all. All interventions require non-empty reason string. MODIFY triggers LLM-powered replan with plan hash tracking to prevent identical retries.
+- **GovernanceBridge**: RiskClassifier → TrustLedger → MCPSentry validation pipeline for sub-agent actions. T3 always requires operator approval for Hive agents.
+- **Hive UAB Integration** (`src/hive/integration/`): HiveUABBridge for governed desktop app access, HiveUABExecutor for LLM-planned UAB step execution with heuristic fallback.
+- **Hive API**: Full REST API at `/api/hive/` — status, roster, agents, tasks, control endpoints, intervention history. Gated by `FEATURE_HIVE`.
+- **Hive War Room Page**: HiveAgentMesh page with real-time agent table (3s polling), state badges, per-agent controls, kill-all emergency button. InterventionDialog component with type-specific styling and required reason validation.
+- **Hive Configuration** (`config/hive.yaml`): Capacity (max 10 concurrent agents), governance (supervised by default, collapse on violation), UAB integration toggle, retry policy (no identical plans).
+
+### Added — Feature Flags
+- `FEATURE_TOOLS_UAB` (default: false) — enables UAB bridge provider
+- `FEATURE_HIVE` (default: false) — enables Hive Agent Mesh
+- `FEATURE_HIVE_UAB` (default: false) — enables UAB for Hive sub-agents
+
+### Added — Receipt Types
+- `AppControlReceipt` — UAB per-action audit receipt with risk classification and chain linkage
+- `AppSessionEntry` — UAB per-session summary with action breakdown
+- `HIVE_TASK_EVENT` — Hive task lifecycle receipts (received, decomposed, completed, failed, replanned)
+- `HIVE_AGENT_EVENT` — Hive agent lifecycle receipts (spawned, state transition, action, paused, resumed, collapsed)
+- `HIVE_INTERVENTION_EVENT` — Hive operator intervention receipts
+
+### Added — Configuration Files
+- `config/hive.yaml` — Hive Agent Mesh configuration (capacity, governance, UAB, retry)
+- `soul/overlays/hive.yaml` — Hive governance overlay with non-negotiable rules
+
+### Added — Documentation
+- `docs/uab.md` — UAB comprehensive reference
+- `docs/hive.md` — Hive Agent Mesh comprehensive reference
+- `docs/operations/runbooks/uab.md` — UAB operational procedures
+- `docs/operations/runbooks/hive.md` — Hive operational procedures
+
 ## [0.2.31] - 2026-02-27
 
 ### Added — Tool Flow Streaming

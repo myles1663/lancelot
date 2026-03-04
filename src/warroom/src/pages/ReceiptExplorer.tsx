@@ -1,8 +1,9 @@
 import { useState, useCallback, useEffect } from 'react'
-import { usePolling } from '@/hooks'
+import { usePolling, usePageTitle } from '@/hooks'
 import { fetchReceipts, fetchReceiptStats, fetchReceiptContext } from '@/api'
-import { TierBadge, MetricCard } from '@/components'
+import { TierBadge, MetricCard, Pagination } from '@/components'
 import type { ReceiptItem, ReceiptContext } from '@/api/receipts'
+import { formatTimestamp } from '@/utils/dateFormat'
 
 const TIER_LABELS = ['T0', 'T1', 'T2', 'T3']
 
@@ -27,6 +28,17 @@ const ACTION_TYPE_CONFIG: Record<string, { label: string; color: string; bg: str
   step_failed:   { label: 'Step Fail',    color: 'text-red-400',    bg: 'bg-red-400/15' },
   voice_stt:     { label: 'Voice STT',    color: 'text-pink-400',   bg: 'bg-pink-400/15' },
   voice_tts:     { label: 'Voice TTS',    color: 'text-pink-400',   bg: 'bg-pink-400/15' },
+  // UAB (Universal App Bridge) action types
+  uab_detect:    { label: 'UAB Detect',   color: 'text-teal-400',   bg: 'bg-teal-400/15' },
+  uab_connect:   { label: 'UAB Connect',  color: 'text-teal-400',   bg: 'bg-teal-400/15' },
+  uab_enumerate: { label: 'UAB Enum',     color: 'text-teal-400',   bg: 'bg-teal-400/15' },
+  uab_query:     { label: 'UAB Query',    color: 'text-teal-400',   bg: 'bg-teal-400/15' },
+  uab_act:       { label: 'UAB Act',      color: 'text-orange-400', bg: 'bg-orange-400/15' },
+  uab_state:     { label: 'UAB State',    color: 'text-teal-400',   bg: 'bg-teal-400/15' },
+  // HIVE Agent Mesh action types
+  hive_task_event:         { label: 'HIVE Task',         color: 'text-violet-400', bg: 'bg-violet-400/15' },
+  hive_agent_event:        { label: 'HIVE Agent',        color: 'text-violet-400', bg: 'bg-violet-400/15' },
+  hive_intervention_event: { label: 'HIVE Intervention', color: 'text-rose-400',   bg: 'bg-rose-400/15' },
 }
 
 function ActionTypeBadge({ type }: { type: string }) {
@@ -44,24 +56,34 @@ const ACTION_TYPE_OPTIONS = Object.entries(ACTION_TYPE_CONFIG).map(([value, { la
   label,
 }))
 
+const PAGE_SIZE = 50
+
 export function ReceiptExplorer() {
+  usePageTitle('Receipt Explorer')
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [tierFilter, setTierFilter] = useState('')
   const [actionTypeFilter, setActionTypeFilter] = useState('')
   const [questFilter, setQuestFilter] = useState('')
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
+
+  // Reset page when filters change
+  useEffect(() => {
+    setPage(1)
+  }, [search, statusFilter, actionTypeFilter, questFilter, tierFilter])
 
   const fetcher = useCallback(
     () =>
       fetchReceipts({
-        limit: 100,
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
         q: search || undefined,
         status: statusFilter || undefined,
         action_type: actionTypeFilter || undefined,
         quest_id: questFilter || undefined,
       }),
-    [search, statusFilter, actionTypeFilter, questFilter],
+    [search, statusFilter, actionTypeFilter, questFilter, page],
   )
 
   const { data: receiptsData } = usePolling({ fetcher, interval: 15000 })
@@ -166,7 +188,7 @@ export function ReceiptExplorer() {
             {receipts.length === 0 ? (
               <tr>
                 <td colSpan={7} className="px-4 py-8 text-center text-text-muted">
-                  No receipts found
+                  No receipts match current filters
                 </td>
               </tr>
             ) : (
@@ -183,6 +205,14 @@ export function ReceiptExplorer() {
             )}
           </tbody>
         </table>
+        {receiptsData && (
+          <Pagination
+            currentPage={page}
+            totalPages={Math.ceil((receiptsData.total ?? 0) / PAGE_SIZE)}
+            onPageChange={setPage}
+            totalItems={receiptsData.total}
+          />
+        )}
       </div>
     </div>
   )
@@ -295,7 +325,7 @@ function ReceiptRow({
         className="border-b border-border-default hover:bg-surface-card-elevated cursor-pointer transition-colors"
       >
         <td className="px-4 py-3 font-mono text-xs text-text-muted">
-          {new Date(r.timestamp).toLocaleString()}
+          {formatTimestamp(r.timestamp)}
         </td>
         <td className="px-4 py-3">
           <TierBadge tier={r.tier} compact />

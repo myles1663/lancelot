@@ -76,7 +76,9 @@ class TestEnums:
         """Capability enum covers all expected capabilities."""
         expected = {
             "shell_exec", "repo_ops", "file_ops", "web_ops",
-            "ui_builder", "deploy_ops", "vision_control"
+            "ui_builder", "deploy_ops", "vision_control", "app_control",
+            "connector.read", "connector.write", "connector.delete",
+            "credential.read", "credential.write",
         }
         actual = {c.value for c in Capability}
         assert actual == expected

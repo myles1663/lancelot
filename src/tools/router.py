@@ -34,7 +34,7 @@ from src.tools.contracts import (
 )
 from src.tools.health import HealthMonitor, get_health_monitor
 from src.tools.policies import PolicyEngine, PolicyDecision
-from src.core.feature_flags import FEATURE_TOOLS_HOST_EXECUTION, FEATURE_TOOLS_HOST_BRIDGE
+from src.core.feature_flags import FEATURE_TOOLS_HOST_EXECUTION, FEATURE_TOOLS_HOST_BRIDGE, FEATURE_TOOLS_UAB
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,7 @@ def _default_provider_preferences() -> Dict[str, List[str]]:
         "ui_builder": ["ui_templates", "ui_antigravity"],
         "deploy_ops": list(exec_chain),
         "vision_control": ["vision_antigravity"],
+        "app_control": ["uab_bridge"] if FEATURE_TOOLS_UAB else [],
     }
 
 

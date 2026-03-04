@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { usePolling } from '@/hooks'
+import { usePolling, usePageTitle } from '@/hooks'
 import { fetchHealthReady } from '@/api'
 import { fetchSchedulerJobs, enableSchedulerJob, disableSchedulerJob, triggerSchedulerJob, updateSchedulerJobTimezone } from '@/api/scheduler'
 import type { SchedulerJob, JobTriggerResponse } from '@/api/scheduler'
+import { formatTimestamp } from '@/utils/dateFormat'
 
 // Common IANA timezones for the selector
 const TIMEZONE_OPTIONS = [
@@ -37,8 +38,7 @@ function formatTrigger(type: string, value: string): string {
 }
 
 function formatLastRun(iso: string | null): string {
-  if (!iso) return 'Never'
-  return new Date(iso).toLocaleString()
+  return formatTimestamp(iso)
 }
 
 function jobStatusState(status: string | null): 'healthy' | 'error' | 'inactive' {
@@ -55,6 +55,7 @@ function jobStatusLabel(status: string | null): string {
 // ── Component ───────────────────────────────────────────────────
 
 export function SchedulerPanel() {
+  usePageTitle('Scheduler')
   // Health polling (scheduler running status)
   const { data: healthData } = usePolling({ fetcher: fetchHealthReady, interval: 10000 })
 
@@ -154,7 +155,7 @@ export function SchedulerPanel() {
           />
           {lastTick && (
             <span className="text-xs font-mono text-text-muted">
-              Last tick: {new Date(lastTick).toLocaleString()}
+              Last tick: {formatTimestamp(lastTick)}
             </span>
           )}
         </div>
@@ -350,7 +351,7 @@ export function SchedulerPanel() {
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] text-text-muted uppercase tracking-wider">Registered:</span>
                         <span className="text-xs font-mono text-text-muted">
-                          {new Date(job.registered_at).toLocaleString()}
+                          {formatTimestamp(job.registered_at)}
                         </span>
                       </div>
                     </div>

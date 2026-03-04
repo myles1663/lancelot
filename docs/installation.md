@@ -699,6 +699,58 @@ mkdir -p lancelot_data
 chmod 777 lancelot_data
 ```
 
+### UAB Daemon Setup
+
+The Universal Application Bridge requires a Node.js daemon running on the host machine (outside Docker).
+
+**Prerequisites:** Node.js 18+
+
+**Install and start (Linux/macOS):**
+```bash
+./scripts/install-uab.sh --start
+```
+
+**Install with auto-start (Windows):**
+```batch
+scripts\install-uab.bat
+```
+Registers a `LancelotUABDaemon` Scheduled Task that starts the daemon on login. Idempotent — safe to re-run.
+
+**Manual foreground start (Windows — for debugging):**
+```batch
+scripts\start-uab.bat
+```
+
+**Manual setup:**
+```bash
+cd packages/uab
+npm install
+npm run build
+node dist/daemon.js --port 7900
+```
+
+**Verify:**
+```bash
+curl http://localhost:7900 -d '{"jsonrpc":"2.0","method":"getStatus","params":{},"id":1}'
+```
+
+**Enable in Lancelot:** Set `FEATURE_TOOLS_UAB=true` in `.env` (requires `FEATURE_TOOLS_FABRIC=true`).
+
+### Hive Agent Mesh Configuration
+
+To enable the Hive Agent Mesh:
+
+1. Set `FEATURE_HIVE=true` in `.env`
+2. Ensure `config/hive.yaml` exists (see [Configuration Reference](configuration-reference.md) for all fields)
+3. Optionally enable UAB integration: set `FEATURE_HIVE_UAB=true` (requires `FEATURE_TOOLS_UAB=true`)
+
+**Verify:**
+```bash
+curl http://localhost:8000/api/hive/status
+```
+
+Expected: `{"status": "idle", "enabled": true, ...}`
+
 ### Windows Git Bash path mangling
 
 **Symptom:** Docker exec commands fail with mangled paths (e.g., `C:/Program Files/Git/home/...`).

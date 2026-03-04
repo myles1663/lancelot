@@ -93,6 +93,29 @@ All feature flags are boolean: `true`/`1`/`yes` to enable, anything else to disa
 | `FEATURE_ASYNC_VERIFICATION` | `false` | Async verification for T1 actions |
 | `FEATURE_INTENT_TEMPLATES` | `false` | Cached intent plan templates |
 | `FEATURE_BATCH_RECEIPTS` | `false` | Batched receipt emission |
+| `FEATURE_TOOLS_UAB` | `false` | Universal Application Bridge (desktop app control) |
+| `FEATURE_HIVE` | `false` | Hive Agent Mesh (ephemeral sub-agents) |
+| `FEATURE_HIVE_UAB` | `false` | UAB integration for Hive sub-agents |
+
+#### Feature Flag Metadata Properties
+
+Some feature flags include extended metadata for the War Room UI:
+
+| Property | Description |
+|----------|-------------|
+| `category` | Grouping for the Kill Switches page (e.g., `"tools"`, `"agents"`) |
+| `requires` | List of prerequisite flags that must be enabled first |
+| `warning` | Warning text shown when enabling a potentially dangerous flag |
+| `confirm_enable` | If `true`, requires confirmation dialog before enabling |
+| `has_editor` | Special UI editor panel (e.g., `"uab_panel"` for the UAB status panel) |
+
+#### Feature Flag Dependencies
+
+| Flag | Requires |
+|------|----------|
+| `FEATURE_TOOLS_UAB` | `FEATURE_TOOLS_FABRIC` |
+| `FEATURE_HIVE` | — |
+| `FEATURE_HIVE_UAB` | `FEATURE_HIVE`, `FEATURE_TOOLS_UAB` |
 
 ---
 
@@ -354,6 +377,42 @@ persistence:
   patterns_path: "data/apl/patterns.json"
 ```
 
+### `config/hive.yaml`
+
+Hive Agent Mesh configuration. Controls capacity, governance, UAB integration, and retry behavior.
+
+```yaml
+# Capacity
+max_concurrent_agents: 10           # Max active agents (paused count toward limit)
+default_task_timeout: 300            # Default seconds per agent before timeout
+max_actions_per_agent: 50            # Default action count limit per agent
+max_subtasks_per_decomposition: 20   # Max subtasks from LLM decomposer
+
+# Governance
+spawn_approval_tier: "T2"           # Minimum tier for spawn approval
+default_control_method: "supervised" # Default: fully_autonomous, supervised, manual_confirm
+collapse_on_governance_violation: true  # Collapse agent on governance denial
+collapse_on_soul_violation: true     # Collapse agent on Soul constraint violation
+
+# UAB Integration
+uab_enabled: false                   # Enable desktop app control for sub-agents
+uab_allowed_apps: []                 # App name allowlist (empty = all allowed)
+
+# Retry
+max_retry_attempts: 2                # Max replan attempts
+never_retry_identical_plan: true     # Reject replans that produce identical plan hash
+
+# Logging
+log_agent_actions: true              # Log individual agent actions
+log_decomposition: true              # Log task decomposition details
+```
+
+### Soul Overlay: `soul/overlays/hive.yaml`
+
+Hive governance overlay — adds subsystem-specific rules on top of the base Soul. Contains five non-negotiable rules (hive_no_autonomous_t3, hive_collapse_on_governance_violation, hive_scoped_soul_monotonic, hive_intervention_requires_reason, hive_never_retry_identical) plus allowed_autonomous and requires_approval action lists.
+
+See [Hive Agent Mesh](hive.md) for full rule descriptions.
+
 ### `config/network_allowlist.yaml`
 
 Outbound domain allowlist. Only these domains can be contacted from within the Lancelot container.
@@ -391,6 +450,17 @@ audit:
 
 ---
 
+### UAB Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `UAB_DAEMON_URL` | `http://host.docker.internal:7900` | UAB daemon address (for container → host communication) |
+| `UAB_DAEMON_PORT` | `7900` | UAB daemon listen port (for host-side startup) |
+| `UAB_LOG_LEVEL` | `info` | Daemon log level: `debug`, `info`, `warn`, `error` |
+| `UAB_LOG_FILE` | _(none)_ | Optional daemon log file path |
+
+---
+
 ## Soul Configuration
 
 Soul files live in the `soul/` directory, not in `config/`. See [Authoring Souls](authoring-souls.md) for the complete Soul schema reference.
@@ -420,3 +490,7 @@ Runtime data lives in `lancelot_data/` (container path: `/home/lancelot/data`).
 | `lancelot_data/vault/` | Encrypted credential storage |
 | `lancelot_data/apl/` | APL decision logs and rules |
 | `lancelot_data/governance/` | Policy cache and intent templates |
+| `lancelot_data/receipts/uab/` | UAB action receipts (JSON files) |
+| `lancelot_data/receipts/uab/sessions/` | UAB session summaries |
+| `config/hive.yaml` | Hive Agent Mesh configuration |
+| `soul/overlays/hive.yaml` | Hive governance overlay |

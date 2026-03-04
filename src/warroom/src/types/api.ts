@@ -24,6 +24,9 @@ export interface HealthCheckResponse {
   components: Record<string, string>
   crusader_mode: boolean
   uptime_seconds: number
+  error_count: number
+  total_requests: number
+  error_rate: number
 }
 
 export interface HealthReadyResponse {
@@ -430,6 +433,19 @@ export interface VaultKeyEntry {
 
 export interface VaultKeysResponse {
   keys: VaultKeyEntry[]
+  total: number
+  message?: string
+}
+
+export interface VaultMaskedEntry {
+  key: string
+  type: string
+  created_at: string
+  masked_value: string
+}
+
+export interface VaultMaskedResponse {
+  keys: VaultMaskedEntry[]
   total: number
   message?: string
 }

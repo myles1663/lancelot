@@ -198,6 +198,24 @@ export function VitalsBar() {
         </div>
       </Vital>
 
+      {/* Error Rate */}
+      <Vital
+        label="Error Rate"
+        tooltip="Percentage of requests returning 5xx errors since last restart."
+      >
+        <span
+          className={`text-xs font-semibold font-mono ${
+            (health?.error_rate ?? 0) > 5
+              ? 'text-state-error'
+              : (health?.error_rate ?? 0) > 1
+                ? 'text-state-degraded'
+                : 'text-state-healthy'
+          }`}
+        >
+          {health ? `${health.error_rate}%` : '--'}
+        </span>
+      </Vital>
+
       {/* Crusader badge */}
       {isCrusader && (
         <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded bg-accent-secondary/20 text-accent-secondary">

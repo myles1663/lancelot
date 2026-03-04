@@ -72,6 +72,7 @@ from src.core.feature_flags import (
     FEATURE_TOOLS_HOST_BRIDGE,
     FEATURE_TOOLS_NETWORK,
     FEATURE_TOOLS_CLI_PROVIDERS,
+    FEATURE_TOOLS_UAB,
 )
 
 logger = logging.getLogger(__name__)
@@ -201,6 +202,16 @@ class ToolFabric:
             vision_ag = AntigravityVisionProvider()
             self._health_monitor.register(vision_ag)
 
+        # UAB provider (Universal App Bridge — desktop app control via host)
+        if FEATURE_TOOLS_UAB:
+            from src.tools.providers.uab_bridge import UABProvider
+            uab_provider = UABProvider()
+            self._health_monitor.register(uab_provider)
+            logger.warning(
+                "UAB BRIDGE ENABLED — desktop app control via daemon at %s",
+                uab_provider.config.daemon_url,
+            )
+
         # CLI providers (future — gate for when adapters are implemented)
         if FEATURE_TOOLS_CLI_PROVIDERS:
             logger.info("CLI providers enabled — no CLI adapters currently installed")
@@ -224,6 +235,37 @@ class ToolFabric:
         """
         self._health_monitor.unregister(provider_id)
         logger.info("Unregistered provider: %s", provider_id)
+
+    def update_router_preferences(self) -> None:
+        """Rebuild router preference chains from current feature flag state.
+
+        Call this after registering/unregistering a provider so the router
+        knows which providers are available for each capability.
+        """
+        import feature_flags as ff
+
+        exec_chain: list[str] = []
+        if getattr(ff, "FEATURE_TOOLS_HOST_BRIDGE", False):
+            exec_chain.append("host_bridge")
+        if getattr(ff, "FEATURE_TOOLS_HOST_EXECUTION", False):
+            exec_chain.append("host_execution")
+        exec_chain.append("local_sandbox")
+
+        self._router.set_preferences(Capability.SHELL_EXEC, list(exec_chain))
+        self._router.set_preferences(Capability.REPO_OPS, list(exec_chain))
+        self._router.set_preferences(Capability.FILE_OPS, list(exec_chain))
+        self._router.set_preferences(Capability.DEPLOY_OPS, list(exec_chain))
+        self._router.set_preferences(Capability.WEB_OPS, ["local_sandbox"])
+        self._router.set_preferences(
+            Capability.UI_BUILDER,
+            ["ui_templates", "ui_antigravity"] if not self.config.safe_mode else ["ui_templates"],
+        )
+        self._router.set_preferences(Capability.VISION_CONTROL, ["vision_antigravity"])
+        self._router.set_preferences(
+            Capability.APP_CONTROL,
+            ["uab_bridge"] if getattr(ff, "FEATURE_TOOLS_UAB", False) else [],
+        )
+        logger.info("Router preferences rebuilt (exec_chain=%s)", exec_chain)
 
     # =========================================================================
     # Command Execution (ShellExec)

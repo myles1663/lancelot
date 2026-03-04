@@ -218,6 +218,39 @@ async def list_vault_keys():
         return _safe_error(500, "Failed to list vault keys")
 
 
+@router.get("/vault/masked")
+async def list_vault_masked():
+    """List all credential keys with masked values."""
+    try:
+        if _connector_vault is None:
+            return {"keys": [], "message": "Vault not initialised"}
+
+        keys = _connector_vault.list_keys()
+        entries = []
+        for key in keys:
+            entry = _connector_vault._entries.get(key)
+            raw_val = _connector_vault.retrieve(key) if _connector_vault else None
+            masked = _mask_value(raw_val) if raw_val else "••••"
+            entries.append({
+                "key": key,
+                "type": entry.type if entry else "unknown",
+                "created_at": entry.created_at if entry else "",
+                "masked_value": masked,
+            })
+
+        return {"keys": entries, "total": len(entries)}
+    except Exception as exc:
+        logger.error("list_vault_masked error: %s", exc)
+        return _safe_error(500, "Failed to list vault keys")
+
+
+def _mask_value(value: str) -> str:
+    """Mask a credential value: first 4 + **** + last 4."""
+    if len(value) <= 8:
+        return "****"
+    return value[:4] + "****" + value[-4:]
+
+
 @router.delete("/vault/keys/{key}")
 async def delete_vault_key(key: str):
     """Delete a credential from the vault."""

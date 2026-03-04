@@ -14,6 +14,7 @@ Capabilities:
 - UIBuilder: UI scaffolding from templates or generative
 - DeployOps: Build, test, package, deploy
 - VisionControl: Screen perception and action (requires Antigravity)
+- AppControl: Framework-level desktop app control (requires UAB)
 """
 
 from __future__ import annotations
@@ -90,6 +91,7 @@ class Capability(str, Enum):
     UI_BUILDER = "ui_builder"
     DEPLOY_OPS = "deploy_ops"
     VISION_CONTROL = "vision_control"
+    APP_CONTROL = "app_control"
     # Connector capabilities (Capability Upgrade)
     CONNECTOR_READ = "connector.read"
     CONNECTOR_WRITE = "connector.write"
@@ -221,6 +223,107 @@ class VisionResult:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "VisionResult":
         """Create VisionResult from dictionary."""
+        return cls(**data)
+
+
+@dataclass
+class DetectedApp:
+    """A desktop application detected by UAB framework detection."""
+    pid: int
+    name: str
+    path: Optional[str] = None
+    framework: Optional[str] = None
+    confidence: float = 0.0
+    window_title: Optional[str] = None
+    connection_info: Optional[Dict[str, Any]] = None  # v0.5.0: framework-specific
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "DetectedApp":
+        return cls(**data)
+
+
+@dataclass
+class UIElement:
+    """A UI element in the unified UAB element tree."""
+    id: str
+    type: str  # button, textfield, menu, list, etc.
+    label: Optional[str] = None
+    properties: Dict[str, Any] = field(default_factory=dict)
+    bounds: Optional[Dict[str, int]] = None  # {x, y, width, height}
+    children: List["UIElement"] = field(default_factory=list)
+    actions: List[str] = field(default_factory=list)
+    visible: bool = True
+    enabled: bool = True
+    meta: Optional[Dict[str, Any]] = None  # v0.5.0: framework-specific metadata
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d["children"] = [c.to_dict() for c in self.children]
+        return d
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "UIElement":
+        children = [UIElement.from_dict(c) for c in data.pop("children", [])]
+        return cls(**data, children=children)
+
+
+@dataclass
+class AppActionResult:
+    """Result of performing an action on a UI element via UAB."""
+    success: bool
+    action: str = ""
+    element_id: Optional[str] = None
+    state_changes: List[Dict[str, Any]] = field(default_factory=list)
+    error_message: Optional[str] = None
+    duration_ms: int = 0
+    result_data: Optional[Any] = None  # v0.5.0: Office read results, screenshot paths, etc.
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AppActionResult":
+        return cls(**data)
+
+
+@dataclass
+class AppState:
+    """Current state of a connected application."""
+    pid: int
+    window_title: Optional[str] = None
+    window_size: Optional[Dict[str, int]] = None
+    window_position: Optional[Dict[str, int]] = None
+    focused: bool = False
+    active_element: Optional[Dict[str, Any]] = None
+    modals: List[Dict[str, Any]] = field(default_factory=list)
+    menus: List[Dict[str, Any]] = field(default_factory=list)
+    clipboard: Optional[str] = None  # v0.5.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AppState":
+        return cls(**data)
+
+
+@dataclass
+class ConnectionResult:
+    """Result of connecting to an application via UAB."""
+    success: bool
+    pid: int = 0
+    framework: Optional[str] = None
+    connection_method: Optional[str] = None
+    error_message: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ConnectionResult":
         return cls(**data)
 
 
@@ -675,6 +778,116 @@ class VisionControlCapability(Protocol):
         screenshot: Optional[bytes] = None,
     ) -> VisionResult:
         """Verify UI matches expected state."""
+        ...
+
+
+@runtime_checkable
+class AppControlCapability(Protocol):
+    """
+    Capability for framework-level desktop application control.
+
+    Requires the Universal App Bridge (UAB) daemon running on the host.
+    Uses framework-specific hooks (CDP, Qt MOC, GTK GIR, etc.) to get
+    structured access to application UI trees.
+
+    Licensed separately under BSL 1.1 — see packages/uab/LICENSE.
+    """
+
+    def detect(self) -> List[DetectedApp]:
+        """
+        Detect controllable desktop applications.
+
+        Scans running processes and identifies UI frameworks via
+        library signatures, process metadata, and binary structure.
+
+        Returns:
+            List of detected applications with framework info
+        """
+        ...
+
+    def connect(self, target: Union[int, str]) -> ConnectionResult:
+        """
+        Connect to an application by PID or name.
+
+        Establishes a framework-specific hook (e.g., CDP for Electron,
+        MOC for Qt) to enable structured UI access.
+
+        Args:
+            target: Process ID or application name
+
+        Returns:
+            ConnectionResult with connection status and method used
+        """
+        ...
+
+    def enumerate(self, pid: int) -> List[UIElement]:
+        """
+        Enumerate all UI elements in a connected application.
+
+        Walks the framework's UI tree and maps elements to the unified
+        UIElement schema with types, labels, properties, and bounds.
+
+        Args:
+            pid: Process ID of connected application
+
+        Returns:
+            List of top-level UIElements (with nested children)
+        """
+        ...
+
+    def query(self, pid: int, selector: Dict[str, Any]) -> List[UIElement]:
+        """
+        Search for UI elements matching a selector.
+
+        Supports filtering by type, label (fuzzy), properties, visibility,
+        and combination selectors.
+
+        Args:
+            pid: Process ID of connected application
+            selector: Search criteria (type, label, properties, visible, limit)
+
+        Returns:
+            List of matching UIElements
+        """
+        ...
+
+    def act(
+        self,
+        pid: int,
+        element_id: str,
+        action: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> AppActionResult:
+        """
+        Perform an action on a UI element.
+
+        Supported actions: click, doubleclick, rightclick, type, clear,
+        select, scroll, focus, hover, expand, collapse, invoke, check,
+        uncheck, toggle, keypress, hotkey.
+
+        Args:
+            pid: Process ID of connected application
+            element_id: Target element identifier
+            action: Action type
+            params: Optional parameters (text for type, value for select, etc.)
+
+        Returns:
+            AppActionResult with success status and observed state changes
+        """
+        ...
+
+    def state(self, pid: int) -> AppState:
+        """
+        Get current application state.
+
+        Returns window info, active element, open modals, and menu state.
+
+        Args:
+            pid: Process ID of connected application
+
+        Returns:
+            AppState snapshot
+        """
         ...
 
 

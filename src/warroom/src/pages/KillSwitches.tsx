@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
-import { usePolling } from '@/hooks'
+import { usePolling, usePageTitle } from '@/hooks'
 import { fetchSystemStatus, fetchFlags, toggleFlag, fetchCrusaderStatus } from '@/api'
-import { fetchNetworkAllowlist, updateNetworkAllowlist, fetchHostAgentStatus, shutdownHostAgent, fetchHostWriteCommands, saveHostWriteCommands, fetchHostWriteStatus, toggleHostWriteCommands } from '@/api/flags'
-import type { HostAgentStatus } from '@/api/flags'
+import { fetchNetworkAllowlist, updateNetworkAllowlist, fetchHostAgentStatus, shutdownHostAgent, fetchHostWriteCommands, saveHostWriteCommands, fetchHostWriteStatus, toggleHostWriteCommands, fetchUABStatus, fetchUABApps } from '@/api/flags'
+import type { HostAgentStatus, UABStatus, UABConnectedApp } from '@/api/flags'
 import { StatusDot, ConfirmDialog } from '@/components'
 import type { FlagInfo } from '@/api/flags'
 import type { CrusaderStatusResponse } from '@/types/api'
@@ -372,8 +372,133 @@ function HostWriteCommandsEditor() {
   )
 }
 
+// ── Inline UAB Panel ───────────────────────────────────────────────
+function UABPanel() {
+  const [status, setStatus] = useState<UABStatus | null>(null)
+  const [apps, setApps] = useState<UABConnectedApp[]>([])
+  const [error, setError] = useState<string | null>(null)
+
+  const poll = useCallback(async () => {
+    try {
+      const [statusRes, appsRes] = await Promise.all([
+        fetchUABStatus(),
+        fetchUABApps(),
+      ])
+      setStatus(statusRes)
+      setApps(appsRes.apps || [])
+      setError(null)
+    } catch {
+      setError('Failed to check UAB status')
+    }
+  }, [])
+
+  useEffect(() => {
+    poll()
+    const timer = setInterval(poll, 5000)
+    return () => clearInterval(timer)
+  }, [poll])
+
+  const reachable = status?.reachable ?? false
+
+  return (
+    <div className="mt-2 space-y-3">
+      {/* Section 1: Daemon Status */}
+      <div className="p-3 bg-surface-card rounded-lg border border-border-default">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">UAB Daemon</span>
+          <div className="flex items-center gap-1.5">
+            <span className={`w-2 h-2 rounded-full ${reachable ? 'bg-state-healthy animate-pulse' : 'bg-state-error'}`} />
+            <span className={`text-[10px] font-medium ${reachable ? 'text-state-healthy' : 'text-state-error'}`}>
+              {reachable ? 'Running' : 'Offline'}
+            </span>
+          </div>
+        </div>
+
+        {reachable && status && (
+          <div className="space-y-1.5 mb-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-text-muted">Version</span>
+              <span className="text-[10px] font-mono text-text-primary">v{status.version}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-text-muted">Connected Apps</span>
+              <span className="text-[10px] font-mono text-text-primary">{status.connected_apps}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-text-muted">Frameworks</span>
+              <span className="text-[10px] font-mono text-text-primary">
+                {status.supported_frameworks.length > 0 ? status.supported_frameworks.join(', ') : 'none'}
+              </span>
+            </div>
+            {status.uptime_seconds > 0 && (
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-text-muted">Uptime</span>
+                <span className="text-[10px] font-mono text-text-primary">
+                  {Math.floor(status.uptime_seconds / 60)}m {status.uptime_seconds % 60}s
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!reachable && (
+          <div className="space-y-2">
+            <p className="text-[10px] text-text-muted leading-relaxed">
+              The UAB daemon is not running. Install for auto-start:
+            </p>
+            <code className="block text-[10px] font-mono bg-surface-input rounded px-2 py-1.5 text-text-primary select-all">
+              scripts\install-uab.bat
+            </code>
+            <p className="text-[10px] text-text-muted">
+              Or start manually (foreground): <code className="font-mono text-text-primary">scripts\start-uab.bat</code>
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Section 2: Connected Apps */}
+      {reachable && apps.length > 0 && (
+        <div className="p-3 bg-surface-card rounded-lg border border-border-default">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Connected Apps</span>
+            <span className="text-[10px] text-text-muted">{apps.length} app{apps.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div className="space-y-1.5">
+            {apps.map((app) => (
+              <div key={app.pid} className="flex items-center justify-between py-1 px-2 bg-surface-input rounded">
+                <div className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-state-healthy" />
+                  <span className="text-[10px] font-medium text-text-primary">{app.name}</span>
+                  <span className="text-[9px] font-mono text-text-muted">PID {app.pid}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent-primary/10 text-accent-primary font-mono">
+                    {app.framework}
+                  </span>
+                  <span className="text-[9px] text-text-muted">{app.connectionMethod}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* BSL License Notice */}
+      <div className="p-2 bg-surface-input rounded border border-border-default">
+        <p className="text-[9px] text-text-muted leading-relaxed">
+          UAB is licensed under <span className="font-medium text-text-secondary">BSL 1.1</span> — free for personal use and the Lancelot ecosystem.
+          Commercial agent runtimes and enterprise use require a separate license. See packages/uab/LICENSE.
+        </p>
+      </div>
+
+      {error && <p className="text-[10px] text-state-error">{error}</p>}
+    </div>
+  )
+}
+
 // ── Main Kill Switches Page ─────────────────────────────────────────
 export function KillSwitches() {
+  usePageTitle('Kill Switches')
   const { data } = usePolling({ fetcher: fetchSystemStatus, interval: 10000 })
   const { data: flagsData, refetch: refetchFlags } = usePolling({ fetcher: fetchFlags, interval: 10000 })
   const { data: crusaderStatus } = usePolling<CrusaderStatusResponse>({ fetcher: fetchCrusaderStatus, interval: 5000 })
@@ -610,6 +735,7 @@ export function KillSwitches() {
                       {/* Inline editor for flags with has_editor */}
                       {info.has_editor === 'network_allowlist' && <AllowlistEditor />}
                       {info.has_editor === 'host_agent' && <HostAgentPanel />}
+                      {info.has_editor === 'uab_panel' && <UABPanel />}
                     </div>
                   )}
                 </div>

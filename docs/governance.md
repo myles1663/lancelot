@@ -326,3 +326,45 @@ Defines APL detection parameters, rule limits, never-automate list, and persiste
 ### Soul files (`soul/`)
 
 Constitutional governance documents. See [Authoring Souls](authoring-souls.md) for customization guidance.
+
+---
+
+## Scoped Soul Governance (Hive Agent Mesh)
+
+When the Hive Agent Mesh spawns sub-agents, each agent receives a **scoped Soul** — a task-specific governance document derived from the parent Soul with the **monotonic restriction principle**: scoped Souls can only be more restrictive, never less.
+
+### How Scoped Souls Work
+
+1. Start with the parent Soul's `allowed_autonomous` actions
+2. Filter to only the actions matching the subtask's `allowed_categories`
+3. If `control_method=MANUAL_CONFIRM`, move all actions to `requires_approval`
+4. Preserve all parent risk rules and add Hive-specific rules
+5. Tighten scheduling: `max_concurrent_jobs=1`, duration capped to task timeout
+6. Validate with `validate_more_restrictive()` — if validation fails, the agent is not spawned
+
+### Soul Overlay (`soul/overlays/hive.yaml`)
+
+The Hive overlay adds five non-negotiable governance rules:
+
+| Rule | Severity | Effect |
+|------|----------|--------|
+| `hive_no_autonomous_t3` | CRITICAL | Sub-agents may NEVER autonomously execute T3 actions |
+| `hive_collapse_on_governance_violation` | CRITICAL | Governance check failure immediately collapses the agent |
+| `hive_scoped_soul_monotonic` | CRITICAL | Scoped Souls can only tighten constraints, never loosen |
+| `hive_intervention_requires_reason` | CRITICAL | All operator interventions require non-empty reason string |
+| `hive_never_retry_identical` | CRITICAL | Replans must produce a new plan (tracked via plan hash) |
+
+### Hive-Specific Risk Rules
+
+- **No autonomous T3** — even agents with `control_method=FULLY_AUTONOMOUS` cannot execute T3 actions without operator approval
+- **Collapse on violation** — any governance denial or Soul constraint violation immediately collapses the agent (recommended: `collapse_on_governance_violation: true` in `config/hive.yaml`)
+- **Intervention accountability** — the `hive_intervention_requires_reason` rule ensures every operator action has an audit-traceable justification
+
+### How This Extends the Governance Model
+
+The scoped Soul mechanism extends the existing governance model (Soul → Policy Engine → Risk Tiers) with:
+- **Per-agent governance** — each sub-agent has its own governance boundary
+- **Monotonic restriction** — sub-agents are always less powerful than the parent
+- **Hive overlay rules** — additional safety constraints specific to ephemeral multi-agent execution
+
+For the full Hive Agent Mesh architecture, see [Hive](hive.md). For Soul overlay authoring, see [Authoring Souls](authoring-souls.md).

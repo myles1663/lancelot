@@ -408,3 +408,62 @@ soul/
 ```
 
 All versions are retained. You can switch between any version at any time — the linter validates the target version before activation.
+
+---
+
+## Soul Overlays
+
+Soul overlays are supplementary governance documents that add subsystem-specific rules on top of the base Soul. They were introduced with the Hive Agent Mesh to provide governance rules that apply only when the subsystem is active.
+
+### How Overlays Work
+
+An overlay does not replace the Soul — it adds rules. The base Soul defines the constitutional foundation; overlays add subsystem-specific constraints that are enforced only when that subsystem is operating.
+
+Overlays are stored in `soul/overlays/` and loaded at subsystem initialization.
+
+### Example: Hive Overlay (`soul/overlays/hive.yaml`)
+
+```yaml
+risk_rules:
+  - name: "hive_no_autonomous_t3"
+    description: "Sub-agents may NEVER autonomously execute T3 actions"
+    enforced: true
+  - name: "hive_collapse_on_governance_violation"
+    description: "Any governance check failure collapses the sub-agent immediately"
+    enforced: true
+  - name: "hive_scoped_soul_monotonic"
+    description: "Scoped Souls can only be more restrictive than parent"
+    enforced: true
+  - name: "hive_intervention_requires_reason"
+    description: "All operator interventions require non-empty reason"
+    enforced: true
+  - name: "hive_never_retry_identical"
+    description: "Replans must produce a new plan (hash tracked)"
+    enforced: true
+
+allowed_autonomous:
+  - hive_task_decompose
+  - hive_agent_spawn
+  - hive_agent_collapse_completed
+  - hive_receipt_emit
+  - hive_status_query
+
+requires_approval:
+  - hive_agent_t3_action
+  - hive_kill_all
+  - hive_modify_constraints
+```
+
+### Scoped Souls for Sub-Agents
+
+When the Hive Agent Mesh spawns a sub-agent, it generates a **scoped Soul** — a task-specific Soul derived from the parent with the monotonic restriction principle:
+
+1. **Start with parent** `allowed_autonomous` actions
+2. **Filter by task categories** — keep only actions matching the subtask's `allowed_categories`
+3. **Apply control method** — `MANUAL_CONFIRM` moves all actions to `requires_approval`
+4. **Preserve all parent risk rules** — only add, never remove
+5. **Tighten scheduling** — `max_concurrent_jobs=1`, duration capped to task timeout
+
+The scoped Soul is validated with `validate_more_restrictive()` to ensure it never grants more autonomy than the parent. Each scoped Soul is SHA256-hashed and stored on the agent record for audit linkage.
+
+For full details, see [Hive Agent Mesh](hive.md).

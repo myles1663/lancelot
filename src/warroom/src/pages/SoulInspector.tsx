@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
-import { usePolling } from '@/hooks'
+import { usePolling, usePageTitle } from '@/hooks'
 import { fetchSoulStatus, fetchCrusaderStatus } from '@/api'
 import { fetchSoulContent, proposeSoulAmendment, approveSoulProposal, activateSoulProposal } from '@/api/soul'
 import { ConfirmDialog } from '@/components'
+import { formatTimestamp } from '@/utils/dateFormat'
 import type { SoulDocument, SoulContentResponse, SoulProposal, CrusaderStatusResponse, SoulOverlayInfo } from '@/types/api'
 
 // ── Collapsible Section ─────────────────────────────────────────────
@@ -260,6 +261,7 @@ function SoulEditor({ rawYaml, onProposed }: { rawYaml: string; onProposed: () =
 
 // ── Main Soul Inspector Page ────────────────────────────────────────
 export function SoulInspector() {
+  usePageTitle('Soul Inspector')
   const { data: statusData, refetch: refetchStatus } = usePolling({ fetcher: fetchSoulStatus, interval: 30000 })
   const { data: crusaderStatus } = usePolling<CrusaderStatusResponse>({ fetcher: fetchCrusaderStatus, interval: 5000 })
   const [content, setContent] = useState<SoulContentResponse | null>(null)
@@ -489,7 +491,7 @@ export function SoulInspector() {
                         </div>
                       )}
                       {p.author && (
-                        <p className="text-[10px] text-text-muted mt-1">by {p.author} {p.created_at ? `at ${new Date(p.created_at).toLocaleString()}` : ''}</p>
+                        <p className="text-[10px] text-text-muted mt-1">by {p.author} {p.created_at ? `at ${formatTimestamp(p.created_at)}` : ''}</p>
                       )}
                     </div>
                   )

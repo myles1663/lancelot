@@ -167,6 +167,7 @@ The denylist uses token-level matching, which means `rm` in a filename doesn't t
 Lancelot defends against prompt injection at multiple layers:
 
 1. **Input sanitization** — 16 banned phrases, 10 regex patterns, Cyrillic homoglyph normalization, zero-width character stripping. Applied before any processing.
+1. **Rate limiting** — Sliding-window rate limiter (60 requests/minute per client) enforced at the gateway middleware layer. Requests exceeding the limit receive HTTP 429 with a `Retry-After` header. See the [Rate Limiting](#rate-limiting) section below for details.
 2. **Governance context separation** — The Soul and governance rules are structurally separated from untrusted user content. The model receives them as system-level context, not as part of the conversation.
 3. **Context compiler authority hierarchy** — The context compiler enforces: Soul > operator instructions > user input. Injected instructions cannot override Soul constraints.
 4. **Verifier cross-check** — The Verifier agent analyzes execution outputs for signs of policy bypass or unexpected behavior.
@@ -341,3 +342,129 @@ Recommendations for production deployments:
 - Regular receipt review and quarantine monitoring
 
 Lancelot is designed to be **safe by construction** within its runtime boundary. Security of the deployment environment is a shared responsibility.
+
+---
+
+## UAB Security Model
+
+The Universal Application Bridge introduces host-level desktop app control, which requires additional security measures.
+
+### Risk Classification (3-Tier)
+
+Every UAB action is classified before execution:
+
+| Risk Level | Actions | Governance |
+|------------|---------|------------|
+| **LOW** | detect, enumerate, query, state, screenshot, all read operations | Autonomous |
+| **MEDIUM** | click, type, select, scroll, keypress, hotkey, write operations | May require approval |
+| **HIGH** | close, invoke, move, resize, sendEmail | Always requires approval |
+
+### Sensitive App Auto-Escalation
+
+Actions targeting sensitive applications are automatically escalated:
+- **Password managers** (1password, bitwarden, keepass, lastpass): read → MEDIUM, mutate → HIGH
+- **Banking/financial** (banking apps, venmo, paypal, stripe): read → MEDIUM, mutate → HIGH
+- **Email clients** (outlook, thunderbird, gmail): read → MEDIUM, mutate → HIGH
+- **Shells** (terminal, powershell, cmd): read → MEDIUM, mutate → HIGH
+
+### Rate Limiting and Audit
+
+- 100 requests per minute per PID (enforced at daemon level)
+- Every action produces an `AppControlReceipt` with risk classification
+- Audit log tracks all permission checks with app name, action, risk level, and outcome
+- Session tracking links individual actions to app connection sessions
+
+### Host Bridge Security Considerations
+
+The UAB daemon runs **outside the Docker container** on the host machine. This is a necessary design decision (UI frameworks require host-level access) but introduces specific security considerations:
+
+- The daemon listens on localhost only (port 7900) — not exposed externally
+- Communication is HTTP on `host.docker.internal` — local network only
+- The daemon has full host-level UI access — the risk classification and audit system provides accountability
+- Feature-gated (`FEATURE_TOOLS_UAB=false` by default) — must be explicitly enabled
+
+---
+
+## Hive Agent Mesh Security
+
+The Hive Agent Mesh introduces ephemeral sub-agents, which require governance at the agent level.
+
+### Scoped Soul Validation
+
+Every sub-agent receives a scoped Soul that is validated to be **strictly more restrictive** than the parent:
+- No new `allowed_autonomous` actions beyond what the parent allows
+- All parent risk rules preserved (only additions allowed)
+- Scheduling boundaries tightened (max 1 concurrent job, duration capped)
+- `no_autonomous_irreversible` maintained if parent has it
+
+If validation fails, the agent is not spawned.
+
+### Governance Bridge Pipeline
+
+Every sub-agent action goes through the full governance pipeline:
+
+```
+Sub-Agent Action → RiskClassifier (T0–T3) → TrustLedger (effective tier)
+  → MCPSentry (hard deny) → GovernanceResult (approved/denied)
+```
+
+- T3 actions **always** require operator approval for Hive agents (Soul overlay rule)
+- Governance denial collapses the agent immediately (no retry)
+- Governance checks produce receipts for audit trail
+
+### Collapse-on-Violation
+
+When `collapse_on_governance_violation: true` (recommended default), any governance check failure immediately collapses the sub-agent. This prevents agents from attempting alternative actions after a governance denial.
+
+### No-Identical-Retry
+
+After a task failure or MODIFY intervention, the Architect must produce a genuinely new plan. Plan hashes are tracked in `_plan_history`. If the new plan matches any previous plan, it is rejected. This prevents infinite loops where the LLM regenerates the same failing approach.
+
+### Ephemeral Security Properties
+
+- Sub-agent working memory is destroyed on collapse — no persistent state leaks between tasks
+- Task decomposition context does not leak between unrelated quests
+- Each agent's scoped Soul hash is recorded on the agent record for audit linkage
+- All state transitions, actions, and interventions produce durable receipts
+
+---
+
+## Rate Limiting
+
+Lancelot enforces a sliding-window rate limiter at the gateway middleware layer to prevent abuse and resource exhaustion.
+
+### Configuration
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Window size | 60 seconds | Sliding window |
+| Max requests | 60 per window | Per client IP |
+| Response on exceed | HTTP 429 | Includes `Retry-After` header |
+| Scope | All `/chat` requests | Health/ready endpoints are exempt |
+
+### Behavior
+
+- Each incoming request timestamps are stored in a deque per client
+- Expired timestamps (older than 60s) are pruned on each request
+- If the deque length exceeds 60, the request is rejected with 429
+- The `Retry-After` header indicates seconds until the oldest entry expires
+- Rate limiting is applied before input sanitization and authentication
+
+### Error Rate Monitoring
+
+The gateway tracks request-level error metrics:
+
+| Metric | Description |
+|--------|-------------|
+| `total_requests` | Total HTTP requests since last container restart |
+| `error_count` | Requests that returned HTTP 5xx |
+| `error_rate` | `error_count / total_requests * 100` (percentage) |
+
+These metrics are exposed in the `/health` endpoint response and displayed in the War Room VitalsBar. Color thresholds: green (< 1%), amber (1–5%), red (> 5%).
+
+### War Room Session Rate Limiting
+
+War Room sessions use the same rate limiter. Additionally:
+- Sessions expire after 30 minutes of inactivity (configurable via `WARROOM_SESSION_TIMEOUT_MINUTES`)
+- Invalid/expired sessions receive HTTP 401 and are redirected to the login screen
+- All login attempts are rate-limited under the same 60/min window

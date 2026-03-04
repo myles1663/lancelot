@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { usePolling } from '@/hooks'
+import { usePolling, usePageTitle } from '@/hooks'
 import { fetchCoreBlocks, fetchQuarantine, fetchMemoryStats, searchMemory, promoteItem } from '@/api'
 import { MetricCard, EmptyState } from '@/components'
 
 export function MemoryPanel() {
+  usePageTitle('Memory')
   const { data: blocks, error: blocksError } = usePolling({ fetcher: fetchCoreBlocks, interval: 30000 })
   const { data: quarantine, error: quarantineError, refetch: refetchQuarantine } = usePolling({ fetcher: fetchQuarantine, interval: 30000 })
   const { data: stats } = usePolling({ fetcher: fetchMemoryStats, interval: 60000 })

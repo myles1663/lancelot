@@ -133,6 +133,7 @@ FEATURE_TOOLS_NETWORK: bool = _env_bool("FEATURE_TOOLS_NETWORK", default=False)
 FEATURE_TOOLS_HOST_EXECUTION: bool = _env_bool("FEATURE_TOOLS_HOST_EXECUTION", default=False)
 FEATURE_TOOLS_HOST_BRIDGE: bool = _env_bool("FEATURE_TOOLS_HOST_BRIDGE", default=False)
 FEATURE_HOST_WRITE_COMMANDS: bool = _env_bool("FEATURE_HOST_WRITE_COMMANDS", default=False)
+FEATURE_TOOLS_UAB: bool = _env_bool("FEATURE_TOOLS_UAB", default=False)
 
 # Fix Pack V1 flags
 FEATURE_RESPONSE_ASSEMBLER: bool = _env_bool("FEATURE_RESPONSE_ASSEMBLER")
@@ -184,6 +185,10 @@ FEATURE_GOOGLE_OAUTH: bool = _env_bool("FEATURE_GOOGLE_OAUTH", default=False)  #
 FEATURE_TOOL_FLOW_STREAMING: bool = _env_bool("FEATURE_TOOL_FLOW_STREAMING", default=False)  # Real-time tool execution progress events via EventBus
 FEATURE_ACTION_CARDS: bool = _env_bool("FEATURE_ACTION_CARDS", default=False)  # Channel-agnostic interactive buttons for approvals and actions
 
+# HIVE Agent Mesh — ephemeral sub-agent architecture
+FEATURE_HIVE: bool = _env_bool("FEATURE_HIVE", default=False)  # Master switch for HIVE Agent Mesh subsystem
+FEATURE_HIVE_UAB: bool = _env_bool("FEATURE_HIVE_UAB", default=False)  # Enable UAB bridge for HIVE sub-agents
+
 
 # All flags are now hot-toggleable via SubsystemManager — no restart required.
 RESTART_REQUIRED_FLAGS = frozenset()
@@ -232,6 +237,7 @@ def reload_flags() -> None:
     global FEATURE_TOOLS_FABRIC, FEATURE_TOOLS_CLI_PROVIDERS, FEATURE_TOOLS_ANTIGRAVITY
     global FEATURE_TOOLS_NETWORK, FEATURE_TOOLS_HOST_EXECUTION, FEATURE_TOOLS_HOST_BRIDGE
     global FEATURE_HOST_WRITE_COMMANDS
+    global FEATURE_TOOLS_UAB
     global FEATURE_RESPONSE_ASSEMBLER, FEATURE_EXECUTION_TOKENS
     global FEATURE_TASK_GRAPH_EXECUTION, FEATURE_NETWORK_ALLOWLIST, FEATURE_VOICE_NOTES
     global FEATURE_AGENTIC_LOOP
@@ -246,6 +252,7 @@ def reload_flags() -> None:
     global FEATURE_DEEP_REASONING_LOOP
     global FEATURE_GOOGLE_OAUTH
     global FEATURE_TOOL_FLOW_STREAMING, FEATURE_ACTION_CARDS
+    global FEATURE_HIVE, FEATURE_HIVE_UAB
 
     # vNext2 flags
     FEATURE_SOUL = _env_bool("FEATURE_SOUL")
@@ -262,6 +269,7 @@ def reload_flags() -> None:
     FEATURE_TOOLS_HOST_EXECUTION = _env_bool("FEATURE_TOOLS_HOST_EXECUTION", default=False)
     FEATURE_TOOLS_HOST_BRIDGE = _env_bool("FEATURE_TOOLS_HOST_BRIDGE", default=False)
     FEATURE_HOST_WRITE_COMMANDS = _env_bool("FEATURE_HOST_WRITE_COMMANDS", default=False)
+    FEATURE_TOOLS_UAB = _env_bool("FEATURE_TOOLS_UAB", default=False)
 
     # Fix Pack V1 flags
     FEATURE_RESPONSE_ASSEMBLER = _env_bool("FEATURE_RESPONSE_ASSEMBLER")
@@ -313,6 +321,10 @@ def reload_flags() -> None:
     FEATURE_TOOL_FLOW_STREAMING = _env_bool("FEATURE_TOOL_FLOW_STREAMING", default=False)
     FEATURE_ACTION_CARDS = _env_bool("FEATURE_ACTION_CARDS", default=False)
 
+    # HIVE Agent Mesh
+    FEATURE_HIVE = _env_bool("FEATURE_HIVE", default=False)
+    FEATURE_HIVE_UAB = _env_bool("FEATURE_HIVE_UAB", default=False)
+
 
 def get_all_flags() -> dict[str, bool]:
     """Return a snapshot of all feature flag values."""
@@ -333,10 +345,10 @@ def log_feature_flags() -> None:
         FEATURE_SOUL, FEATURE_SKILLS, FEATURE_HEALTH_MONITOR, FEATURE_SCHEDULER, FEATURE_MEMORY_VNEXT,
     )
     logger.info(
-        "Tool Fabric flags: FABRIC=%s, CLI_PROVIDERS=%s, ANTIGRAVITY=%s, NETWORK=%s, HOST_EXEC=%s, HOST_BRIDGE=%s, HOST_WRITE_CMDS=%s",
+        "Tool Fabric flags: FABRIC=%s, CLI_PROVIDERS=%s, ANTIGRAVITY=%s, NETWORK=%s, HOST_EXEC=%s, HOST_BRIDGE=%s, HOST_WRITE_CMDS=%s, UAB=%s",
         FEATURE_TOOLS_FABRIC, FEATURE_TOOLS_CLI_PROVIDERS, FEATURE_TOOLS_ANTIGRAVITY,
         FEATURE_TOOLS_NETWORK, FEATURE_TOOLS_HOST_EXECUTION, FEATURE_TOOLS_HOST_BRIDGE,
-        FEATURE_HOST_WRITE_COMMANDS,
+        FEATURE_HOST_WRITE_COMMANDS, FEATURE_TOOLS_UAB,
     )
     logger.info(
         "Fix Pack V1 flags: RESPONSE_ASSEMBLER=%s, EXECUTION_TOKENS=%s, TASK_GRAPH=%s, NETWORK_ALLOWLIST=%s, VOICE_NOTES=%s",
@@ -389,4 +401,8 @@ def log_feature_flags() -> None:
     logger.info(
         "Tool Flow + ActionCards flags: TOOL_FLOW_STREAMING=%s, ACTION_CARDS=%s",
         FEATURE_TOOL_FLOW_STREAMING, FEATURE_ACTION_CARDS,
+    )
+    logger.info(
+        "HIVE Agent Mesh flags: HIVE=%s, HIVE_UAB=%s",
+        FEATURE_HIVE, FEATURE_HIVE_UAB,
     )

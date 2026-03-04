@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { usePolling } from '@/hooks'
+import { usePolling, usePageTitle } from '@/hooks'
 import {
   fetchSkillProposals,
   fetchSkillProposal,
@@ -9,6 +9,7 @@ import {
   fetchInstalledSkills,
 } from '@/api'
 import { StatusDot, MetricCard } from '@/components'
+import { formatDateOnly, formatTimestamp } from '@/utils/dateFormat'
 import type { SkillProposalDetail } from '@/types/api'
 
 const STATUS_STATES: Record<string, 'healthy' | 'degraded' | 'error' | 'inactive'> = {
@@ -19,6 +20,7 @@ const STATUS_STATES: Record<string, 'healthy' | 'degraded' | 'error' | 'inactive
 }
 
 export function SkillsPanel() {
+  usePageTitle('Skills')
   const { data: proposals, refetch: refreshProposals } = usePolling({ fetcher: fetchSkillProposals, interval: 10000 })
   const { data: skills, refetch: refreshSkills } = usePolling({ fetcher: fetchInstalledSkills, interval: 15000 })
 
@@ -112,7 +114,7 @@ export function SkillsPanel() {
                     <p className="text-[11px] text-text-muted mt-0.5 truncate">{p.description}</p>
                   </div>
                   <span className="text-[10px] text-text-muted ml-2 whitespace-nowrap">
-                    {new Date(p.created_at).toLocaleDateString()}
+                    {formatDateOnly(p.created_at)}
                   </span>
                 </div>
               ))}
@@ -184,7 +186,7 @@ export function SkillsPanel() {
                   label={selectedProposal.status}
                 />
                 <span className="text-text-muted">
-                  Created: {new Date(selectedProposal.created_at).toLocaleString()}
+                  Created: {formatTimestamp(selectedProposal.created_at)}
                 </span>
                 {selectedProposal.permissions.length > 0 && (
                   <span className="text-text-muted">

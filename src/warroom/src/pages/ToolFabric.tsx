@@ -1,8 +1,9 @@
-import { usePolling } from '@/hooks'
+import { usePolling, usePageTitle } from '@/hooks'
 import { fetchHealth, fetchToolsHealth, fetchToolsConfig } from '@/api'
 import { StatusDot, MetricCard } from '@/components'
 
 export function ToolFabric() {
+  usePageTitle('Tool Fabric')
   const { data: health } = usePolling({ fetcher: fetchHealth, interval: 10000 })
   const { data: toolsHealth } = usePolling({ fetcher: fetchToolsHealth, interval: 10000 })
   const { data: toolsConfig } = usePolling({ fetcher: fetchToolsConfig, interval: 30000 })

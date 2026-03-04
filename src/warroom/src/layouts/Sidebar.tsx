@@ -32,6 +32,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     title: 'OPERATIONS',
     items: [
+      { label: 'HIVE Agent Mesh', path: '/hive' },
       { label: 'Receipt Explorer', path: '/receipts', shortcut: '6' },
       { label: 'Tool Fabric', path: '/tools', shortcut: '7' },
       { label: 'Memory', path: '/memory', shortcut: '8' },
@@ -84,7 +85,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             <img
               src={logo}
               alt="Lancelot"
-              className="w-8 h-8 rounded-lg object-cover"
+              className="w-12 h-12 rounded-lg object-cover"
             />
             <div>
               <h1 className="text-sm font-semibold text-text-primary tracking-wide">LANCELOT OS</h1>

@@ -32,7 +32,7 @@ These principles are enforced in code, not just stated in docs:
   <img src="docs/images/fig1_system_architecture.svg" alt="Lancelot System Architecture" width="900">
 </p>
 
-Every subsystem is **independently disableable** via feature flags. If something breaks, kill it — the rest keeps running.
+Every subsystem is **independently disableable** via feature flags. If something breaks, kill it — the rest keeps running. Recent additions include the **Universal Application Bridge (UAB)** for framework-level desktop app control and the **Hive Agent Mesh** for ephemeral sub-agent task decomposition — both feature-gated and disabled by default.
 
 ## Key Capabilities
 
@@ -42,6 +42,8 @@ Every subsystem is **independently disableable** via feature flags. If something
 | **Memory** | Tiered, commit-based memory with quarantine and rollback | [Memory](docs/memory.md) |
 | **Skills** | Modular capabilities with manifest-declared permissions | [Developing Skills](docs/developing-skills.md) |
 | **Tool Fabric** | Provider-agnostic execution with sandboxing and policy gates | [Architecture](docs/architecture.md) |
+| **UAB** | Framework-level desktop app control across 8 UI frameworks (feature-gated) | [UAB](docs/uab.md) |
+| **Hive Mesh** | Ephemeral sub-agent architecture with task decomposition and scoped souls (feature-gated) | [Hive](docs/hive.md) |
 | **Receipts** | Auditable record of every action, decision, and outcome | [Receipts](docs/receipts.md) |
 | **Scheduler** | Gated cron/interval automation with approval pipelines | [Configuration](docs/configuration-reference.md) |
 | **War Room** | Operator dashboard for full system observability | [War Room Guide](docs/war-room.md) |
@@ -203,6 +205,8 @@ lancelot/
 | [Developing Connectors](docs/developing-connectors.md) | Build governed integrations |
 | [Developing Skills](docs/developing-skills.md) | Build capabilities that pass the security pipeline |
 | [Authoring Souls](docs/authoring-souls.md) | Customize Lancelot's constitutional governance |
+| [UAB (Universal Application Bridge)](docs/uab.md) | Desktop app control via framework hooking |
+| [Hive Agent Mesh](docs/hive.md) | Ephemeral sub-agent task decomposition |
 | [How Lancelot Compares](docs/comparison.md) | Factual comparison with the agent landscape |
 | [Anti-Roadmap](docs/anti-roadmap.md) | What we will not build, and why |
 | [Changelog](CHANGELOG.md) | Version history |

@@ -1,4 +1,4 @@
-import { usePolling } from '@/hooks'
+import { usePolling, usePageTitle } from '@/hooks'
 import {
   fetchAplRules,
   fetchAplProposals,
@@ -14,6 +14,7 @@ import { MetricCard, TierBadge, ConfirmDialog } from '@/components'
 import { useState } from 'react'
 
 export function AplPanel() {
+  usePageTitle('Approval Learning')
   const { data: rulesData, refetch: refetchRules } = usePolling({ fetcher: fetchAplRules, interval: 15000 })
   const { data: proposalsData, refetch: refetchProposals } = usePolling({ fetcher: fetchAplProposals, interval: 10000 })
   const { data: decisionsData } = usePolling({ fetcher: () => fetchAplDecisions(30), interval: 15000 })

@@ -1,9 +1,11 @@
-import { usePolling } from '@/hooks'
+import { usePolling, usePageTitle } from '@/hooks'
 import { fetchGovernanceStats, fetchGovernanceDecisions, fetchGovernanceApprovals, approveItem, denyItem } from '@/api'
-import { MetricCard, TierBadge } from '@/components'
+import { MetricCard, TierBadge, EmptyState } from '@/components'
 import type { GovernanceDecision, ApprovalItem } from '@/api/governance'
+import { formatTimeOnly } from '@/utils/dateFormat'
 
 export function GovernanceDashboard() {
+  usePageTitle('Governance')
   const { data: statsData } = usePolling({ fetcher: fetchGovernanceStats, interval: 10000 })
   const { data: decisionsData, refetch: refetchDecisions } = usePolling({
     fetcher: () => fetchGovernanceDecisions(20),
@@ -49,7 +51,7 @@ export function GovernanceDashboard() {
             Approval Queue ({approvals.length})
           </h3>
           {approvals.length === 0 ? (
-            <p className="text-sm text-text-muted">No pending approvals</p>
+            <EmptyState title="No Pending Approvals" description="All governance items have been reviewed." />
           ) : (
             <div className="space-y-3">
               {approvals.map((item: ApprovalItem) => (
@@ -100,7 +102,7 @@ export function GovernanceDashboard() {
             Recent Decisions
           </h3>
           {decisions.length === 0 ? (
-            <p className="text-sm text-text-muted">No decisions yet</p>
+            <EmptyState title="No Decisions" description="Governance decisions will appear here as actions are evaluated." />
           ) : (
             <div className="space-y-2 max-h-96 overflow-y-auto">
               {decisions.map((d: GovernanceDecision) => (
@@ -116,7 +118,7 @@ export function GovernanceDashboard() {
                     </span>
                   )}
                   <span className="text-[10px] text-text-muted font-mono">
-                    {new Date(d.recorded_at).toLocaleTimeString()}
+                    {formatTimeOnly(d.recorded_at)}
                   </span>
                 </div>
               ))}
