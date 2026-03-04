@@ -5,6 +5,27 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.2.33] - 2026-03-04
+
+### Added — Vault-Backed Secret Management
+- **SecretCache** (`src/core/secret_cache.py`): Module-level singleton for vault-backed secret storage with thread-safe RLock access. Replaces `os.getenv()` for all system secrets. Maps 6 env vars to vault keys (e.g., `LANCELOT_API_TOKEN` → `system.api_token`). Auto-migrates secrets from `.env` to vault on first boot.
+- **Environ Scrubbing**: After bootstrap, all migrated secrets are deleted from `os.environ` — no longer visible in `/proc/PID/environ`. Vault key (`LANCELOT_VAULT_KEY`) also scrubbed after vault initialization.
+- **Password Hashing**: War Room password (`WARROOM_PASSWORD`) automatically hashed with SHA-256 on migration. `_verify_password()` in `auth_api.py` auto-detects SHA-256 hex vs legacy plaintext for backward compatibility.
+- **Hot Rotation** (Phase 2): `POST /api/secrets/reload` endpoint (owner-token-protected) reloads vault secrets into cache without restart. SIGHUP handler (Linux) triggers same reload. Returns count of changed secrets with receipt emission.
+- **PBKDF2 Passphrase Support** (Phase 3): Human-memorable passphrases via PBKDF2HMAC (SHA256, 600k iterations, 16-byte random salt). Set `LANCELOT_VAULT_PASSPHRASE` instead of raw Fernet key. Salt stored alongside vault data.
+- **Docker Secrets Support** (Phase 3): Reads `LANCELOT_VAULT_KEY` and `LANCELOT_VAULT_PASSPHRASE` from `/run/secrets/` before checking `os.environ`.
+- **Migration Script** (`scripts/migrate_secrets_to_vault.py`): One-time migration with `--remove-from-env` and `--dry-run` flags.
+- **Feature Flag**: `FEATURE_VAULT_SECRETS` (default: true) — kill switch for vault-backed secrets with fallback to `os.getenv()`.
+- **32 new tests** (`tests/test_secret_cache.py`): Coverage for all 3 phases — bootstrap, migration, hashing, scrubbing, reload, PBKDF2, Docker Secrets.
+
+### Changed — License Migration
+- **BSL 1.1**: Repository license changed from AGPL-3.0 to Business Source License 1.1. Licensor: Myles Russell Hamilton. Change Date: March 4, 2030 (auto-converts to AGPL-3.0-or-later). Free for non-production use; production requires commercial license.
+- Updated LICENSE file, 23 Python source headers, 2 JS/TS headers, package.json files, pyproject.toml, README badge, DISCLOSURE.md, CHANGELOG.md.
+- UAB sub-package also migrated to BSL 1.1. Third-party dependency licenses unchanged.
+
+### Changed
+- 9 modules updated to use `secret_cache.get()` instead of `os.getenv()`: gateway.py, auth_api.py, security_bridge.py, warroom_ws.py, response_helpers.py, orchestrator.py, telegram_bot.py, onboarding.py, soul/api.py.
+
 ## [0.2.32] - 2026-03-03
 
 ### Added — Universal Application Bridge (UAB)

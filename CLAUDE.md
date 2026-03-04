@@ -17,7 +17,7 @@
 
 ## Session Rules
 
-- **Current version:** `0.2.32` (see `VERSION` file and `CHANGELOG.md`)
+- **Current version:** `0.2.33` (see `VERSION` file and `CHANGELOG.md`)
 - **Push after fix:** If we implement a fix on the local deployed version, we push the fixes to the git repo.
 - **Merge after test:** Once we test any branch and confirm it works, merge it back to `main` for a complete updated system.
 - **Always update CHANGELOG + VERSION:** When deploying a fix pack or feature, bump `VERSION` and add a new section to `CHANGELOG.md` (Added/Fixed/Changed subsections).
@@ -393,6 +393,7 @@ All read from environment variables. `true`/`1`/`yes` = enabled; everything else
 | `FEATURE_TOOLS_UAB` | false | — | UAB desktop app control (requires FEATURE_TOOLS_FABRIC) |
 | `FEATURE_HIVE` | false | — | Hive Agent Mesh (ephemeral sub-agents) |
 | `FEATURE_HIVE_UAB` | false | — | UAB for Hive sub-agents (requires FEATURE_HIVE + FEATURE_TOOLS_UAB) |
+| `FEATURE_VAULT_SECRETS` | **true** | true | Vault-backed secret cache (kill switch → fallback to os.getenv) |
 
 ---
 
