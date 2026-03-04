@@ -172,15 +172,15 @@ class TestMaxActions:
 class TestTimeout:
     def test_timeout_collapses_agent(self, registry, receipt_mgr):
         def slow_executor(action):
-            time.sleep(0.15)
+            time.sleep(1.5)
             return {}
 
         runtime, record = _make_runtime(
-            registry, receipt_mgr, slow_executor, timeout=0.1,
+            registry, receipt_mgr, slow_executor, timeout=1,
         )
         # Need multiple actions — timeout is checked BEFORE each action
         actions = [{"action": f"slow{i}"} for i in range(5)]
         result = runtime.run(actions)
-        # After the first action (0.15s > 0.1s timeout), the second iteration detects timeout
+        # After the first action (1.5s > 1s timeout), the second iteration detects timeout
         assert result.collapse_reason == CollapseReason.TIMEOUT
         assert result.action_count < 5  # Should not complete all actions

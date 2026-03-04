@@ -88,13 +88,19 @@ class TaskSpec:
     description: str = ""
     control_method: ControlMethod = ControlMethod.SUPERVISED
     priority: TaskPriority = TaskPriority.NORMAL
-    timeout_seconds: int = 300
+    timeout_seconds: float = 300
     max_actions: int = 50
     allowed_apps: List[str] = field(default_factory=list)
     allowed_categories: List[str] = field(default_factory=list)
     context: Dict[str, Any] = field(default_factory=dict)
     parent_task_id: Optional[str] = None
     execution_group: int = 0  # Tasks in same group run concurrently
+
+    def __post_init__(self):
+        if self.timeout_seconds < 1:
+            self.timeout_seconds = 1
+        if self.max_actions < 1:
+            self.max_actions = 1
 
 
 @dataclass

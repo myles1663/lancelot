@@ -262,18 +262,18 @@ class TestAgentTimeoutAndCleanup:
     def test_slow_executor_triggers_timeout(self, registry, receipt_mgr):
         """Executor that takes too long triggers TIMEOUT collapse."""
         def slow_executor(action):
-            time.sleep(0.3)
+            time.sleep(1.5)
             return {}
 
         runtime, record = _make_runtime(
-            registry, receipt_mgr, slow_executor, timeout=0.1,
+            registry, receipt_mgr, slow_executor, timeout=1,
         )
         actions = [{"action": f"s{i}"} for i in range(10)]
         result = runtime.run(actions)
 
         assert result.collapse_reason == CollapseReason.TIMEOUT
         assert result.success is False
-        # At most 1 action completed (first one takes 0.3s > 0.1s timeout)
+        # At most 1 action completed (first one takes 1.5s > 1s timeout)
         assert result.action_count <= 1
 
     def test_paused_agent_times_out(self, registry, receipt_mgr):
@@ -773,6 +773,40 @@ class TestReceiptIntegrity:
         parent = service.get(loaded.parent_id)
         assert parent is None  # Orphaned
 
+        # validate_parent_chain should find this orphan
+        orphans = service.validate_parent_chain()
+        assert len(orphans) == 1
+        assert orphans[0]["receipt_id"] == orphan.id
+        assert orphans[0]["orphaned_parent_id"] == "nonexistent-parent-id"
+
+    def test_validate_parent_chain_clean(self, tmp_path):
+        """validate_parent_chain returns empty list when all parents exist."""
+        from src.shared.receipts import ReceiptService, create_receipt, ActionType, CognitionTier
+
+        service = ReceiptService(data_dir=str(tmp_path))
+        quest = str(uuid.uuid4())
+
+        parent = create_receipt(
+            action_type=ActionType.HIVE_TASK_EVENT,
+            action_name="task",
+            inputs={},
+            tier=CognitionTier.DETERMINISTIC,
+            quest_id=quest,
+        )
+        service.create(parent)
+        child = create_receipt(
+            action_type=ActionType.HIVE_AGENT_EVENT,
+            action_name="agent",
+            inputs={},
+            tier=CognitionTier.DETERMINISTIC,
+            parent_id=parent.id,
+            quest_id=quest,
+        )
+        service.create(child)
+
+        orphans = service.validate_parent_chain(quest_id=quest)
+        assert orphans == []
+
     def test_quest_id_grouping_accurate(self, tmp_path):
         """All receipts with same quest_id returned by quest filter."""
         from src.shared.receipts import ReceiptService, create_receipt, ActionType, CognitionTier
@@ -1060,6 +1094,60 @@ class TestTrustLedgerRaceConditions:
         # First action approved, second denied
         assert result.success is False
         assert result.collapse_reason == CollapseReason.GOVERNANCE_DENIED
+
+
+# =====================================================================
+# 8. REGRESSION TESTS — fixes from failure injection findings
+# =====================================================================
+
+class TestRegressionFixes:
+    """Tests for the fixes derived from failure injection findings."""
+
+    def test_taskspec_timeout_floor(self):
+        """TaskSpec.timeout_seconds cannot go below 1."""
+        spec_zero = TaskSpec(timeout_seconds=0)
+        assert spec_zero.timeout_seconds == 1
+
+        spec_negative = TaskSpec(timeout_seconds=-10)
+        assert spec_negative.timeout_seconds == 1
+
+        spec_fractional = TaskSpec(timeout_seconds=0.5)
+        assert spec_fractional.timeout_seconds == 1
+
+        spec_valid = TaskSpec(timeout_seconds=30)
+        assert spec_valid.timeout_seconds == 30
+
+    def test_taskspec_max_actions_floor(self):
+        """TaskSpec.max_actions cannot go below 1."""
+        spec = TaskSpec(max_actions=0)
+        assert spec.max_actions == 1
+
+        spec_neg = TaskSpec(max_actions=-5)
+        assert spec_neg.max_actions == 1
+
+    def test_governance_pause_respects_task_timeout(self, registry, receipt_mgr):
+        """Governance pause uses remaining task timeout, not hardcoded 300s.
+
+        Agent with 0.3s timeout should not wait 300s when paused.
+        """
+        governance = GovernanceBridge(
+            risk_classifier=_MockRiskClassifier(tier=2),  # T2 → requires approval → pause
+        )
+
+        runtime, record = _make_runtime(
+            registry, receipt_mgr,
+            action_executor=lambda a: {"ok": True},
+            governance=governance,
+            timeout=0.3,  # Very short timeout
+        )
+
+        start = time.monotonic()
+        result = runtime.run([{"action": "needs_approval"}])
+        elapsed = time.monotonic() - start
+
+        assert result.collapse_reason == CollapseReason.TIMEOUT
+        # Should have timed out in ~0.3s, not 300s
+        assert elapsed < 5.0
 
 
 # ── Mock Helpers ──────────────────────────────────────────────────────

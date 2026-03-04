@@ -223,7 +223,7 @@ lancelot/
 | **Unit** | ~3,850 | Core subsystems, types, state machines, serialization, policies, receipts |
 | **Integration** | ~100 | End-to-end task lifecycle, API endpoints, cross-subsystem coordination |
 | **End-to-end** | ~145 | Full orchestrator flows, multi-agent execution, receipt chain verification |
-| **Failure injection** | 42 | Connector failure mid-task, timeout/cleanup, concurrent conflicts, soul violations, receipt tampering, UAB fallback, trust ledger race conditions |
+| **Failure injection** | 46 | Connector failure mid-task, timeout/cleanup, concurrent conflicts, soul violations, receipt tampering, UAB fallback, trust ledger race conditions |
 
 Run the suite:
 
@@ -232,6 +232,24 @@ pytest tests/ -x                        # Stop on first failure
 pytest tests/hive/ -v                   # HIVE subsystem only
 pytest tests/hive/test_failure_injection.py -v  # Failure/edge-case tests
 ```
+
+### What the Tests Found
+
+Failure injection testing uncovered 4 bugs and 2 design gaps. All bugs have been fixed and regression-tested.
+
+**Bugs Uncovered and Fixed:**
+
+| Issue | Severity | File | Fix |
+|-------|----------|------|-----|
+| Governance pause ignored agent timeout — paused agents waited a hardcoded 300s regardless of their actual deadline | Bug | `src/hive/runtime.py` | `_wait_for_unpause` now uses remaining task timeout |
+| Governance component failures logged at `debug` level — trust ledger and MCP Sentry errors invisible to operators | Monitoring gap | `src/hive/integration/governance_bridge.py` | Bumped to `warning` level |
+| `TaskSpec.timeout_seconds` had no floor — zero or negative values accepted silently | Defensive gap | `src/hive/types.py` | Added `__post_init__` floor at 1 second |
+| Receipt `parent_id` could reference non-existent receipts with no way to audit | Audit gap | `src/shared/receipts.py` | Added `validate_parent_chain()` for orphan detection |
+
+**Design Notes (Not Bugs — Documented for Transparency):**
+
+- `HiveConfig.max_retry_attempts` exists but the runtime doesn't use it — retries are handled at the architect level, not per-action. This is intentional but underdocumented.
+- `UABBridge._validate_app_access` is a no-op stub — app access is validated by the runtime before calling the bridge. The stub exists for future per-bridge enforcement.
 
 ## License
 

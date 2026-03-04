@@ -464,6 +464,44 @@ class ReceiptService:
         )
         return [self._row_to_receipt(row) for row in cursor.fetchall()]
 
+    def validate_parent_chain(
+        self,
+        quest_id: Optional[str] = None,
+    ) -> List[Dict[str, str]]:
+        """Find receipts whose parent_id points to a non-existent receipt.
+
+        Useful for audit: every receipt with a parent_id should reference
+        an actual receipt.  Orphans indicate tampering or data corruption.
+
+        Args:
+            quest_id: Optional quest scope.  If given, only checks receipts
+                      within that quest.
+
+        Returns:
+            List of dicts with ``receipt_id`` and ``orphaned_parent_id``
+            for every broken link found.  Empty list means chain is intact.
+        """
+        sql = """
+            SELECT r.id, r.parent_id
+            FROM receipts r
+            WHERE r.parent_id IS NOT NULL
+              AND r.parent_id != ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM receipts p WHERE p.id = r.parent_id
+              )
+        """
+        params: List[Any] = []
+        if quest_id:
+            sql += " AND r.quest_id = ?"
+            params.append(quest_id)
+
+        conn = self._get_connection()
+        cursor = conn.execute(sql, params)
+        return [
+            {"receipt_id": row["id"], "orphaned_parent_id": row["parent_id"]}
+            for row in cursor.fetchall()
+        ]
+
     def get_stats(
         self,
         since: Optional[str] = None,

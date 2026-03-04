@@ -247,8 +247,20 @@ class SubAgentRuntime:
             collapse_reason=self._collapse_reason,
         )
 
-    def _wait_for_unpause(self, timeout: float = 300.0) -> None:
-        """Wait for the pause event to be set (or timeout)."""
+    def _wait_for_unpause(self, timeout: Optional[float] = None) -> None:
+        """Wait for the pause event to be set (or timeout).
+
+        Uses the remaining task timeout by default so a paused agent
+        cannot outlive its deadline.
+        """
+        if timeout is None:
+            if self._start_time is not None:
+                elapsed = time.monotonic() - self._start_time
+                remaining = max(0.0, self._record.task_spec.timeout_seconds - elapsed)
+                timeout = remaining
+            else:
+                timeout = float(self._record.task_spec.timeout_seconds)
+
         if not self._pause_event.wait(timeout=timeout):
             # Timeout while paused — collapse
             self.request_collapse(

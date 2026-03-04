@@ -97,7 +97,7 @@ class GovernanceBridge:
                     tier_str = f"T{effective.value}"
                     requires_approval = effective.value >= 2
             except Exception as exc:
-                logger.debug("Trust ledger check failed: %s", exc)
+                logger.warning("Trust ledger check failed: %s", exc)
 
         # Step 3: MCP Sentry permission check
         if self._mcp_sentry:
@@ -111,7 +111,7 @@ class GovernanceBridge:
                         requires_operator_approval=False,
                     )
             except Exception as exc:
-                logger.debug("MCP Sentry check failed: %s", exc)
+                logger.warning("MCP Sentry check failed: %s", exc)
 
         if requires_approval:
             return GovernanceResult(
@@ -157,7 +157,7 @@ class GovernanceBridge:
             else:
                 self._trust_ledger.record_failure(capability, scope)
         except Exception as exc:
-            logger.debug("Trust ledger update failed: %s", exc)
+            logger.warning("Trust ledger update failed: %s", exc)
 
     def request_approval(
         self,
