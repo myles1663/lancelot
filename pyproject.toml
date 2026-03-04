@@ -1,6 +1,6 @@
 [project]
 name = "lancelot"
-version = "0.2.33"
+version = "0.3.0"
 description = "Autonomous AI governance platform"
 license = "BUSL-1.1"
 requires-python = ">=3.11"

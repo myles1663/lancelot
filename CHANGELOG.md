@@ -5,7 +5,7 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
-## [0.2.33] - 2026-03-04
+## [0.3.0] - 2026-03-04
 
 ### Added — Vault-Backed Secret Management
 - **SecretCache** (`src/core/secret_cache.py`): Module-level singleton for vault-backed secret storage with thread-safe RLock access. Replaces `os.getenv()` for all system secrets. Maps 6 env vars to vault keys (e.g., `LANCELOT_API_TOKEN` → `system.api_token`). Auto-migrates secrets from `.env` to vault on first boot.
