@@ -29,7 +29,11 @@ def append_download_links(response: str, doc_paths: list) -> str:
         return response
     links = []
     _ws = os.getenv("LANCELOT_WORKSPACE", "/home/lancelot/workspace")
-    _tok = os.getenv("LANCELOT_API_TOKEN", "")
+    try:
+        import secret_cache
+        _tok = secret_cache.get("LANCELOT_API_TOKEN", "")
+    except Exception:
+        _tok = os.getenv("LANCELOT_API_TOKEN", "")
     for path in doc_paths:
         fname = Path(path).name
         # Determine relative path from workspace root

@@ -5,6 +5,7 @@ Validates username/password against environment variables and issues
 session tokens with configurable timeout.
 """
 
+import hashlib
 import hmac
 import os
 import time
@@ -22,8 +23,38 @@ _sessions: dict = {}
 
 _SESSION_TIMEOUT = int(os.getenv("WARROOM_SESSION_TIMEOUT_MINUTES", "30")) * 60
 
-WARROOM_USERNAME = os.getenv("WARROOM_USERNAME", "")
-WARROOM_PASSWORD = os.getenv("WARROOM_PASSWORD", "")
+
+def _get_warroom_username() -> str:
+    """Lazy-load War Room username from secret_cache (or env fallback)."""
+    try:
+        import secret_cache
+        return secret_cache.get("WARROOM_USERNAME", "")
+    except Exception:
+        return os.getenv("WARROOM_USERNAME", "")
+
+
+def _get_warroom_password() -> str:
+    """Lazy-load War Room password hash from secret_cache (or env fallback)."""
+    try:
+        import secret_cache
+        return secret_cache.get("WARROOM_PASSWORD", "")
+    except Exception:
+        return os.getenv("WARROOM_PASSWORD", "")
+
+
+def _verify_password(plain: str, stored: str) -> bool:
+    """Verify a plaintext password against a stored value.
+
+    Detects format:
+    - SHA-256 hex (64 chars): hash the input and compare.
+    - Legacy plaintext: direct constant-time comparison.
+    """
+    if len(stored) == 64:
+        # Stored value looks like a SHA-256 hex digest
+        input_hash = hashlib.sha256(plain.encode("utf-8")).hexdigest()
+        return hmac.compare_digest(input_hash, stored)
+    # Legacy plaintext comparison
+    return hmac.compare_digest(plain, stored)
 
 _audit_logger = None
 
@@ -47,14 +78,17 @@ async def login(request: Request):
     username = data.get("username", "")
     password = data.get("password", "")
 
-    if not WARROOM_USERNAME or not WARROOM_PASSWORD:
+    wr_user = _get_warroom_username()
+    wr_pass = _get_warroom_password()
+
+    if not wr_user or not wr_pass:
         return JSONResponse(status_code=503, content={
             "error": "War Room credentials not configured",
             "detail": "Set WARROOM_USERNAME and WARROOM_PASSWORD environment variables",
         })
 
-    if not (hmac.compare_digest(username, WARROOM_USERNAME)
-            and hmac.compare_digest(password, WARROOM_PASSWORD)):
+    if not (hmac.compare_digest(username, wr_user)
+            and _verify_password(password, wr_pass)):
         if _audit_logger:
             _audit_logger.log_event(
                 "AUTH_LOGIN_FAILED",

@@ -40,6 +40,10 @@ services:
     restart: unless-stopped
     networks:
       - lancelot_net
+    # Phase 3: Docker Secrets — mount vault key from file instead of env
+    # To use: create the secret file, then uncomment the two lines below.
+    # secrets:
+    #   - lancelot_vault_key
 
   # F-001: Docker Socket Proxy — restricts Docker API access for sandbox provider.
   # Only allows container operations (create, start, wait, remove, logs).
@@ -111,6 +115,12 @@ volumes:
     name: lancelot_data
   lancelot_workspace:
     name: lancelot_workspace
+
+# Phase 3: Docker Secrets — file-based vault key (avoids /proc/PID/environ exposure)
+# To use: 1) Create the file  2) Uncomment the secrets: block on lancelot-core
+# secrets:
+#   lancelot_vault_key:
+#     file: ./secrets/lancelot_vault_key.txt
 
 networks:
   lancelot_net:

@@ -134,10 +134,24 @@ Lancelot is **safe by construction**, not by convention:
 - Capability-based tool access with default-deny posture
 - Sandboxed execution (Docker containers, workspace boundary enforcement)
 - Symlink-safe path validation, atomic file writes
-- Secrets never stored in memory, never sent to models unless required
 - Local PII redaction before any external API call
 - Feature-flag kill switches for every high-risk subsystem
 - 96 vulnerabilities identified and remediated across two hardening passes
+
+### Vault-Backed Secret Management
+
+Secrets never live in plaintext environment variables at runtime. Lancelot uses a **3-phase hardened secret pipeline**:
+
+1. **Encrypted Vault Storage** — All system secrets (API tokens, War Room credentials, Telegram tokens) are stored in a Fernet-encrypted vault (`AES-128-CBC + HMAC-SHA256`). On first boot, secrets are auto-migrated from `.env` into the vault. War Room passwords are SHA-256 hashed on migration.
+
+2. **In-Memory Cache + Environ Scrub** — At startup, secrets are loaded from the vault into a thread-safe in-memory cache (`secret_cache`), then scrubbed from `os.environ` — including `LANCELOT_VAULT_KEY` itself. This closes the `/proc/PID/environ` exposure window. All modules read secrets from the cache, never from environment variables.
+
+3. **Hot Rotation Without Restart** — Secrets can be rotated at runtime via `POST /api/secrets/reload` (owner-token-protected) or `kill -HUP <pid>`. Changed secrets propagate immediately to all consumers. Every rotation emits an auditable `SYSTEM` receipt.
+
+**Optional hardening:**
+- **Docker Secrets** — Read the vault key from `/run/secrets/` instead of environment variables (commented-out config in `docker-compose.yml`)
+- **PBKDF2 Passphrase Derivation** — Use a human-memorable passphrase instead of a raw Fernet key. The vault auto-detects passphrases and derives a key via `PBKDF2HMAC(SHA256, 600k iterations)` with a persisted random salt.
+- **Rollback** — Set `FEATURE_VAULT_SECRETS=false` to fall back to `os.getenv()` without code changes.
 
 Full details: [Security Posture](docs/security.md)
 

@@ -48,7 +48,11 @@ router = APIRouter(prefix="/soul", tags=["soul"])
 
 # Soul directory — configurable via env or default
 _SOUL_DIR: Optional[str] = os.environ.get("SOUL_DIR", None)
-_API_TOKEN = os.environ.get("LANCELOT_API_TOKEN", os.environ.get("API_TOKEN", ""))
+try:
+    import secret_cache
+    _API_TOKEN = secret_cache.get("LANCELOT_API_TOKEN", "") or os.environ.get("API_TOKEN", "")
+except Exception:
+    _API_TOKEN = os.environ.get("LANCELOT_API_TOKEN", os.environ.get("API_TOKEN", ""))
 _proposals_lock = threading.Lock()
 
 # V31: ActionCard factory — set by gateway.py during startup

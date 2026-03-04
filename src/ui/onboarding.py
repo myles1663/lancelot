@@ -438,9 +438,17 @@ class OnboardingOrchestrator:
         return None
 
     def _has_security_tokens(self):
-        """Check if all three security tokens exist in .env or env."""
+        """Check if all three security tokens exist in vault, .env, or env."""
         for key in ("LANCELOT_OWNER_TOKEN", "LANCELOT_API_TOKEN", "LANCELOT_VAULT_KEY"):
-            if not self._get_env_value(key):
+            # Check secret_cache first (vault-backed), then env
+            found = False
+            try:
+                import secret_cache
+                if secret_cache.is_bootstrapped() and secret_cache.get(key, ""):
+                    found = True
+            except Exception:
+                pass
+            if not found and not self._get_env_value(key):
                 return False
         return True
 
@@ -1221,6 +1229,22 @@ class OnboardingOrchestrator:
         if tokens:
             self._write_env_values(tokens, "Security Tokens (auto-generated — keep secret)")
             generated.append(f"Security tokens generated ({len(tokens)} tokens)")
+            # Also store in vault if available
+            try:
+                import secret_cache
+                if secret_cache.is_bootstrapped():
+                    _vault_map = {
+                        "LANCELOT_API_TOKEN": "system.api_token",
+                        "LANCELOT_OWNER_TOKEN": "system.owner_token",
+                    }
+                    from connectors.vault import CredentialVault as _OnbVault
+                    _onb_vault = _OnbVault(config_path="config/vault.yaml")
+                    for _tk, _tv in tokens.items():
+                        if _tk in _vault_map:
+                            _onb_vault.store(_vault_map[_tk], _tv, type="system_secret")
+                    secret_cache.bootstrap(_onb_vault)
+            except Exception:
+                pass
 
         # 2. Generate War Room credentials if missing
         warroom_creds = {}
@@ -1233,6 +1257,21 @@ class OnboardingOrchestrator:
         if warroom_creds:
             self._write_env_values(warroom_creds, "War Room Credentials (auto-generated)")
             generated.append("War Room credentials generated")
+            # Also store in vault if available
+            try:
+                import secret_cache
+                if secret_cache.is_bootstrapped():
+                    import hashlib as _hlib
+                    from connectors.vault import CredentialVault as _OnbVault2
+                    _onb_vault2 = _OnbVault2(config_path="config/vault.yaml")
+                    if "WARROOM_USERNAME" in warroom_creds:
+                        _onb_vault2.store("system.warroom_username", warroom_creds["WARROOM_USERNAME"], type="system_secret")
+                    if warroom_password:
+                        _pw_hash = _hlib.sha256(warroom_password.encode("utf-8")).hexdigest()
+                        _onb_vault2.store("system.warroom_password_hash", _pw_hash, type="system_secret")
+                    secret_cache.bootstrap(_onb_vault2)
+            except Exception:
+                pass
 
         # 3. Write default feature flags if missing
         flags_written = {}

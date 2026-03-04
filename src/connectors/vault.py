@@ -2,12 +2,18 @@
 Credential Vault — Encrypted credential storage for connectors.
 
 Credentials are encrypted with Fernet (AES-128-CBC + HMAC-SHA256)
-and stored on disk. The encryption key comes from an environment
-variable; if not set, a new key is generated and a warning is logged.
+and stored on disk. The encryption key is resolved in priority order:
+
+1. Docker secret file (/run/secrets/<name>)
+2. Environment variable (LANCELOT_VAULT_KEY)
+3. Passphrase → PBKDF2-derived Fernet key (if value is not valid Fernet)
+4. Ephemeral generated key (warning — credentials won't survive restart)
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import logging
 import os
@@ -19,10 +25,16 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
 
 from src.connectors.base import CredentialSpec
 
 logger = logging.getLogger(__name__)
+
+# ── PBKDF2 Constants ─────────────────────────────────────────────
+_PBKDF2_ITERATIONS = 600_000
+_PBKDF2_SALT_FILE = "vault_salt.bin"  # Stored alongside vault data
 
 
 # ── Vault Entry ────────────────────────────────────────────────────
@@ -115,16 +127,31 @@ class CredentialVault:
         self._audit_enabled = audit.get("log_access", True)
         self._audit_path = Path(audit.get("log_path", "data/vault/access.log"))
 
-        # Encryption key
+        # Encryption key — resolved in priority order:
+        # 1. Docker secret file  2. Env var  3. Passphrase→PBKDF2  4. Ephemeral
         enc = self._config.get("encryption", {})
         key_env_var = enc.get("key_env_var", "LANCELOT_VAULT_KEY")
-        key_str = os.environ.get(key_env_var, "")
+        docker_secret_name = enc.get("docker_secret", "lancelot_vault_key")
+
+        key_str = self._resolve_key(key_env_var, docker_secret_name)
+        self._key_source: str = "unknown"
 
         if key_str:
-            self._cipher = Fernet(key_str.encode())
+            if self._is_valid_fernet_key(key_str):
+                # Raw Fernet key (from env or Docker secret)
+                self._cipher = Fernet(key_str.encode())
+                self._key_source = "fernet"
+            else:
+                # Treat as passphrase — derive Fernet key via PBKDF2
+                salt_dir = self._storage_path.parent
+                derived_key = self._derive_key_from_passphrase(key_str, salt_dir)
+                self._cipher = Fernet(derived_key)
+                self._key_source = "pbkdf2"
+                logger.info("Vault key derived from passphrase via PBKDF2 (600k iterations).")
         else:
             new_key = Fernet.generate_key()
             self._cipher = Fernet(new_key)
+            self._key_source = "ephemeral"
             logger.warning(
                 "LANCELOT_VAULT_KEY not set — generated ephemeral key. "
                 "Credentials will NOT survive restarts without setting this env var."
@@ -143,6 +170,74 @@ class CredentialVault:
             with open(path, "r", encoding="utf-8") as f:
                 return yaml.safe_load(f) or {}
         return {}
+
+    @staticmethod
+    def _resolve_key(env_var: str, docker_secret_name: str) -> str:
+        """Resolve encryption key: Docker secret → env var.
+
+        Docker secrets are mounted at /run/secrets/<name> by the Docker
+        runtime. Reading from file avoids /proc/PID/environ exposure.
+        """
+        # 1. Docker secret file (highest priority)
+        secret_path = Path(f"/run/secrets/{docker_secret_name}")
+        if secret_path.exists():
+            try:
+                key = secret_path.read_text(encoding="utf-8").strip()
+                if key:
+                    logger.info("Vault key loaded from Docker secret: %s", secret_path)
+                    return key
+            except Exception as exc:
+                logger.warning("Failed to read Docker secret %s: %s", secret_path, exc)
+
+        # 2. Environment variable
+        key = os.environ.get(env_var, "")
+        if key:
+            return key
+
+        return ""
+
+    @staticmethod
+    def _is_valid_fernet_key(key_str: str) -> bool:
+        """Check if a string is a valid Fernet key (44-char url-safe base64)."""
+        try:
+            decoded = base64.urlsafe_b64decode(key_str.encode())
+            return len(decoded) == 32
+        except Exception:
+            return False
+
+    @staticmethod
+    def _derive_key_from_passphrase(passphrase: str, salt_dir: Path) -> bytes:
+        """Derive a Fernet key from a human-memorable passphrase using PBKDF2.
+
+        Salt is stored in <salt_dir>/vault_salt.bin. A new random salt is
+        generated on first use and persisted for subsequent derivations.
+
+        Returns:
+            Fernet key bytes (url-safe base64 encoded).
+        """
+        salt_dir.mkdir(parents=True, exist_ok=True)
+        salt_path = salt_dir / _PBKDF2_SALT_FILE
+
+        if salt_path.exists():
+            salt = salt_path.read_bytes()
+        else:
+            salt = os.urandom(16)
+            salt_path.write_bytes(salt)
+            logger.info("Generated new PBKDF2 salt at %s", salt_path)
+
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=_PBKDF2_ITERATIONS,
+        )
+        derived = kdf.derive(passphrase.encode("utf-8"))
+        return base64.urlsafe_b64encode(derived)
+
+    @property
+    def key_source(self) -> str:
+        """How the encryption key was resolved: 'fernet', 'pbkdf2', or 'ephemeral'."""
+        return self._key_source
 
     def store(self, key: str, value: str, type: str = "api_key") -> VaultEntry:
         """Store or update a credential. Returns the VaultEntry."""

@@ -99,7 +99,11 @@ class WebhookAuthenticator:
         TODO: Implement real JWT signature validation using Google's public keys.
         Current V1: Simple Token Match from Env.
         """
-        expected_token = os.getenv("LANCELOT_API_TOKEN")
+        try:
+            import secret_cache
+            expected_token = secret_cache.get("LANCELOT_API_TOKEN", "")
+        except Exception:
+            expected_token = os.getenv("LANCELOT_API_TOKEN")
         if not expected_token:
             return True # Dev mode
             
@@ -116,18 +120,30 @@ class CommsBridge:
     """
     def __init__(self):
         self.comms_type = os.getenv("LANCELOT_COMMS_TYPE", "google_chat")
-        
+
         # Google Chat Config
         self.webhook_url = os.getenv("LANCELOT_COMMS_WEBHOOK")
-        
-        # Telegram Config
-        self.telegram_token = os.getenv("LANCELOT_TELEGRAM_TOKEN")
-        self.telegram_chat_id = os.getenv("LANCELOT_TELEGRAM_CHAT_ID")
+
+    def _telegram_token(self) -> str:
+        """Read telegram token from secret_cache (supports hot rotation)."""
+        try:
+            import secret_cache
+            return secret_cache.get("LANCELOT_TELEGRAM_TOKEN", "")
+        except Exception:
+            return os.getenv("LANCELOT_TELEGRAM_TOKEN", "")
+
+    def _telegram_chat_id(self) -> str:
+        """Read telegram chat ID from secret_cache (supports hot rotation)."""
+        try:
+            import secret_cache
+            return secret_cache.get("LANCELOT_TELEGRAM_CHAT_ID", "")
+        except Exception:
+            return os.getenv("LANCELOT_TELEGRAM_CHAT_ID", "")
 
     async def send_alert(self, message: str):
         """Sends an alert to the bonded channel."""
         import aiohttp
-        
+
         if self.comms_type == "google_chat":
              if not self.webhook_url:
                  logger.warning("Google Chat Webhook missing.")
@@ -136,11 +152,13 @@ class CommsBridge:
              payload = {"text": message}
 
         elif self.comms_type == "telegram":
-             if not self.telegram_token or not self.telegram_chat_id:
+             tg_token = self._telegram_token()
+             tg_chat = self._telegram_chat_id()
+             if not tg_token or not tg_chat:
                  logger.warning("Telegram settings missing.")
                  return
-             target_url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
-             payload = {"chat_id": self.telegram_chat_id, "text": message, "parse_mode": "Markdown"}
+             target_url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+             payload = {"chat_id": tg_chat, "text": message, "parse_mode": "Markdown"}
         
         else:
              logger.warning(f"Unknown comms type: {self.comms_type}")

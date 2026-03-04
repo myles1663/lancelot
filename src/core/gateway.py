@@ -156,8 +156,29 @@ async def subsystem_gate_middleware(request: Request, call_next):
                 )
     return await call_next(request)
 
+# --- Vault-Backed Secret Cache (Phase 1) ---
+import secret_cache
+
+_boot_vault = None
+try:
+    from feature_flags import FEATURE_VAULT_SECRETS
+    if FEATURE_VAULT_SECRETS:
+        from connectors.vault import CredentialVault as _BootVault
+        _boot_vault = _BootVault(config_path="config/vault.yaml")
+        secret_cache.bootstrap(_boot_vault)
+        secret_cache.scrub_environ()
+        # Phase 3: Scrub vault key itself from environ — closes last /proc exposure.
+        # Safe because _boot_vault already holds the cipher in memory.
+        if "LANCELOT_VAULT_KEY" in os.environ:
+            del os.environ["LANCELOT_VAULT_KEY"]
+            logger.info("LANCELOT_VAULT_KEY scrubbed from os.environ (vault cipher in memory).")
+        logger.info("Vault-backed secret cache initialized (key_source=%s).",
+                     getattr(_boot_vault, 'key_source', 'unknown'))
+except Exception as _vault_exc:
+    logger.warning("Vault bootstrap failed — falling back to os.getenv(): %s", _vault_exc)
+
 # --- API Authentication ---
-API_TOKEN = os.getenv("LANCELOT_API_TOKEN")
+API_TOKEN = secret_cache.get("LANCELOT_API_TOKEN") if secret_cache.is_bootstrapped() else os.getenv("LANCELOT_API_TOKEN")
 DEV_MODE = os.getenv("LANCELOT_DEV_MODE", "").lower() in ("true", "1", "yes")
 
 
@@ -1158,7 +1179,7 @@ async def startup_event():
         from connectors_api import router as connectors_mgmt_router, init_connectors_api
 
         _connector_registry = ConnectorRegistry(config_path="config/connectors.yaml")
-        _connector_vault = ConnectorVault(config_path="config/vault.yaml")
+        _connector_vault = _boot_vault if _boot_vault else ConnectorVault(config_path="config/vault.yaml")
 
         # Register enabled connectors if FEATURE_CONNECTORS is on
         # V22: Validate credentials at registration — connectors without
@@ -1399,6 +1420,25 @@ async def startup_event():
             mode="local"
         )
     
+    # ===== Phase 2: SIGHUP Secret Reload Handler =====
+    import platform as _plat
+    if _plat.system() != "Windows":
+        import signal
+        def _sighup_handler(signum, frame):
+            """Reload secrets from vault on SIGHUP (Linux/macOS only)."""
+            global API_TOKEN
+            try:
+                if _boot_vault and secret_cache.is_bootstrapped():
+                    changed = secret_cache.reload(_boot_vault)
+                    changed_count = sum(1 for v in changed.values() if v)
+                    if changed.get("LANCELOT_API_TOKEN"):
+                        API_TOKEN = secret_cache.get("LANCELOT_API_TOKEN")
+                    logger.info("SIGHUP: secrets reloaded (%d changed)", changed_count)
+            except Exception as _e:
+                logger.error("SIGHUP: secret reload failed: %s", _e)
+        signal.signal(signal.SIGHUP, _sighup_handler)
+        logger.info("SIGHUP handler registered for secret rotation.")
+
     logger.info("Lancelot Gateway started.")
 
 
@@ -1660,6 +1700,49 @@ async def mfa_submit(request: Request):
             
     except Exception as e:
         return error_response(500, "Internal server error", request_id=request_id)
+
+
+# ── Phase 2: Secret Rotation Endpoint ─────────────────────────────
+@app.post("/api/secrets/reload")
+async def reload_secrets(request: Request):
+    """Reload secrets from vault into cache without restart.
+
+    Owner-token-protected. Returns count of changed secrets.
+    Emits SYSTEM receipt with action secret_rotation.
+    """
+    global API_TOKEN
+    if not verify_token(request):
+        return JSONResponse(status_code=403, content={"error": "Unauthorized"})
+    try:
+        if not _boot_vault or not secret_cache.is_bootstrapped():
+            return JSONResponse(status_code=503, content={
+                "error": "Vault not initialized — secret rotation unavailable",
+            })
+        changed = secret_cache.reload(_boot_vault)
+        changed_count = sum(1 for v in changed.values() if v)
+
+        # Update module-level API_TOKEN if it changed
+        if changed.get("LANCELOT_API_TOKEN"):
+            API_TOKEN = secret_cache.get("LANCELOT_API_TOKEN")
+
+        # Emit receipt
+        try:
+            from shared.receipts import ReceiptService
+            _rs = ReceiptService(data_dir="/home/lancelot/data")
+            _rs.create_receipt(
+                task_id="secret_rotation",
+                action="secret_rotation",
+                category="SYSTEM",
+                result={"changed_count": changed_count},
+            )
+        except Exception:
+            pass
+
+        logger.info("Secrets reloaded: %d changed", changed_count)
+        return {"status": "ok", "changed_count": changed_count}
+    except Exception as e:
+        logger.error("Secret reload failed: %s", e)
+        return JSONResponse(status_code=500, content={"error": "Reload failed"})
 
 
 @app.get("/health")

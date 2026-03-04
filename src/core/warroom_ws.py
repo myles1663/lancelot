@@ -82,7 +82,11 @@ event_bus.subscribe_all(_on_event)
 
 def _verify_ws_token(token: str) -> bool:
     """Validate a WebSocket auth token against LANCELOT_API_TOKEN."""
-    api_token = os.getenv("LANCELOT_API_TOKEN")
+    try:
+        import secret_cache
+        api_token = secret_cache.get("LANCELOT_API_TOKEN", "")
+    except Exception:
+        api_token = os.getenv("LANCELOT_API_TOKEN")
     if not api_token:
         dev_mode = os.getenv("LANCELOT_DEV_MODE", "").lower() in ("true", "1", "yes")
         return dev_mode  # Only allow in explicit dev mode

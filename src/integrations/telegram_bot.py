@@ -34,8 +34,13 @@ class TelegramBot:
     _OFFSET_FILE = os.path.join(os.getenv("LANCELOT_DATA_DIR", "/home/lancelot/data"), "chat", "telegram_offset.txt")
 
     def __init__(self, orchestrator=None, voice_processor=None):
-        self.token = os.getenv("LANCELOT_TELEGRAM_TOKEN", "")
-        self.chat_id = os.getenv("LANCELOT_TELEGRAM_CHAT_ID", "")
+        try:
+            import secret_cache
+            self.token = secret_cache.get("LANCELOT_TELEGRAM_TOKEN", "")
+            self.chat_id = secret_cache.get("LANCELOT_TELEGRAM_CHAT_ID", "")
+        except Exception:
+            self.token = os.getenv("LANCELOT_TELEGRAM_TOKEN", "")
+            self.chat_id = os.getenv("LANCELOT_TELEGRAM_CHAT_ID", "")
         self.orchestrator = orchestrator
         self.voice_processor = voice_processor
         self.running = False

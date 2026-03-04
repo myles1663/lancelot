@@ -189,6 +189,9 @@ FEATURE_ACTION_CARDS: bool = _env_bool("FEATURE_ACTION_CARDS", default=False)  #
 FEATURE_HIVE: bool = _env_bool("FEATURE_HIVE", default=False)  # Master switch for HIVE Agent Mesh subsystem
 FEATURE_HIVE_UAB: bool = _env_bool("FEATURE_HIVE_UAB", default=False)  # Enable UAB bridge for HIVE sub-agents
 
+# Vault-backed secret management — secrets in encrypted vault instead of os.environ
+FEATURE_VAULT_SECRETS: bool = _env_bool("FEATURE_VAULT_SECRETS", default=True)  # Vault-backed secret cache (rollback: false = os.getenv fallback)
+
 
 # All flags are now hot-toggleable via SubsystemManager — no restart required.
 RESTART_REQUIRED_FLAGS = frozenset()
@@ -253,6 +256,7 @@ def reload_flags() -> None:
     global FEATURE_GOOGLE_OAUTH
     global FEATURE_TOOL_FLOW_STREAMING, FEATURE_ACTION_CARDS
     global FEATURE_HIVE, FEATURE_HIVE_UAB
+    global FEATURE_VAULT_SECRETS
 
     # vNext2 flags
     FEATURE_SOUL = _env_bool("FEATURE_SOUL")
@@ -324,6 +328,9 @@ def reload_flags() -> None:
     # HIVE Agent Mesh
     FEATURE_HIVE = _env_bool("FEATURE_HIVE", default=False)
     FEATURE_HIVE_UAB = _env_bool("FEATURE_HIVE_UAB", default=False)
+
+    # Vault-backed secret management
+    FEATURE_VAULT_SECRETS = _env_bool("FEATURE_VAULT_SECRETS", default=True)
 
 
 def get_all_flags() -> dict[str, bool]:
@@ -405,4 +412,8 @@ def log_feature_flags() -> None:
     logger.info(
         "HIVE Agent Mesh flags: HIVE=%s, HIVE_UAB=%s",
         FEATURE_HIVE, FEATURE_HIVE_UAB,
+    )
+    logger.info(
+        "Vault-backed secrets flags: VAULT_SECRETS=%s",
+        FEATURE_VAULT_SECRETS,
     )
