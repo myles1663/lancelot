@@ -2,7 +2,7 @@
 
 // Lancelot — A Governed Autonomous System
 // Copyright (c) 2026 Myles Russell Hamilton
-// Licensed under AGPL-3.0. See LICENSE for details.
+// Licensed under BUSL-1.1. See LICENSE for details.
 // Patent Pending: US Provisional Application #63/982,183
 
 import { readFileSync } from 'node:fs';

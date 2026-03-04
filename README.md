@@ -1,6 +1,6 @@
 # Lancelot
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
+[![License: BSL-1.1](https://img.shields.io/badge/License-BSL%201.1-blue.svg)](LICENSE)
 [![Patent Pending](https://img.shields.io/badge/Patent-Pending-orange.svg)](DISCLOSURE.md)
 [![Built with Claude Code](https://img.shields.io/badge/Built%20with-Claude%20Code-blueviolet.svg)](CLAUDE.md)
 [![Tests](https://img.shields.io/badge/Tests-4200%2B%20passing-brightgreen.svg)]()
@@ -267,7 +267,7 @@ Failure injection testing uncovered 4 bugs and 2 design gaps. All bugs have been
 
 ## License
 
-AGPL-3.0 — See [LICENSE](LICENSE) for details. Commercial licensing available for organizations that cannot comply with AGPL terms.
+BSL 1.1 (source-available) — See [LICENSE](LICENSE) for details. Free for non-production use (evaluation, development, testing). Production use requires a commercial license. Converts automatically to AGPL-3.0 on March 4, 2030.
 
 ---
 

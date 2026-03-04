@@ -54,7 +54,7 @@
     "windows-automation"
   ],
   "author": "ClaudeClaw",
-  "license": "MIT",
+  "license": "BUSL-1.1",
   "engines": {
     "node": ">=18.0.0"
   },

@@ -14,10 +14,12 @@ connector proxy pattern, and the integrated Governed Autonomous System (GAS) arc
 
 ### What This Means for Users
 
-- **AGPL users:** You can freely use, modify, and distribute Lancelot under AGPL-3.0 terms.
-  The patent does not restrict AGPL-compliant usage.
-- **Commercial licensees:** Organizations requiring commercial licensing (to avoid AGPL
-  open-source requirements) should contact us for terms.
+- **Non-production users:** You can freely use, modify, and study Lancelot under BSL 1.1 terms
+  for evaluation, development, and testing. The patent does not restrict BSL-compliant usage.
+- **Production users:** Production use requires a commercial license from the Licensor.
+  Contact us for terms.
+- **After the Change Date (March 4, 2030):** Lancelot automatically converts to AGPL-3.0-or-later,
+  permitting full production use under AGPL terms.
 - **Clean-room reimplementations:** The patent claims cover the specific architectural
   methods described in the filing. Independent implementations of the same methods may
   be subject to patent claims regardless of whether they use Lancelot's code.
@@ -49,13 +51,13 @@ Lancelot was created by **Myles Russell Hamilton**.
 
 ## Licensing
 
-Lancelot is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
+Lancelot is source-available under the **Business Source License 1.1 (BSL 1.1)**.
 
 This means:
-- You can use Lancelot freely for any purpose
-- If you modify Lancelot and provide it as a network service, you must release your
-  modifications under AGPL-3.0
-- Organizations that cannot comply with AGPL terms can obtain a commercial license
+- You can freely use, copy, modify, and redistribute Lancelot for non-production purposes
+  (evaluation, development, testing, personal projects)
+- Production use requires a commercial license from the Licensor
+- On the Change Date (March 4, 2030), the license automatically converts to AGPL-3.0-or-later
 
 See [LICENSE](LICENSE) for the full license text.
 

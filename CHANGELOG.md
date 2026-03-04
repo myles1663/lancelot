@@ -948,7 +948,7 @@ Initial public release of the Lancelot Governed Autonomous System.
 - Telegram file attachment delivery
 - 1900+ tests
 
-License: AGPL-3.0 | Patent Pending: US Provisional Application #63/982,183
+License: BSL-1.1 (converts to AGPL-3.0 on March 4, 2030) | Patent Pending: US Provisional Application #63/982,183
 
 ---
 
