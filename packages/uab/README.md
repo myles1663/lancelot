@@ -247,4 +247,4 @@ Agent Runtime (Claude / GPT / Any Agent)
 
 ## License
 
-MIT
+BSL
