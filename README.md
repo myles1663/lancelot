@@ -3,7 +3,7 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 [![Patent Pending](https://img.shields.io/badge/Patent-Pending-orange.svg)](DISCLOSURE.md)
 [![Built with Claude Code](https://img.shields.io/badge/Built%20with-Claude%20Code-blueviolet.svg)](CLAUDE.md)
-[![Tests](https://img.shields.io/badge/Tests-1900%2B%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-4200%2B%20passing-brightgreen.svg)]()
 
 **A Governed Autonomous System** — an AI operator that can plan, act, remember, and recover under explicit constitutional control.
 
@@ -183,7 +183,7 @@ lancelot/
 ├── config/                # YAML configuration files
 ├── docs/                  # Documentation
 ├── soul/                  # Soul version files
-├── tests/                 # Test suite (1900+ tests)
+├── tests/                 # Test suite (4200+ tests)
 └── static/                # UI assets
 ```
 
@@ -213,6 +213,25 @@ lancelot/
 | [Contributing](CONTRIBUTING.md) | How to contribute |
 | [Disclosure](DISCLOSURE.md) | Patent status, licensing, development methodology |
 | [Security Policy](SECURITY.md) | Responsible disclosure process |
+
+## Test Suite
+
+**196 test files — 4,200+ tests** across the full stack:
+
+| Category | Tests | Coverage |
+|----------|------:|----------|
+| **Unit** | ~3,850 | Core subsystems, types, state machines, serialization, policies, receipts |
+| **Integration** | ~100 | End-to-end task lifecycle, API endpoints, cross-subsystem coordination |
+| **End-to-end** | ~145 | Full orchestrator flows, multi-agent execution, receipt chain verification |
+| **Failure injection** | 42 | Connector failure mid-task, timeout/cleanup, concurrent conflicts, soul violations, receipt tampering, UAB fallback, trust ledger race conditions |
+
+Run the suite:
+
+```bash
+pytest tests/ -x                        # Stop on first failure
+pytest tests/hive/ -v                   # HIVE subsystem only
+pytest tests/hive/test_failure_injection.py -v  # Failure/edge-case tests
+```
 
 ## License
 
