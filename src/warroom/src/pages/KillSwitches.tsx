@@ -506,6 +506,7 @@ export function KillSwitches() {
   const [pendingToggle, setPendingToggle] = useState<string | null>(null)
   const [pendingDanger, setPendingDanger] = useState<{ name: string; message: string } | null>(null)
   const [restartBanner, setRestartBanner] = useState<string | null>(null)
+  const [agentStartHint, setAgentStartHint] = useState<string | null>(null)
   const [toggling, setToggling] = useState<string | null>(null)
 
   const crusaderActive = crusaderStatus?.crusader_mode ?? false
@@ -555,6 +556,12 @@ export function KillSwitches() {
       if (res.restart_required) {
         setRestartBanner(res.message)
       }
+      // Show agent start hint when Host Bridge is enabled but agent is offline
+      if (res.agent_reachable === false && res.agent_start_hint) {
+        setAgentStartHint(res.agent_start_hint)
+      } else {
+        setAgentStartHint(null)
+      }
       refetchFlags()
     } catch {
       // ignore
@@ -599,6 +606,31 @@ export function KillSwitches() {
           <button onClick={() => setRestartBanner(null)} className="text-xs text-text-muted hover:text-text-primary ml-4">
             Dismiss
           </button>
+        </div>
+      )}
+
+      {agentStartHint && (
+        <div className="mb-4 p-3 bg-state-degraded/10 border border-state-degraded/30 rounded-lg">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-state-degraded animate-pulse" />
+              <span className="text-sm font-semibold text-state-degraded">Host Agent Not Running</span>
+            </div>
+            <button onClick={() => setAgentStartHint(null)} className="text-xs text-text-muted hover:text-text-primary">
+              Dismiss
+            </button>
+          </div>
+          <p className="text-xs text-text-secondary mb-2">
+            Host Bridge is enabled but the agent process is not running on your host machine.
+          </p>
+          <div className="space-y-1">
+            <code className="block text-[10px] font-mono bg-surface-input rounded px-2 py-1.5 text-text-primary select-all">
+              host_agent\start_agent.bat
+            </code>
+            <p className="text-[10px] text-text-muted">
+              Or install as auto-start service: <code className="font-mono text-text-primary select-all">host_agent\install_service.bat</code>
+            </p>
+          </div>
         </div>
       )}
 

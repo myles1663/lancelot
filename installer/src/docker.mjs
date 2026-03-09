@@ -5,6 +5,9 @@
 import { execa } from 'execa';
 import ora from 'ora';
 import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { spawn } from 'node:child_process';
 import { REPO_URL, HEALTH_CHECK_URL, HEALTH_CHECK_INTERVAL_MS, HEALTH_CHECK_MAX_ATTEMPTS } from './constants.mjs';
 
 export async function cloneRepo(targetDir) {
@@ -111,5 +114,100 @@ export async function dockerDown(projectDir) {
     await execa('docker', ['compose', 'down'], { cwd: projectDir, timeout: 30000 });
   } catch {
     // Best effort cleanup
+  }
+}
+
+export async function startHostAgent(projectDir) {
+  const spinner = ora('  Starting Host Agent...').start();
+
+  const agentScript = path.join(projectDir, 'host_agent', 'agent.py');
+  if (!fs.existsSync(agentScript)) {
+    spinner.warn('  Host Agent script not found — skipping');
+    return;
+  }
+
+  // Read token from .env if available, otherwise use default
+  let token = 'lancelot-host-agent';
+  try {
+    const envPath = path.join(projectDir, '.env');
+    if (fs.existsSync(envPath)) {
+      const envContent = fs.readFileSync(envPath, 'utf-8');
+      const match = envContent.match(/^HOST_AGENT_TOKEN=(.+)$/m);
+      if (match) token = match[1].trim();
+    }
+  } catch {
+    // Use default token
+  }
+
+  try {
+    const isWindows = os.platform() === 'win32';
+
+    if (isWindows) {
+      // Use pythonw (no console window) for background execution on Windows
+      let pythonCmd = 'pythonw';
+      try {
+        await execa('where', ['pythonw'], { timeout: 5000 });
+      } catch {
+        // Fall back to python if pythonw not found
+        pythonCmd = 'python';
+      }
+
+      // Spawn detached — survives installer exit
+      const child = spawn(pythonCmd, [agentScript, '--token', token], {
+        detached: true,
+        stdio: 'ignore',
+        cwd: projectDir,
+        windowsHide: true,
+      });
+      child.unref();
+    } else {
+      // Unix: spawn detached with nohup-like behavior
+      const child = spawn('python3', [agentScript, '--token', token], {
+        detached: true,
+        stdio: 'ignore',
+        cwd: projectDir,
+      });
+      child.unref();
+    }
+
+    // Wait briefly and verify it's reachable
+    await new Promise(r => setTimeout(r, 2000));
+
+    try {
+      const res = await fetch('http://127.0.0.1:9111/health', {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (res.ok) {
+        spinner.succeed('  Host Agent started (port 9111)');
+        return;
+      }
+    } catch {
+      // Not reachable yet — try once more
+    }
+
+    // Second attempt after another second
+    await new Promise(r => setTimeout(r, 1500));
+    try {
+      const res = await fetch('http://127.0.0.1:9111/health', {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (res.ok) {
+        spinner.succeed('  Host Agent started (port 9111)');
+        return;
+      }
+    } catch {
+      // Still not reachable
+    }
+
+    spinner.warn('  Host Agent started but not yet reachable — it may need a moment');
+  } catch (e) {
+    spinner.warn(`  Could not start Host Agent: ${e.message}`);
+    console.log('');
+    console.log('    You can start it manually later:');
+    if (os.platform() === 'win32') {
+      console.log('      host_agent\\start_agent.bat');
+    } else {
+      console.log('      python3 host_agent/agent.py &');
+    }
   }
 }

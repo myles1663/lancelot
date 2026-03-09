@@ -72,6 +72,9 @@ npm-debug.log*
 .coverage
 htmlcov/
 
+# Demo seed script (local use only)
+scripts/seed-demo.*
+
 # War Room React SPA
 src/warroom/node_modules/
 src/warroom/dist/

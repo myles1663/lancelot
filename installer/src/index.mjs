@@ -17,7 +17,7 @@ import {
 } from './prompts.mjs';
 import { writeEnvFile, patchDockerCompose } from './config.mjs';
 import { downloadModel } from './model.mjs';
-import { cloneRepo, dockerBuild, dockerUp, waitForHealthy } from './docker.mjs';
+import { cloneRepo, dockerBuild, dockerUp, waitForHealthy, startHostAgent } from './docker.mjs';
 import { markOnboardingComplete } from './onboarding.mjs';
 import { loadState, saveState, clearState, isStepComplete } from './state.mjs';
 
@@ -224,6 +224,13 @@ export async function run(opts) {
     if (!isStepComplete(completed, 'health_check')) {
       await waitForHealthy();
       completed.push('health_check');
+      await saveState(completed, config);
+    }
+
+    // ── Start Host Agent (runs on host, bridges Docker ↔ host OS) ──
+    if (!isStepComplete(completed, 'host_agent')) {
+      await startHostAgent(config.installDir);
+      completed.push('host_agent');
       await saveState(completed, config);
     }
 

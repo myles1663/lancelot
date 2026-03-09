@@ -22,6 +22,8 @@ export interface ToggleFlagResponse {
   enabled: boolean
   restart_required: boolean
   message: string
+  agent_reachable?: boolean
+  agent_start_hint?: string
 }
 
 export interface AllowlistResponse {

@@ -638,19 +638,34 @@ async def toggle_flag(name: str):
                     "message": f"{name} set to {new_val} but subsystem toggle failed: {exc}",
                 }
 
-        # Auto-shutdown host agent when disabling HOST_BRIDGE
-        if name == "FEATURE_TOOLS_HOST_BRIDGE" and not new_val:
-            try:
-                import urllib.request as _ur
-                _req = _ur.Request(
-                    f"{HOST_AGENT_URL}/shutdown",
-                    method="POST",
-                    headers={"Authorization": f"Bearer {HOST_AGENT_TOKEN}"},
-                )
-                _ur.urlopen(_req, timeout=3)
-                logger.info("Host agent shutdown signal sent (flag toggled off)")
-            except Exception:
-                pass  # Best-effort — agent may already be offline
+        # Host Bridge lifecycle: auto-shutdown on disable, reachability check on enable
+        agent_reachable = None
+        if name == "FEATURE_TOOLS_HOST_BRIDGE":
+            if not new_val:
+                # Shutting down — send stop signal to host agent
+                try:
+                    import urllib.request as _ur
+                    _req = _ur.Request(
+                        f"{HOST_AGENT_URL}/shutdown",
+                        method="POST",
+                        headers={"Authorization": f"Bearer {HOST_AGENT_TOKEN}"},
+                    )
+                    _ur.urlopen(_req, timeout=3)
+                    logger.info("Host agent shutdown signal sent (flag toggled off)")
+                    agent_reachable = False
+                except Exception:
+                    agent_reachable = False
+            else:
+                # Enabling — check if host agent is reachable
+                try:
+                    import urllib.request as _ur
+                    _req = _ur.Request(f"{HOST_AGENT_URL}/health", method="GET")
+                    _ur.urlopen(_req, timeout=3)
+                    agent_reachable = True
+                    logger.info("Host agent reachable on enable")
+                except Exception:
+                    agent_reachable = False
+                    logger.info("Host agent NOT reachable on enable — user must start it")
 
         # Audit log the toggle
         if _audit_logger:
@@ -662,7 +677,7 @@ async def toggle_flag(name: str):
                 user="WarRoom",
             )
 
-        return {
+        result = {
             "flag": name,
             "enabled": new_val,
             "restart_required": False,
@@ -671,6 +686,17 @@ async def toggle_flag(name: str):
                 " (subsystem hot-toggled)" if hot_toggled else ""
             ),
         }
+        if agent_reachable is not None:
+            result["agent_reachable"] = agent_reachable
+            if new_val and not agent_reachable:
+                result["agent_start_hint"] = (
+                    "Host Bridge enabled but the Host Agent is not running. "
+                    "Start it on your host machine:\n"
+                    "  host_agent\\start_agent.bat\n"
+                    "Or install as a service:\n"
+                    "  host_agent\\install_service.bat"
+                )
+        return result
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})
     except Exception as exc:
