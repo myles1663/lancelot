@@ -30,6 +30,15 @@ export function showSuccess(config) {
   console.log(chalk.green.bold('  ║') + chalk.gray(`  Comms:    ${config.commsName || 'Not configured'}`) + ' '.repeat(Math.max(0, 29 - (config.commsName || 'Not configured').length)) + chalk.green.bold('║'));
   console.log(chalk.green.bold('  ╚══════════════════════════════════════════╝'));
   console.log('');
+
+  if (config.warRoomPassword) {
+    console.log(chalk.yellow.bold('  War Room Login Credentials:'));
+    console.log(chalk.white(`    Username: ${chalk.bold(config.warRoomUser || 'admin')}`));
+    console.log(chalk.white(`    Password: ${chalk.bold(config.warRoomPassword)}`));
+    console.log(chalk.yellow('    Save these — you need them to access the War Room.'));
+    console.log('');
+  }
+
   console.log(chalk.gray('  Quick commands:'));
   console.log(chalk.gray(`    cd ${config.directory || 'lancelot'}`));
   console.log(chalk.gray('    docker compose up -d      # Start'));

@@ -16,7 +16,7 @@ const program = new Command()
   .description('Install and configure Lancelot — your AI-powered autonomous agent')
   .version(pkg.version)
   .option('-d, --directory <path>', 'Installation directory', './lancelot')
-  .option('--provider <name>', 'LLM provider (gemini|openai|anthropic)')
+  .option('--provider <name>', 'LLM provider (gemini|openai|anthropic|xai|nvidia)')
   .option('--skip-model', 'Skip local model download')
   .option('--resume', 'Resume a previously interrupted install')
   .parse(process.argv);

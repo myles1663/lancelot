@@ -160,6 +160,49 @@ export async function promptGoogleChatSpace() {
   });
 }
 
+export async function promptWarRoomUsername() {
+  return await input({
+    message: 'Choose a War Room username:',
+    default: 'admin',
+    validate: (val) => {
+      if (!val || val.trim().length < 2) {
+        return 'Username must be at least 2 characters';
+      }
+      if (!/^[a-zA-Z0-9_.-]+$/.test(val.trim())) {
+        return 'Username can only contain letters, numbers, dots, dashes, and underscores';
+      }
+      return true;
+    },
+  });
+}
+
+export async function promptWarRoomPassword() {
+  while (true) {
+    const pw = await password({
+      message: 'Choose a War Room password:',
+      mask: '*',
+      validate: (val) => {
+        if (!val || val.length < 8) {
+          return 'Password must be at least 8 characters';
+        }
+        return true;
+      },
+    });
+
+    const pw2 = await password({
+      message: 'Confirm password:',
+      mask: '*',
+    });
+
+    if (pw !== pw2) {
+      console.log(chalk.red('  Passwords do not match. Please try again.'));
+      continue;
+    }
+
+    return pw;
+  }
+}
+
 export async function promptConfirm(config) {
   const providerInfo = PROVIDERS[config.provider];
   const commsInfo = COMMS[config.commsType];
@@ -173,6 +216,7 @@ export async function promptConfirm(config) {
     : `${providerInfo?.name || config.provider} (API key)`;
   console.log(chalk.gray(`    Provider:   ${authLabel}`));
   console.log(chalk.gray(`    Comms:      ${commsInfo?.name || config.commsType}`));
+  console.log(chalk.gray(`    War Room:   ${config.warRoomUser || 'admin'} / ${'*'.repeat((config.warRoomPassword || '').length)}`));
   if (config.hasGpu) {
     console.log(chalk.gray(`    GPU:        ${config.gpuName} (${config.gpuLayers} layers)`));
   } else {

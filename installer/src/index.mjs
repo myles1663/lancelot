@@ -13,7 +13,7 @@ import { runAllChecks } from './prereqs.mjs';
 import {
   promptInstallDir, promptOwnerName, promptProvider, promptAuthMethod, promptApiKey,
   promptCommsChannel, promptTelegramToken, promptTelegramChatId,
-  promptGoogleChatSpace, promptConfirm,
+  promptGoogleChatSpace, promptWarRoomUsername, promptWarRoomPassword, promptConfirm,
 } from './prompts.mjs';
 import { writeEnvFile, patchDockerCompose } from './config.mjs';
 import { downloadModel } from './model.mjs';
@@ -21,7 +21,7 @@ import { cloneRepo, dockerBuild, dockerUp, waitForHealthy, startHostAgent } from
 import { markOnboardingComplete } from './onboarding.mjs';
 import { loadState, saveState, clearState, isStepComplete } from './state.mjs';
 
-const TOTAL_STEPS = 7;
+const TOTAL_STEPS = 8;
 
 export async function run(opts) {
   showBanner();
@@ -149,6 +149,16 @@ export async function run(opts) {
       await saveState(completed, config);
     }
 
+    // ── Step 5: War Room credentials ──
+    if (!isStepComplete(completed, 'warroom_creds')) {
+      showStep(5, TOTAL_STEPS, 'War Room Login');
+      console.log(chalk.gray('  The War Room is your command center for monitoring and controlling Lancelot.'));
+      config.warRoomUser = await promptWarRoomUsername();
+      config.warRoomPassword = await promptWarRoomPassword();
+      completed.push('warroom_creds');
+      await saveState(completed, config);
+    }
+
     // ── Confirm ──
     const proceed = await promptConfirm(config);
     if (!proceed) {
@@ -157,9 +167,16 @@ export async function run(opts) {
       process.exit(0);
     }
 
-    // ── Step 5: Clone + Configure ──
+    // Re-prompt for War Room credentials on resume (never stored in state file)
+    if (isStepComplete(completed, 'warroom_creds') && !config.warRoomPassword) {
+      showStep(5, TOTAL_STEPS, 'War Room Login (re-enter credentials)');
+      config.warRoomUser = await promptWarRoomUsername();
+      config.warRoomPassword = await promptWarRoomPassword();
+    }
+
+    // ── Step 6: Clone + Configure ──
     if (!isStepComplete(completed, 'clone')) {
-      showStep(5, TOTAL_STEPS, 'Setting up project');
+      showStep(6, TOTAL_STEPS, 'Setting up project');
       await cloneRepo(config.installDir);
       completed.push('clone');
       await saveState(completed, config);
@@ -175,9 +192,9 @@ export async function run(opts) {
       await saveState(completed, config);
     }
 
-    // ── Step 6: Model download ──
+    // ── Step 7: Model download ──
     if (!isStepComplete(completed, 'model')) {
-      showStep(6, TOTAL_STEPS, 'Downloading local AI model');
+      showStep(7, TOTAL_STEPS, 'Downloading local AI model');
 
       if (opts.skipModel) {
         showInfo('Skipping model download (--skip-model)');
@@ -207,9 +224,9 @@ export async function run(opts) {
       await saveState(completed, config);
     }
 
-    // ── Step 7: Docker build + start ──
+    // ── Step 8: Docker build + start ──
     if (!isStepComplete(completed, 'docker_build')) {
-      showStep(7, TOTAL_STEPS, 'Building and starting Lancelot');
+      showStep(8, TOTAL_STEPS, 'Building and starting Lancelot');
       await dockerBuild(config.installDir);
       completed.push('docker_build');
       await saveState(completed, config);
@@ -249,6 +266,8 @@ export async function run(opts) {
       directory: config.installDir,
       providerName: PROVIDERS[config.provider]?.name || config.provider,
       commsName: config.commsType === 'skip' ? 'Not configured' : (COMMS[config.commsType]?.name || config.commsType),
+      warRoomUser: config.warRoomUser || 'admin',
+      warRoomPassword: config.warRoomPassword,
     });
 
     // Auto-open War Room in the default browser
@@ -302,18 +321,27 @@ async function runOAuthFlow(config) {
 
   // Step 2: Open browser
   const platform = process.platform;
-  const openCmd = platform === 'win32' ? `start "${authUrl}"`
+  const openCmd = platform === 'win32' ? `start "" "${authUrl}"`
                 : platform === 'darwin' ? `open "${authUrl}"`
                 : `xdg-open "${authUrl}"`;
-  exec(openCmd, () => {});
+  exec(openCmd, (err) => {
+    if (err) {
+      console.log(chalk.yellow('  Could not open browser automatically.'));
+      console.log(chalk.yellow('  Please open the URL above manually.'));
+    }
+  });
 
   console.log(chalk.cyan('  Browser opened — sign in with your Anthropic account.'));
-  console.log(chalk.gray('  Waiting for authorization...'));
+  console.log('');
+  console.log(chalk.white('  If the browser did not open, visit this URL manually:'));
+  console.log(chalk.underline.cyan(`  ${authUrl}`));
+  console.log('');
+  console.log(chalk.gray('  Waiting for authorization... (press Ctrl+C to skip — you can finish in War Room)'));
   console.log('');
 
   // Step 3: Poll for completion
   const pollSpinner = ora('  Waiting for OAuth authorization...').start();
-  const maxAttempts = 120; // 4 minutes
+  const maxAttempts = 60; // 2 minutes
   const pollInterval = 2000;
 
   for (let i = 0; i < maxAttempts; i++) {
