@@ -5,6 +5,24 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [0.3.1] - 2026-03-12
+
+### Added — NVIDIA Nemotron Provider Support
+- **NvidiaProviderClient** (`src/core/providers/nvidia_client.py`): Full provider adapter for NVIDIA Nemotron models via NIM API (OpenAI-compatible). Supports text generation, tool/function calling, model discovery with known-catalog fallback, retry with exponential backoff, and auth error detection.
+- **Known models**: Nemotron 3 Nano 30B (256K context, fast lane), Nemotron 3 Super 120B (1M context, deep lane), Nemotron Nano 9B v2, Llama 3.3 Nemotron Super 49B, Llama 3.1 Nemotron 70B Instruct.
+- **Factory registration**: `nvidia` added to `create_provider()` and `API_KEY_VARS` in `providers/factory.py`.
+- **FlagshipClient**: `_call_nvidia()` method for lightweight HTTP mode via NIM REST API.
+- **Config**: `nvidia` provider profile in `config/models.yaml` with fast/deep/cache lanes.
+- **Cost tracking**: 5 Nemotron models added to `usage_tracker.py` fallback cost rates.
+- **Onboarding**: NVIDIA added as option [5] in both CLI installer (`installer/src/constants.mjs`) and runtime onboarding (`src/ui/onboarding.py`). Live API key validation via NIM `/v1/models` endpoint. Users can select by number (5), name (nvidia), or model family (nemotron).
+- **42 new tests** (`tests/test_nvidia_provider.py`): Config loading, cost rates, factory registration, flagship HTTP dispatch, SDK client methods (generate, tools, messages, discovery, errors), and env-gated integration tests.
+- **Environment variables**: `NVIDIA_API_KEY` (required), `NVIDIA_BASE_URL` (optional, defaults to `https://integrate.api.nvidia.com/v1`).
+
+### Changed
+- Documentation updated across 9 files (README, CLAUDE.md, CAPABILITIES.md, installer README, quickstart, installation, architecture, configuration-reference) to reflect 5 supported providers.
+- `tests/conftest.py`: Added `src/core` to sys.path to mirror Docker PYTHONPATH for host-side test runs.
+- `tests/test_provider_profile.py`: Updated real-config test to expect >= 4 providers.
+
 ## [0.3.0] - 2026-03-04
 
 ### Added — Vault-Backed Secret Management

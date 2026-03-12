@@ -12,7 +12,7 @@ The installer guides you through the entire setup process:
 
 1. **Prerequisites check** — Node.js, Git, Docker Desktop, Docker Compose, disk space, RAM, GPU detection
 2. **Install location** — choose where to install Lancelot
-3. **LLM Provider** — select Gemini (recommended), OpenAI, or Anthropic and enter your API key
+3. **LLM Provider** — select Gemini (recommended), OpenAI, Anthropic, xAI, or NVIDIA and enter your API key
 4. **Communications** — configure Telegram, Google Chat, or skip
 5. **Repository clone** — pulls the latest Lancelot from GitHub
 6. **Configuration** — generates `.env`, patches `docker-compose.yml` for your system
@@ -25,7 +25,7 @@ The installer guides you through the entire setup process:
 | Flag | Description |
 |------|-------------|
 | `-d, --directory <path>` | Installation directory (default: `./lancelot`) |
-| `--provider <name>` | Pre-select provider: `gemini`, `openai`, or `anthropic` |
+| `--provider <name>` | Pre-select provider: `gemini`, `openai`, `anthropic`, `xai`, or `nvidia` |
 | `--skip-model` | Skip the local model download |
 | `--resume` | Resume an interrupted installation |
 

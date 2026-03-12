@@ -43,6 +43,14 @@ PROVIDERS = {
         "signup": "https://console.x.ai/",
         "description": "Grok models, pay-as-you-go",
     },
+    "nvidia": {
+        "name": "NVIDIA Nemotron",
+        "env_var": "NVIDIA_API_KEY",
+        "env_provider": "nvidia",
+        "prefix": "nvapi-",
+        "signup": "https://build.nvidia.com/",
+        "description": "Nemotron models via NIM, free tier available",
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -514,6 +522,8 @@ class OnboardingOrchestrator:
             "    Get a key at: https://console.anthropic.com/\n\n"
             "[4] xAI (Grok) — Grok models, pay-as-you-go\n"
             "    Get a key at: https://console.x.ai/\n\n"
+            "[5] NVIDIA Nemotron — Nemotron models via NIM, free tier available\n"
+            "    Get a key at: https://build.nvidia.com/\n\n"
             "Enter the number of your choice:"
         )
 
@@ -526,6 +536,7 @@ class OnboardingOrchestrator:
             "2": "openai", "openai": "openai",
             "3": "anthropic", "anthropic": "anthropic", "claude": "anthropic",
             "4": "xai", "xai": "xai", "grok": "xai",
+            "5": "nvidia", "nvidia": "nvidia", "nemotron": "nvidia",
         }
 
         provider_id = provider_map.get(choice.lower())
@@ -754,6 +765,18 @@ class OnboardingOrchestrator:
                     return {"valid": True}
                 if r.status_code == 401:
                     return {"valid": False, "error": "Invalid API key — rejected by xAI"}
+                return {"valid": False, "error": f"Unexpected response (HTTP {r.status_code})"}
+
+            elif provider == "nvidia":
+                r = requests.get(
+                    "https://integrate.api.nvidia.com/v1/models",
+                    headers={"Authorization": f"Bearer {key}"},
+                    timeout=10,
+                )
+                if r.ok:
+                    return {"valid": True}
+                if r.status_code == 401:
+                    return {"valid": False, "error": "Invalid API key — rejected by NVIDIA"}
                 return {"valid": False, "error": f"Unexpected response (HTTP {r.status_code})"}
 
             return {"valid": False, "error": f"Unknown provider: {provider}"}

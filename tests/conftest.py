@@ -11,6 +11,8 @@ import pytest
 
 # Ensure project root is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# Mirror Docker PYTHONPATH so bare provider imports (e.g. 'from providers.base') resolve
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "core"))
 
 
 # ---------------------------------------------------------------------------

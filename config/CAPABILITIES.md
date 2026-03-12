@@ -12,8 +12,8 @@
 - The owner communicates with you through their configured comms channel or the War Room UI.
 
 ## LLM Provider Support
-- Multi-provider: Supports Google Gemini, OpenAI, Anthropic, and xAI (Grok) as LLM backends
-- Provider is configured via LANCELOT_PROVIDER env var (gemini, openai, anthropic, xai)
+- Multi-provider: Supports Google Gemini, OpenAI, Anthropic, xAI (Grok), and NVIDIA Nemotron as LLM backends
+- Provider is configured via LANCELOT_PROVIDER env var (gemini, openai, anthropic, xai, nvidia)
 - Hot-swap provider switching: change providers from the War Room UI without restarting
 - API key rotation: rotate provider keys from the War Room UI without restarting
 - Lane-based model routing: fast lane (cheap, quick), deep lane (complex reasoning), cache lane (context caching)
@@ -23,7 +23,7 @@
 - Runtime config persistence: provider and lane choices survive container restarts
 
 ## Browser Automation & Vision (Antigravity)
-- Provider-agnostic: works with Gemini, OpenAI, Anthropic, or xAI (uses active LANCELOT_PROVIDER)
+- Provider-agnostic: works with Gemini, OpenAI, Anthropic, xAI, or NVIDIA (uses active LANCELOT_PROVIDER)
 - AI browser tasks: natural language browser automation via browser-use ("go to X and click Y")
 - Vision control: screenshots, element location, click/type/drag actions via Playwright
 - UI scaffolding: template-based and AI-generated UI project generation

@@ -64,6 +64,7 @@ You need an API key from at least one provider:
 | **OpenAI** | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | No | `sk-...` |
 | **Anthropic** | [console.anthropic.com](https://console.anthropic.com/) | No | `sk-ant-...` |
 | **xAI (Grok)** | [console.x.ai](https://console.x.ai/) | No | `xai-...` |
+| **NVIDIA Nemotron** | [build.nvidia.com](https://build.nvidia.com/) | Yes | `nvapi-...` |
 
 You can configure one or more providers. Lancelot routes between them based on task complexity and provider availability. API keys can be rotated from the War Room UI without restarting the container.
 
@@ -134,7 +135,7 @@ cp config/models.example.yaml config/models.yaml
 Create a `.env` file in the project root with your configuration:
 
 ```ini
-# LLM Provider (gemini, openai, anthropic, or xai)
+# LLM Provider (gemini, openai, anthropic, xai, or nvidia)
 LANCELOT_PROVIDER=gemini
 
 # LLM API Keys (at least one required, matching your provider)
@@ -354,8 +355,8 @@ Lancelot routes tasks across four lanes, using local and cloud models:
 |----------|------|---------------|---------|
 | 1 | `local_redaction` | Qwen3-8B (local) | PII redaction — always local |
 | 2 | `local_utility` | Qwen3-8B (local) | Classify, summarize, extract |
-| 3 | `flagship_fast` | Gemini Flash / GPT-4o-mini / Claude Haiku | Orchestration, tool calls |
-| 4 | `flagship_deep` | Gemini Pro / GPT-4o / Claude Sonnet | Planning, complex reasoning |
+| 3 | `flagship_fast` | Gemini Flash / GPT-4o-mini / Claude Haiku / Nemotron Nano | Orchestration, tool calls |
+| 4 | `flagship_deep` | Gemini Pro / GPT-4o / Claude Sonnet / Nemotron Super | Planning, complex reasoning |
 
 ### Model configuration
 
@@ -532,11 +533,12 @@ Open `http://localhost:8000` in a browser. You should see the operator dashboard
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | **LLM Provider** | | | |
-| `LANCELOT_PROVIDER` | Yes | — | Active provider: `gemini`, `openai`, `anthropic`, or `xai` |
-| `GEMINI_API_KEY` | One of four | — | Google Gemini API key |
-| `OPENAI_API_KEY` | One of four | — | OpenAI API key |
-| `ANTHROPIC_API_KEY` | One of four | — | Anthropic API key |
-| `XAI_API_KEY` | One of four | — | xAI (Grok) API key |
+| `LANCELOT_PROVIDER` | Yes | — | Active provider: `gemini`, `openai`, `anthropic`, `xai`, or `nvidia` |
+| `GEMINI_API_KEY` | One of five | — | Google Gemini API key |
+| `OPENAI_API_KEY` | One of five | — | OpenAI API key |
+| `ANTHROPIC_API_KEY` | One of five | — | Anthropic API key |
+| `XAI_API_KEY` | One of five | — | xAI (Grok) API key |
+| `NVIDIA_API_KEY` | One of five | — | NVIDIA NIM API key |
 | **Security** | | | |
 | `LANCELOT_OWNER_TOKEN` | Yes | — | Token for Soul amendments, memory writes |
 | `LANCELOT_API_TOKEN` | Yes | — | Token for API authentication |

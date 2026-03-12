@@ -18,6 +18,7 @@ API_KEY_VARS = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "xai": "XAI_API_KEY",
+    "nvidia": "NVIDIA_API_KEY",
 }
 
 
@@ -31,7 +32,7 @@ def create_provider(
     """Factory to create the right ProviderClient based on provider name.
 
     Args:
-        provider_name: One of "gemini", "openai", "anthropic", "xai".
+        provider_name: One of "gemini", "openai", "anthropic", "xai", "nvidia".
         api_key: The API key for the provider.
         mode: "sdk" (full SDK features) or "api" (lightweight). Default: "sdk".
         auth_token: V28 — OAuth bearer token (Anthropic only, takes priority over api_key).
@@ -58,6 +59,10 @@ def create_provider(
     elif provider_name == "xai":
         from providers.xai_client import XAIProviderClient
         return XAIProviderClient(api_key=api_key, **kwargs)
+
+    elif provider_name == "nvidia":
+        from providers.nvidia_client import NvidiaProviderClient
+        return NvidiaProviderClient(api_key=api_key, **kwargs)
 
     raise ValueError(
         f"Unknown provider: '{provider_name}'. "

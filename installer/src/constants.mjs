@@ -47,6 +47,16 @@ export const PROVIDERS = {
     validationUrl: 'https://api.x.ai/v1/models',
     signupUrl: 'https://console.x.ai/',
   },
+  nvidia: {
+    name: 'NVIDIA Nemotron',
+    envVar: 'NVIDIA_API_KEY',
+    envProvider: 'nvidia',
+    recommended: false,
+    description: 'Nemotron models via NIM, free tier available',
+    keyPrefix: 'nvapi-',
+    validationUrl: 'https://integrate.api.nvidia.com/v1/models',
+    signupUrl: 'https://build.nvidia.com/',
+  },
 };
 
 export const COMMS = {

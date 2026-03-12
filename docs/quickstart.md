@@ -32,7 +32,7 @@ The installer walks you through each step interactively:
 
 1. **Prerequisites check** — verifies Docker, Git, disk space, RAM, GPU
 2. **Install location** — where to put Lancelot (default: `./lancelot`)
-3. **LLM provider** — select Gemini, OpenAI, Anthropic, or xAI and paste your API key
+3. **LLM provider** — select Gemini, OpenAI, Anthropic, xAI, or NVIDIA and paste your API key
 4. **Communications** — optionally configure a messaging channel: Telegram, Google Chat, Slack, Discord, Teams, WhatsApp, Email, or SMS (you can skip this)
 5. **Repository clone** — pulls the latest code from GitHub
 6. **Configuration** — generates your `.env` file automatically

@@ -118,7 +118,7 @@ class TestRealConfigFiles:
             models_path=str(_MODELS_PATH),
             router_path=str(_ROUTER_PATH),
         )
-        assert len(reg.provider_names) >= 3
+        assert len(reg.provider_names) >= 4
 
     def test_real_config_has_three_providers(self):
         data = load_models_config(str(_MODELS_PATH))

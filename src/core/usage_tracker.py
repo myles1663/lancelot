@@ -52,6 +52,12 @@ _FALLBACK_COST_PER_1K: dict[str, float] = {
     # Anthropic
     "claude-3-5-haiku-latest": 0.004,
     "claude-sonnet-4-20250514": 0.015,
+    # NVIDIA Nemotron
+    "nvidia/nemotron-3-nano-30b-a3b": 0.0002,
+    "nvidia/nemotron-3-super-120b-a12b": 0.0013,
+    "nvidia/nemotron-nano-9b-v2": 0.00016,
+    "nvidia/llama-3.3-nemotron-super-49b-v1": 0.0004,
+    "nvidia/llama-3.1-nemotron-70b-instruct": 0.0012,
     # Local (free)
     "local-llm": 0.0,
 }
