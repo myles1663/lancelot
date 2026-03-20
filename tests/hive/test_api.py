@@ -4,6 +4,8 @@ import pytest
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 
+from unittest.mock import patch
+
 from src.hive.api import router, init_hive_api, shutdown_hive_api
 from src.hive.types import AgentState, TaskSpec
 from src.hive.config import HiveConfig
@@ -81,7 +83,8 @@ def initialized_client(app, config, registry, receipt_mgr, lifecycle):
         receipt_mgr=receipt_mgr,
         config=config,
     )
-    yield TestClient(app)
+    with patch("src.hive.api._resolve_operator_ids", return_value=("test-op", "test-sess")):
+        yield TestClient(app)
     shutdown_hive_api()
 
 
@@ -197,7 +200,7 @@ class TestInterventionEndpoints:
 
     def test_get_interventions_after_kill(self, initialized_client, lifecycle):
         record = lifecycle.spawn(TaskSpec())
-        lifecycle.kill(record.agent_id, "Test reason")
+        lifecycle.kill(record.agent_id, "Test reason", operator_id="test-op", session_id="test-sess")
         resp = initialized_client.get("/api/hive/interventions")
         assert resp.status_code == 200
         data = resp.json()

@@ -257,6 +257,8 @@ class HiveReceiptManager:
         feedback: Optional[str] = None,
         quest_id: Optional[str] = None,
         parent_receipt_id: Optional[str] = None,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> str:
         """Record an operator intervention."""
         receipt = emit_hive_receipt(
@@ -271,6 +273,8 @@ class HiveReceiptManager:
             parent_id=parent_receipt_id,
             quest_id=quest_id,
             data_dir=self._data_dir,
+            operator_id=operator_id,
+            session_id=session_id,
         )
         return receipt.id
 

@@ -769,12 +769,18 @@ class LancelotOrchestrator:
         # S9: HMAC integrity verification for RULES.md
         try:
             sig_path = os.path.join(self.data_dir, "RULES.md.sig")
-            if os.path.exists(sig_path):
-                # ... verification logic ...
-                # For now just trust the file load
-                pass
+            rules_path = os.path.join(self.data_dir, "RULES.md")
+            if os.path.exists(sig_path) and os.path.exists(rules_path):
+                hmac_key = os.getenv("LANCELOT_HMAC_KEY", "default-dev-key")
+                with open(rules_path, "rb") as f:
+                    rules_bytes = f.read()
+                expected_sig = hmac.new(hmac_key.encode(), rules_bytes, hashlib.sha256).hexdigest()
+                with open(sig_path, "r") as f:
+                    stored_sig = f.read().strip()
+                if expected_sig != stored_sig:
+                    _logging.warning("HMAC signature mismatch for RULES.md — file may have been tampered with")
         except Exception as e:
-            print(f"HMAC check failed: {e}")
+            _logging.warning(f"HMAC check failed: {e}")
 
         print("Memory loaded into ContextEnv.")
 
@@ -3467,11 +3473,18 @@ class LancelotOrchestrator:
 
         print(f"Executing command via CLI: {command}")
 
+        # S3: Always check for shell metacharacters first (prevents chaining bypass)
+        for char in COMMAND_BLACKLIST_CHARS:
+            if char in command:
+                duration = int((__import__("time").time() - start_time) * 1000)
+                self.receipt_service.update(receipt.fail(f"Blocked shell metacharacter: '{char}'", duration))
+                return f"SECURITY BLOCK: Blocked shell metacharacter: '{char}'"
+
         try:
             parts = shlex.split(command)
         except ValueError:
             return "Error parsing command."
-            
+
         base_cmd = parts[0].lower() if parts else ""
         SAFEREPL_COMMANDS = {"ls", "dir", "cat", "read", "type", "grep", "search", "outline", "diff", "cp", "mv", "rm", "mkdir", "touch", "sleep", "wake"}
 

@@ -29,8 +29,8 @@ class TestManifest:
         assert len(discord.manifest.required_credentials) == 1
         assert discord.manifest.required_credentials[0].vault_key == "discord.bot_token"
 
-    def test_credential_type_is_api_key(self, discord):
-        assert discord.manifest.required_credentials[0].type == "api_key"
+    def test_credential_type_is_bot_token(self, discord):
+        assert discord.manifest.required_credentials[0].type == "bot_token"
 
     def test_does_not_access(self, discord):
         dna = discord.manifest.does_not_access

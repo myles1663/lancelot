@@ -32,7 +32,7 @@ These principles are enforced in code, not just stated in docs:
   <img src="docs/images/fig1_system_architecture.svg" alt="Lancelot System Architecture" width="900">
 </p>
 
-Every subsystem is **independently disableable** via feature flags. If something breaks, kill it — the rest keeps running. Recent additions include the **Universal Application Bridge (UAB)** for framework-level desktop app control and the **Hive Agent Mesh** for ephemeral sub-agent task decomposition — both feature-gated and disabled by default.
+Every subsystem is **independently disableable** via feature flags. If something breaks, kill it — the rest keeps running. Recent additions include the **Federation Data Plane** for multi-instance Soul-governed coordination, **MCP Governance** for governed access to external tool servers, the **Universal Application Bridge (UAB)** for framework-level desktop app control, the **Hive Agent Mesh** for ephemeral sub-agent task decomposition, and the **A2A Protocol** for governed cross-agent interoperability via Google's A2A v0.2 spec — all feature-gated and disabled by default.
 
 ## Key Capabilities
 
@@ -44,7 +44,16 @@ Every subsystem is **independently disableable** via feature flags. If something
 | **Tool Fabric** | Provider-agnostic execution with sandboxing and policy gates | [Architecture](docs/architecture.md) |
 | **UAB** | Framework-level desktop app control across 8 UI frameworks (feature-gated) | [UAB](docs/uab.md) |
 | **Hive Mesh** | Ephemeral sub-agent architecture with task decomposition and scoped souls (feature-gated) | [Hive](docs/hive.md) |
+| **Federation** | Multi-instance coordination with Soul propagation, task handoff, and cross-instance audit (feature-gated) | [Federation](docs/federation.md) |
+| **MCP Governance** | Governed MCP tool server access with 8-gate fail-closed pipeline (feature-gated) | [MCP](docs/mcp.md) |
+| **Connectors** | Governed external service integrations with risk classification and trust tracking (feature-gated) | [Connectors](docs/connectors.md) |
 | **Receipts** | Auditable record of every action, decision, and outcome | [Receipts](docs/receipts.md) |
+| **Compliance Export** | One-click SOC 2, ISO 27001, GDPR audit artifacts from the receipt DAG | [Compliance Export](docs/compliance-export.md) |
+| **Time-Travel** | Governed fork/replay of quest histories with DAG visualization and state snapshots (feature-gated) | [Time-Travel](docs/time-travel.md) |
+| **A2A Protocol** | Governed Agent-to-Agent interoperability via Google A2A v0.2 — inbound server, outbound client, agent card, trust tracking (feature-gated) | [A2A](docs/a2a.md) |
+| **Observability** | OTel traces/metrics, webhooks, and Metrics API for enterprise monitoring stacks (feature-gated) | [Observability](docs/observability.md) |
+| **Incident Response** | Structured response playbooks for governance events with trigger engine, PDF reports, and industry variant overlays (feature-gated) | [Incident Response](docs/incident-response.md) |
+| **Soul Template Library** | Pre-validated Soul templates for industry verticals with propose→approve→activate workflow | [Soul Templates](docs/soul-templates.md) |
 | **Scheduler** | Gated cron/interval automation with approval pipelines | [Configuration](docs/configuration-reference.md) |
 | **War Room** | Operator dashboard for full system observability | [War Room Guide](docs/war-room.md) |
 
@@ -182,17 +191,26 @@ lancelot/
 ├── src/
 │   ├── core/              # Orchestration, routing, security
 │   │   ├── memory/        # Tiered memory: block store, commits, compiler
-│   │   ├── soul/          # Constitutional identity: store, linter, amendments
+│   │   ├── soul/          # Constitutional identity: store, linter, amendments, templates
+│   │   │   ├── templates.py      # Soul Template Library: registry, validation
+│   │   │   ├── template_api.py   # Template API: propose, approve, activate
 │   │   ├── skills/        # Modular skills: schema, registry, executor, factory
 │   │   ├── health/        # Heartbeat: health types, monitor, API
 │   │   ├── scheduler/     # Job scheduling: schema, service, executor
 │   │   └── feature_flags.py
 │   ├── tools/             # Tool Fabric: contracts, policies, providers
+│   ├── connectors/        # Governed external service integrations
+│   ├── mcp/               # MCP governance: 8-gate proxy, argument screening, response guard
+│   ├── a2a/               # A2A Protocol: inbound server, outbound client, agent card, registry
+│   ├── federation/        # Federation: identity, transport, Soul propagation, handoff, audit
+│   ├── incidents/         # Incident Response: trigger engine, playbooks, store, reports
+│   ├── hive/              # Hive Agent Mesh: decomposition, scoped souls, governance bridge
 │   ├── warroom/           # React War Room (Vite + React 18 + TypeScript)
 │   ├── agents/            # Planner, Verifier, Crusader
 │   ├── ui/                # Legacy Streamlit UI, Launcher
-│   ├── integrations/      # Telegram, Google Chat, MCP
+│   ├── integrations/      # Telegram, Google Chat
 │   └── shared/            # Utilities, logging, receipts
+├── playbooks/             # Incident response playbooks (YAML) + industry variant overlays
 ├── installer/             # create-lancelot CLI installer (npm)
 ├── config/                # YAML configuration files
 ├── docs/                  # Documentation
@@ -221,6 +239,19 @@ lancelot/
 | [Authoring Souls](docs/authoring-souls.md) | Customize Lancelot's constitutional governance |
 | [UAB (Universal Application Bridge)](docs/uab.md) | Desktop app control via framework hooking |
 | [Hive Agent Mesh](docs/hive.md) | Ephemeral sub-agent task decomposition |
+| [Federation Data Plane](docs/federation.md) | Multi-instance coordination, Soul propagation, task handoff |
+| [MCP Governance](docs/mcp.md) | Governed MCP tool server access with 8-gate pipeline |
+| [Kill Switches](docs/kill-switches.md) | Complete feature flag reference with dependency chains |
+| [Connectors](docs/connectors.md) | External service integrations with governed proxy |
+| [Trust Ledger](docs/trust-ledger.md) | Progressive tier relaxation via demonstrated reliability |
+| [Approval Pattern Learning](docs/apl.md) | Auto-approval from learned owner decision patterns |
+| [Skill Security Pipeline](docs/skill-security.md) | 6-stage evaluation for new skills |
+| [Compliance Export](docs/compliance-export.md) | One-click SOC 2, ISO 27001, GDPR audit artifacts |
+| [Observability](docs/observability.md) | OTel export, webhooks, Metrics API, dashboard templates |
+| [Time-Travel Debugging](docs/time-travel.md) | Governed fork/replay, DAG navigator, state snapshots |
+| [A2A Protocol](docs/a2a.md) | Governed Agent-to-Agent interoperability with inbound/outbound pipelines |
+| [Soul Templates](docs/soul-templates.md) | Pre-validated Soul templates for industry verticals |
+| [Incident Response](docs/incident-response.md) | Response playbooks, trigger engine, incident lifecycle, PDF reports |
 | [How Lancelot Compares](docs/comparison.md) | Factual comparison with the agent landscape |
 | [Anti-Roadmap](docs/anti-roadmap.md) | What we will not build, and why |
 | [Changelog](CHANGELOG.md) | Version history |

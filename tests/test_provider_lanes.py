@@ -324,7 +324,7 @@ class TestFlagshipAnthropic:
             c.complete("test", lane="deep")
             req = mock_open.call_args[0][0]
             assert req.get_header("X-api-key") == "ant-key"
-            assert req.get_header("Anthropic-version") == "2023-06-01"
+            assert req.get_header("Anthropic-version") == "2024-10-22"
 
 
 # ===================================================================

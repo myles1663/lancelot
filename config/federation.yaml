@@ -1,0 +1,66 @@
+# ===========================================================================
+# Federation — Default Configuration
+# ===========================================================================
+# Feature flag: FEATURE_FEDERATION (default: false)
+#
+# Controls the multi-instance federation layer for coordinating
+# multiple Lancelot instances under Soul-governed topology.
+
+# Heartbeat interval in seconds (peers emit heartbeats at this rate)
+heartbeat_interval_s: 2.0
+
+# Staleness thresholds for peer health classification
+staleness_warning_s: 10.0     # Warning: delayed but possibly transient
+staleness_critical_s: 20.0    # Critical: likely connectivity issue
+staleness_lost_s: 30.0        # Lost: instance unreachable
+
+# TLS configuration (required for cross-network deployments)
+tls_required: false
+# tls_cert_path: /path/to/cert.pem
+# tls_key_path: /path/to/key.pem
+
+# Topology persistence path
+topology_path: "config/federation_topology.json"
+
+# Maximum number of peers in a federation
+max_peers: 50
+
+# Timeout for governance commands (seconds)
+command_timeout_s: 5.0
+
+# Timeout for handoff operations (seconds)
+handoff_timeout_s: 30.0
+
+# Budget governance thresholds (percentage of ceiling)
+budget_warning_pct: 80.0     # T2: warn, restrict new spawns
+budget_critical_pct: 95.0    # T3: block new spawns, alert operator
+
+# ── Transport ───────────────────────────────────────────────
+# Retry policy for outbound federation requests
+retry_max_attempts: 3
+retry_base_backoff_s: 1.0       # Exponential: 1s, 2s, 4s
+
+# Connection timeouts (seconds)
+connect_timeout_s: 5.0
+read_timeout_s: 30.0
+
+# ── Circuit Breaker ─────────────────────────────────────────
+# Per-peer circuit breaker to prevent cascade failures
+circuit_breaker_threshold: 5    # Consecutive failures to trip
+circuit_breaker_recovery_s: 60.0  # Seconds before half-open test
+
+# ── Auth ────────────────────────────────────────────────────
+# Ed25519 request signing + replay protection
+auth_timestamp_window_s: 30.0   # Max age of valid request timestamp
+nonce_cache_size: 10000          # In-memory nonce dedup cache
+
+# ── Peer Storage ────────────────────────────────────────────
+# SQLite-backed persistent peer registry (empty = auto-derived from data_dir)
+# peer_db_path: ""
+
+# ── Cost Reporting ──────────────────────────────────────────
+cost_report_interval_s: 30.0    # How often children report cost to root
+
+# ── Self Address ────────────────────────────────────────────
+# This instance's externally-reachable address for peer registration
+# self_address: "http://localhost:8000"

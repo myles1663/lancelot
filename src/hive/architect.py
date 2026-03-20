@@ -273,6 +273,8 @@ class ArchitectAgent:
         self,
         intervention: OperatorIntervention,
         feedback: Optional[str] = None,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Handle an operator intervention.
 
@@ -284,6 +286,8 @@ class ArchitectAgent:
         if intervention.intervention_type == InterventionType.KILL_ALL:
             collapsed = self._lifecycle.kill_all(
                 intervention.reason or "Operator kill all",
+                operator_id=operator_id,
+                session_id=session_id,
             )
             self._status = "idle"
             return {
@@ -296,6 +300,8 @@ class ArchitectAgent:
                 self._lifecycle.kill(
                     intervention.agent_id,
                     intervention.reason or "Operator kill",
+                    operator_id=operator_id,
+                    session_id=session_id,
                 )
             return {
                 "action": "kill",
@@ -308,6 +314,8 @@ class ArchitectAgent:
                 reason=intervention.reason,
                 feedback=feedback or intervention.feedback,
                 constraints=intervention.constraints,
+                operator_id=operator_id,
+                session_id=session_id,
             )
 
         if intervention.intervention_type == InterventionType.PAUSE:
@@ -315,6 +323,8 @@ class ArchitectAgent:
                 self._lifecycle.pause(
                     intervention.agent_id,
                     intervention.reason or "Operator pause",
+                    operator_id=operator_id,
+                    session_id=session_id,
                 )
             return {
                 "action": "pause",
@@ -323,7 +333,11 @@ class ArchitectAgent:
 
         if intervention.intervention_type == InterventionType.RESUME:
             if intervention.agent_id:
-                self._lifecycle.resume(intervention.agent_id)
+                self._lifecycle.resume(
+                    intervention.agent_id,
+                    operator_id=operator_id,
+                    session_id=session_id,
+                )
             return {
                 "action": "resume",
                 "agent_id": intervention.agent_id,
@@ -336,6 +350,8 @@ class ArchitectAgent:
         reason: str,
         feedback: Optional[str] = None,
         constraints: Optional[Dict[str, Any]] = None,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Replan with operator feedback.
 
@@ -345,7 +361,11 @@ class ArchitectAgent:
             return {"action": "replan", "error": "No active goal to replan"}
 
         # Kill all current agents
-        self._lifecycle.kill_all(f"Replan: {reason}")
+        self._lifecycle.kill_all(
+            f"Replan: {reason}",
+            operator_id=operator_id,
+            session_id=session_id,
+        )
 
         # Build enriched context with feedback
         context = {

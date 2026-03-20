@@ -168,11 +168,19 @@ class TestFeatureFlags:
             os.environ.pop(key, None)
 
         from src.core import feature_flags
+        # Clear persisted state so it doesn't override defaults
+        old_persisted = dict(feature_flags._persisted_state)
+        feature_flags._persisted_state.pop("FEATURE_CONNECTORS", None)
+        feature_flags._persisted_state.pop("FEATURE_TRUST_LEDGER", None)
+        feature_flags._persisted_state.pop("FEATURE_SKILL_SECURITY_PIPELINE", None)
         feature_flags.reload_flags()
 
         assert feature_flags.FEATURE_CONNECTORS is False
         assert feature_flags.FEATURE_TRUST_LEDGER is False
         assert feature_flags.FEATURE_SKILL_SECURITY_PIPELINE is False
+
+        # Restore persisted state
+        feature_flags._persisted_state.update(old_persisted)
 
     def test_connector_flags_enable(self):
         os.environ["FEATURE_CONNECTORS"] = "true"
@@ -211,5 +219,6 @@ class TestCapabilityEnum:
         assert Capability.CREDENTIAL_WRITE == "credential.write"
 
     def test_total_capabilities(self):
-        # 7 original + 5 connector = 12
-        assert len(Capability) == 12
+        # 8 original (shell_exec, repo_ops, file_ops, web_ops, ui_builder,
+        # deploy_ops, vision_control, app_control) + 5 connector = 13
+        assert len(Capability) == 13

@@ -5,7 +5,7 @@ Validates:
 - "set up a way for us to communicate" → EXEC_REQUEST (new "set" keyword)
 - "does slack offer a free use account" → KNOWLEDGE_REQUEST (new "does" keyword)
 - "which one would be best" → KNOWLEDGE_REQUEST (new "which" keyword)
-- Default fallback → PLAN_REQUEST (not AMBIGUOUS)
+- Default fallback → KNOWLEDGE_REQUEST (not AMBIGUOUS)
 - Previous EXEC_REQUEST / PLAN_REQUEST / KNOWLEDGE_REQUEST cases still work
 """
 
@@ -24,19 +24,19 @@ from plan_types import IntentType
 # ---------------------------------------------------------------------------
 
 class TestDefaultFallback:
-    """Spec lines 13-14: uncertain → PLAN_REQUEST, never AMBIGUOUS."""
+    """Spec lines 13-14: uncertain → KNOWLEDGE_REQUEST, never AMBIGUOUS."""
 
     def test_random_message_not_ambiguous(self):
         result = classify_intent("hello there friend")
         assert result != IntentType.AMBIGUOUS
 
-    def test_random_message_is_plan_request(self):
+    def test_random_message_is_knowledge_request(self):
         result = classify_intent("hello there friend")
-        assert result == IntentType.PLAN_REQUEST
+        assert result == IntentType.KNOWLEDGE_REQUEST
 
-    def test_gibberish_defaults_plan(self):
+    def test_gibberish_defaults_knowledge(self):
         result = classify_intent("xyzzy plugh")
-        assert result == IntentType.PLAN_REQUEST
+        assert result == IntentType.KNOWLEDGE_REQUEST
 
     def test_empty_still_ambiguous(self):
         """Empty/whitespace is a special case — still AMBIGUOUS."""

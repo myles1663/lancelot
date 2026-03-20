@@ -215,6 +215,37 @@ export interface SoulProposeResponse {
   status: string
 }
 
+export interface SoulTemplateMetadata {
+  name: string
+  display_name: string
+  description: string
+  industry: string
+  version: string
+  author: string
+  tags: string[]
+}
+
+export interface SoulTemplateDetail {
+  metadata: SoulTemplateMetadata
+  soul_dict: Record<string, unknown>
+  raw_yaml: string
+}
+
+export interface SoulTemplateListResponse {
+  templates: SoulTemplateMetadata[]
+  count: number
+}
+
+export interface SoulTemplateApplyResponse {
+  proposal_id: string
+  proposed_version: string
+  diff_summary: string[]
+  template_name: string
+  template_version: string
+  fields_customized: string[]
+  status: string
+}
+
 // ------------------------------------------------------------------
 // Memory  (/memory/*)
 // ------------------------------------------------------------------

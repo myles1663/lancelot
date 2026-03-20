@@ -180,6 +180,17 @@ async def revoke_rule(rule_id: str, request: Request):
         data = await request.json() if request.headers.get("content-type") else {}
         reason = data.get("reason", "Revoked via War Room")
         _rule_engine.revoke_rule(rule_id, reason=reason)
+
+        # Governance receipt
+        from src.core.governance_receipts import emit_governance_receipt
+        from src.shared.receipts import ActionType
+        emit_governance_receipt(
+            request,
+            ActionType.APL_RULE_REJECTED,
+            action_name="revoke_rule",
+            inputs={"rule_id": rule_id, "reason": reason},
+        )
+
         return {"status": "revoked", "rule_id": rule_id}
     except Exception as exc:
         logger.error("revoke_rule error: %s", exc)
@@ -187,12 +198,23 @@ async def revoke_rule(rule_id: str, request: Request):
 
 
 @router.post("/proposals/{rule_id}/activate")
-async def activate_proposal(rule_id: str):
+async def activate_proposal(rule_id: str, request: Request):
     """Activate a proposed rule."""
     try:
         if _rule_engine is None:
             return _safe_error(400, "Rule engine not initialised")
         _rule_engine.activate_rule(rule_id)
+
+        # Governance receipt
+        from src.core.governance_receipts import emit_governance_receipt
+        from src.shared.receipts import ActionType
+        emit_governance_receipt(
+            request,
+            ActionType.APL_RULE_APPROVED,
+            action_name="activate_proposal",
+            inputs={"rule_id": rule_id},
+        )
+
         return {"status": "active", "rule_id": rule_id}
     except Exception as exc:
         logger.error("activate_proposal error: %s", exc)
@@ -208,6 +230,17 @@ async def decline_proposal(rule_id: str, request: Request):
         data = await request.json() if request.headers.get("content-type") else {}
         reason = data.get("reason", "Declined via War Room")
         _rule_engine.decline_rule(rule_id, reason=reason)
+
+        # Governance receipt
+        from src.core.governance_receipts import emit_governance_receipt
+        from src.shared.receipts import ActionType
+        emit_governance_receipt(
+            request,
+            ActionType.APL_RULE_REJECTED,
+            action_name="decline_proposal",
+            inputs={"rule_id": rule_id, "reason": reason},
+        )
+
         return {"status": "declined", "rule_id": rule_id}
     except Exception as exc:
         logger.error("decline_proposal error: %s", exc)

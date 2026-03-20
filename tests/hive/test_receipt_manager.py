@@ -139,6 +139,8 @@ class TestInterventionReceipts:
             agent_id="agent-1",
             reason="Need to check progress",
             quest_id="quest-1",
+            operator_id="test-op",
+            session_id="test-sess",
         )
         assert rid
 
@@ -228,6 +230,8 @@ class TestQueryHelpers:
             agent_id="a1",
             reason="Check",
             quest_id=quest_id,
+            operator_id="test-op",
+            session_id="test-sess",
         )
         interventions = receipt_mgr.get_interventions(quest_id)
         assert len(interventions) == 1

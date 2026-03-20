@@ -203,12 +203,12 @@ class TestRiskAssessment:
         decision = policy_engine.evaluate_command("git commit -m 'test'")
         assert decision.risk_level == RiskLevel.MEDIUM
 
-    def test_curl_blocked_not_in_allowlist(self, policy_engine):
-        """curl is blocked when not in allowlist."""
+    def test_curl_allowed_high_risk(self, policy_engine):
+        """curl is in default allowlist but flagged as high risk."""
         decision = policy_engine.evaluate_command("curl http://example.com")
-        # curl is not in default allowlist, so it's blocked
-        assert decision.allowed is False
-        assert decision.risk_level == RiskLevel.MEDIUM
+        # curl is now in the default allowlist
+        assert decision.allowed is True
+        assert decision.risk_level == RiskLevel.HIGH
 
     def test_curl_high_risk_when_allowed(self):
         """curl is high risk when in allowlist."""

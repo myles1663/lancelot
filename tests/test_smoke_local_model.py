@@ -288,13 +288,14 @@ class TestRunSmokeTestMultiPrompt:
 
     @patch("local_models.smoke_test.is_model_present", return_value=True)
     @patch("local_models.smoke_test._load_model")
-    def test_all_five_prompts_tested(self, mock_load, mock_present):
+    def test_all_six_prompts_tested(self, mock_load, mock_present):
         responses = {
             "classify_intent": "question",
             "extract_json": '{"name": "John", "age": 30, "city": "New York"}',
             "summarize_internal": "Revenue grew 15% due to digital marketing.",
             "redact": "Contact [NAME] at [EMAIL] or [PHONE].",
             "rag_rewrite": "application error troubleshooting steps",
+            "verify_intent": "action",
         }
 
         call_count = [0]
@@ -311,20 +312,22 @@ class TestRunSmokeTestMultiPrompt:
                     return _mock_llm_response(resp)
                 elif key == "rag_rewrite" and "rewrite" in prompt.lower():
                     return _mock_llm_response(resp)
+                elif key == "verify_intent" and "intent" in prompt.lower():
+                    return _mock_llm_response(resp)
             return _mock_llm_response("fallback response with [ bracket")
 
         mock_llm = MagicMock()
         mock_llm.side_effect = mock_inference
         mock_load.return_value = mock_llm
 
-        data = load_lockfile()  # Use real lockfile with all 5 prompts
+        data = load_lockfile()  # Use real lockfile with all 6 prompts
         result = run_smoke_test(lockfile_data=data)
 
-        assert len(result.prompt_results) == 5
+        assert len(result.prompt_results) == 6
         names = {pr.name for pr in result.prompt_results}
         assert names == {
             "classify_intent", "extract_json", "summarize_internal",
-            "redact", "rag_rewrite",
+            "redact", "rag_rewrite", "verify_intent",
         }
 
     @patch("local_models.smoke_test.is_model_present", return_value=True)
@@ -402,7 +405,7 @@ class TestRealModelInference:
         result = run_smoke_test()
         assert result.model_loaded is True
         assert result.passed is True, result.summary()
-        assert len(result.prompt_results) == 5
+        assert len(result.prompt_results) == 6
 
     def test_classify_intent_returns_valid_category(self):
         result = run_smoke_test()

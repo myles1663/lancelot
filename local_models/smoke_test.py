@@ -87,6 +87,11 @@ _SMOKE_INPUTS = {
         "input": "how do I fix the thingy that's broken on my app",
         "expect_contains": None,  # Any non-empty rewrite
     },
+    "verify_intent": {
+        "input": "Please restart the database service on the production server.",
+        "expect_contains": None,  # Any non-empty response is fine
+        "expect_one_of": ["plan", "action", "question"],
+    },
 }
 
 

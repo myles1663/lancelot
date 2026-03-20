@@ -105,6 +105,22 @@ class ScopedSoulGenerator:
             ).strip(),
         )
 
+        # Narrow MCP permissions for sub-agent (same ceiling contract)
+        scoped_mcp_permissions = list(
+            parent_soul.mcp_permissions
+        ) if hasattr(parent_soul, "mcp_permissions") else []
+
+        # If task specifies allowed categories, further restrict MCP
+        # by only keeping servers whose IDs match allowed categories
+        if task_spec.allowed_categories and scoped_mcp_permissions:
+            scoped_mcp_permissions = [
+                p for p in scoped_mcp_permissions
+                if any(
+                    cat.lower() in p.get("server_id", "").lower()
+                    for cat in task_spec.allowed_categories
+                )
+            ]
+
         # Build the scoped Soul — version tagged as scoped
         scoped_soul = Soul(
             version=parent_soul.version,
@@ -132,6 +148,7 @@ class ScopedSoulGenerator:
             tone_invariants=list(parent_soul.tone_invariants),
             memory_ethics=list(parent_soul.memory_ethics),
             scheduling_boundaries=scoped_sched.model_dump(),
+            mcp_permissions=scoped_mcp_permissions,
         )
 
         logger.info(
@@ -180,6 +197,17 @@ class ScopedSoulGenerator:
         if (parent.scheduling_boundaries.no_autonomous_irreversible and
                 not scoped.scheduling_boundaries.no_autonomous_irreversible):
             return False
+
+        # Check: MCP permissions narrowed (same ceiling contract)
+        if hasattr(parent, "mcp_permissions") and hasattr(scoped, "mcp_permissions"):
+            parent_server_ids = {
+                p.get("server_id", "") for p in (parent.mcp_permissions or [])
+            }
+            scoped_server_ids = {
+                p.get("server_id", "") for p in (scoped.mcp_permissions or [])
+            }
+            if not scoped_server_ids.issubset(parent_server_ids):
+                return False
 
         return True
 

@@ -1,0 +1,152 @@
+_playbook_metadata:
+  name: cost-anomaly-ceiling-breached
+  display_name: "Cost Anomaly — Budget Ceiling Breached"
+  description: "Budget ceiling has reached 100%. Immediate investigation required to identify runaway spend and contain cost exposure before hard limits are exceeded."
+  category: COST_ANOMALY
+  severity_default: MEDIUM
+  industry: general
+  version: "1.0"
+  author: Lancelot
+  tags: [cost, budget, ceiling, hive, runaway-spend]
+
+trigger:
+  receipt_types: [COST_CEILING_BREACHED]
+  conditions:
+    - field: budget_utilization_pct
+      operator: gte
+      value: 100
+  severity: MEDIUM
+
+paging:
+  CRITICAL:
+    - channel: pagerduty
+      endpoint_ref: vault://pagerduty-webhook
+      escalation_minutes: 5
+  HIGH:
+    - channel: slack
+      endpoint_ref: vault://slack-incident-channel
+      escalation_minutes: 15
+  MEDIUM:
+    - channel: slack
+      endpoint_ref: vault://slack-ops-channel
+      escalation_minutes: 60
+
+steps:
+  - step: 1
+    title: "Check HIVE spawn count immediately"
+    description: >
+      HIVE agent spawning is the most common cause of rapid cost escalation.
+      Query the orchestrator for active HIVE agent count and compare against
+      the expected baseline for the current quest. If agent count is abnormally
+      high, this is likely a spawn loop and must be contained before any other
+      investigation.
+    action_type: MANUAL
+    sla_minutes: 3
+    decision_points:
+      - condition: "If HIVE agent count exceeds expected baseline by 2x or more"
+        action: "Proceed immediately to Step 2 — activate spawn gate."
+      - condition: "If HIVE agent count is within expected range"
+        action: "Skip to Step 3 — investigate non-HIVE cost drivers."
+    actions: []
+
+  - step: 2
+    title: "Activate HIVE spawn gate kill switch"
+    description: >
+      Enable the HIVE spawn gate kill switch immediately to prevent further
+      agent spawning. This is a containment action — it does not stop existing
+      agents but prevents new ones from being created. Confirm activation via
+      the Kill Switches panel in the War Room.
+    action_type: MANUAL
+    sla_minutes: 2
+    decision_points:
+      - condition: "If kill switch activates successfully"
+        action: "Proceed to Step 3 to identify the specific quest and model."
+      - condition: "If kill switch fails to activate"
+        action: "Escalate to CRITICAL immediately and invoke manual agent stop on all HIVE agents."
+    actions: []
+
+  - step: 3
+    title: "Identify quest, model, and task driving cost"
+    description: >
+      Using the receipts ledger and cost metrics, identify which quest is
+      responsible for the ceiling breach. Determine the model being used
+      (e.g., GPT-4, Claude) and the specific task or sub-task generating
+      the highest token consumption. Record quest ID, model identifier,
+      and task description for the incident report.
+    action_type: MANUAL
+    sla_minutes: 5
+    decision_points:
+      - condition: "If a single quest accounts for more than 80% of spend"
+        action: "Focus investigation on that quest — proceed to Step 4."
+      - condition: "If spend is distributed across multiple quests"
+        action: "Check for a systemic issue (e.g., model misconfiguration) before proceeding."
+    actions: []
+
+  - step: 4
+    title: "Determine if escalation is from legitimate work or a loop"
+    description: >
+      Review the task history and agent output for the identified quest.
+      A legitimate cost spike shows progressive, meaningful output toward
+      the quest objective. A reasoning loop shows repetitive output,
+      circular logic, or the same sub-task being retried without progress.
+      Check receipt history for repeated identical action patterns.
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "If the agent is in a reasoning loop"
+        action: "Proceed to Step 5 — stop the agent."
+      - condition: "If the work is legitimate but expensive"
+        action: "Skip to Step 6 — evaluate whether to raise the ceiling or restructure the task."
+    actions: []
+
+  - step: 5
+    title: "Stop agent if loop confirmed"
+    description: >
+      If a reasoning loop is confirmed, issue an agent stop command for the
+      specific agent or quest. Do not rely solely on the spawn gate — the
+      existing agents may continue burning tokens. Verify via receipts that
+      an AGENT_STOPPED receipt is generated. If no receipt appears within
+      60 seconds of the stop command, escalate to infrastructure review.
+    action_type: MANUAL
+    sla_minutes: 5
+    decision_points:
+      - condition: "If AGENT_STOPPED receipt is confirmed"
+        action: "Proceed to Step 6 for post-incident assessment."
+      - condition: "If no AGENT_STOPPED receipt appears"
+        action: "Escalate to CRITICAL — agent may be unresponsive to governance commands."
+    actions: []
+
+  - step: 6
+    title: "Assess whether ceiling needs adjustment or task needs restructuring"
+    description: >
+      With the immediate threat contained, determine the correct forward path.
+      If the task was legitimate, consider whether the budget ceiling was set
+      too low for the scope of work, or whether the task should be decomposed
+      into smaller sub-tasks with individual budgets. If it was a loop, document
+      the loop pattern for APL rule creation to prevent recurrence.
+    action_type: MANUAL
+    sla_minutes: 15
+    decision_points:
+      - condition: "If ceiling was legitimately too low"
+        action: "Propose new ceiling with justification and get operator approval before raising."
+      - condition: "If loop was the cause"
+        action: "Create an APL rule to detect the pattern and proceed to Step 7."
+    actions: []
+
+  - step: 7
+    title: "Close incident and generate post-mortem receipt"
+    description: >
+      Generate a post-mortem summary including: root cause (loop vs. legitimate
+      spend), containment actions taken, time to containment, total cost incurred
+      during the incident, and any APL rules or ceiling adjustments made. Ensure
+      all actions taken during this playbook have corresponding receipts in the
+      ledger. Deactivate the HIVE spawn gate kill switch only after confirming
+      the root cause is resolved.
+    action_type: MANUAL
+    sla_minutes: 15
+    decision_points:
+      - condition: "If spawn gate is still active and root cause is resolved"
+        action: "Deactivate spawn gate and monitor for 30 minutes."
+      - condition: "If root cause is not yet fully resolved"
+        action: "Keep spawn gate active and schedule a follow-up review within 4 hours."
+    actions: []

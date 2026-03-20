@@ -111,7 +111,7 @@ class TestKill:
             [{"action": f"step{i}"} for i in range(100)],
         )
         time.sleep(0.05)
-        lifecycle.kill(record.agent_id, "Test kill")
+        lifecycle.kill(record.agent_id, "Test kill", operator_id="test-op", session_id="test-sess")
         result = future.result(timeout=10)
         # Should have been killed before completing all 100 actions
 
@@ -119,20 +119,20 @@ class TestKill:
         spec = TaskSpec()
         record = lifecycle.spawn(spec)
         with pytest.raises(InterventionRequiresReasonError):
-            lifecycle.kill(record.agent_id, "")
+            lifecycle.kill(record.agent_id, "", operator_id="test-op", session_id="test-sess")
 
 
 class TestKillAll:
     def test_kill_all(self, lifecycle, registry):
         for _ in range(3):
             lifecycle.spawn(TaskSpec())
-        collapsed = lifecycle.kill_all("Emergency")
+        collapsed = lifecycle.kill_all("Emergency", operator_id="test-op", session_id="test-sess")
         assert len(collapsed) >= 3
         assert registry.active_count() == 0
 
     def test_kill_all_requires_reason(self, lifecycle):
         with pytest.raises(InterventionRequiresReasonError):
-            lifecycle.kill_all("")
+            lifecycle.kill_all("", operator_id="test-op", session_id="test-sess")
 
 
 class TestPauseResume:
@@ -166,7 +166,7 @@ class TestIntervene:
             agent_id=record.agent_id,
             reason="Check progress",
         )
-        mgr.intervene(record.agent_id, intervention)
+        mgr.intervene(record.agent_id, intervention, operator_id="test-op", session_id="test-sess")
         mgr.shutdown()
 
     def test_intervene_requires_reason(self, lifecycle, registry):
@@ -178,7 +178,7 @@ class TestIntervene:
             reason="",
         )
         with pytest.raises(InterventionRequiresReasonError):
-            lifecycle.intervene(record.agent_id, intervention)
+            lifecycle.intervene(record.agent_id, intervention, operator_id="test-op", session_id="test-sess")
 
 
 class TestCapacityEnforcement:

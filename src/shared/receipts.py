@@ -60,6 +60,97 @@ class ActionType(str, Enum):
     HIVE_TASK_EVENT = "hive_task_event"
     HIVE_AGENT_EVENT = "hive_agent_event"
     HIVE_INTERVENTION_EVENT = "hive_intervention_event"
+    # Federation
+    FEDERATION_HEARTBEAT_EVENT = "federation_heartbeat_event"
+    FEDERATION_IDENTITY_EVENT = "federation_identity_event"
+    FEDERATION_TOPOLOGY_EVENT = "federation_topology_event"
+    FEDERATION_HANDOFF_EVENT = "federation_handoff_event"
+    FEDERATION_SOUL_EVENT = "federation_soul_event"
+    FEDERATION_BUDGET_EVENT = "federation_budget_event"
+    # MCP (Model Context Protocol) — governed tool proxy
+    MCP_TOOL_CALL = "mcp_tool_call"
+    MCP_TOOL_BLOCKED = "mcp_tool_blocked"
+    # Operator Identity — governance lifecycle receipts
+    # Kill switches
+    KILL_SWITCH_ISSUED = "kill_switch_issued"
+    KILL_SWITCH_LIFTED = "kill_switch_lifted"
+    # T3 approvals
+    T3_APPROVED = "t3_approved"
+    T3_REJECTED = "t3_rejected"
+    # Soul governance
+    SOUL_UPDATED = "soul_updated"
+    SOUL_VERSION_PINNED = "soul_version_pinned"
+    # Agent lifecycle
+    AGENT_DEPLOYED = "agent_deployed"
+    AGENT_STOPPED = "agent_stopped"
+    # Credentials
+    CREDENTIAL_REGISTERED = "credential_registered"
+    CREDENTIAL_REVOKED = "credential_revoked"
+    # MCP server management
+    MCP_SERVER_REGISTERED = "mcp_server_registered"
+    MCP_SERVER_REVOKED = "mcp_server_revoked"
+    MCP_T3_APPROVED = "mcp_t3_approved"
+    MCP_T3_REJECTED = "mcp_t3_rejected"
+    # Connectors
+    CONNECTOR_ENABLED = "connector_enabled"
+    CONNECTOR_DISABLED = "connector_disabled"
+    # Network allowlist
+    ALLOWLIST_MODIFIED = "allowlist_modified"
+    # Scheduler CRUD
+    SCHEDULER_TASK_CREATED = "scheduler_task_created"
+    SCHEDULER_TASK_DELETED = "scheduler_task_deleted"
+    # Tool store
+    TOOL_ENABLED = "tool_enabled"
+    TOOL_DISABLED = "tool_disabled"
+    # APL rule decisions
+    APL_RULE_APPROVED = "apl_rule_approved"
+    APL_RULE_REJECTED = "apl_rule_rejected"
+    # Governance write errors
+    GOVERNANCE_WRITE_ERROR = "governance_write_error"
+    # Compliance export
+    COMPLIANCE_EXPORT_GENERATED = "compliance_export_generated"
+    # Observability
+    WEBHOOK_DELIVERY_FAILED = "webhook_delivery_failed"
+    METRICS_API_QUERY = "metrics_api_query"
+    # A2A Protocol — Agent-to-Agent interoperability
+    A2A_TASK_RECEIVED = "a2a_task_received"
+    A2A_INBOUND_BLOCKED = "a2a_inbound_blocked"
+    A2A_TASK_EXECUTING = "a2a_task_executing"
+    A2A_TASK_COMPLETED = "a2a_task_completed"
+    A2A_DELEGATION_SENT = "a2a_delegation_sent"
+    A2A_OUTBOUND_BLOCKED = "a2a_outbound_blocked"
+    A2A_DELEGATION_COMPLETED = "a2a_delegation_completed"
+    A2A_DELEGATION_FAILED = "a2a_delegation_failed"
+    T3_A2A_INBOUND_APPROVAL_REQUEST = "t3_a2a_inbound_approval_request"
+    T3_A2A_INBOUND_APPROVED = "t3_a2a_inbound_approved"
+    T3_A2A_INBOUND_REJECTED = "t3_a2a_inbound_rejected"
+    T3_A2A_OUTBOUND_APPROVAL_REQUEST = "t3_a2a_outbound_approval_request"
+    T3_A2A_OUTBOUND_APPROVED = "t3_a2a_outbound_approved"
+    T3_A2A_OUTBOUND_REJECTED = "t3_a2a_outbound_rejected"
+    A2A_AGENT_REGISTERED = "a2a_agent_registered"
+    A2A_AGENT_CARD_UPDATED = "a2a_agent_card_updated"
+    A2A_AGENT_CARD_FETCHED = "a2a_agent_card_fetched"
+    # Time-Travel Debugging
+    QUEST_FORKED = "quest_forked"
+    QUEST_REPLAYED = "quest_replayed"
+    TIME_TRAVEL_INSPECT = "time_travel_inspect"
+    T3_FORK_APPROVAL_REQUEST = "t3_fork_approval_request"
+    T3_FORK_APPROVED = "t3_fork_approved"
+    T3_FORK_REJECTED = "t3_fork_rejected"
+    FORK_SOUL_REJECTED = "fork_soul_rejected"
+    # Soul Template Library
+    SOUL_TEMPLATE_APPLIED = "soul_template_applied"
+    # Incident Response Playbooks
+    INCIDENT_OPENED = "incident_opened"
+    INCIDENT_PAGED = "incident_paged"
+    INCIDENT_ACKNOWLEDGED = "incident_acknowledged"
+    INCIDENT_STATUS_UPDATED = "incident_status_updated"
+    INCIDENT_TIMELINE_ENTRY = "incident_timeline_entry"
+    INCIDENT_REMEDIATION_LINKED = "incident_remediation_linked"
+    INCIDENT_ESCALATED = "incident_escalated"
+    INCIDENT_CLOSED = "incident_closed"
+    INCIDENT_FALSE_POSITIVE = "incident_false_positive"
+    PLAYBOOK_UPDATED = "playbook_updated"
 
 
 class ReceiptStatus(str, Enum):
@@ -103,6 +194,9 @@ class Receipt:
     quest_id: Optional[str] = None
     error_message: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # Operator Identity — who initiated this action (None = automated)
+    operator_id: Optional[str] = None
+    session_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -113,7 +207,7 @@ class Receipt:
         """Create Receipt from dictionary."""
         return cls(**data)
 
-    def complete(self, outputs: Dict[str, Any], duration_ms: int, 
+    def complete(self, outputs: Dict[str, Any], duration_ms: int,
                  token_count: Optional[int] = None) -> "Receipt":
         """Mark receipt as successfully completed."""
         return Receipt(
@@ -130,7 +224,9 @@ class Receipt:
             parent_id=self.parent_id,
             quest_id=self.quest_id,
             error_message=None,
-            metadata=self.metadata
+            metadata=self.metadata,
+            operator_id=self.operator_id,
+            session_id=self.session_id,
         )
 
     def fail(self, error_message: str, duration_ms: int) -> "Receipt":
@@ -149,7 +245,9 @@ class Receipt:
             parent_id=self.parent_id,
             quest_id=self.quest_id,
             error_message=error_message,
-            metadata=self.metadata
+            metadata=self.metadata,
+            operator_id=self.operator_id,
+            session_id=self.session_id,
         )
 
 
@@ -161,8 +259,11 @@ class ReceiptService:
     Designed for high-volume autonomous operation logging.
     """
     
-    SCHEMA_VERSION = 1
-    
+    SCHEMA_VERSION = 2
+
+    # Phase 1 schema: table + indexes on columns that exist in all versions.
+    # The operator_id index is created AFTER migration (see _init_database)
+    # to avoid "no such column" errors when upgrading v1 → v2 databases.
     CREATE_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS receipts (
         id TEXT PRIMARY KEY,
@@ -178,9 +279,11 @@ class ReceiptService:
         parent_id TEXT,
         quest_id TEXT,
         error_message TEXT,
-        metadata TEXT NOT NULL DEFAULT '{}'
+        metadata TEXT NOT NULL DEFAULT '{}',
+        operator_id TEXT,
+        session_id TEXT
     );
-    
+
     CREATE INDEX IF NOT EXISTS idx_receipts_timestamp ON receipts(timestamp);
     CREATE INDEX IF NOT EXISTS idx_receipts_action_type ON receipts(action_type);
     CREATE INDEX IF NOT EXISTS idx_receipts_status ON receipts(status);
@@ -232,28 +335,57 @@ class ReceiptService:
             raise
 
     def _init_database(self):
-        """Initialize database schema."""
+        """Initialize database schema with migration support.
+
+        Order matters:
+        1. CREATE TABLE + base indexes (columns present in all versions)
+        2. Migrate v1 → v2: ALTER TABLE to add operator_id/session_id
+        3. CREATE INDEX on operator_id (safe now that column exists)
+        """
         with self._transaction() as conn:
             conn.executescript(self.CREATE_TABLE_SQL)
+            # Migrate v1 → v2: add operator_id and session_id columns
+            try:
+                cursor = conn.execute("PRAGMA table_info(receipts)")
+                columns = {row[1] for row in cursor.fetchall()}
+                if "operator_id" not in columns:
+                    conn.execute("ALTER TABLE receipts ADD COLUMN operator_id TEXT")
+                if "session_id" not in columns:
+                    conn.execute("ALTER TABLE receipts ADD COLUMN session_id TEXT")
+            except Exception:
+                pass  # Columns already exist or table is fresh
+            # Create operator_id index AFTER migration so column is guaranteed
+            # to exist (whether from fresh CREATE TABLE or ALTER TABLE).
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_receipts_operator_id "
+                "ON receipts(operator_id)"
+            )
 
     def create(self, receipt: Receipt) -> Receipt:
         """
         Persist a new receipt.
-        
+
+        Enforces operator identity requirements: if the receipt's action_type
+        is in IDENTITY_REQUIRED_TYPES, operator_id must be present and valid.
+        Raises IdentityRequiredError or InvalidIdentityError on violation.
+
         Args:
             receipt: The receipt to store
-            
+
         Returns:
             The stored receipt
         """
+        self._enforce_identity(receipt)
+
         with self._transaction() as conn:
             conn.execute("""
                 INSERT INTO receipts (
                     id, timestamp, action_type, action_name,
                     inputs, outputs, status, duration_ms,
                     token_count, tier, parent_id, quest_id,
-                    error_message, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    error_message, metadata,
+                    operator_id, session_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 receipt.id,
                 receipt.timestamp,
@@ -268,9 +400,102 @@ class ReceiptService:
                 receipt.parent_id,
                 receipt.quest_id,
                 receipt.error_message,
-                json.dumps(receipt.metadata)
+                json.dumps(receipt.metadata),
+                receipt.operator_id,
+                receipt.session_id,
             ))
+
+        # Observability bridge — export OTel span + update metrics.
+        # Non-blocking: failure here MUST NOT affect the receipt write.
+        try:
+            from src.observability.receipt_bridge import on_receipt_written
+            on_receipt_written(receipt.to_dict())
+        except Exception:
+            pass  # OTel failure is never propagated
+
         return receipt
+
+    def _enforce_identity(self, receipt: Receipt) -> None:
+        """Check operator identity requirements before writing.
+
+        If the receipt type requires identity and none is supplied,
+        a GOVERNANCE_WRITE_ERROR receipt is persisted (as a fallback
+        audit trail) and IdentityRequiredError is raised.
+        """
+        from src.core.operator_identity import (
+            IDENTITY_REQUIRED_TYPES,
+            IdentityRequiredError,
+            InvalidIdentityError,
+        )
+
+        if receipt.action_type not in IDENTITY_REQUIRED_TYPES:
+            return
+
+        if not receipt.operator_id:
+            # Persist a governance write error receipt for audit trail
+            self._record_governance_write_error(
+                receipt.action_type, "missing_identity"
+            )
+            raise IdentityRequiredError(receipt.action_type)
+
+        if receipt.operator_id == "SYSTEM":
+            # SYSTEM identity is never valid on human-required receipt types
+            self._record_governance_write_error(
+                receipt.action_type, "system_identity_on_human_action"
+            )
+            raise IdentityRequiredError(receipt.action_type)
+
+    def _record_governance_write_error(
+        self, attempted_type: str, error_class: str
+    ) -> None:
+        """Persist a GOVERNANCE_WRITE_ERROR receipt as fallback audit trail.
+
+        This receipt does NOT require OperatorIdentity (it may be written
+        when identity is unavailable). It is never blocked by identity
+        enforcement — that would create a circular dependency.
+        """
+        try:
+            error_receipt = Receipt(
+                action_type=ActionType.GOVERNANCE_WRITE_ERROR.value,
+                action_name="identity_enforcement",
+                inputs={
+                    "attempted_receipt_type": attempted_type,
+                    "error_class": error_class,
+                },
+                outputs={},
+                status=ReceiptStatus.FAILURE.value,
+                metadata={"enforcement": "operator_identity"},
+            )
+            with self._transaction() as conn:
+                conn.execute("""
+                    INSERT INTO receipts (
+                        id, timestamp, action_type, action_name,
+                        inputs, outputs, status, duration_ms,
+                        token_count, tier, parent_id, quest_id,
+                        error_message, metadata,
+                        operator_id, session_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    error_receipt.id,
+                    error_receipt.timestamp,
+                    error_receipt.action_type,
+                    error_receipt.action_name,
+                    json.dumps(error_receipt.inputs),
+                    json.dumps(error_receipt.outputs),
+                    error_receipt.status,
+                    None, None, 0, None, None,
+                    f"IdentityRequiredError: {attempted_type}",
+                    json.dumps(error_receipt.metadata),
+                    None, None,
+                ))
+        except Exception:
+            # Last resort: if even the error receipt fails, log it.
+            # The AuditLogger (hash-chained text log) is the final fallback.
+            import logging
+            logging.getLogger("lancelot.receipts").error(
+                "GOVERNANCE_WRITE_ERROR receipt itself failed for type=%s",
+                attempted_type,
+            )
 
     def update(self, receipt: Receipt) -> Receipt:
         """
@@ -613,6 +838,8 @@ class ReceiptService:
 
     def _row_to_receipt(self, row: sqlite3.Row) -> Receipt:
         """Convert a database row to a Receipt object."""
+        # Handle both v1 (no operator columns) and v2 schemas
+        row_keys = row.keys() if hasattr(row, "keys") else []
         return Receipt(
             id=row["id"],
             timestamp=row["timestamp"],
@@ -627,7 +854,9 @@ class ReceiptService:
             parent_id=row["parent_id"],
             quest_id=row["quest_id"],
             error_message=row["error_message"],
-            metadata=json.loads(row["metadata"]) if row["metadata"] else {}
+            metadata=json.loads(row["metadata"]) if row["metadata"] else {},
+            operator_id=row["operator_id"] if "operator_id" in row_keys else None,
+            session_id=row["session_id"] if "session_id" in row_keys else None,
         )
 
     def close(self):
@@ -645,11 +874,13 @@ def create_receipt(
     tier: CognitionTier = CognitionTier.DETERMINISTIC,
     parent_id: Optional[str] = None,
     quest_id: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None,
+    operator_id: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> Receipt:
     """
     Factory function for creating new receipts.
-    
+
     Args:
         action_type: The type of action
         action_name: Specific name of the operation
@@ -658,7 +889,9 @@ def create_receipt(
         parent_id: Optional parent receipt ID
         quest_id: Optional quest ID for grouping
         metadata: Optional additional metadata
-        
+        operator_id: Stable operator UUID (required for governance actions)
+        session_id: Ephemeral session UUID
+
     Returns:
         A new Receipt in PENDING status
     """
@@ -669,7 +902,9 @@ def create_receipt(
         tier=tier.value,
         parent_id=parent_id,
         quest_id=quest_id,
-        metadata=metadata or {}
+        metadata=metadata or {},
+        operator_id=operator_id,
+        session_id=session_id,
     )
 
 

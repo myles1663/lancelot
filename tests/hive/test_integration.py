@@ -200,7 +200,7 @@ class TestEndToEnd:
         time.sleep(0.1)
 
         # Kill it
-        lifecycle.kill(record.agent_id, "Kill switch test")
+        lifecycle.kill(record.agent_id, "Kill switch test", operator_id="test-op", session_id="test-sess")
         result = future.result(timeout=10)
 
         # Should have been killed before completing all actions
@@ -228,7 +228,7 @@ class TestInterventionIntegration:
     async def test_intervention_receipt_chain(self, config, lifecycle, receipt_mgr, registry):
         """Verify interventions produce receipts in correct order."""
         record = lifecycle.spawn(TaskSpec(), quest_id="q-int-test")
-        lifecycle.kill(record.agent_id, "Test intervention chain")
+        lifecycle.kill(record.agent_id, "Test intervention chain", operator_id="test-op", session_id="test-sess")
 
         interventions = receipt_mgr.get_interventions(quest_id="q-int-test")
         assert len(interventions) >= 1

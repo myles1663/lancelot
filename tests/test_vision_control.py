@@ -233,53 +233,30 @@ class TestVisionReceipts:
 
     def test_capture_creates_receipt(self, provider_enabled, mock_engine):
         """Screen capture creates receipt."""
-        with patch.object(provider_enabled, "_async_capture_screen") as mock_capture:
-            mock_capture.return_value = (b"screenshot", "hash123")
+        with patch("asyncio.run", return_value=(b"screenshot", "hash123")):
+            provider_enabled.capture_screen()
 
-            import asyncio
-            with patch("asyncio.get_event_loop") as mock_loop:
-                mock_loop.return_value.run_until_complete = lambda coro: asyncio.get_event_loop().run_until_complete(mock_capture.return_value) if hasattr(coro, "__await__") else mock_capture.return_value
-
-                # Mock to return directly
-                mock_loop.return_value.run_until_complete = MagicMock(
-                    return_value=(b"screenshot", "hash123")
-                )
-
-                provider_enabled.capture_screen()
-
-                receipts = provider_enabled.get_receipts()
-                assert len(receipts) == 1
-                assert receipts[0]["action"] == "capture_screen"
+            receipts = provider_enabled.get_receipts()
+            assert len(receipts) == 1
+            assert receipts[0]["action"] == "capture_screen"
 
     def test_receipts_include_screenshot_hash(self, provider_enabled):
         """Receipts include screenshot hash, not raw bytes."""
-        with patch.object(provider_enabled, "_async_capture_screen") as mock_capture:
-            import asyncio
-            with patch("asyncio.get_event_loop") as mock_loop:
-                mock_loop.return_value.run_until_complete = MagicMock(
-                    return_value=(b"screenshot_data", "abc123hash")
-                )
+        with patch("asyncio.run", return_value=(b"screenshot_data", "abc123hash")):
+            provider_enabled.capture_screen()
 
-                provider_enabled.capture_screen()
-
-                receipts = provider_enabled.get_receipts()
-                # Receipt has hash, not raw bytes
-                assert receipts[0]["screenshot_after_hash"] == "abc123hash"
+            receipts = provider_enabled.get_receipts()
+            # Receipt has hash, not raw bytes
+            assert receipts[0]["screenshot_after_hash"] == "abc123hash"
 
     def test_clear_receipts(self, provider_enabled):
         """Receipts can be cleared."""
-        with patch.object(provider_enabled, "_async_capture_screen"):
-            import asyncio
-            with patch("asyncio.get_event_loop") as mock_loop:
-                mock_loop.return_value.run_until_complete = MagicMock(
-                    return_value=(b"data", "hash")
-                )
+        with patch("asyncio.run", return_value=(b"data", "hash")):
+            provider_enabled.capture_screen()
+            assert len(provider_enabled.get_receipts()) == 1
 
-                provider_enabled.capture_screen()
-                assert len(provider_enabled.get_receipts()) == 1
-
-                provider_enabled.clear_receipts()
-                assert len(provider_enabled.get_receipts()) == 0
+            provider_enabled.clear_receipts()
+            assert len(provider_enabled.get_receipts()) == 0
 
     def test_receipts_disabled(self):
         """Receipts can be disabled in config."""
@@ -287,15 +264,9 @@ class TestVisionReceipts:
         provider = AntigravityVisionProvider(config=config)
         provider._antigravity_available = True
 
-        with patch.object(provider, "_async_capture_screen"):
-            import asyncio
-            with patch("asyncio.get_event_loop") as mock_loop:
-                mock_loop.return_value.run_until_complete = MagicMock(
-                    return_value=(b"data", "hash")
-                )
-
-                provider.capture_screen()
-                assert len(provider.get_receipts()) == 0
+        with patch("asyncio.run", return_value=(b"data", "hash")):
+            provider.capture_screen()
+            assert len(provider.get_receipts()) == 0
 
 
 # =============================================================================
@@ -308,58 +279,34 @@ class TestActions:
 
     def test_click_action_type(self, provider_enabled):
         """Click action is recognized."""
-        with patch.object(provider_enabled, "_async_perform_action") as mock_action:
-            mock_action.return_value = VisionResult(success=True, action_performed="click")
-
-            import asyncio
-            with patch("asyncio.get_event_loop") as mock_loop:
-                mock_loop.return_value.run_until_complete = MagicMock(
-                    return_value=mock_action.return_value
-                )
-
-                result = provider_enabled.perform_action(
-                    "click",
-                    {"x": 100, "y": 200}
-                )
-
-                assert result.success is True
+        mock_result = VisionResult(success=True, action_performed="click")
+        with patch("asyncio.run", return_value=mock_result):
+            result = provider_enabled.perform_action(
+                "click",
+                {"x": 100, "y": 200}
+            )
+            assert result.success is True
 
     def test_type_action_type(self, provider_enabled):
         """Type action is recognized."""
-        with patch.object(provider_enabled, "_async_perform_action") as mock_action:
-            mock_action.return_value = VisionResult(success=True, action_performed="type")
-
-            import asyncio
-            with patch("asyncio.get_event_loop") as mock_loop:
-                mock_loop.return_value.run_until_complete = MagicMock(
-                    return_value=mock_action.return_value
-                )
-
-                result = provider_enabled.perform_action(
-                    "type",
-                    {"x": 100, "y": 200},
-                    value="hello"
-                )
-
-                assert result.success is True
+        mock_result = VisionResult(success=True, action_performed="type")
+        with patch("asyncio.run", return_value=mock_result):
+            result = provider_enabled.perform_action(
+                "type",
+                {"x": 100, "y": 200},
+                value="hello"
+            )
+            assert result.success is True
 
     def test_scroll_action_type(self, provider_enabled):
         """Scroll action is recognized."""
-        with patch.object(provider_enabled, "_async_perform_action") as mock_action:
-            mock_action.return_value = VisionResult(success=True, action_performed="scroll")
-
-            import asyncio
-            with patch("asyncio.get_event_loop") as mock_loop:
-                mock_loop.return_value.run_until_complete = MagicMock(
-                    return_value=mock_action.return_value
-                )
-
-                result = provider_enabled.perform_action(
-                    "scroll",
-                    {"delta": 100}
-                )
-
-                assert result.success is True
+        mock_result = VisionResult(success=True, action_performed="scroll")
+        with patch("asyncio.run", return_value=mock_result):
+            result = provider_enabled.perform_action(
+                "scroll",
+                {"delta": 100}
+            )
+            assert result.success is True
 
 
 # =============================================================================
@@ -372,39 +319,25 @@ class TestElementLocation:
 
     def test_locate_by_css_selector(self, provider_enabled):
         """Element location by CSS selector."""
-        with patch.object(provider_enabled, "_async_locate_element") as mock_locate:
-            mock_locate.return_value = [
-                {"selector": "#button", "x": 10, "y": 20, "confidence": 1.0}
-            ]
+        mock_elements = [
+            {"selector": "#button", "x": 10, "y": 20, "confidence": 1.0}
+        ]
+        with patch("asyncio.run", return_value=mock_elements):
+            elements = provider_enabled.locate_element("#button")
 
-            import asyncio
-            with patch("asyncio.get_event_loop") as mock_loop:
-                mock_loop.return_value.run_until_complete = MagicMock(
-                    return_value=mock_locate.return_value
-                )
-
-                elements = provider_enabled.locate_element("#button")
-
-                assert len(elements) == 1
-                assert elements[0]["confidence"] == 1.0
+            assert len(elements) == 1
+            assert elements[0]["confidence"] == 1.0
 
     def test_locate_by_description(self, provider_enabled):
         """Element location by natural language."""
-        with patch.object(provider_enabled, "_async_locate_element") as mock_locate:
-            mock_locate.return_value = [
-                {"description": "Submit button", "x": 100, "y": 200, "confidence": 0.8}
-            ]
+        mock_elements = [
+            {"description": "Submit button", "x": 100, "y": 200, "confidence": 0.8}
+        ]
+        with patch("asyncio.run", return_value=mock_elements):
+            elements = provider_enabled.locate_element("Submit button")
 
-            import asyncio
-            with patch("asyncio.get_event_loop") as mock_loop:
-                mock_loop.return_value.run_until_complete = MagicMock(
-                    return_value=mock_locate.return_value
-                )
-
-                elements = provider_enabled.locate_element("Submit button")
-
-                assert len(elements) == 1
-                assert elements[0]["confidence"] == 0.8
+            assert len(elements) == 1
+            assert elements[0]["confidence"] == 0.8
 
 
 # =============================================================================
@@ -417,33 +350,17 @@ class TestStateVerification:
 
     def test_verify_state_success(self, provider_enabled):
         """State verification succeeds."""
-        with patch.object(provider_enabled, "_async_verify_state") as mock_verify:
-            mock_verify.return_value = VisionResult(success=True, confidence=1.0)
-
-            import asyncio
-            with patch("asyncio.get_event_loop") as mock_loop:
-                mock_loop.return_value.run_until_complete = MagicMock(
-                    return_value=mock_verify.return_value
-                )
-
-                result = provider_enabled.verify_state({"text": "Welcome"})
-
-                assert result.success is True
+        mock_result = VisionResult(success=True, confidence=1.0)
+        with patch("asyncio.run", return_value=mock_result):
+            result = provider_enabled.verify_state({"text": "Welcome"})
+            assert result.success is True
 
     def test_verify_state_failure(self, provider_enabled):
         """State verification fails gracefully."""
-        with patch.object(provider_enabled, "_async_verify_state") as mock_verify:
-            mock_verify.return_value = VisionResult(success=False, confidence=0.0)
-
-            import asyncio
-            with patch("asyncio.get_event_loop") as mock_loop:
-                mock_loop.return_value.run_until_complete = MagicMock(
-                    return_value=mock_verify.return_value
-                )
-
-                result = provider_enabled.verify_state({"text": "Not found"})
-
-                assert result.success is False
+        mock_result = VisionResult(success=False, confidence=0.0)
+        with patch("asyncio.run", return_value=mock_result):
+            result = provider_enabled.verify_state({"text": "Not found"})
+            assert result.success is False
 
 
 # =============================================================================
@@ -571,25 +488,18 @@ class TestIntegration:
 
     def test_receipt_captures_action_details(self, provider_enabled):
         """Receipt captures full action details."""
-        with patch.object(provider_enabled, "_async_perform_action") as mock_action:
-            mock_action.return_value = VisionResult(
-                success=True,
-                action_performed="click",
-                confidence=1.0,
-            )
+        mock_result = VisionResult(
+            success=True,
+            action_performed="click",
+            confidence=1.0,
+        )
+        with patch("asyncio.run", return_value=mock_result):
+            target = {"x": 100, "y": 200, "center_x": 150, "center_y": 250}
+            provider_enabled.perform_action("click", target)
 
-            import asyncio
-            with patch("asyncio.get_event_loop") as mock_loop:
-                mock_loop.return_value.run_until_complete = MagicMock(
-                    return_value=mock_action.return_value
-                )
-
-                target = {"x": 100, "y": 200, "center_x": 150, "center_y": 250}
-                provider_enabled.perform_action("click", target)
-
-                receipts = provider_enabled.get_receipts()
-                assert len(receipts) == 1
-                assert receipts[0]["action"] == "perform_action:click"
-                assert receipts[0]["target_element"] == target
-                assert receipts[0]["action_performed"] == "click"
+            receipts = provider_enabled.get_receipts()
+            assert len(receipts) == 1
+            assert receipts[0]["action"] == "perform_action:click"
+            assert receipts[0]["target_element"] == target
+            assert receipts[0]["action_performed"] == "click"
 

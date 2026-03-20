@@ -110,7 +110,7 @@ class TestKillFlow:
             [{"action": f"a{i}"} for i in range(100)],
         )
         time.sleep(0.05)
-        lifecycle.kill(record.agent_id, "Test kill")
+        lifecycle.kill(record.agent_id, "Test kill", operator_id="test-op", session_id="test-sess")
         result = future.result(timeout=10)
         # Should not have completed all 100 actions
         assert result.action_count < 100
@@ -120,13 +120,13 @@ class TestKillFlow:
         lifecycle = _make_slow_lifecycle(config, registry, receipt_mgr)
         record = lifecycle.spawn(TaskSpec())
         with pytest.raises(InterventionRequiresReasonError):
-            lifecycle.kill(record.agent_id, "")
+            lifecycle.kill(record.agent_id, "", operator_id="test-op", session_id="test-sess")
         lifecycle.shutdown()
 
     def test_kill_records_intervention(self, config, registry, receipt_mgr):
         lifecycle = _make_slow_lifecycle(config, registry, receipt_mgr)
         record = lifecycle.spawn(TaskSpec())
-        lifecycle.kill(record.agent_id, "Killing for test")
+        lifecycle.kill(record.agent_id, "Killing for test", operator_id="test-op", session_id="test-sess")
         # Check intervention was recorded (in archive since agent collapsed)
         agent = registry.get(record.agent_id)
         assert agent is not None
@@ -141,7 +141,7 @@ class TestKillAllFlow:
         records = []
         for _ in range(3):
             records.append(lifecycle.spawn(TaskSpec()))
-        collapsed = lifecycle.kill_all("Emergency stop")
+        collapsed = lifecycle.kill_all("Emergency stop", operator_id="test-op", session_id="test-sess")
         assert len(collapsed) >= 3
         assert registry.active_count() == 0
         lifecycle.shutdown()
@@ -149,7 +149,7 @@ class TestKillAllFlow:
     def test_kill_all_requires_reason(self, config, registry, receipt_mgr):
         lifecycle = _make_slow_lifecycle(config, registry, receipt_mgr)
         with pytest.raises(InterventionRequiresReasonError):
-            lifecycle.kill_all("")
+            lifecycle.kill_all("", operator_id="test-op", session_id="test-sess")
         lifecycle.shutdown()
 
 
@@ -167,7 +167,7 @@ class TestInterveneMethod:
             agent_id=record.agent_id,
             reason="Operator review",
         )
-        lifecycle.intervene(record.agent_id, intervention)
+        lifecycle.intervene(record.agent_id, intervention, operator_id="test-op", session_id="test-sess")
         lifecycle.shutdown()
 
     def test_intervene_with_kill(self, config, registry, receipt_mgr):
@@ -178,7 +178,7 @@ class TestInterveneMethod:
             agent_id=record.agent_id,
             reason="Must stop",
         )
-        lifecycle.intervene(record.agent_id, intervention)
+        lifecycle.intervene(record.agent_id, intervention, operator_id="test-op", session_id="test-sess")
         lifecycle.shutdown()
 
     def test_intervene_with_modify_kills_agent(self, config, registry, receipt_mgr):
@@ -190,7 +190,7 @@ class TestInterveneMethod:
             reason="Change approach",
             feedback="Use different method",
         )
-        lifecycle.intervene(record.agent_id, intervention)
+        lifecycle.intervene(record.agent_id, intervention, operator_id="test-op", session_id="test-sess")
         # Modify = kill + replan, so agent should be killed
         lifecycle.shutdown()
 
@@ -203,7 +203,7 @@ class TestInterveneMethod:
             reason="",
         )
         with pytest.raises(InterventionRequiresReasonError):
-            lifecycle.intervene(record.agent_id, intervention)
+            lifecycle.intervene(record.agent_id, intervention, operator_id="test-op", session_id="test-sess")
         lifecycle.shutdown()
 
 
@@ -211,7 +211,7 @@ class TestReceiptChain:
     def test_intervention_emits_receipt(self, config, registry, receipt_mgr):
         lifecycle = _make_slow_lifecycle(config, registry, receipt_mgr)
         record = lifecycle.spawn(TaskSpec())
-        lifecycle.kill(record.agent_id, "Receipt test")
+        lifecycle.kill(record.agent_id, "Receipt test", operator_id="test-op", session_id="test-sess")
 
         interventions = receipt_mgr.get_interventions()
         # At least the kill intervention

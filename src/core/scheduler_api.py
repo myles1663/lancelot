@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -207,7 +207,7 @@ def disable_job(job_id: str):
 
 
 @router.delete("/jobs/{job_id}", response_model=JobDeleteResponse)
-def delete_job(job_id: str):
+def delete_job(job_id: str, request: Request):
     """Delete a scheduled job permanently."""
     if _service is None:
         return JSONResponse(
@@ -220,6 +220,17 @@ def delete_job(job_id: str):
     try:
         _service.delete_job(job_id)
         logger.info("Deleted scheduled job '%s'", job_id)
+
+        # Governance receipt
+        from src.core.governance_receipts import emit_governance_receipt
+        from src.shared.receipts import ActionType
+        emit_governance_receipt(
+            request,
+            ActionType.SCHEDULER_TASK_DELETED,
+            action_name="delete_job",
+            inputs={"job_id": job_id, "job_name": record.name},
+        )
+
         return JobDeleteResponse(id=job_id, deleted=True)
     except Exception as exc:
         logger.exception("Failed to delete job %s", job_id)

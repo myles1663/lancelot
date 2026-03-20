@@ -525,7 +525,7 @@ class TestCostTable:
 
     def test_all_known_models_have_rates(self):
         expected_models = [
-            "gemini-2.0-flash", "gemini-2.0-pro",
+            "gemini-2.0-flash", "gemini-2.5-pro",
             "gpt-4o-mini", "gpt-4o",
             "claude-3-5-haiku-latest", "claude-sonnet-4-20250514",
             "local-llm",
@@ -537,7 +537,7 @@ class TestCostTable:
         assert _COST_PER_1K["local-llm"] == 0.0
 
     def test_deep_models_cost_more(self):
-        assert _COST_PER_1K["gemini-2.0-pro"] > _COST_PER_1K["gemini-2.0-flash"]
+        assert _COST_PER_1K["gemini-2.5-pro"] > _COST_PER_1K["gemini-2.0-flash"]
         assert _COST_PER_1K["gpt-4o"] > _COST_PER_1K["gpt-4o-mini"]
         assert _COST_PER_1K["claude-sonnet-4-20250514"] > _COST_PER_1K["claude-3-5-haiku-latest"]
 

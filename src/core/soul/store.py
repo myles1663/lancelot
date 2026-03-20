@@ -22,7 +22,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -63,6 +63,117 @@ class SchedulingBoundaries(BaseModel):
     description: str = ""
 
 
+class SpawnBudgetGovernance(BaseModel):
+    """Constitutional constraints on HIVE sub-agent spawning (federation-aware)."""
+    max_concurrent_spawns: int = Field(default=10, ge=1, le=100)
+    max_spawn_model_tier: str = Field(default="T2", pattern=r"^T[0-3]$")
+    max_estimated_tokens_per_spawn: int = Field(default=100000, ge=1000)
+    require_spawn_approval: bool = True
+    spawn_approval_channels: List[str] = Field(default_factory=lambda: ["war_room"])
+
+
+class A2ACallerRule(BaseModel):
+    """Rule for an allowed or blocked A2A caller."""
+    agent_id: Optional[str] = None
+    agent_framework: Optional[str] = None
+    max_risk_tier: str = Field(default="T2", pattern=r"^T[0-3]$")
+
+
+class InboundA2APermissions(BaseModel):
+    """Soul governance for inbound A2A tasks (Lancelot as A2A server).
+
+    Absent = A2A inbound disabled (fail-closed).
+    """
+    allow_inbound: bool = Field(default=False, description="Master switch for inbound A2A.")
+    default_trust_tier: str = Field(
+        default="T2", pattern=r"^T[0-3]$",
+        description="Trust tier assigned to auto-registered callers.",
+    )
+    allowed_callers: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="List of allowed callers by agent_id or agent_framework with max_risk_tier.",
+    )
+    blocked_callers: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="List of blocked callers by agent_id or agent_framework.",
+    )
+    require_agent_card: bool = Field(
+        default=True,
+        description="Require callers to present a valid Agent Card.",
+    )
+    skill_filter: List[str] = Field(
+        default_factory=list,
+        description="Skills exposed to A2A callers. Empty = all a2a_visible skills.",
+    )
+    require_preregistration: bool = Field(
+        default=False,
+        description="If true, all callers must be manually pre-registered. No auto-registration.",
+    )
+
+
+class OutboundA2APermissions(BaseModel):
+    """Soul governance for outbound A2A delegations (Lancelot as A2A client).
+
+    Absent = A2A outbound disabled (fail-closed).
+    """
+    allow_outbound: bool = Field(default=False, description="Master switch for outbound A2A.")
+    allowed_targets: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "List of allowed delegation targets. Each entry: "
+            "agent_id or agent_framework + allowed_task_types + risk_tier."
+        ),
+    )
+    max_delegation_depth: int = Field(
+        default=2, ge=1, le=10,
+        description="Maximum delegation chain depth. Prevents unbounded cross-agent chains.",
+    )
+    require_agent_card_verification: bool = Field(
+        default=True,
+        description="Require Agent Card verification before first outbound delegation.",
+    )
+
+
+class ForkPermissions(BaseModel):
+    """Constitutional constraints on Time-Travel fork/replay operations.
+
+    Controls whether quest forking is allowed, what approval tier is required,
+    which receipt fields may be modified in a fork, and which modifications
+    are architecturally prohibited.
+    """
+    allow_fork: bool = Field(
+        default=False,
+        description="Master switch — if false, all fork/replay operations are rejected.",
+    )
+    require_approval_tier: int = Field(
+        default=3,
+        ge=0,
+        le=3,
+        description="Minimum trust tier required for fork approval (0-3). Default T3.",
+    )
+    modifiable_fields: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Receipt input fields that may be modified in a fork. "
+            "Empty list = no modifications allowed (replay-only). "
+            "Example: ['inputs.query', 'inputs.model_tier']."
+        ),
+    )
+    prohibited_modifications: List[str] = Field(
+        default_factory=lambda: [
+            "operator_id",
+            "session_id",
+            "quest_id",
+            "timestamp",
+            "id",
+        ],
+        description=(
+            "Fields that can NEVER be modified in a fork — enforced architecturally. "
+            "These are identity, provenance, and audit chain fields."
+        ),
+    )
+
+
 class Soul(BaseModel):
     """Validated Soul document — Lancelot's constitutional identity."""
     version: str
@@ -76,12 +187,46 @@ class Soul(BaseModel):
     scheduling_boundaries: SchedulingBoundaries = Field(
         default_factory=SchedulingBoundaries,
     )
+    spawn_budget: SpawnBudgetGovernance = Field(
+        default_factory=SpawnBudgetGovernance,
+    )
+    mcp_permissions: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "MCP server/tool permissions. Each entry: "
+            "{server_id, allowed_tools, risk_tier}. "
+            "Wildcard (*) in allowed_tools permits all tools. "
+            "Federation ceiling: child instances can only have "
+            "equal or more restrictive permissions."
+        ),
+    )
+    fork_permissions: ForkPermissions = Field(
+        default_factory=ForkPermissions,
+        description=(
+            "Time-Travel Debugging governance. Controls fork/replay "
+            "operations, approval requirements, and field modification rules."
+        ),
+    )
+    inbound_a2a_permissions: Optional[InboundA2APermissions] = Field(
+        default=None,
+        description=(
+            "A2A inbound governance. Controls which external agents can send "
+            "tasks to this Lancelot instance. Absent = inbound A2A disabled."
+        ),
+    )
+    outbound_a2a_permissions: Optional[OutboundA2APermissions] = Field(
+        default=None,
+        description=(
+            "A2A outbound governance. Controls which external agents this "
+            "Lancelot instance can delegate tasks to. Absent = outbound A2A disabled."
+        ),
+    )
 
     @field_validator("version")
     @classmethod
     def version_must_be_valid(cls, v: str) -> str:
-        if not re.match(r"^(v\d+|crusader)$", v):
-            raise ValueError(f"Version must match 'vN' or 'crusader' pattern, got '{v}'")
+        if not re.match(r"^(v\d+|crusader|scoped|intersection)$", v):
+            raise ValueError(f"Version must match 'vN', 'crusader', 'scoped', or 'intersection' pattern, got '{v}'")
         return v
 
     @field_validator("mission")
@@ -236,9 +381,13 @@ def load_active_soul(soul_dir: Optional[str] = None) -> Soul:
             f"Soul validation failed for {version}: {exc}"
         ) from exc
 
-    # Run linter — fail on critical invariant violations
-    from src.core.soul.linter import lint_or_raise  # local import to avoid circular
-    lint_or_raise(soul)
+    # Run linter — fail on critical invariant violations.
+    # Skip linting for the crusader soul: it is an operator-authorized runtime
+    # override that intentionally relaxes safety constraints (see comment in
+    # soul_crusader.yaml header).
+    if soul.version != "crusader":
+        from src.core.soul.linter import lint_or_raise  # local import to avoid circular
+        lint_or_raise(soul)
 
     logger.info("soul_loaded: version=%s", soul.version)
     return soul

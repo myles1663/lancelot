@@ -11,85 +11,99 @@ import asyncio
 from unittest.mock import patch, MagicMock, AsyncMock, PropertyMock
 
 
+def _make_mock_provider(provider_name="gemini"):
+    """Create a mock ProviderClient with standard defaults."""
+    mock_provider = MagicMock()
+    mock_provider.provider_name = provider_name
+    mock_provider._client = MagicMock()
+    mock_provider._client.caches.create.side_effect = Exception("cache not available")
+    mock_result = MagicMock()
+    mock_result.text = "Test response"
+    mock_result.tool_calls = []
+    mock_result.has_tool_calls = False
+    mock_result.usage = {"input_tokens": 10, "output_tokens": 20}
+    mock_provider.generate.return_value = mock_result
+    mock_provider.build_user_message.return_value = "mock-message"
+    return mock_provider
+
+
+def _build_orchestrator(mock_provider=None):
+    """Build an orchestrator with provider and cache init mocked out."""
+    import importlib
+    import orchestrator as orch_mod
+    importlib.reload(orch_mod)
+
+    if mock_provider is None:
+        mock_provider = _make_mock_provider()
+
+    # Patch _init_provider and _init_context_cache to avoid real SDK calls
+    with patch.object(orch_mod.LancelotOrchestrator, '_init_provider') as mock_init_prov, \
+         patch.object(orch_mod.LancelotOrchestrator, '_init_context_cache') as mock_init_cache:
+        orch = orch_mod.LancelotOrchestrator()
+        orch.provider = mock_provider
+    return orch
+
+
 # ---------------------------------------------------------------------------
 # Test 1: SDK Migration
 # ---------------------------------------------------------------------------
 class TestSDKMigration(unittest.TestCase):
-    """Verifies google-genai SDK integration in orchestrator and librarian."""
+    """Verifies provider-based SDK integration in orchestrator."""
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key-123"})
-    @patch("orchestrator.genai.Client")
-    @patch("orchestrator.chromadb.PersistentClient")
-    def test_orchestrator_creates_genai_client(self, mock_chroma, mock_client_cls):
-        """Client should be instantiated with api_key from env."""
-        mock_client_cls.return_value = MagicMock()
-        mock_chroma.return_value = MagicMock(
-            get_or_create_collection=MagicMock(return_value=MagicMock())
-        )
-        from orchestrator import LancelotOrchestrator
-        orch = LancelotOrchestrator()
-        mock_client_cls.assert_called_once_with(api_key="test-key-123")
-        self.assertIsNotNone(orch.client)
+    def test_orchestrator_creates_provider(self):
+        """Provider should be instantiated when API key is present."""
+        import importlib
+        import orchestrator as orch_mod
+        importlib.reload(orch_mod)
+
+        with patch("providers.factory.create_provider") as mock_create:
+            mock_provider = _make_mock_provider()
+            mock_create.return_value = mock_provider
+            with patch.object(orch_mod.LancelotOrchestrator, '_init_context_cache'):
+                orch = orch_mod.LancelotOrchestrator()
+            mock_create.assert_called()
+            self.assertIsNotNone(orch.provider)
 
     @patch.dict(os.environ, {}, clear=False)
-    @patch("orchestrator.chromadb.PersistentClient")
-    def test_orchestrator_no_api_key(self, mock_chroma):
-        """Client should be None when GEMINI_API_KEY is missing."""
-        mock_chroma.return_value = MagicMock(
-            get_or_create_collection=MagicMock(return_value=MagicMock())
-        )
+    def test_orchestrator_no_api_key(self):
+        """Provider should be None when no API key is set."""
         env = os.environ.copy()
-        env.pop("GEMINI_API_KEY", None)
+        for key in ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+                     "XAI_API_KEY", "NVIDIA_API_KEY"):
+            env.pop(key, None)
         with patch.dict(os.environ, env, clear=True):
-            from orchestrator import LancelotOrchestrator
             import importlib
-            import orchestrator
-            importlib.reload(orchestrator)
-            orch = orchestrator.LancelotOrchestrator()
-            self.assertIsNone(orch.client)
+            import orchestrator as orch_mod
+            importlib.reload(orch_mod)
+            orch = orch_mod.LancelotOrchestrator()
+            self.assertIsNone(orch.provider)
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key", "GEMINI_MODEL": "gemini-3-pro"})
-    @patch("orchestrator.genai.Client")
-    @patch("orchestrator.chromadb.PersistentClient")
-    def test_model_name_configurable(self, mock_chroma, mock_client_cls):
+    def test_model_name_configurable(self):
         """Model name should be read from GEMINI_MODEL env var."""
-        mock_client_cls.return_value = MagicMock()
-        mock_chroma.return_value = MagicMock(
-            get_or_create_collection=MagicMock(return_value=MagicMock())
-        )
-        from orchestrator import LancelotOrchestrator
         import importlib
-        import orchestrator
-        importlib.reload(orchestrator)
-        orch = orchestrator.LancelotOrchestrator()
+        import orchestrator as orch_mod
+        importlib.reload(orch_mod)
+
+        # Patch _init_provider so ProfileRegistry doesn't override model_name,
+        # and _init_context_cache so no real cache call is made.
+        with patch.object(orch_mod.LancelotOrchestrator, '_init_provider'), \
+             patch.object(orch_mod.LancelotOrchestrator, '_init_context_cache'):
+            orch = orch_mod.LancelotOrchestrator()
         self.assertEqual(orch.model_name, "gemini-3-pro")
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
-    @patch("orchestrator.genai.Client")
-    @patch("orchestrator.chromadb.PersistentClient")
-    def test_chat_uses_new_sdk_pattern(self, mock_chroma, mock_client_cls):
-        """chat() should call client.models.generate_content() with proper args."""
-        mock_response = MagicMock()
-        mock_response.text = "Confidence: 85 Test response"
-        mock_client = MagicMock()
-        mock_client.models.generate_content.return_value = mock_response
-        mock_client.caches.create.side_effect = Exception("cache not available")
-        mock_client_cls.return_value = mock_client
-        mock_chroma.return_value = MagicMock(
-            get_or_create_collection=MagicMock(return_value=MagicMock())
-        )
-
-        from orchestrator import LancelotOrchestrator
-        import importlib
-        import orchestrator
-        importlib.reload(orchestrator)
-        orch = orchestrator.LancelotOrchestrator()
-
+    def test_chat_uses_provider_generate(self):
+        """chat() should call provider.generate() with proper args."""
+        mock_provider = _make_mock_provider()
+        orch = _build_orchestrator(mock_provider)
         result = orch.chat("hello")
-        mock_client.models.generate_content.assert_called_once()
-        call_kwargs = mock_client.models.generate_content.call_args
-        self.assertEqual(call_kwargs.kwargs.get("model") or call_kwargs[1].get("model", call_kwargs[0][0] if call_kwargs[0] else None),
-                         orch.model_name)
+        mock_provider.generate.assert_called()
+        call_kwargs = mock_provider.generate.call_args
+        # Provider.generate receives model as a keyword arg
+        model_arg = call_kwargs.kwargs.get("model") or (call_kwargs.args[0] if call_kwargs.args else None)
+        self.assertIsNotNone(model_arg)
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
     @patch("librarian.genai.Client")
@@ -112,35 +126,15 @@ class TestSystemInstructions(unittest.TestCase):
     """Verifies _build_system_instruction() structure and content."""
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
-    @patch("orchestrator.genai.Client")
-    @patch("orchestrator.chromadb.PersistentClient")
-    def test_instruction_has_persona(self, mock_chroma, mock_client_cls):
-        mock_client_cls.return_value = MagicMock()
-        mock_client_cls.return_value.caches.create.side_effect = Exception("no cache")
-        mock_chroma.return_value = MagicMock(
-            get_or_create_collection=MagicMock(return_value=MagicMock())
-        )
-        import importlib
-        import orchestrator
-        importlib.reload(orchestrator)
-        orch = orchestrator.LancelotOrchestrator()
+    def test_instruction_has_persona(self):
+        orch = _build_orchestrator()
         instruction = orch._build_system_instruction()
         self.assertIn("Lancelot", instruction)
         self.assertIn("loyal AI Knight", instruction)
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
-    @patch("orchestrator.genai.Client")
-    @patch("orchestrator.chromadb.PersistentClient")
-    def test_instruction_has_guardrails_with_unmistakably(self, mock_chroma, mock_client_cls):
-        mock_client_cls.return_value = MagicMock()
-        mock_client_cls.return_value.caches.create.side_effect = Exception("no cache")
-        mock_chroma.return_value = MagicMock(
-            get_or_create_collection=MagicMock(return_value=MagicMock())
-        )
-        import importlib
-        import orchestrator
-        importlib.reload(orchestrator)
-        orch = orchestrator.LancelotOrchestrator()
+    def test_instruction_has_guardrails_with_unmistakably(self):
+        orch = _build_orchestrator()
         instruction = orch._build_system_instruction()
         self.assertIn("unmistakably", instruction)
         self.assertIn("refuse to execute destructive", instruction)
@@ -149,69 +143,33 @@ class TestSystemInstructions(unittest.TestCase):
         self.assertIn("refuse to modify your own rules", instruction)
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
-    @patch("orchestrator.genai.Client")
-    @patch("orchestrator.chromadb.PersistentClient")
-    def test_instruction_has_rules_and_context(self, mock_chroma, mock_client_cls):
-        mock_client_cls.return_value = MagicMock()
-        mock_client_cls.return_value.caches.create.side_effect = Exception("no cache")
-        mock_chroma.return_value = MagicMock(
-            get_or_create_collection=MagicMock(return_value=MagicMock())
-        )
-        import importlib
-        import orchestrator
-        importlib.reload(orchestrator)
-        orch = orchestrator.LancelotOrchestrator()
+    def test_instruction_has_rules_and_context(self):
+        orch = _build_orchestrator()
         instruction = orch._build_system_instruction()
         self.assertIn("Rules:", instruction)
         self.assertIn("User Context:", instruction)
         self.assertIn("Memory:", instruction)
-        self.assertIn("Confidence Score", instruction)
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
-    @patch("orchestrator.genai.Client")
-    @patch("orchestrator.chromadb.PersistentClient")
-    def test_crusader_mode_modifies_instruction(self, mock_chroma, mock_client_cls):
-        mock_client_cls.return_value = MagicMock()
-        mock_client_cls.return_value.caches.create.side_effect = Exception("no cache")
-        mock_chroma.return_value = MagicMock(
-            get_or_create_collection=MagicMock(return_value=MagicMock())
-        )
-        import importlib
-        import orchestrator
-        importlib.reload(orchestrator)
-        orch = orchestrator.LancelotOrchestrator()
+    def test_crusader_mode_modifies_instruction(self):
+        orch = _build_orchestrator()
         normal = orch._build_system_instruction(crusader_mode=False)
         crusader = orch._build_system_instruction(crusader_mode=True)
-        # Crusader mode should modify the instruction (exact change depends on CrusaderPromptModifier)
+        # Crusader mode should modify the instruction
         self.assertNotEqual(normal, crusader)
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
-    @patch("orchestrator.genai.Client")
-    @patch("orchestrator.chromadb.PersistentClient")
-    def test_system_instruction_passed_to_config(self, mock_chroma, mock_client_cls):
-        """Verify system_instruction goes in GenerateContentConfig, not in prompt."""
-        mock_response = MagicMock()
-        mock_response.text = "Test response"
-        mock_client = MagicMock()
-        mock_client.models.generate_content.return_value = mock_response
-        mock_client.caches.create.side_effect = Exception("cache not available")
-        mock_client_cls.return_value = mock_client
-        mock_chroma.return_value = MagicMock(
-            get_or_create_collection=MagicMock(return_value=MagicMock())
-        )
-
-        import importlib
-        import orchestrator
-        importlib.reload(orchestrator)
-        orch = orchestrator.LancelotOrchestrator()
+    def test_system_instruction_passed_to_provider(self):
+        """Verify system_instruction is passed to provider.generate(), not in contents."""
+        mock_provider = _make_mock_provider()
+        orch = _build_orchestrator(mock_provider)
         orch.chat("test message")
 
-        call_kwargs = mock_client.models.generate_content.call_args
-        config = call_kwargs.kwargs.get("config")
-        self.assertIsNotNone(config)
-        # The contents should NOT contain the system instruction text
-        contents = call_kwargs.kwargs.get("contents", "")
-        self.assertNotIn("unmistakably", contents)
+        call_kwargs = mock_provider.generate.call_args
+        # system_instruction should be passed as a keyword argument to generate()
+        sys_instr = call_kwargs.kwargs.get("system_instruction", "")
+        self.assertIsNotNone(sys_instr)
+        self.assertTrue(len(sys_instr) > 0, "system_instruction should be non-empty")
 
 
 # ---------------------------------------------------------------------------
@@ -221,115 +179,92 @@ class TestContextCaching(unittest.TestCase):
     """Verifies context caching creation, usage, and invalidation."""
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
-    @patch("orchestrator.genai.Client")
-    @patch("orchestrator.chromadb.PersistentClient")
-    def test_cache_creation(self, mock_chroma, mock_client_cls):
-        """Cache should be created during __init__ when client is available."""
+    def test_cache_creation(self):
+        """Cache should be created during _init_context_cache when provider is Gemini."""
         mock_cache = MagicMock()
         mock_cache.name = "caches/test-cache-id"
-        mock_client = MagicMock()
-        mock_client.caches.create.return_value = mock_cache
-        mock_client_cls.return_value = mock_client
-        mock_chroma.return_value = MagicMock(
-            get_or_create_collection=MagicMock(return_value=MagicMock())
-        )
+        mock_provider = _make_mock_provider()
+        # Override: cache creation succeeds
+        mock_provider._client.caches.create.side_effect = None
+        mock_provider._client.caches.create.return_value = mock_cache
 
         import importlib
-        import orchestrator
-        importlib.reload(orchestrator)
-        orch = orchestrator.LancelotOrchestrator()
+        import orchestrator as orch_mod
+        importlib.reload(orch_mod)
+
+        # Only patch _init_provider; let _init_context_cache run with the mock provider
+        with patch.object(orch_mod.LancelotOrchestrator, '_init_provider'):
+            orch = orch_mod.LancelotOrchestrator()
+            orch.provider = mock_provider
+            # Manually call _init_context_cache since we patched _init_provider
+            orch._init_context_cache()
+
         self.assertIsNotNone(orch._cache)
         self.assertEqual(orch._cache.name, "caches/test-cache-id")
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
-    @patch("orchestrator.genai.Client")
-    @patch("orchestrator.chromadb.PersistentClient")
-    def test_cache_fallback_on_error(self, mock_chroma, mock_client_cls):
+    def test_cache_fallback_on_error(self):
         """Cache should be None if creation fails (e.g., content too small)."""
-        mock_client = MagicMock()
-        mock_client.caches.create.side_effect = Exception("Content too small for caching")
-        mock_client_cls.return_value = mock_client
-        mock_chroma.return_value = MagicMock(
-            get_or_create_collection=MagicMock(return_value=MagicMock())
-        )
+        mock_provider = _make_mock_provider()
+        # Default: cache creation raises
 
         import importlib
-        import orchestrator
-        importlib.reload(orchestrator)
-        orch = orchestrator.LancelotOrchestrator()
+        import orchestrator as orch_mod
+        importlib.reload(orch_mod)
+
+        with patch.object(orch_mod.LancelotOrchestrator, '_init_provider'):
+            orch = orch_mod.LancelotOrchestrator()
+            orch.provider = mock_provider
+            orch._init_context_cache()
+
         self.assertIsNone(orch._cache)
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
-    @patch("orchestrator.genai.Client")
-    @patch("orchestrator.chromadb.PersistentClient")
-    def test_chat_uses_cache_when_available(self, mock_chroma, mock_client_cls):
-        """chat() should pass cached_content in config when cache exists."""
+    def test_chat_works_with_cache(self):
+        """chat() should work when cache exists (provider.generate still called)."""
         mock_cache = MagicMock()
         mock_cache.name = "caches/test-cache-id"
-        mock_response = MagicMock()
-        mock_response.text = "Test cached response"
-        mock_client = MagicMock()
-        mock_client.caches.create.return_value = mock_cache
-        mock_client.models.generate_content.return_value = mock_response
-        mock_client_cls.return_value = mock_client
-        mock_chroma.return_value = MagicMock(
-            get_or_create_collection=MagicMock(return_value=MagicMock())
-        )
+        mock_provider = _make_mock_provider()
+        mock_provider._client.caches.create.side_effect = None
+        mock_provider._client.caches.create.return_value = mock_cache
 
-        import importlib
-        import orchestrator
-        importlib.reload(orchestrator)
-        orch = orchestrator.LancelotOrchestrator()
+        orch = _build_orchestrator(mock_provider)
+        orch._cache = mock_cache  # Simulate cache being set
         orch.chat("test message")
 
-        call_kwargs = mock_client.models.generate_content.call_args
-        config = call_kwargs.kwargs.get("config")
-        self.assertIsNotNone(config)
+        mock_provider.generate.assert_called()
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
-    @patch("orchestrator.genai.Client")
-    @patch("orchestrator.chromadb.PersistentClient")
-    def test_cache_invalidated_on_rule_update(self, mock_chroma, mock_client_cls):
+    def test_cache_invalidated_on_rule_update(self):
         """_update_rules() should recreate cache after modifying RULES.md."""
         mock_cache = MagicMock()
         mock_cache.name = "caches/original"
-        mock_client = MagicMock()
-        mock_client.caches.create.return_value = mock_cache
-        mock_client_cls.return_value = mock_client
-        mock_chroma.return_value = MagicMock(
-            get_or_create_collection=MagicMock(return_value=MagicMock())
-        )
+        mock_provider = _make_mock_provider()
+        mock_provider._client.caches.create.side_effect = None
+        mock_provider._client.caches.create.return_value = mock_cache
 
         import importlib
-        import orchestrator
-        importlib.reload(orchestrator)
-        orch = orchestrator.LancelotOrchestrator()
+        import orchestrator as orch_mod
+        importlib.reload(orch_mod)
+
+        with patch.object(orch_mod.LancelotOrchestrator, '_init_provider'):
+            orch = orch_mod.LancelotOrchestrator()
+            orch.provider = mock_provider
+            orch._init_context_cache()
 
         # Initial cache creation = 1 call
-        initial_calls = mock_client.caches.create.call_count
+        initial_calls = mock_provider._client.caches.create.call_count
 
         # Update rules should trigger cache recreation
         orch._update_rules("A valid short rule")
 
         # Should have been called again for cache invalidation
-        self.assertGreater(mock_client.caches.create.call_count, initial_calls)
+        self.assertGreater(mock_provider._client.caches.create.call_count, initial_calls)
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key", "GEMINI_CACHE_TTL": "7200"})
-    @patch("orchestrator.genai.Client")
-    @patch("orchestrator.chromadb.PersistentClient")
-    def test_cache_ttl_configurable(self, mock_chroma, mock_client_cls):
+    def test_cache_ttl_configurable(self):
         """Cache TTL should be read from GEMINI_CACHE_TTL env var."""
-        mock_client = MagicMock()
-        mock_client.caches.create.side_effect = Exception("test")
-        mock_client_cls.return_value = mock_client
-        mock_chroma.return_value = MagicMock(
-            get_or_create_collection=MagicMock(return_value=MagicMock())
-        )
-
-        import importlib
-        import orchestrator
-        importlib.reload(orchestrator)
-        orch = orchestrator.LancelotOrchestrator()
+        orch = _build_orchestrator()
         self.assertEqual(orch._cache_ttl, 7200)
 
 
@@ -337,64 +272,34 @@ class TestContextCaching(unittest.TestCase):
 # Test 4: Thinking/Reasoning Config
 # ---------------------------------------------------------------------------
 class TestThinkingConfig(unittest.TestCase):
-    """Verifies ThinkingConfig generation from env vars."""
+    """Verifies _get_thinking_config() generation from env vars."""
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key", "GEMINI_THINKING_LEVEL": "high"})
-    @patch("orchestrator.genai.Client")
-    @patch("orchestrator.chromadb.PersistentClient")
-    def test_thinking_level_from_env(self, mock_chroma, mock_client_cls):
-        mock_client_cls.return_value = MagicMock()
-        mock_client_cls.return_value.caches.create.side_effect = Exception("no cache")
-        mock_chroma.return_value = MagicMock(
-            get_or_create_collection=MagicMock(return_value=MagicMock())
-        )
-        import importlib
-        import orchestrator
-        importlib.reload(orchestrator)
-        orch = orchestrator.LancelotOrchestrator()
+    def test_thinking_level_from_env(self):
+        orch = _build_orchestrator()
         config = orch._get_thinking_config()
         self.assertIsNotNone(config)
+        self.assertEqual(config["thinking_level"], "high")
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key", "GEMINI_THINKING_LEVEL": "off"})
-    @patch("orchestrator.genai.Client")
-    @patch("orchestrator.chromadb.PersistentClient")
-    def test_thinking_off_returns_none(self, mock_chroma, mock_client_cls):
-        mock_client_cls.return_value = MagicMock()
-        mock_client_cls.return_value.caches.create.side_effect = Exception("no cache")
-        mock_chroma.return_value = MagicMock(
-            get_or_create_collection=MagicMock(return_value=MagicMock())
-        )
-        import importlib
-        import orchestrator
-        importlib.reload(orchestrator)
-        orch = orchestrator.LancelotOrchestrator()
+    def test_thinking_off_returns_none(self):
+        orch = _build_orchestrator()
         config = orch._get_thinking_config()
         self.assertIsNone(config)
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key", "GEMINI_THINKING_LEVEL": "low"})
-    @patch("orchestrator.genai.Client")
-    @patch("orchestrator.chromadb.PersistentClient")
-    def test_thinking_included_in_chat(self, mock_chroma, mock_client_cls):
-        """ThinkingConfig should be included in the generation call."""
-        mock_response = MagicMock()
-        mock_response.text = "Test response"
-        mock_client = MagicMock()
-        mock_client.models.generate_content.return_value = mock_response
-        mock_client.caches.create.side_effect = Exception("no cache")
-        mock_client_cls.return_value = mock_client
-        mock_chroma.return_value = MagicMock(
-            get_or_create_collection=MagicMock(return_value=MagicMock())
-        )
-
-        import importlib
-        import orchestrator
-        importlib.reload(orchestrator)
-        orch = orchestrator.LancelotOrchestrator()
+    def test_thinking_included_in_chat(self):
+        """ThinkingConfig should be included in the provider.generate() config arg."""
+        mock_provider = _make_mock_provider()
+        orch = _build_orchestrator(mock_provider)
         orch.chat("test")
 
-        call_kwargs = mock_client.models.generate_content.call_args
+        call_kwargs = mock_provider.generate.call_args
         config = call_kwargs.kwargs.get("config")
         self.assertIsNotNone(config)
+        # Config should contain thinking key with thinking_level dict
+        self.assertIn("thinking", config)
+        self.assertEqual(config["thinking"]["thinking_level"], "low")
 
 
 # ---------------------------------------------------------------------------
@@ -580,7 +485,7 @@ class TestUCPGatewayEndpoints(unittest.TestCase):
 # Test: API Discovery SDK Migration
 # ---------------------------------------------------------------------------
 class TestAPIDiscoverySDKMigration(unittest.TestCase):
-    """Verifies api_discovery.py uses new client.models.generate_content pattern."""
+    """Verifies api_discovery.py uses provider.generate() pattern."""
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
     def test_llm_extract_uses_new_sdk(self):

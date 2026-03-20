@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { usePolling, usePageTitle } from '@/hooks'
 import { fetchSoulStatus, fetchCrusaderStatus } from '@/api'
-import { fetchSoulContent, proposeSoulAmendment, approveSoulProposal, activateSoulProposal } from '@/api/soul'
+import { fetchSoulContent, proposeSoulAmendment, approveSoulProposal, activateSoulProposal, fetchSoulTemplates, fetchSoulTemplateDetail, applySoulTemplate } from '@/api/soul'
 import { ConfirmDialog } from '@/components'
 import { formatTimestamp } from '@/utils/dateFormat'
-import type { SoulDocument, SoulContentResponse, SoulProposal, CrusaderStatusResponse, SoulOverlayInfo } from '@/types/api'
+import type { SoulDocument, SoulContentResponse, SoulProposal, CrusaderStatusResponse, SoulOverlayInfo, SoulTemplateMetadata, SoulTemplateDetail } from '@/types/api'
 
 // ── Collapsible Section ─────────────────────────────────────────────
 function Section({ title, children, defaultOpen = true }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
@@ -259,6 +259,182 @@ function SoulEditor({ rawYaml, onProposed }: { rawYaml: string; onProposed: () =
   )
 }
 
+// ── Template Browser ────────────────────────────────────────────────
+function TemplateBrowser({ onApplied }: { onApplied: () => void }) {
+  const [templates, setTemplates] = useState<SoulTemplateMetadata[]>([])
+  const [loading, setLoading] = useState(true)
+  const [selected, setSelected] = useState<SoulTemplateDetail | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [applying, setApplying] = useState(false)
+  const [result, setResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [industryFilter, setIndustryFilter] = useState<string>('')
+
+  useEffect(() => {
+    setLoading(true)
+    fetchSoulTemplates(industryFilter || undefined)
+      .then(res => setTemplates(res.templates))
+      .catch(() => setTemplates([]))
+      .finally(() => setLoading(false))
+  }, [industryFilter])
+
+  const handleSelect = async (name: string) => {
+    setDetailLoading(true)
+    setResult(null)
+    try {
+      const detail = await fetchSoulTemplateDetail(name)
+      setSelected(detail)
+    } catch {
+      setResult({ type: 'error', message: `Failed to load template: ${name}` })
+    } finally {
+      setDetailLoading(false)
+    }
+  }
+
+  const handleApply = async () => {
+    if (!selected) return
+    setApplying(true)
+    setResult(null)
+    try {
+      const res = await applySoulTemplate(selected.metadata.name, 'war-room-operator')
+      setResult({
+        type: 'success',
+        message: `Template "${selected.metadata.display_name}" applied as proposal ${res.proposal_id} (${res.diff_summary.length} change${res.diff_summary.length !== 1 ? 's' : ''}). Go to Pending Proposals to approve and activate.`,
+      })
+      onApplied()
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to apply template'
+      setResult({ type: 'error', message: msg })
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  const industries = Array.from(new Set(templates.map(t => t.industry)))
+
+  return (
+    <div className="space-y-4">
+      {/* Filter bar */}
+      <div className="flex items-center gap-3">
+        <span className="text-[10px] text-text-muted uppercase tracking-wider">Industry</span>
+        <div className="flex gap-1">
+          <button
+            onClick={() => setIndustryFilter('')}
+            className={`px-2 py-0.5 text-[10px] rounded transition-colors ${
+              !industryFilter
+                ? 'bg-accent-primary text-white'
+                : 'bg-surface-input text-text-muted hover:text-text-primary'
+            }`}
+          >
+            All
+          </button>
+          {industries.map(ind => (
+            <button
+              key={ind}
+              onClick={() => setIndustryFilter(ind)}
+              className={`px-2 py-0.5 text-[10px] rounded capitalize transition-colors ${
+                industryFilter === ind
+                  ? 'bg-accent-primary text-white'
+                  : 'bg-surface-input text-text-muted hover:text-text-primary'
+              }`}
+            >
+              {ind}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-text-muted">Loading templates...</p>
+      ) : templates.length === 0 ? (
+        <p className="text-sm text-text-muted">No templates available.</p>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {templates.map(t => (
+            <button
+              key={t.name}
+              onClick={() => handleSelect(t.name)}
+              className={`text-left p-3 rounded-lg border transition-colors ${
+                selected?.metadata.name === t.name
+                  ? 'border-accent-primary bg-accent-primary/5'
+                  : 'border-border-default bg-surface-card-elevated hover:border-accent-primary/50'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-semibold text-text-primary">{t.display_name}</span>
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent-primary/10 text-accent-primary capitalize">
+                  {t.industry}
+                </span>
+              </div>
+              <p className="text-[11px] text-text-secondary leading-relaxed line-clamp-2">
+                {t.description}
+              </p>
+              {t.tags.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {t.tags.slice(0, 4).map(tag => (
+                    <span key={tag} className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-surface-input text-text-muted">
+                      {tag}
+                    </span>
+                  ))}
+                  {t.tags.length > 4 && (
+                    <span className="text-[9px] text-text-muted">+{t.tags.length - 4}</span>
+                  )}
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Template detail / diff view */}
+      {detailLoading && (
+        <p className="text-sm text-text-muted">Loading template details...</p>
+      )}
+
+      {selected && !detailLoading && (
+        <div className="border border-border-default rounded-lg overflow-hidden">
+          <div className="p-3 bg-surface-card-elevated border-b border-border-default/50">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-xs font-semibold text-text-primary">{selected.metadata.display_name}</h4>
+                <p className="text-[10px] text-text-muted mt-0.5">
+                  v{selected.metadata.version} by {selected.metadata.author}
+                </p>
+              </div>
+              <button
+                onClick={handleApply}
+                disabled={applying}
+                className="px-3 py-1.5 text-[11px] font-medium rounded bg-accent-primary text-white hover:bg-accent-primary/80 transition-colors disabled:opacity-50"
+              >
+                {applying ? 'Applying...' : 'Apply as Proposal'}
+              </button>
+            </div>
+          </div>
+          <div className="p-3 bg-surface-card">
+            <p className="text-[10px] text-text-muted uppercase tracking-wider mb-2">Template Soul YAML</p>
+            <pre className="text-[11px] font-mono text-text-primary leading-relaxed bg-surface-input rounded p-3 overflow-auto max-h-[400px] whitespace-pre-wrap">
+              {selected.raw_yaml}
+            </pre>
+          </div>
+        </div>
+      )}
+
+      {result && (
+        <div className={`p-2 rounded border text-[11px] leading-relaxed ${
+          result.type === 'success'
+            ? 'bg-state-healthy/10 border-state-healthy/30 text-state-healthy'
+            : 'bg-state-error/10 border-state-error/30 text-state-error'
+        }`}>
+          {result.message}
+        </div>
+      )}
+
+      <p className="text-[10px] text-text-muted">
+        Applying a template creates a Soul Amendment Proposal. Review the diff, then approve and activate via the Pending Proposals section.
+      </p>
+    </div>
+  )
+}
+
 // ── Main Soul Inspector Page ────────────────────────────────────────
 export function SoulInspector() {
   usePageTitle('Soul Inspector')
@@ -266,7 +442,7 @@ export function SoulInspector() {
   const { data: crusaderStatus } = usePolling<CrusaderStatusResponse>({ fetcher: fetchCrusaderStatus, interval: 5000 })
   const [content, setContent] = useState<SoulContentResponse | null>(null)
   const [contentLoading, setContentLoading] = useState(true)
-  const [tab, setTab] = useState<'view' | 'edit'>('view')
+  const [tab, setTab] = useState<'view' | 'edit' | 'templates'>('view')
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [confirmAction, setConfirmAction] = useState<{ type: 'approve' | 'activate'; id: string } | null>(null)
   const [actionResult, setActionResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
@@ -396,12 +572,24 @@ export function SoulInspector() {
             >
               YAML Editor
             </button>
+            <button
+              onClick={() => setTab('templates')}
+              className={`flex-1 px-4 py-1.5 rounded text-xs font-medium transition-colors ${
+                tab === 'templates'
+                  ? 'bg-accent-primary text-white'
+                  : 'text-text-muted hover:text-text-primary'
+              }`}
+            >
+              Templates
+            </button>
           </div>
 
           {/* Tab content */}
           <section className="bg-surface-card border border-border-default rounded-lg p-4">
             {tab === 'view' ? (
               <SoulViewer soul={content.soul} />
+            ) : tab === 'templates' ? (
+              <TemplateBrowser onApplied={() => { refetchStatus(); loadContent() }} />
             ) : crusaderActive ? (
               <div className="p-4 text-center">
                 <p className="text-sm text-text-muted">Soul editing is disabled while Crusader Mode is active.</p>

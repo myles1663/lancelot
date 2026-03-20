@@ -26,10 +26,10 @@ class TestManifest:
         assert "protocol.imap" in smtp.manifest.target_domains
 
     def test_credential_key(self, smtp):
-        assert smtp.manifest.required_credentials[0].vault_key == "email.smtp_credentials"
+        assert smtp.manifest.required_credentials[0].vault_key == "email.smtp_host"
 
     def test_credential_type(self, smtp):
-        assert smtp.manifest.required_credentials[0].type == "basic_auth"
+        assert smtp.manifest.required_credentials[0].type == "config"
 
     def test_backend_property(self, smtp):
         assert smtp.backend == "smtp"
@@ -79,7 +79,7 @@ class TestImapReadExecution:
             ("move_to_folder", {"message_id": "x", "label_id": "y"}),
         ]:
             result = smtp.execute(op_id, params)
-            assert result.credential_vault_key == "email.smtp_credentials"
+            assert result.credential_vault_key == "email.smtp_password"
 
 
 # ── SMTP Write Operations ────────────────────────────────────────

@@ -1,3 +1,9 @@
+"""Tests for S10: LLM Response Validation.
+
+Covers: confidence routing via _parse_response, LLM output sanitization
+via _validate_llm_response, and confidence boundary edge cases.
+"""
+
 import unittest
 import tempfile
 import os
@@ -16,15 +22,17 @@ def _make_orchestrator(data_dir):
         with open(os.path.join(data_dir, fname), "w") as f:
             f.write("")
 
-    orig_gemini = LancelotOrchestrator._init_gemini
-    orig_memory = LancelotOrchestrator._init_memory_db
-    LancelotOrchestrator._init_gemini = lambda self: None
-    LancelotOrchestrator._init_memory_db = lambda self: None
+    orig_provider = LancelotOrchestrator._init_provider
+    orig_cache = LancelotOrchestrator._init_context_cache
+    LancelotOrchestrator._init_provider = lambda self: None
+    LancelotOrchestrator._init_context_cache = lambda self: None
 
-    orch = LancelotOrchestrator(data_dir=data_dir)
+    try:
+        orch = LancelotOrchestrator(data_dir=data_dir)
+    finally:
+        LancelotOrchestrator._init_provider = orig_provider
+        LancelotOrchestrator._init_context_cache = orig_cache
 
-    LancelotOrchestrator._init_gemini = orig_gemini
-    LancelotOrchestrator._init_memory_db = orig_memory
     return orch
 
 
@@ -43,10 +51,11 @@ class TestConfidenceRouting(unittest.TestCase):
         self.assertNotIn("DRAFT", result)
         self.assertNotIn("PERMISSION REQUIRED", result)
 
-    def test_medium_confidence_returns_draft(self):
-        """Confidence 70-90 returns DRAFT prefix."""
+    def test_medium_confidence_returns_clean(self):
+        """Confidence 70-90 returns clean response (Honest Closure strips DRAFT prefix)."""
         result = self.orch._parse_response("Confidence: 80 Maybe this works")
-        self.assertTrue(result.startswith("DRAFT:"))
+        # Should NOT be blocked as low confidence
+        self.assertNotIn("PERMISSION REQUIRED", result)
 
     def test_low_confidence_returns_permission_required(self):
         """Confidence <70 returns PERMISSION REQUIRED prefix."""
@@ -105,10 +114,11 @@ class TestConfidenceEdgeCases(unittest.TestCase):
         self.data_dir = tempfile.mkdtemp()
         self.orch = _make_orchestrator(self.data_dir)
 
-    def test_confidence_exactly_90_is_draft(self):
-        """Confidence == 90 is NOT >90, so should fall to >=70 DRAFT branch."""
+    def test_confidence_exactly_90_is_medium(self):
+        """Confidence == 90 is NOT >90, so should fall to >=70 branch (clean, no DRAFT)."""
         result = self.orch._parse_response("Confidence: 90 borderline")
-        self.assertTrue(result.startswith("DRAFT:"))
+        self.assertNotIn("PERMISSION REQUIRED", result)
+        self.assertNotIn("DRAFT", result)
 
     def test_confidence_exactly_91_is_high(self):
         """Confidence == 91 is >90, should return clean (high confidence)."""
@@ -116,10 +126,11 @@ class TestConfidenceEdgeCases(unittest.TestCase):
         self.assertNotIn("DRAFT", result)
         self.assertNotIn("PERMISSION REQUIRED", result)
 
-    def test_confidence_exactly_70_is_draft(self):
-        """Confidence == 70 is >=70, should return DRAFT."""
+    def test_confidence_exactly_70_is_medium(self):
+        """Confidence == 70 is >=70, should return clean (no DRAFT, no PERMISSION REQUIRED)."""
         result = self.orch._parse_response("Confidence: 70 lower boundary")
-        self.assertTrue(result.startswith("DRAFT:"))
+        self.assertNotIn("PERMISSION REQUIRED", result)
+        self.assertNotIn("DRAFT", result)
 
     def test_confidence_exactly_69_is_permission(self):
         """Confidence == 69 is <70, should return PERMISSION REQUIRED."""

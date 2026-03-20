@@ -159,8 +159,9 @@ class TestProviderIdentity:
         assert Capability.SHELL_EXEC in caps
         assert Capability.REPO_OPS in caps
         assert Capability.FILE_OPS in caps
+        assert Capability.WEB_OPS in caps
         assert Capability.DEPLOY_OPS in caps
-        assert len(caps) == 4
+        assert len(caps) == 5
 
     def test_supports_capability(self, sandbox):
         """supports() method works correctly."""

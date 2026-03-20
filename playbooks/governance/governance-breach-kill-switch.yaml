@@ -1,0 +1,110 @@
+_playbook_metadata:
+  name: governance-breach-kill-switch
+  display_name: "Kill Switch Activation Response"
+  description: "Response protocol when any kill switch is activated. Identifies which switch fired, determines root cause, and verifies containment."
+  category: GOVERNANCE_BREACH
+  severity_default: HIGH
+  industry: general
+  version: "1.0"
+  author: Lancelot
+  tags: [governance, kill-switch, containment]
+
+trigger:
+  receipt_types: [kill_switch_issued]
+  conditions: []
+  severity: HIGH
+
+paging:
+  CRITICAL:
+    - channel: pagerduty
+      endpoint_ref: vault://pagerduty-webhook
+      escalation_minutes: 5
+  HIGH:
+    - channel: slack
+      endpoint_ref: vault://slack-incident-channel
+      escalation_minutes: 15
+
+steps:
+  - step: 1
+    title: "Identify which kill switch fired"
+    description: "Check the triggering receipt for switch_name, the affected quest_id, and what the agent was doing at activation time. Pull the last 5 receipts before the kill switch receipt."
+    action_type: MANUAL
+    sla_minutes: 2
+    decision_points:
+      - condition: "Kill switch was manually activated by an operator"
+        action: "Proceed to step 2 — confirm operator intent"
+      - condition: "Kill switch was automatically activated by APL"
+        action: "Proceed to step 3 — review APL trigger pattern"
+
+  - step: 2
+    title: "Confirm operator intent"
+    description: "Contact the operator who issued the kill switch (check operator_id in receipt). Verify the activation was intentional and document the reason in the incident timeline."
+    action_type: MANUAL
+    sla_minutes: 5
+    decision_points:
+      - condition: "Operator confirms intentional activation"
+        action: "Skip to step 5 — assess blast radius"
+      - condition: "Operator did not initiate the activation"
+        action: "Escalate to CRITICAL — possible unauthorized access. Proceed to step 4."
+
+  - step: 3
+    title: "Review APL trigger pattern"
+    description: "Pull the APL rule that triggered the kill switch. Check the pattern history — is this a known trigger or a new pattern? Review the last 10 APL decisions for this rule."
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "APL rule is working correctly, agent behavior warranted the switch"
+        action: "Proceed to step 5 — assess blast radius"
+      - condition: "APL rule appears to be misfiring (false positive)"
+        action: "Document the false positive, proceed to step 7 for Soul review"
+
+  - step: 4
+    title: "Escalate — unauthorized activation"
+    description: "Escalate incident severity to CRITICAL. Notify security team lead. Check all receipts from the operator_id in the last 24 hours for anomalous activity."
+    action_type: MANUAL
+    sla_minutes: 5
+    actions:
+      - "Escalate severity to CRITICAL"
+      - "Page security team lead"
+
+  - step: 5
+    title: "Assess blast radius"
+    description: "Identify all quests, agents, and workflows affected by the kill switch activation. Check if dependent systems are in a safe state. Document affected scope in the timeline."
+    action_type: MANUAL
+    sla_minutes: 10
+
+  - step: 6
+    title: "Verify containment"
+    description: "Confirm the kill switch is still active and the triggering condition is contained. Check that no new receipts from the affected quest have been generated since activation."
+    action_type: VERIFY
+    sla_minutes: 5
+    decision_points:
+      - condition: "Kill switch is active, no new activity from affected quest"
+        action: "Proceed to step 7 — root cause analysis"
+      - condition: "Kill switch was lifted or agent resumed without authorization"
+        action: "Re-activate kill switch immediately, escalate to step 4"
+
+  - step: 7
+    title: "Root cause analysis"
+    description: "Document the root cause: why did the governance event occur? Was it an agent behavior issue, a Soul configuration gap, an external trigger, or an infrastructure failure? Review the Soul constraints that were active at incident time."
+    action_type: MANUAL
+    sla_minutes: 30
+
+  - step: 8
+    title: "Remediation plan"
+    description: "Determine the remediation: Soul amendment, APL rule update, agent restart with modified parameters, or no action needed. All remediation actions must be executed through governed channels (War Room or API) to generate receipts."
+    action_type: MANUAL
+    sla_minutes: 15
+    actions:
+      - "Link all remediation receipts to this incident"
+
+  - step: 9
+    title: "Close incident"
+    description: "Verify all remediation actions are complete and receipted. Write root_cause summary. For HIGH/CRITICAL incidents, root_cause is required. Consider generating board report if required by policy."
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "Root cause documented, remediation complete"
+        action: "Close incident"
+      - condition: "Root cause unclear or remediation incomplete"
+        action: "Return to step 7"

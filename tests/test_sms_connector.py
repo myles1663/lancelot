@@ -38,11 +38,11 @@ class TestManifest:
         assert sms.manifest.target_domains == ["api.twilio.com"]
 
     def test_has_credentials(self, sms):
-        assert len(sms.manifest.required_credentials) == 1
-        assert sms.manifest.required_credentials[0].vault_key == "sms.twilio_credentials"
+        assert len(sms.manifest.required_credentials) == 4
+        assert sms.manifest.required_credentials[0].vault_key == "sms.account_sid"
 
     def test_credential_type(self, sms):
-        assert sms.manifest.required_credentials[0].type == "basic_auth"
+        assert sms.manifest.required_credentials[0].type == "config"
 
     def test_does_not_access(self, sms):
         dna = sms.manifest.does_not_access
@@ -150,7 +150,7 @@ class TestReadExecution:
             ("get_media", {"message_sid": "SM1", "media_sid": "ME1"}),
         ]:
             result = sms.execute(op_id, params)
-            assert result.credential_vault_key == "sms.twilio_credentials"
+            assert result.credential_vault_key == "sms.auth_token"
 
     def test_unknown_operation_raises(self, sms):
         with pytest.raises(KeyError):

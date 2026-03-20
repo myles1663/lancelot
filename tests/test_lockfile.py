@@ -115,9 +115,9 @@ class TestRealLockfile:
         data = load_lockfile()
         assert data["model"]["checksum"]["algorithm"] == "sha256"
 
-    def test_real_lockfile_has_five_prompts(self):
+    def test_real_lockfile_has_six_prompts(self):
         data = load_lockfile()
-        assert len(data["prompts"]) == 5
+        assert len(data["prompts"]) == 6
 
 
 # ===================================================================
@@ -154,10 +154,10 @@ class TestRealPrompts:
 
     def test_load_all_prompts_from_real_lockfile(self):
         prompts = load_all_prompts()
-        assert len(prompts) == 5
+        assert len(prompts) == 6
         assert set(prompts.keys()) == {
             "classify_intent", "extract_json", "summarize_internal",
-            "redact", "rag_rewrite",
+            "redact", "rag_rewrite", "verify_intent",
         }
 
 

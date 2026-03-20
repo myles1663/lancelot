@@ -189,11 +189,12 @@ class TestAuthTypeIntegration:
         assert headers["Authorization"] == "Bot discord-bot-token"
 
     @patch("src.connectors.proxy.requests.Session.request")
-    def test_basic_auth_for_sms(self, mock_req, registry, vault):
-        """SMS/Twilio uses basic_auth → Basic header."""
+    def test_basic_auth_composed_for_sms(self, mock_req, registry, vault):
+        """SMS/Twilio uses basic_auth_composed → Basic header from two vault keys."""
         connector = SMSConnector(account_sid="AC1", from_number="+1")
         registry.register(connector)
-        vault.store("sms.twilio_credentials", "base64encodedcreds", type="basic_auth")
+        vault.store("sms.account_sid", "AC1", type="config")
+        vault.store("sms.auth_token", "twilio-auth-token", type="api_key")
         vault.grant_connector_access("sms", connector.manifest)
 
         mock_resp = MagicMock()
@@ -209,7 +210,9 @@ class TestAuthTypeIntegration:
         assert resp.success is True
         call_kwargs = mock_req.call_args
         headers = call_kwargs.kwargs.get("headers", call_kwargs[1].get("headers", {}))
-        assert headers["Authorization"] == "Basic base64encodedcreds"
+        import base64 as b64
+        expected = "Basic " + b64.b64encode(b"AC1:twilio-auth-token").decode()
+        assert headers["Authorization"] == expected
 
     @patch("src.connectors.proxy.requests.Session.request")
     def test_bearer_auth_for_whatsapp(self, mock_req, registry, vault):
@@ -244,7 +247,8 @@ class TestFormEncodedSupport:
     def test_twilio_sends_form_data(self, mock_req, registry, vault):
         connector = SMSConnector(account_sid="AC1", from_number="+1")
         registry.register(connector)
-        vault.store("sms.twilio_credentials", "creds", type="basic_auth")
+        vault.store("sms.account_sid", "AC1", type="config")
+        vault.store("sms.auth_token", "twilio-auth-token", type="api_key")
         vault.grant_connector_access("sms", connector.manifest)
 
         mock_resp = MagicMock()
@@ -415,7 +419,7 @@ class TestCredentialKeyPropagation:
     def test_sms_results_have_cred_key(self):
         c = SMSConnector(account_sid="AC1", from_number="+1")
         result = c.execute("send_sms", {"to": "+1", "body": "hi"})
-        assert result.credential_vault_key == "sms.twilio_credentials"
+        assert result.credential_vault_key == "sms.auth_token"
 
     def test_email_gmail_results_have_cred_key(self):
         c = EmailConnector(backend="gmail")
@@ -430,4 +434,4 @@ class TestCredentialKeyPropagation:
     def test_email_smtp_results_have_cred_key(self):
         c = EmailConnector(backend="smtp")
         result = c.execute("list_messages", {})
-        assert result.credential_vault_key == "email.smtp_credentials"
+        assert result.credential_vault_key == "email.smtp_password"

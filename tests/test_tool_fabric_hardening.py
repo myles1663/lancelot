@@ -198,8 +198,8 @@ class TestCommandDenylist:
 
     def test_command_not_in_allowlist(self, policy_engine):
         """Verify commands not in allowlist are blocked."""
-        # curl is not in default allowlist
-        decision = policy_engine.evaluate_command("curl http://example.com")
+        # Use a command that is genuinely not in the default allowlist
+        decision = policy_engine.evaluate_command("nmap 192.168.1.1")
         assert not decision.allowed
         assert "allowlist" in decision.reasons[0].lower()
 
@@ -329,13 +329,14 @@ class TestNetworkEnforcement:
 
     def test_network_commands_flagged_high_risk(self, policy_engine):
         """Verify network-related commands are flagged as high risk."""
-        # These are allowed but high risk
+        # curl and wget are now in the default allowlist, but flagged high risk
         curl_decision = policy_engine.evaluate_command("curl http://example.com")
         wget_decision = policy_engine.evaluate_command("wget http://example.com")
 
-        # curl and wget not in allowlist, so they should be blocked
-        assert not curl_decision.allowed
-        assert not wget_decision.allowed
+        assert curl_decision.allowed
+        assert curl_decision.risk_level == RiskLevel.HIGH
+        assert wget_decision.allowed
+        assert wget_decision.risk_level == RiskLevel.HIGH
 
 
 # =============================================================================

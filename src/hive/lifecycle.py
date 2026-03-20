@@ -213,7 +213,13 @@ class AgentLifecycleManager:
 
     # ── Operator Controls ────────────────────────────────────────────
 
-    def pause(self, agent_id: str, reason: str) -> None:
+    def pause(
+        self,
+        agent_id: str,
+        reason: str,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> None:
         """Pause an executing agent."""
         if not reason.strip():
             raise InterventionRequiresReasonError("pause")
@@ -234,7 +240,12 @@ class AgentLifecycleManager:
             "reason": reason,
         })
 
-    def resume(self, agent_id: str) -> None:
+    def resume(
+        self,
+        agent_id: str,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> None:
         """Resume a paused agent."""
         with self._lock:
             runtime = self._runtimes.get(agent_id)
@@ -247,7 +258,13 @@ class AgentLifecycleManager:
         except (ValueError, AgentCollapsedError):
             pass
 
-    def kill(self, agent_id: str, reason: str) -> None:
+    def kill(
+        self,
+        agent_id: str,
+        reason: str,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> None:
         """Kill an agent (request collapse)."""
         if not reason.strip():
             raise InterventionRequiresReasonError("kill")
@@ -278,9 +295,16 @@ class AgentLifecycleManager:
             agent_id=agent_id,
             reason=reason,
             quest_id=self._get_quest_id(agent_id),
+            operator_id=operator_id,
+            session_id=session_id,
         )
 
-    def kill_all(self, reason: str) -> List[str]:
+    def kill_all(
+        self,
+        reason: str,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> List[str]:
         """Kill all active agents."""
         if not reason.strip():
             raise InterventionRequiresReasonError("kill_all")
@@ -301,6 +325,8 @@ class AgentLifecycleManager:
         self._receipts.record_intervention(
             intervention_type=InterventionType.KILL_ALL,
             reason=reason,
+            operator_id=operator_id,
+            session_id=session_id,
         )
 
         logger.warning("Kill all: %d agents collapsed", len(collapsed))
@@ -310,20 +336,22 @@ class AgentLifecycleManager:
         self,
         agent_id: str,
         intervention: OperatorIntervention,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> None:
         """Process an operator intervention."""
         if not intervention.reason.strip():
             raise InterventionRequiresReasonError(intervention.intervention_type.value)
 
         if intervention.intervention_type == InterventionType.PAUSE:
-            self.pause(agent_id, intervention.reason)
+            self.pause(agent_id, intervention.reason, operator_id=operator_id, session_id=session_id)
         elif intervention.intervention_type == InterventionType.RESUME:
-            self.resume(agent_id)
+            self.resume(agent_id, operator_id=operator_id, session_id=session_id)
         elif intervention.intervention_type == InterventionType.KILL:
-            self.kill(agent_id, intervention.reason)
+            self.kill(agent_id, intervention.reason, operator_id=operator_id, session_id=session_id)
         elif intervention.intervention_type == InterventionType.MODIFY:
             # Modify = kill + replan (handled by architect)
-            self.kill(agent_id, intervention.reason)
+            self.kill(agent_id, intervention.reason, operator_id=operator_id, session_id=session_id)
 
         self._receipts.record_intervention(
             intervention_type=intervention.intervention_type,
@@ -331,6 +359,8 @@ class AgentLifecycleManager:
             reason=intervention.reason,
             feedback=intervention.feedback,
             quest_id=self._get_quest_id(agent_id),
+            operator_id=operator_id,
+            session_id=session_id,
         )
 
     # ── Helpers ──────────────────────────────────────────────────────
@@ -346,6 +376,24 @@ class AgentLifecycleManager:
         return record.quest_id if record else None
 
     def shutdown(self) -> None:
-        """Shut down the lifecycle manager and its thread pool."""
-        self.kill_all("Lifecycle manager shutdown")
+        """Shut down the lifecycle manager and its thread pool.
+
+        This is a system-initiated action (no human operator), so we
+        collapse agents directly without emitting intervention receipts
+        that would require operator identity.
+        """
+        # Signal all runtimes to collapse
+        with self._lock:
+            for runtime in self._runtimes.values():
+                runtime.request_collapse(
+                    CollapseReason.OPERATOR_KILL_ALL,
+                    "Lifecycle manager shutdown",
+                )
+
+        # Collapse via registry for non-executing agents
+        self._registry.collapse_all(
+            reason=CollapseReason.OPERATOR_KILL_ALL,
+            message="Lifecycle manager shutdown",
+        )
+
         self._executor.shutdown(wait=False)

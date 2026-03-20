@@ -1,14 +1,16 @@
 import os
 import sys
+import platform
+import pytest
 
 def test_imports():
     print("Testing imports...")
     try:
-        import google.generativeai as genai
-        print("SUCCESS: google.generativeai imported.")
+        import google.genai as genai
+        print("SUCCESS: google.genai imported.")
     except ImportError as e:
-        print(f"FAILURE: Could not import google.generativeai. Error: {e}")
-        sys.exit(1)
+        print(f"FAILURE: Could not import google.genai. Error: {e}")
+        pytest.fail(f"Could not import google.genai: {e}")
 
     try:
         import fastapi
@@ -67,6 +69,7 @@ def test_volume_persistence():
         
     print(f"\nPlease verify that 'test_write.txt' exists in your local './lancelot_data' directory.")
 
+@pytest.mark.skipif(platform.system() == "Windows", reason="pwd/getuid not available on Windows")
 def test_user():
     print("\nTesting current user...")
     try:
@@ -78,7 +81,6 @@ def test_user():
         else:
             print(f"SUCCESS: Running as non-root user '{user}'.")
     except ImportError:
-        # pwd module might not be available on Windows, but this runs in Linux container
         print("Could not determine user via pwd module.")
         print(f"Current UID: {os.getuid()}")
 

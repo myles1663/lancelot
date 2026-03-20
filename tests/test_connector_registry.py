@@ -121,11 +121,18 @@ class TestRegistration:
 
     def test_register_disabled_raises(self):
         os.environ["FEATURE_CONNECTORS"] = "false"
+        # Clear persisted state so it doesn't override the env var
+        old_persisted = feature_flags._persisted_state.pop("FEATURE_CONNECTORS", None)
         feature_flags.reload_flags()
 
         reg = ConnectorRegistry("config/connectors.yaml")
-        with pytest.raises(RuntimeError, match="FEATURE_CONNECTORS is disabled"):
-            reg.register(_make_connector("slack"))
+        try:
+            with pytest.raises(RuntimeError, match="FEATURE_CONNECTORS is disabled"):
+                reg.register(_make_connector("slack"))
+        finally:
+            # Restore persisted state
+            if old_persisted is not None:
+                feature_flags._persisted_state["FEATURE_CONNECTORS"] = old_persisted
 
     def test_register_enabled_succeeds(self):
         os.environ["FEATURE_CONNECTORS"] = "true"

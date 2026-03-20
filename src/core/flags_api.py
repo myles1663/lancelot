@@ -9,7 +9,7 @@ import logging
 import os
 
 import yaml
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
@@ -325,6 +325,33 @@ FLAG_META = {
         "conflicts": [],
         "warning": "Requires both HIVE and TOOLS_UAB. Sub-agents will be able to interact with desktop applications through the UAB daemon. All actions are governance-gated and receipt-traced.",
     },
+
+    # ── Vault-Backed Secrets ────────────────────────────────────────
+    "FEATURE_VAULT_SECRETS": {
+        "description": "Vault-Backed Secret Management — credentials stored in Fernet-encrypted vault instead of raw environment variables. Supports Docker secrets, env vars, or passphrase-derived keys (PBKDF2).",
+        "category": "Security",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Disabling falls back to os.getenv() for credential resolution. Not recommended for production.",
+    },
+
+    # ── Federation ──────────────────────────────────────────────────
+    "FEATURE_FEDERATION": {
+        "description": "Federation — multi-instance coordination layer. Enables peer registration, task handoff, soul propagation, heartbeat mesh, and cross-instance kill propagation with Ed25519 authentication.",
+        "category": "Core Subsystem",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Exposes federation API endpoints. Peers authenticate via Ed25519 challenge/response. All federation events are receipt-traced and audit-logged.",
+    },
+
+    # ── MCP (Model Context Protocol) ────────────────────────────────
+    "FEATURE_MCP": {
+        "description": "MCP Master Kill Switch — enables governed MCP tool invocations through the MCP proxy. Every call routes through Soul permission → kill switch → network allowlist → argument screening → risk tier → receipt. Fail-closed on every gate.",
+        "category": "Core Subsystem",
+        "requires": ["FEATURE_CONNECTORS"],
+        "conflicts": [],
+        "warning": "MCP servers consume LLM tokens for tool discovery and invocation. Each server must be individually registered with credentials in the Vault. HTTP+SSE transport only — no stdio process spawning.",
+    },
 }
 
 
@@ -598,7 +625,7 @@ def _validate_flag_dependencies(name: str, new_value: bool) -> Optional[str]:
 # ── Flag Toggle/Set Routes ───────────────────────────────────────────
 
 @router.post("/{name}/toggle")
-async def toggle_flag(name: str):
+async def toggle_flag(name: str, request: Request):
     """Toggle a feature flag at runtime. Hot-toggles subsystems automatically."""
     try:
         import feature_flags as ff
@@ -677,6 +704,16 @@ async def toggle_flag(name: str):
                 user="WarRoom",
             )
 
+        # Governance receipt — kill switch issued (disabled) or lifted (enabled)
+        from src.core.governance_receipts import emit_governance_receipt
+        from src.shared.receipts import ActionType
+        emit_governance_receipt(
+            request,
+            ActionType.KILL_SWITCH_LIFTED if new_val else ActionType.KILL_SWITCH_ISSUED,
+            action_name="toggle_flag",
+            inputs={"flag": name, "new_value": new_val, "hot_toggled": hot_toggled},
+        )
+
         result = {
             "flag": name,
             "enabled": new_val,
@@ -705,7 +742,7 @@ async def toggle_flag(name: str):
 
 
 @router.post("/{name}/set")
-async def set_flag(name: str, value: bool = True):
+async def set_flag(name: str, request: Request, value: bool = True):
     """Set a feature flag to a specific value. Hot-toggles subsystems automatically."""
     try:
         import feature_flags as ff
@@ -731,6 +768,16 @@ async def set_flag(name: str, value: bool = True):
                     hot_toggled = True
             except Exception as exc:
                 logger.error("Hot-toggle failed for %s: %s", name, exc)
+
+        # Governance receipt
+        from src.core.governance_receipts import emit_governance_receipt
+        from src.shared.receipts import ActionType
+        emit_governance_receipt(
+            request,
+            ActionType.KILL_SWITCH_LIFTED if value else ActionType.KILL_SWITCH_ISSUED,
+            action_name="set_flag",
+            inputs={"flag": name, "value": value, "hot_toggled": hot_toggled},
+        )
 
         return {
             "flag": name,

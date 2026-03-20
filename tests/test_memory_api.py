@@ -47,12 +47,16 @@ def app(temp_data_dir, monkeypatch):
     """Create a FastAPI app with memory router."""
     import src.core.memory.api as api_module
 
-    # Reset the singleton
+    # Reset the singleton so previous test runs don't leak state
+    original_service = api_module._memory_service
     api_module._memory_service = None
 
-    # Patch the data directory
+    # Build a test-local service dict bound to the temp directory
+    _test_service = None
+
     def patched_get_memory_service():
-        if api_module._memory_service is None:
+        nonlocal _test_service
+        if _test_service is None:
             from src.core.memory.store import CoreBlockStore
             from src.core.memory.sqlite_store import MemoryStoreManager
             from src.core.memory.commits import CommitManager
@@ -65,7 +69,7 @@ def app(temp_data_dir, monkeypatch):
 
             store_manager = MemoryStoreManager(data_dir=temp_data_dir)
 
-            api_module._memory_service = {
+            _test_service = {
                 "core_store": core_store,
                 "store_manager": store_manager,
                 "commit_manager": CommitManager(core_store, store_manager, temp_data_dir),
@@ -75,17 +79,23 @@ def app(temp_data_dir, monkeypatch):
                 "compiler_service": ContextCompilerService(temp_data_dir),
             }
 
-        return api_module._memory_service
-
-    monkeypatch.setattr(api_module, "get_memory_service", patched_get_memory_service)
+        return _test_service
 
     app = FastAPI()
     app.include_router(router)
 
+    # Use FastAPI's dependency_overrides so that Depends(get_memory_service)
+    # calls our patched factory regardless of the captured function reference.
+    # This bypasses the FEATURE_MEMORY_VNEXT check in the real function and
+    # ensures tests work even when other test modules have already imported
+    # and cached the feature flag as False.
+    app.dependency_overrides[api_module.get_memory_service] = patched_get_memory_service
+
     yield app
 
     # Cleanup
-    api_module._memory_service = None
+    app.dependency_overrides.clear()
+    api_module._memory_service = original_service
 
 
 @pytest.fixture

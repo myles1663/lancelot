@@ -366,6 +366,14 @@ class OnboardingOrchestrator:
         api_key = self._get_env_value(env_var) if env_var else None
         if not api_key:
             api_key = os.getenv(env_var)
+        # Also check Vault-backed secret_cache (key may only be in Vault)
+        if not api_key and env_var:
+            try:
+                import secret_cache
+                if secret_cache.is_bootstrapped():
+                    api_key = secret_cache.get(env_var, "")
+            except Exception:
+                pass
 
         adc_exists = False
         if provider == "gemini":
@@ -387,7 +395,10 @@ class OnboardingOrchestrator:
             except Exception:
                 pass
 
-        if not api_key and not adc_exists and not oauth_configured:
+        # If snapshot already records credentials as verified, trust it
+        # (key may be in Vault which isn't bootstrapped during __init__)
+        snapshot_verified = self.snapshot.credential_status == "verified"
+        if not api_key and not adc_exists and not oauth_configured and not snapshot_verified:
             return "HANDSHAKE"
 
         # Step 3.5: V27 — Provider mode (SDK/API) must be selected

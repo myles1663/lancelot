@@ -255,6 +255,8 @@ Every action emits a receipt containing:
 | `cognition_tier` | DETERMINISTIC, CLASSIFICATION, PLANNING, or SYNTHESIS |
 | `parent_id` | Link to parent action (for chain reconstruction) |
 | `quest_id` | Link to originating goal |
+| `operator_id` | Stable UUID of the human who initiated the action (null = automated) |
+| `session_id` | Ephemeral War Room session UUID |
 
 **Receipt guarantees:**
 - If there's no receipt, the action didn't happen
@@ -264,6 +266,12 @@ Every action emits a receipt containing:
 - Receipt inputs/outputs are sanitized (secrets redacted, PII stripped)
 
 Receipts are the **ground truth** of system behavior. They enable post-hoc auditing, incident investigation, and trust scoring.
+
+### Operator Identity Enforcement
+
+25 governance receipt types are designated **identity-required** — the receipt writer blocks these if no valid OperatorIdentity is attached. This prevents ungoverned human-decision actions from being recorded without attribution. When enforcement blocks a write, a `GOVERNANCE_WRITE_ERROR` receipt is persisted as a fallback audit trail.
+
+Identity is resolved at the API layer: War Room sessions inject identity via `resolve_operator_identity()`, API-key requests use `get_api_key_identity()` with `LANCELOT_OPERATOR_NAME`. The SYSTEM identity (`operator_id="SYSTEM"`) is reserved for automated actions and is never valid on identity-required types.
 
 ---
 
@@ -280,6 +288,12 @@ Every high-risk subsystem has an independent kill switch via feature flags:
 | `FEATURE_SCHEDULER=false` | Automated job execution |
 | `FEATURE_MEMORY_VNEXT=false` | Memory writes (default: off) |
 | `FEATURE_SOUL=false` | Constitutional governance (not recommended) |
+| `FEATURE_HIVE=false` | Hive Agent Mesh sub-agents |
+| `FEATURE_TOOLS_UAB=false` | Universal Application Bridge (default: off) |
+| `FEATURE_FEDERATION=false` | Federation multi-instance coordination (default: off) |
+| `FEATURE_MCP=false` | MCP tool server access (default: off) |
+| `FEATURE_CONNECTORS=false` | External service connectors (default: off) |
+| `FEATURE_VAULT_SECRETS=true` | Vault-backed secret storage |
 
 **Safe defaults:**
 - No autonomous irreversible actions
@@ -426,6 +440,117 @@ After a task failure or MODIFY intervention, the Architect must produce a genuin
 - Task decomposition context does not leak between unrelated quests
 - Each agent's scoped Soul hash is recorded on the agent record for audit linkage
 - All state transitions, actions, and interventions produce durable receipts
+
+---
+
+## Federation Security
+
+The Federation Data Plane introduces inter-instance communication, requiring additional security measures.
+
+### Instance Identity (Ed25519)
+
+Every instance generates a unique Ed25519 keypair on first activation, stored in the Credential Vault:
+
+- **Private key** — Signs all outbound federation requests
+- **Public key** — Shared with peers during registration, used for verification
+- **Fingerprint** — SHA256[:16] of public key for compact identification
+
+### Request Signing
+
+All inter-instance HTTP requests are signed:
+
+- Headers: `X-Federation-Instance-Id`, `X-Federation-Timestamp`, `X-Federation-Nonce`, `X-Federation-Signature`
+- Canonical string: `"{METHOD}\n{PATH}\n{TIMESTAMP}\n{NONCE}\n{SHA256(BODY)}"`
+- Verification uses the peer's public key from the `TopologyRegistry`
+
+### Replay Protection
+
+- Nonce deduplication via SQLite-backed store
+- Timestamp window: ±30 seconds (configurable)
+- Nonces older than 120 seconds are pruned automatically
+
+### Soul Propagation Security
+
+3-tier risk model ensures critical changes (risk rules, scheduling boundaries) require per-instance confirmation. Soul consistency is tracked federation-wide (SYNCHRONIZED, PROPAGATING, STALE, DIVERGED).
+
+### Kill Switch Authority Hierarchy
+
+| Level | Scope | Who |
+|-------|-------|-----|
+| **L1 (Federation Root)** | Any instance | Root only |
+| **L2 (Local)** | Self only | Any instance |
+| **L3 (Automated)** | Context-dependent | Governance triggers |
+
+### Divergence Handling
+
+Connectivity loss triggers divergence detection. During divergence, T3 operations are queued. Reconciliation on reconnection classifies conflicts as COMPATIBLE (auto-merge) or INCOMPATIBLE (operator review required).
+
+### Circuit Breaker
+
+Per-peer circuit breakers prevent cascade failures: CLOSED → OPEN (5 failures) → HALF_OPEN (60s) → test → CLOSED or OPEN.
+
+For the full reference, see [Federation](federation.md).
+
+---
+
+## MCP Security
+
+The MCP subsystem introduces external tool server communication, governed by an 8-gate fail-closed pipeline.
+
+### Transport Restriction
+
+**HTTP+SSE only.** Stdio process spawning is explicitly excluded as an attack surface in a containerized governance system. This is a deliberate security decision.
+
+### 8-Gate Governance Pipeline
+
+Every MCP tool invocation passes through all gates sequentially:
+
+1. **Soul Permission** — Server+tool must be explicitly permitted in Soul `mcp_permissions`
+2. **Kill Switch** — Master (`FEATURE_MCP`) and per-server flags must be enabled
+3. **Server Status** — Server must be registered and not suspended/error
+4. **Network Allowlist** — Endpoint domain must be in network allowlist
+5. **Argument Screening** — 6 injection categories checked (SQL, path traversal, command injection, prompt injection, NoSQL, size limits)
+6. **Credential Resolution** — Vault credential resolved with scoped accessor ID
+7. **MCP Execution** — HTTP+SSE JSON-RPC 2.0 call
+8. **Receipt Persistence** — **Mandatory.** If receipt write fails, invocation result is discarded
+
+### Argument Screening (Deep Inspection)
+
+| Category | Patterns | Examples |
+|----------|----------|---------|
+| SQL Injection | 11 | `OR '1'='1'`, `UNION SELECT`, `SLEEP()` |
+| Path Traversal | 8 | `../`, URL-encoded, `/etc/passwd`, null bytes |
+| Command Injection | 7 | `;ls`, backticks, `$()`, reverse shell |
+| Prompt Injection | 8 | `<\|system\|>`, `IMPORTANT: ignore` |
+| NoSQL Injection | 3 | MongoDB `$` operators, `$where` |
+| Size Limits | — | 50KB per string, 200KB total |
+
+**Compound attack detection:** If 2+ categories trigger in the same invocation, severity escalates to **critical** and the invocation is hard-blocked.
+
+### Response Guard
+
+MCP server responses are scrubbed before entering the agent context:
+
+- **13 credential patterns** — OpenAI keys, GitHub PATs, Slack tokens, AWS keys, JWTs, connection strings, private keys
+- **6 prompt injection markers** — System role markers, instruction override directives
+- **500KB size limit** — Oversized responses truncated
+
+### Credential Isolation
+
+Each MCP server's credential is stored in the Vault with a scoped access policy: `accessor_id=f"mcp:{server_id}"`. A server can only access its own credential — no cross-server credential leakage.
+
+### Federation Ceiling Enforcement
+
+Child/peer MCP permissions are monotonically narrowed from the root Soul:
+
+- Child servers ⊆ root servers
+- Child tools ⊆ root tools per server
+- Child risk tier ≥ root risk tier (more restrictive)
+- Child wildcard only if root has wildcard
+
+This prevents federation children from escalating MCP access beyond what the root Soul permits.
+
+For the full reference, see [MCP](mcp.md).
 
 ---
 

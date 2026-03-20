@@ -28,9 +28,16 @@ def bal_db(tmp_path):
 @pytest.fixture
 def app_client(bal_db, monkeypatch):
     """Create a FastAPI TestClient with the client router mounted."""
-    # Ensure BAL feature flag passes at module level
+    # Ensure BAL feature flag passes at module level.
+    # The API's _check_bal_enabled() tries bare `import feature_flags` first
+    # (resolves via conftest sys.path), so we must patch both module instances.
     import src.core.feature_flags as ff
     monkeypatch.setattr(ff, "FEATURE_BAL", True)
+    try:
+        import feature_flags as ff_bare
+        monkeypatch.setattr(ff_bare, "FEATURE_BAL", True)
+    except ImportError:
+        pass
 
     repo = ClientRepository(bal_db)
     init_client_api(repo)

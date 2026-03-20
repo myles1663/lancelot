@@ -15,7 +15,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ class ValidateCredentialResponse(BaseModel):
     "/{connector_id}/credentials",
     response_model=StoreCredentialResponse,
 )
-def store_credential(connector_id: str, body: StoreCredentialRequest):
+def store_credential(connector_id: str, body: StoreCredentialRequest, request: Request):
     """Store a credential for a connector."""
     if _registry is None or _vault is None:
         raise HTTPException(status_code=500, detail="Credential API not initialized")
@@ -104,6 +104,16 @@ def store_credential(connector_id: str, body: StoreCredentialRequest):
             _apply_workspace_path(body.value)
         except Exception as exc:
             logger.warning("Workspace hot-swap failed: %s", exc)
+
+    # Governance receipt
+    from src.core.governance_receipts import emit_governance_receipt
+    from src.shared.receipts import ActionType
+    emit_governance_receipt(
+        request,
+        ActionType.CREDENTIAL_REGISTERED,
+        action_name="store_credential",
+        inputs={"connector_id": connector_id, "vault_key": body.vault_key, "type": body.type},
+    )
 
     return StoreCredentialResponse(stored=True, vault_key=body.vault_key)
 
@@ -138,7 +148,7 @@ def credential_status(connector_id: str):
     "/{connector_id}/credentials/{vault_key}",
     response_model=DeleteCredentialResponse,
 )
-def delete_credential(connector_id: str, vault_key: str):
+def delete_credential(connector_id: str, vault_key: str, request: Request):
     """Delete a credential from the vault."""
     if _registry is None or _vault is None:
         raise HTTPException(status_code=500, detail="Credential API not initialized")
@@ -149,6 +159,16 @@ def delete_credential(connector_id: str, vault_key: str):
 
     _vault.delete(vault_key)
     _vault.access_policy.revoke(connector_id, vault_key)
+
+    # Governance receipt
+    from src.core.governance_receipts import emit_governance_receipt
+    from src.shared.receipts import ActionType
+    emit_governance_receipt(
+        request,
+        ActionType.CREDENTIAL_REVOKED,
+        action_name="delete_credential",
+        inputs={"connector_id": connector_id, "vault_key": vault_key},
+    )
 
     return DeleteCredentialResponse(deleted=True)
 

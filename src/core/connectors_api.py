@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -235,7 +235,7 @@ def list_connectors():
 
 
 @router.post("/{connector_id}/enable", response_model=ConnectorToggleResponse)
-def enable_connector(connector_id: str):
+def enable_connector(connector_id: str, request: Request):
     """Enable a connector."""
     if connector_id not in _CONNECTOR_CLASSES:
         raise HTTPException(status_code=404, detail=f"Unknown connector: {connector_id}")
@@ -256,11 +256,21 @@ def enable_connector(connector_id: str):
         except Exception as e:
             logger.warning("Failed to register connector %s: %s", connector_id, e)
 
+    # Governance receipt
+    from src.core.governance_receipts import emit_governance_receipt
+    from src.shared.receipts import ActionType
+    emit_governance_receipt(
+        request,
+        ActionType.CONNECTOR_ENABLED,
+        action_name="enable_connector",
+        inputs={"connector_id": connector_id},
+    )
+
     return ConnectorToggleResponse(id=connector_id, enabled=True)
 
 
 @router.post("/{connector_id}/disable", response_model=ConnectorToggleResponse)
-def disable_connector(connector_id: str):
+def disable_connector(connector_id: str, request: Request):
     """Disable a connector."""
     if connector_id not in _CONNECTOR_CLASSES:
         raise HTTPException(status_code=404, detail=f"Unknown connector: {connector_id}")
@@ -275,6 +285,16 @@ def disable_connector(connector_id: str):
     if _registry:
         _registry.unregister(connector_id)
         logger.info("Connector disabled and unregistered: %s", connector_id)
+
+    # Governance receipt
+    from src.core.governance_receipts import emit_governance_receipt
+    from src.shared.receipts import ActionType
+    emit_governance_receipt(
+        request,
+        ActionType.CONNECTOR_DISABLED,
+        action_name="disable_connector",
+        inputs={"connector_id": connector_id},
+    )
 
     return ConnectorToggleResponse(id=connector_id, enabled=False)
 

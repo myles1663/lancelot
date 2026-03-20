@@ -45,6 +45,8 @@ def emit_hive_receipt(
     quest_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
     data_dir: str = "/home/lancelot/data",
+    operator_id: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> Receipt:
     """Create and persist a HIVE receipt.
 
@@ -56,6 +58,8 @@ def emit_hive_receipt(
         quest_id: Optional quest ID for grouping.
         metadata: Optional additional metadata.
         data_dir: Root data directory for receipt storage.
+        operator_id: Stable operator UUID (required for intervention receipts).
+        session_id: Ephemeral session UUID.
 
     Returns:
         The persisted Receipt instance.
@@ -75,6 +79,8 @@ def emit_hive_receipt(
         parent_id=parent_id,
         quest_id=quest_id,
         metadata={"hive_subsystem": event_type, **(metadata or {})},
+        operator_id=operator_id,
+        session_id=session_id,
     )
 
     service = get_receipt_service(data_dir)

@@ -309,6 +309,35 @@ Mapping common AI agent failure modes to the specific Lancelot mechanism that bl
 
 ---
 
+## Operator Identity
+
+Every human-initiated governance action carries an **OperatorIdentity** — the named human who initiated it. Automated actions carry the SYSTEM identity. A receipt with `operator_id=null` is automated; a receipt with a populated `operator_id` is a human decision. Auditors can tell the difference at a glance.
+
+### OperatorIdentity Model
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `operator_id` | UUID | Stable, deterministic — same across sessions for the same person. Derived via UUID5(namespace, username). |
+| `display_name` | string | Human-readable name (e.g., "Myles Hamilton"). |
+| `session_id` | UUID | Ephemeral — unique per War Room login session. |
+| `session_started_at` | ISO 8601 | When the session was created. |
+| `auth_method` | string | "local" (War Room login), "api_key" (CLI/API), or "system" (automated). |
+| `ip_address` | string | Client IP. Redacted in compliance exports. Never shown in UI. |
+
+### Identity Enforcement
+
+The receipt writer enforces identity requirements **at write time**. 25 governance receipt types are designated as `IDENTITY_REQUIRED` — if any of these receipt types is written without a valid OperatorIdentity, the write is blocked and a `GOVERNANCE_WRITE_ERROR` receipt is persisted as a fallback audit trail.
+
+Identity-required receipt types include: kill switch toggles, T3 approvals/rejections, Soul updates, agent lifecycle, credential management, MCP server management, connector toggles, allowlist modifications, scheduler CRUD, tool store toggles, APL rule decisions, and HIVE interventions.
+
+The SYSTEM identity (`operator_id="SYSTEM"`) is never valid on human-required receipt types — only human identities can authorize governance actions.
+
+### API-Key Attribution
+
+Requests authenticated via API key (not a War Room session) use `auth_method="api_key"` with the operator name derived from the `LANCELOT_OPERATOR_NAME` environment variable.
+
+---
+
 ## Configuration
 
 ### `config/governance.yaml`
@@ -368,3 +397,42 @@ The scoped Soul mechanism extends the existing governance model (Soul → Policy
 - **Hive overlay rules** — additional safety constraints specific to ephemeral multi-agent execution
 
 For the full Hive Agent Mesh architecture, see [Hive](hive.md). For Soul overlay authoring, see [Authoring Souls](authoring-souls.md).
+
+---
+
+## MCP Governance
+
+When `FEATURE_MCP` is enabled, MCP tool server access is governed by an **8-gate fail-closed pipeline** — the most heavily gated execution path in the system.
+
+### Soul MCP Permissions
+
+The Soul document declares MCP permissions under `mcp_permissions`:
+
+```yaml
+mcp_permissions:
+  - server_id: "github"
+    allowed_tools: ["list_repos", "get_issues"]
+    risk_tier: "T1"
+  - server_id: "database"
+    allowed_tools: ["*"]
+    risk_tier: "T2"
+```
+
+Server IDs not in the list are blocked. Tool names not in `allowed_tools` are blocked. Risk tiers follow the same T0–T3 model as the rest of governance.
+
+### Federation Ceiling
+
+In federation deployments, MCP permissions are **monotonically narrowed** from root to child:
+
+- Child server set ⊆ root server set
+- Child tool set ⊆ root tool set per server
+- Child risk tier ≥ root risk tier (more restrictive only)
+- Child wildcard only if root has wildcard
+
+This uses the same narrowing contract as HIVE scoped Souls — `enforce_mcp_ceiling()` in `src/mcp/federation_ceiling.py`.
+
+### Receipt Obligation
+
+The MCP proxy is **incapable of completing an invocation without generating a receipt**. The constructor raises `ValueError` if `receipt_manager` is None. If receipt persistence fails at Gate 8, the invocation result is discarded — ungoverned success is not allowed.
+
+For the full MCP reference, see [MCP](mcp.md). For argument screening and response guard details, see [Security — MCP Security](security.md#mcp-security).

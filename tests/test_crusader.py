@@ -37,7 +37,7 @@ class TestCrusaderModeState(unittest.TestCase):
     def test_deactivate_when_inactive(self):
         result = self.mode.deactivate()
         self.assertFalse(self.mode.is_active)
-        self.assertIn("Normal mode restored", result)
+        self.assertIn("not active", result)
 
 
 class TestCrusaderModeTriggers(unittest.TestCase):
@@ -218,19 +218,27 @@ class TestCrusaderGatewayIntegration(unittest.TestCase):
 
     def setUp(self):
         from fastapi.testclient import TestClient
-        from gateway import app, crusader_mode, onboarding_orch
+        from gateway import app, crusader_mode, onboarding_orch, main_orchestrator
 
-        # Ensure onboarding is in READY state (remove LOCKDOWN, ensure USER.md exists)
-        lock_file = os.path.join(onboarding_orch.data_dir, "LOCKDOWN")
-        if os.path.exists(lock_file):
-            os.remove(lock_file)
+        # Enable dev mode so verify_token passes without a real token
+        os.environ["LANCELOT_DEV_MODE"] = "true"
+        import gateway
+        gateway.DEV_MODE = True
 
-        user_file = os.path.join(onboarding_orch.data_dir, "USER.md")
-        if not os.path.exists(user_file) or "OnboardingComplete: True" not in open(user_file).read():
-            with open(user_file, "w") as f:
-                f.write("# User Profile\n- Name: TestUser\n- Role: Commander\n- Bonded: True\n- OnboardingComplete: True")
+        # Force onboarding into READY state so the /chat endpoint reaches
+        # the crusader intercept path instead of routing through onboarding.
+        # We also patch _determine_state because the /chat handler re-calls it.
+        onboarding_orch.state = "READY"
+        self._state_patcher = patch.object(
+            onboarding_orch, "_determine_state", return_value="READY"
+        )
+        self._state_patcher.start()
 
-        onboarding_orch.state = onboarding_orch._determine_state()
+        # Mock the audit logger so crusader intercept doesn't need a real LLM
+        self._audit_patcher = patch.object(
+            main_orchestrator.audit_logger, "log_event"
+        )
+        self._audit_patcher.start()
 
         self.client = TestClient(app)
         self.crusader_mode = crusader_mode
@@ -273,15 +281,12 @@ class TestCrusaderGatewayIntegration(unittest.TestCase):
 
     def tearDown(self):
         self.crusader_mode.deactivate()
-        # Restore original USER.md if it was overwritten
-        from gateway import onboarding_orch
-        user_file = os.path.join(onboarding_orch.data_dir, "USER.md")
-        if os.path.exists(user_file):
-            with open(user_file, "r") as f:
-                content = f.read()
-            if "Name: TestUser" in content:
-                with open(user_file, "w") as f:
-                    f.write("# User Profile\n- Name: Arthur\n- Role: Commander\n- Bonded: True\n- OnboardingComplete: True")
+        self._state_patcher.stop()
+        self._audit_patcher.stop()
+        # Restore dev mode setting
+        os.environ.pop("LANCELOT_DEV_MODE", None)
+        import gateway
+        gateway.DEV_MODE = False
 
 
 if __name__ == "__main__":

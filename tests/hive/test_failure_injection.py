@@ -382,7 +382,7 @@ class TestAgentTimeoutAndCleanup:
             # Wait for first action to start, then kill
             barrier.wait(timeout=5)
             time.sleep(0.05)
-            mgr.kill(record.agent_id, "Test kill mid-execution")
+            mgr.kill(record.agent_id, "Test kill mid-execution", operator_id="test-op", session_id="test-sess")
 
             result = future.result(timeout=10)
             # Should not have executed all 10 actions
@@ -496,7 +496,7 @@ class TestConcurrentAgentConflict:
 
             barrier.wait(timeout=5)
             # Kill while executing
-            mgr.kill(record.agent_id, "Race kill")
+            mgr.kill(record.agent_id, "Race kill", operator_id="test-op", session_id="test-sess")
 
             # Should complete without crash or deadlock
             result = future.result(timeout=10)
@@ -535,7 +535,7 @@ class TestConcurrentAgentConflict:
                 futures.append(f)
 
             time.sleep(0.05)
-            mgr.kill_all("Emergency shutdown")
+            mgr.kill_all("Emergency shutdown", operator_id="test-op", session_id="test-sess")
 
             # All futures should resolve (no hangs)
             for f in futures:

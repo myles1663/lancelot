@@ -2,7 +2,8 @@
 War Room Authentication API.
 
 Validates username/password against environment variables and issues
-session tokens with configurable timeout.
+session tokens with configurable timeout. Each session carries an
+OperatorIdentity that is injected into governance receipts.
 """
 
 import hashlib
@@ -11,14 +12,20 @@ import os
 import time
 import uuid
 import logging
+from datetime import datetime, timezone
+from typing import Optional
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+
+from src.core.operator_identity import OperatorIdentity, resolve_operator_id
 
 logger = logging.getLogger("lancelot.auth")
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# Session store: {token: {"expires_at": float, "username": str}}
+# Session store: {token: {"expires_at": float, "username": str,
+#                          "operator_identity": OperatorIdentity}}
 _sessions: dict = {}
 
 _SESSION_TIMEOUT = int(os.getenv("WARROOM_SESSION_TIMEOUT_MINUTES", "30")) * 60
@@ -98,16 +105,30 @@ async def login(request: Request):
         return JSONResponse(status_code=401, content={"error": "Invalid credentials"})
 
     token = str(uuid.uuid4())
+    session_id = str(uuid.uuid4())
+    now_iso = datetime.now(timezone.utc).isoformat()
+    client_ip = request.client.host if request.client else ""
+
+    operator_identity = OperatorIdentity(
+        operator_id=resolve_operator_id(username),
+        display_name=username,
+        session_id=session_id,
+        session_started_at=now_iso,
+        auth_method="local",
+        ip_address=client_ip,
+    )
+
     _sessions[token] = {
         "expires_at": time.time() + _SESSION_TIMEOUT,
         "username": username,
+        "operator_identity": operator_identity,
     }
     _cleanup_expired()
 
     if _audit_logger:
         _audit_logger.log_event(
             "AUTH_LOGIN_SUCCESS",
-            f"User {username} logged in",
+            f"User {username} logged in (operator_id={operator_identity.operator_id}, session={session_id})",
             user=username,
         )
 
@@ -115,6 +136,8 @@ async def login(request: Request):
         "token": token,
         "expires_in": _SESSION_TIMEOUT,
         "username": username,
+        "operator_id": operator_identity.operator_id,
+        "session_id": session_id,
     }
 
 
@@ -163,3 +186,49 @@ def verify_warroom_session(request: Request) -> bool:
         del _sessions[token]
         return False
     return True
+
+
+def resolve_operator_identity(request: Request) -> Optional[OperatorIdentity]:
+    """Resolve OperatorIdentity from a request's session token.
+
+    Returns the OperatorIdentity if the request carries a valid War Room
+    session. Returns None if the request is unauthenticated or uses only
+    an API token (not a session).
+
+    For API-token-only requests (no War Room session), callers can
+    construct an OperatorIdentity from LANCELOT_OPERATOR_NAME env var
+    with auth_method="api_key".
+    """
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    token = auth[7:]
+    session = _sessions.get(token)
+    if not session:
+        return None
+    if session["expires_at"] < time.time():
+        del _sessions[token]
+        return None
+    # Refresh session timeout on activity
+    session["expires_at"] = time.time() + _SESSION_TIMEOUT
+    return session.get("operator_identity")
+
+
+def get_api_key_identity(request: Request) -> OperatorIdentity:
+    """Build an OperatorIdentity for API-key-authenticated requests.
+
+    Uses LANCELOT_OPERATOR_NAME env var (defaults to War Room username).
+    auth_method is set to "api_key".
+    """
+    operator_name = os.getenv("LANCELOT_OPERATOR_NAME", "")
+    if not operator_name:
+        operator_name = _get_warroom_username() or "operator"
+    client_ip = request.client.host if request.client else ""
+    return OperatorIdentity(
+        operator_id=resolve_operator_id(operator_name),
+        display_name=operator_name,
+        session_id="",
+        session_started_at="",
+        auth_method="api_key",
+        ip_address=client_ip,
+    )

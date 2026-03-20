@@ -181,6 +181,9 @@ async def approve_item(approval_id: str, request: Request):
         data = await request.json() if request.headers.get("content-type") else {}
         reason = data.get("reason", "Approved via War Room")
 
+        from src.core.governance_receipts import emit_governance_receipt
+        from src.shared.receipts import ActionType
+
         # Try MCP Sentry T3 action first
         if _mcp_sentry and approval_id in _mcp_sentry.pending_requests:
             req = _mcp_sentry.pending_requests[approval_id]
@@ -193,6 +196,11 @@ async def approve_item(approval_id: str, request: Request):
                     decision="approved",
                     reason=reason,
                 )
+                emit_governance_receipt(
+                    request, ActionType.MCP_T3_APPROVED,
+                    action_name="approve_sentry",
+                    inputs={"approval_id": approval_id, "tool": req.get("tool"), "reason": reason},
+                )
                 return {"status": "approved", "id": approval_id, "type": "sentry"}
 
         # Try graduation proposal
@@ -200,6 +208,11 @@ async def approve_item(approval_id: str, request: Request):
             for p in _trust_ledger.pending_proposals():
                 if p.id == approval_id:
                     _trust_ledger.apply_graduation(approval_id, approved=True, reason=reason)
+                    emit_governance_receipt(
+                        request, ActionType.T3_APPROVED,
+                        action_name="approve_graduation",
+                        inputs={"proposal_id": approval_id, "capability": p.capability, "reason": reason},
+                    )
                     return {"status": "approved", "id": approval_id, "type": "graduation"}
 
         # Try APL rule
@@ -207,6 +220,11 @@ async def approve_item(approval_id: str, request: Request):
             for rule in _rule_engine.list_rules(status="proposed"):
                 if rule.id == approval_id:
                     _rule_engine.activate_rule(approval_id)
+                    emit_governance_receipt(
+                        request, ActionType.APL_RULE_APPROVED,
+                        action_name="approve_apl_rule",
+                        inputs={"rule_id": approval_id, "rule_name": rule.name, "reason": reason},
+                    )
                     return {"status": "approved", "id": approval_id, "type": "apl_rule"}
 
         return _safe_error(404, f"Approval item {approval_id} not found")
@@ -222,6 +240,9 @@ async def deny_item(approval_id: str, request: Request):
         data = await request.json() if request.headers.get("content-type") else {}
         reason = data.get("reason", "Denied via War Room")
 
+        from src.core.governance_receipts import emit_governance_receipt
+        from src.shared.receipts import ActionType
+
         # Try MCP Sentry T3 action first
         if _mcp_sentry and approval_id in _mcp_sentry.pending_requests:
             req = _mcp_sentry.pending_requests[approval_id]
@@ -234,6 +255,11 @@ async def deny_item(approval_id: str, request: Request):
                     decision="denied",
                     reason=reason,
                 )
+                emit_governance_receipt(
+                    request, ActionType.MCP_T3_REJECTED,
+                    action_name="deny_sentry",
+                    inputs={"approval_id": approval_id, "tool": req.get("tool"), "reason": reason},
+                )
                 return {"status": "denied", "id": approval_id, "type": "sentry"}
 
         # Try graduation proposal
@@ -241,6 +267,11 @@ async def deny_item(approval_id: str, request: Request):
             for p in _trust_ledger.pending_proposals():
                 if p.id == approval_id:
                     _trust_ledger.apply_graduation(approval_id, approved=False, reason=reason)
+                    emit_governance_receipt(
+                        request, ActionType.T3_REJECTED,
+                        action_name="deny_graduation",
+                        inputs={"proposal_id": approval_id, "capability": p.capability, "reason": reason},
+                    )
                     return {"status": "denied", "id": approval_id, "type": "graduation"}
 
         # Try APL rule
@@ -248,6 +279,11 @@ async def deny_item(approval_id: str, request: Request):
             for rule in _rule_engine.list_rules(status="proposed"):
                 if rule.id == approval_id:
                     _rule_engine.decline_rule(approval_id, reason=reason)
+                    emit_governance_receipt(
+                        request, ActionType.APL_RULE_REJECTED,
+                        action_name="deny_apl_rule",
+                        inputs={"rule_id": approval_id, "rule_name": rule.name, "reason": reason},
+                    )
                     return {"status": "denied", "id": approval_id, "type": "apl_rule"}
 
         return _safe_error(404, f"Approval item {approval_id} not found")

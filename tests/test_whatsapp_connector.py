@@ -26,8 +26,9 @@ class TestManifest:
         assert whatsapp.manifest.target_domains == ["graph.facebook.com"]
 
     def test_has_credentials(self, whatsapp):
-        assert len(whatsapp.manifest.required_credentials) == 1
+        assert len(whatsapp.manifest.required_credentials) == 2
         assert whatsapp.manifest.required_credentials[0].vault_key == "whatsapp.access_token"
+        assert whatsapp.manifest.required_credentials[1].vault_key == "whatsapp.phone_number_id"
 
     def test_does_not_access(self, whatsapp):
         dna = whatsapp.manifest.does_not_access

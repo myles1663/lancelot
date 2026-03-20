@@ -5,6 +5,170 @@ All notable changes to Project Lancelot will be documented in this file.
 > **Note:** Internal development used version numbers v8.x. The first public release is v0.1.0.
 > All entries below represent the cumulative development history leading to public launch.
 
+## [Unreleased]
+
+### Added — Incident Response Playbooks
+- **Incident Response subsystem** (`src/incidents/`, 7 modules): Structured response protocols for every governance event the platform can generate. Feature-gated behind `FEATURE_INCIDENT_RESPONSE` (default: false).
+- **Incident models** (`src/incidents/models.py`): `IncidentRecord`, `IncidentCategory` (5 categories: governance, security, cost, availability, compliance), `IncidentStatus`, `IncidentSeverity`, `TimelineEntry`.
+- **Incident store** (`src/incidents/store.py`): JSON file persistence in `data/incidents/`, singleton `IncidentStore`.
+- **Trigger engine** (`src/incidents/trigger_engine.py`): 12 trigger rules with fixed-window burst counters and per-trigger dedup (configurable window, dedup key: trigger_type + source_identifier).
+- **Receipt hook** (`src/incidents/receipt_hook.py`): Receipt bridge integration via non-blocking callback for trigger evaluation.
+- **Playbook registry** (`src/incidents/playbooks.py`): YAML playbook loader with industry variant overlay support (append-after with explicit `insert_after` field).
+- **Playbook API** (`src/incidents/playbook_api.py`): 3 REST endpoints — `GET /api/playbooks`, `GET /api/playbooks/{name}`, `POST /api/playbooks/reload`.
+- **Report generator** (`src/incidents/report_generator.py`): PDF incident report generation using shared ReportLab helpers.
+- **Incident API** (`src/incidents/api.py`): 11 REST endpoints at `/api/incidents/` — list, detail, create, update, close, timeline, assign, escalate, stats, export PDF, bulk operations.
+- **Shared PDF helpers** (`src/shared/pdf_helpers.py`): Extracted shared ReportLab utilities — color palette, styles, table builder, cover page. Used by incident report generator and available to other subsystems.
+- **12 base playbooks** (`playbooks/`): governance/ (3), security/ (3), cost/ (2), availability/ (2), compliance/ (3). YAML-defined response protocols with step-by-step checklists.
+- **3 industry variant overlays** (`playbooks/variants/`): finance/, healthcare/, regulated-general/. Append additional steps to base playbooks via `insert_after` field.
+- **10 new receipt types** (`src/shared/receipts.py`): INCIDENT_OPENED, INCIDENT_CLOSED, INCIDENT_ESCALATED, INCIDENT_ASSIGNED, INCIDENT_NOTE_ADDED, INCIDENT_TIMELINE_ENTRY, PLAYBOOK_STARTED, PLAYBOOK_STEP_COMPLETED, PLAYBOOK_COMPLETED, PLAYBOOK_UPDATED. 8 identity-required (all except OPENED and PAGED).
+- **8 new identity-required types** (`src/core/operator_identity.py`): All incident receipt types except INCIDENT_OPENED and INCIDENT_PAGED.
+- **Feature flag** (`src/core/feature_flags.py`): `FEATURE_INCIDENT_RESPONSE` (default: false).
+- **Webhook category** (`src/observability/webhook_categories.py`): `INCIDENT_RESPONSE` category with 10 receipt type mappings.
+- **Receipt bridge hook** (`src/observability/receipt_bridge.py`): Incident trigger evaluation integrated into receipt creation path.
+- **Gateway mounts** (`src/core/gateway.py`): Incident API and Playbook API routers registered.
+- **War Room Incidents Dashboard** (`src/warroom/src/pages/IncidentsDashboard.tsx`): Full incidents panel with stats cards, incident table, detail view, playbook checklist, timeline, and close flow. Route at `/incidents`.
+- **War Room API client** (`src/warroom/src/api/incidents.ts`): TypeScript API client for incident and playbook endpoints.
+
+### Added — Soul Template Library (Phase A + B + D)
+- **Soul Template Registry** (`src/core/soul/templates.py`): Template loader that walks the `templates/` directory tree, parses YAML files, strips `_template_metadata` key, validates remaining dict against Soul Pydantic model + 7-invariant linter. Caches loaded templates with `invalidate_cache()` for hot-reload.
+- **Template Metadata schema** (`TemplateMetadata`): Pydantic model for display info — name, display_name, description, industry, version, author, tags. Stripped before Soul validation.
+- **Template Application flow** (`apply_template()`): Deep-merges optional customizations into template, re-validates against Soul model + linter, creates a Soul Amendment Proposal with `author: "template:{template_name}"`, goes through full propose→approve→activate pipeline.
+- **Template REST API** (`src/core/soul/template_api.py`): 4 endpoints at `/soul/templates/*` — list (with optional industry filter), detail (full YAML), apply (creates proposal + emits receipt), reload (cache invalidation).
+- **3 Finance templates** (`templates/finance/`): `finance-reporting-analyst` (FP&A/CFO), `finance-compliance-monitor` (audit/risk/AML), `finance-internal-ops` (AP/AR/treasury). All pass 7 linter invariants. Written against actual Soul Pydantic schema.
+- **SOUL_TEMPLATE_APPLIED receipt type** (`src/shared/receipts.py`): New ActionType for template application events. Identity-required — added to `IDENTITY_REQUIRED_TYPES` in `operator_identity.py`.
+- **War Room Templates tab** (`SoulInspector.tsx`): New "Templates" tab in Soul Inspector with template browser (industry filter, card grid, tag display), template detail view (full YAML preview), and "Apply as Proposal" button. Applied templates appear in Pending Proposals section for approve→activate.
+- **Gateway registration** (`gateway.py`): Template API router mounted alongside Soul API router.
+
+### Added — A2A Protocol Support (Phase A + B + C + D)
+- **A2A subsystem** (`src/a2a/`, 8 modules): Governed Agent-to-Agent protocol support implementing Google's A2A v0.2 spec. Every cross-agent interaction is Soul-evaluated, receipted, attributed, and killable. Feature-gated behind `FEATURE_A2A` (default: false).
+- **Soul A2A permission blocks** (`src/core/soul/store.py`): Two new optional blocks — `InboundA2APermissions` (allow_inbound, default_trust_tier, allowed_callers, blocked_callers, require_agent_card, skill_filter, require_preregistration) and `OutboundA2APermissions` (allow_outbound, allowed_targets, max_delegation_depth, require_agent_card_verification). Absent = A2A disabled (fail-closed).
+- **Inbound A2A Server** (`server.py`): Protocol-standard endpoints at `/.well-known/agent.json` (Agent Card), `/a2a/tasks/send` (task submission), `/a2a/tasks/{task_id}` (status), `/a2a/tasks/{task_id}/subscribe` (SSE streaming). 8-stage governance pipeline: Authentication → Caller Identity Resolution → Skill Security Pipeline → Soul Evaluation → Risk Classification → T3 Approval Gate → Governed Execution → Response and Trust Update. Lancelot-to-Lancelot calls rejected with Federation API guidance.
+- **Outbound A2A Client** (`client.py`, `outbound_pipeline.py`): 10-stage outbound governance pipeline via governed connector proxy pattern. PII scrubbing on both outbound content and response artifacts. Delegation depth enforcement via `max_delegation_depth`. Polling-based status monitoring (SSE streaming planned Phase 3).
+- **Agent Card Generator** (`agent_card.py`): Dynamic generation from active Soul. Advertises only `a2a_visible` skills. Optional `governance_declaration` extension declaring Lancelot's governance layer. Regenerates on Soul update with caching.
+- **A2A Remote Agent Registry** (`registry.py`): SQLite-backed registry with WAL mode. Directional trust tiers (inbound/outbound tracked independently). Auto-registration on first inbound contact at Soul's `default_trust_tier`. Per-agent kill switches (`A2A_[AGENT_ID]`). Trust tier graduation (success) and reset (single failure → T3).
+- **A2A Management API** (`api.py`): 10 endpoints at `/api/a2a/*` — status, agent CRUD, Agent Card verification, own card view/regeneration, outbound delegation, receipt listing.
+- **War Room A2A Section** (`A2ASection.tsx`): Dedicated section in Connectors panel. Remote agent list with direction/framework/trust tier/card status badges. Agent detail view with interaction history. Register form. Lancelot Agent Card viewer with regenerate button.
+- **17 new receipt types**: A2A_TASK_RECEIVED, A2A_INBOUND_BLOCKED, A2A_TASK_EXECUTING, A2A_TASK_COMPLETED, A2A_DELEGATION_SENT, A2A_OUTBOUND_BLOCKED, A2A_DELEGATION_COMPLETED, A2A_DELEGATION_FAILED, T3_A2A_INBOUND_APPROVAL_REQUEST, T3_A2A_INBOUND_APPROVED, T3_A2A_INBOUND_REJECTED, T3_A2A_OUTBOUND_APPROVAL_REQUEST, T3_A2A_OUTBOUND_APPROVED, T3_A2A_OUTBOUND_REJECTED, A2A_AGENT_REGISTERED, A2A_AGENT_CARD_UPDATED, A2A_AGENT_CARD_FETCHED. 5 identity-required.
+- **Feature flag**: `FEATURE_A2A` (default: false).
+
+### Added — Time-Travel Debugging (Phase A + B + C)
+- **Time-Travel subsystem** (`src/timetravel/`, 5 modules): Governed fork/replay of quest histories under full Soul governance. Feature-gated behind `FEATURE_TIME_TRAVEL` (default: false).
+- **Soul fork_permissions schema** (`src/core/soul/store.py`): New `ForkPermissions` Pydantic model added to Soul — `allow_fork` (default false), `require_approval_tier` (default T3), `modifiable_fields` (allowlist), `prohibited_modifications` (architecturally enforced: operator_id, session_id, quest_id, timestamp, id).
+- **Fork Permission Evaluator** (`fork_permissions.py`): Three-mode validation — INSPECT (always allowed, read-only), REPLAY (requires allow_fork), FORK (requires allow_fork + field validation against modifiable_fields allowlist and prohibited_modifications blacklist). Emits FORK_SOUL_REJECTED receipts on denial.
+- **State Snapshot Reader** (`state_snapshot.py`): Reconstructs governance context at any receipt — Soul version, kill switch state (replayed from receipt history), trust tier, cost data, feature flags, receipt chain. Used by State Inspector UI.
+- **Resume Engine** (`resume_engine.py`): 8-stage fork creation pipeline (Receipt Selection → State Modification → Soul Validation → Risk Reclassification → T3 Approval Gate → Fork Quest Creation → Governed Execution → Fork Receipt). Simpler replay pipeline. T3 approval via trust tier check (synchronous in Phase B, async War Room approval in future phase).
+- **Time-Travel API** (`api.py`): 6 REST endpoints at `/api/timetravel/*` — status, quest receipt chain, receipt snapshot, inspect, replay, fork. Fork/replay require operator identity.
+- **War Room Time-Travel Debugger** (`TimeTravelDebugger.tsx`): Full page with Quest ID search, SVG-based DAG Navigator (receipt chain visualization with status-colored nodes, parent edges, selection), Receipt Detail panel (inputs/outputs collapsible), State Inspector (Soul version, trust tier, kill switches, cost data, governance context flags), Fork Confirmation modal (replay/fork mode toggle, JSON modifications editor, approval tier display).
+- **7 new receipt types**: `QUEST_FORKED`, `QUEST_REPLAYED`, `TIME_TRAVEL_INSPECT`, `T3_FORK_APPROVAL_REQUEST`, `T3_FORK_APPROVED`, `T3_FORK_REJECTED`, `FORK_SOUL_REJECTED`. 5 are identity-required (QUEST_FORKED, QUEST_REPLAYED, TIME_TRAVEL_INSPECT, T3_FORK_APPROVED, T3_FORK_REJECTED).
+- **Feature flag**: `FEATURE_TIME_TRAVEL` (default: false).
+
+### Added — Observability Integration (Phase A + B + C + D)
+- **Observability subsystem** (`src/observability/`, 9 modules): Enterprise observability layer translating governance data into OTel traces/metrics, webhook events, and REST metrics. Gated behind `FEATURE_OBSERVABILITY` (default: false).
+- **OpenTelemetry Export** (`otel_provider.py`, `span_mapper.py`, `metrics.py`): OTLP/HTTP exporter with receipt-to-span mapping (quest_id=trace, receipt_id=span, parent_id=parent_span). 12 governance metric instruments (actions.total, actions.blocked, kill_switches.active, t3_approvals.pending, t3_approvals.response_time_ms, soul.version_changes, trust_ledger.tier_distribution, cost.usd_total, cost.usd_rate, mcp.tool_calls, hive.active_agents, receipts.chain_lag_ms). Tier-aware sampling: T2/T3 always 100%, T0/T1 configurable (default 10%), governance events never sampled out.
+- **Receipt Bridge** (`receipt_bridge.py`): Non-blocking hook in ReceiptService.create() that exports OTel spans, updates metrics, and delivers webhooks on every receipt write. Failure never blocks the receipt write path.
+- **Webhook Engine** (`webhook_engine.py`, `webhook_categories.py`): At-least-once delivery with HMAC-SHA256 signed payloads. 7 event categories (GOVERNANCE_CRITICAL, GOVERNANCE_APPROVAL, SECURITY, COST_THRESHOLD, SOUL_CHANGES, TASK_LIFECYCLE, ALL). Retry schedule: immediate → 30s → 2m → 10m → 30m → 2h. GOVERNANCE_CRITICAL always retried to exhaustion. WEBHOOK_DELIVERY_FAILED receipt on exhaustion.
+- **Metrics API** (`metrics_api.py`): 10 read-only endpoints at `/api/metrics/*` with cursor pagination and soul_version envelope — summary, receipts, receipt detail, actions, cost, trust-ledger, soul, kill-switches, hive, webhooks/status. Thin wrappers over existing data access.
+- **Observability Config API** (`api.py`): Configuration CRUD at `/api/observability/*` — OTel endpoint/auth/sampling, webhook endpoint registration with HMAC secrets, metrics API toggle.
+- **Dashboard Templates** (`docs/dashboards/`): 4 importable dashboard files — Grafana Governance Ops, Grafana Security Ops, Datadog Governance Ops, Datadog Security Ops. All panels reference OTel metric names.
+- **New receipt types**: `WEBHOOK_DELIVERY_FAILED` (SYSTEM), `METRICS_API_QUERY` (identity-required).
+- **Feature flag**: `FEATURE_OBSERVABILITY` (default: false).
+- **Dependencies**: `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http` (HTTP only, no grpc).
+
+### Added — Federation Data Plane
+- **Federation subsystem** (`src/federation/`, 30 modules, ~9,000 lines): Multi-instance coordination with Soul-governed topology, task handoff, and cross-instance audit trails.
+- **Deployment modes**: STANDALONE (single instance), HIERARCHICAL (parent-child tree with root Soul governance), FEDERATED (peer mesh, no single root).
+- **Instance identity**: Ed25519 keypair per instance, generated on first activation, stored in Credential Vault. All inter-instance HTTP requests signed with canonical string construction + replay protection (nonce deduplication, ±30s timestamp window).
+- **Heartbeat system**: Configurable interval (default 2s), 4-level staleness tracking (FRESH < 10s, WARNING 10–20s, CRITICAL 20–30s, LOST > 30s). Payload includes soul_version_hash, budget_utilization, active_task_count.
+- **Soul propagation (3-tier model)**: T1 (minor/tone changes, direct push), T2 (autonomy posture changes, pause → push → activate → resume), T3 (risk rule changes, full stop → push → per-instance confirmation). 4 consistency states: SYNCHRONIZED, PROPAGATING, STALE, DIVERGED.
+- **Task handoff protocol**: Structured task transfer with HandoffContract (assumptions, success criteria, schema), Soul context, and receipt chain. States: INITIATED → ACCEPTED → IN_PROGRESS → COMPLETED (or REJECTED/FAILED).
+- **Federation kill switches**: 3-level authority hierarchy (L1 root, L2 local, L3 automated). 5 command types: LOCAL_KILL, FEDERATION_KILL, TARGETED_KILL, CASCADING_KILL, FEATURE_KILL.
+- **Cost governance**: Real-time cost aggregation via heartbeat payloads. 4 threshold levels: 75% WARNING, 85% SPAWN_RESTRICTED, 95% SPAWN_GATED, 100% HARD_STOP.
+- **Divergence detection**: Connectivity loss tracking with reconciliation (CONNECTED → DIVERGED → RECONNECTING → RECONCILED). Outcomes: COMPATIBLE (merge) or INCOMPATIBLE (operator review).
+- **Contradiction detector**: Receipt DAG consistency checking against HandoffContract assumptions. 3 assumption categories (FACTUAL, CONSTRAINT, TEMPORAL), 4 severity levels.
+- **Graph Builder**: Visual topology editor in War Room. Nodes (instances with budget, HIVE config), edges (hierarchical/federated), 5-dimension edge validation, deployment gates (GREEN/YELLOW/RED).
+- **Federation audit engine**: Cross-instance forensic timeline reconstruction. 14 audit event types covering handoffs, Soul pushes, kills, divergence, contradictions, cost thresholds, peer registration.
+- **Peer registry**: SQLite-backed with WAL mode, thread-safe access, nonce replay protection with automatic 120s pruning.
+- **Circuit breaker**: Per-peer resilience (CLOSED → OPEN after 5 failures → HALF_OPEN after 60s → test request).
+- **Federation API**: 20+ REST endpoints at `/api/federation/` covering state/health, discovery, peer registration, Soul management, task handoff, governance commands, and Graph Builder CRUD.
+- **War Room pages**: FederationOverview (status dashboard), FederationAudit (audit trail viewer), GraphBuilder (topology editor with deployment gates).
+- **Configuration**: `config/federation.yaml` with heartbeat, staleness, TLS, topology, timeout, budget, transport, circuit breaker, auth, and cost reporting settings.
+- **Feature flag**: `FEATURE_FEDERATION` (default: false).
+
+### Added — MCP (Model Context Protocol) Governance
+- **MCP subsystem** (`src/mcp/`, 12 modules): Governed access to external MCP-compliant tool servers with 8-gate fail-closed governance pipeline.
+- **Governance pipeline** (8 gates, sequential, fail-closed): (1) Soul Permission, (2) Kill Switch, (3) Server Status, (4) Network Allowlist, (5) Argument Screening, (6) Credential Resolution, (7) MCP Execution, (7b) Response Guard, (8) Receipt Persistence. Receipt write failure = result discarded (fourth fail-closed gate).
+- **GovernedMCPProxy** (`src/mcp/proxy.py`): Single entry point for all MCP invocations. Constructor requires receipt_manager (ungoverned calls impossible by construction).
+- **MCPPermissionEvaluator** (`src/mcp/permissions.py`): Soul-gated access control with federation ceiling enforcement. MCP risk tiers: T0 (read-only), T1 (reversible), T2 (controlled, default), T3 (irreversible).
+- **MCPArgumentScreener** (`src/mcp/argument_screen.py`): Deep argument inspection with 6 injection pattern categories — SQL injection (11 patterns), path traversal (8), command injection (7), prompt injection (8), NoSQL injection (3), size limits (50KB/string, 200KB total). Compound attack detection: 2+ categories = critical severity hard block.
+- **MCPResponseGuard** (`src/mcp/response_guard.py`): Credential leak scrubbing (13 patterns: OpenAI keys, GitHub PATs, Slack tokens, AWS keys, JWTs, connection strings, private keys) + prompt injection marker removal (6 patterns). 500KB response size limit.
+- **MCPNetworkPolicy** (`src/mcp/network_policy.py`): Registration-time endpoint validation — HTTPS enforcement, blocked cloud metadata endpoints, private IP ranges blocked, embedded credentials rejected, domain resolution check.
+- **MCPClient** (`src/mcp/client.py`): HTTP+SSE transport only (stdio process spawning explicitly excluded as attack surface). JSON-RPC 2.0 protocol. Transport restriction documented for patent examination.
+- **MCPServerRegistry** (`src/mcp/registry.py`): Vault-backed server config store. Auth types: NONE, API_KEY, OAUTH2, BASIC, CUSTOM_HEADER. Status lifecycle: REGISTERED → VALIDATED → ACTIVE (or SUSPENDED/ERROR). Scoped credential access per server.
+- **MCPReceiptManager** (`src/mcp/receipts.py`): Mandatory audit trail. Receipt types: MCP_TOOL_CALL, MCP_TOOL_BLOCKED. 8 block gates. Sensitive key redaction in receipt storage.
+- **Federation ceiling** (`src/mcp/federation_ceiling.py`): Monotonic MCP permission narrowing using same HIVE contract. 4 rules: server subset, tool subset, tier elevation, wildcard restriction. Enforced during Soul propagation, peer registration, and HIVE scoped Soul generation.
+- **Kill switches**: Master (`FEATURE_MCP`) + per-server (`MCP_SERVER_<ID>`) flags.
+- **MCP API**: 8 REST endpoints at `/api/mcp/` — server CRUD, status management, connection testing, credential storage, receipt summary.
+- **War Room integration**: MCPSection component in Connectors page — server list with status/risk badges, register form, test connection, credential management, suspend/activate/unregister controls.
+- **Feature flag**: `FEATURE_MCP` (default: false).
+
+### Added — Operator Identity (Phase A1 + A2)
+- **OperatorIdentity model** (`src/core/operator_identity.py`): Frozen dataclass with operator_id (stable UUID5), display_name, session_id, auth_method, ip_address. Deterministic UUID derivation via `resolve_operator_id()`.
+- **SYSTEM_IDENTITY constant**: Reserved identity for automated actions (operator_id="SYSTEM", auth_method="system").
+- **IDENTITY_REQUIRED_TYPES**: 25 receipt types that must carry human OperatorIdentity — enforced at the receipt writer level with IdentityRequiredError.
+- **Receipt schema v2**: Added `operator_id` and `session_id` columns to receipts SQLite table with automatic v1→v2 migration.
+- **GOVERNANCE_WRITE_ERROR**: Fallback audit trail receipt when identity enforcement fails — ensures blocked governance actions are never silent.
+- **Auth API extensions** (`src/core/auth_api.py`): `resolve_operator_identity()` resolves identity from War Room session, `get_api_key_identity()` for API-key-only requests.
+- **Governance receipt helper** (`src/core/governance_receipts.py`): One-call `emit_governance_receipt()` resolves identity from request and persists a governance receipt.
+- **Phase A2 wiring** — governance receipts emitted in 8 API files:
+  - `flags_api.py`: KILL_SWITCH_ISSUED/LIFTED on toggle/set
+  - `connectors_api.py`: CONNECTOR_ENABLED/DISABLED on enable/disable
+  - `credential_api.py`: CREDENTIAL_REGISTERED/REVOKED on store/delete
+  - `scheduler_api.py`: SCHEDULER_TASK_DELETED on delete
+  - `apl_api.py`: APL_RULE_APPROVED/REJECTED on activate/decline/revoke
+  - `governance_api.py`: MCP_T3_APPROVED/REJECTED, T3_APPROVED/REJECTED, APL_RULE_APPROVED/REJECTED on unified approve/deny
+  - `trust_api.py`: T3_APPROVED/REJECTED on graduation approve/decline
+  - `hive/api.py`: HIVE_INTERVENTION_EVENT on pause/resume/kill/modify/kill-all
+
+### Added — Compliance Export (Phase A + B + C + D)
+- **Compliance Export subsystem** (`src/compliance/`, 7 modules): One-click audit artifacts from the receipt DAG. Four export formats: Forensic Timeline PDF, SOC 2 Type II JSON, ISO 27001:2022 JSON, GDPR Article 30 Processing Record.
+- **Chain Integrity Checker** (`src/compliance/chain_integrity.py`): Verifies receipt parent_id chains are unbroken for an export period. Returns CHAIN_INTACT or CHAIN_ANOMALY with gap detail. Extends existing `validate_parent_chain()` with directional continuity checking.
+- **ip_address Redaction** (`src/compliance/redaction.py`): Unconditional removal of ip_address from all export output. No configuration, no bypass. PRE_IDENTITY_MIGRATION flagging for receipts generated before Operator Identity.
+- **Export Engine** (`src/compliance/export_engine.py`): 8-stage pipeline (Period Resolution → Receipt Fetch → Chain Integrity → Identity Resolution → Format Transform → ip_address Redaction → Output Generation → Export Receipt). Idempotent — same inputs produce same output.
+- **SOC 2 Type II mapper** (`src/compliance/soc2_mapper.py`): Maps 11 Trust Services Criteria controls (CC1.1–CC9.2) to receipt types. Machine-readable JSON for GRC platforms (Vanta, Drata, Secureframe).
+- **ISO 27001:2022 mapper** (`src/compliance/iso27001_mapper.py`): Maps 11 Annex A controls with explicit exclusion notes for out-of-scope controls (physical security, supplier relationships).
+- **GDPR Article 30 mapper** (`src/compliance/gdpr_mapper.py`): Quest-scoped processing activity records. PII category detection from scrubbing pipeline receipts with honest limitation notes when categories aren't recorded.
+- **Compliance Export API** (`src/compliance/api.py`): 6 REST endpoints at `/api/compliance/` — export generation, download, chain integrity check, export history, hash verification, format listing.
+- **Forensic Timeline PDF** (`src/compliance/pdf_export.py`): 7-section ReportLab PDF — Cover Page (with CHAIN_INTACT/ANOMALY), Executive Summary, Governance Controls Active, Human Authorization Log, Full Event Log (paginated, tier-colored), Anomaly Report, Appendix. Branded color palette.
+- **War Room UI** (`src/warroom/src/pages/ComplianceExport.tsx`): Full compliance export panel — format selector (PDF/SOC2/ISO/GDPR), date range picker with presets, quest scope, anomaly threshold config, one-click generate with progress indicator, export history table with download and SHA-256 verification.
+- **Gateway wiring**: Compliance API router auto-initialized in `gateway.py` after receipts API.
+- **Export storage**: `data/compliance_exports/` with self-describing filenames: `{format}_{start}_{end}_{id}.{ext}`.
+- **COMPLIANCE_EXPORT_GENERATED receipt**: Records who generated the artifact, when, for what period, with output SHA-256 for delivery integrity verification. Identity-required — anonymous exports are blocked.
+
+### Added — Receipt Types
+- `MCP_TOOL_CALL` — Successful MCP tool invocation receipt
+- `MCP_TOOL_BLOCKED` — Blocked MCP tool invocation receipt (includes block_gate and block_reason)
+- 24 governance lifecycle receipt types: KILL_SWITCH_ISSUED/LIFTED, T3_APPROVED/REJECTED, SOUL_UPDATED/SOUL_VERSION_PINNED, AGENT_DEPLOYED/STOPPED, CREDENTIAL_REGISTERED/REVOKED, MCP_SERVER_REGISTERED/REVOKED, MCP_T3_APPROVED/REJECTED, CONNECTOR_ENABLED/DISABLED, ALLOWLIST_MODIFIED, SCHEDULER_TASK_CREATED/DELETED, TOOL_ENABLED/DISABLED, APL_RULE_APPROVED/REJECTED, GOVERNANCE_WRITE_ERROR, COMPLIANCE_EXPORT_GENERATED
+
+### Added — Feature Flags
+- `FEATURE_FEDERATION` (default: false) — Multi-instance coordination, task handoff, Soul propagation
+- `FEATURE_MCP` (default: false) — Governed MCP tool invocations
+
+### Changed — Soul Model
+- Added `mcp_permissions: List[Dict[str, Any]]` field to Soul Pydantic model for declaring per-server MCP tool permissions with risk tiers
+
+### Changed — Federation Integration
+- `src/federation/soul_transport.py`: `handle_soul_push()` now calls `narrow_soul_mcp_permissions()` for MCP ceiling enforcement during Soul propagation
+- `src/hive/scoped_soul.py`: `generate()` passes `mcp_permissions` through to scoped Souls, filtered by task's allowed_categories. `validate_more_restrictive()` checks MCP server IDs are subset of parent's
+
+### Added — Documentation
+- `docs/federation.md` — Federation Data Plane comprehensive reference
+- `docs/mcp.md` — MCP governance subsystem comprehensive reference
+- `docs/kill-switches.md` — Complete feature flag reference with dependency chains
+- `docs/connectors.md` — Connector architecture and GovernedConnectorProxy reference
+- `docs/trust-ledger.md` — Trust Ledger graduation and revocation reference
+- `docs/apl.md` — Approval Pattern Learning reference
+- `docs/skill-security.md` — Skill Security Pipeline 6-stage reference
+
 ## [0.3.1] - 2026-03-12
 
 ### Added — NVIDIA Nemotron Provider Support

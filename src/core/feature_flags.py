@@ -53,6 +53,12 @@ Autonomy Loop v2 (V25) Environment variables:
 
 Google OAuth (V26) Environment variables:
     FEATURE_GOOGLE_OAUTH             — default: false (Google OAuth 2.0 for Gmail + Calendar)
+
+Federation Environment variables:
+    FEATURE_FEDERATION               — default: false (multi-instance federation layer)
+
+MCP (Model Context Protocol) Environment variables:
+    FEATURE_MCP                      — default: false (master kill switch for all MCP invocations)
 """
 
 from __future__ import annotations
@@ -192,6 +198,24 @@ FEATURE_HIVE_UAB: bool = _env_bool("FEATURE_HIVE_UAB", default=False)  # Enable 
 # Vault-backed secret management — secrets in encrypted vault instead of os.environ
 FEATURE_VAULT_SECRETS: bool = _env_bool("FEATURE_VAULT_SECRETS", default=True)  # Vault-backed secret cache (rollback: false = os.getenv fallback)
 
+# Federation — multi-instance coordination
+FEATURE_FEDERATION: bool = _env_bool("FEATURE_FEDERATION", default=False)  # Master switch for Federation subsystem (Governance API, heartbeat, identity)
+
+# MCP (Model Context Protocol) — governed tool proxy
+FEATURE_MCP: bool = _env_bool("FEATURE_MCP", default=False)  # Master kill switch for all MCP tool invocations
+
+# Observability — OTel export, webhooks, metrics API
+FEATURE_OBSERVABILITY: bool = _env_bool("FEATURE_OBSERVABILITY", default=False)  # Master switch for observability subsystem
+
+# Time-Travel Debugging — governed fork/replay of quest histories
+FEATURE_TIME_TRAVEL: bool = _env_bool("FEATURE_TIME_TRAVEL", default=False)  # Master switch for time-travel debugging subsystem
+
+# A2A Protocol — governed agent-to-agent interoperability
+FEATURE_A2A: bool = _env_bool("FEATURE_A2A", default=False)  # Master switch for A2A protocol subsystem (inbound + outbound)
+
+# Incident Response Playbooks — structured response protocols for governance events
+FEATURE_INCIDENT_RESPONSE: bool = _env_bool("FEATURE_INCIDENT_RESPONSE", default=False)  # Master switch for incident response playbook engine
+
 
 # All flags are now hot-toggleable via SubsystemManager — no restart required.
 RESTART_REQUIRED_FLAGS = frozenset()
@@ -257,6 +281,11 @@ def reload_flags() -> None:
     global FEATURE_TOOL_FLOW_STREAMING, FEATURE_ACTION_CARDS
     global FEATURE_HIVE, FEATURE_HIVE_UAB
     global FEATURE_VAULT_SECRETS
+    global FEATURE_FEDERATION
+    global FEATURE_MCP
+    global FEATURE_TIME_TRAVEL
+    global FEATURE_A2A
+    global FEATURE_INCIDENT_RESPONSE
 
     # vNext2 flags
     FEATURE_SOUL = _env_bool("FEATURE_SOUL")
@@ -331,6 +360,21 @@ def reload_flags() -> None:
 
     # Vault-backed secret management
     FEATURE_VAULT_SECRETS = _env_bool("FEATURE_VAULT_SECRETS", default=True)
+
+    # Federation
+    FEATURE_FEDERATION = _env_bool("FEATURE_FEDERATION", default=False)
+
+    # MCP
+    FEATURE_MCP = _env_bool("FEATURE_MCP", default=False)
+
+    # Time-Travel Debugging
+    FEATURE_TIME_TRAVEL = _env_bool("FEATURE_TIME_TRAVEL", default=False)
+
+    # A2A Protocol
+    FEATURE_A2A = _env_bool("FEATURE_A2A", default=False)
+
+    # Incident Response Playbooks
+    FEATURE_INCIDENT_RESPONSE = _env_bool("FEATURE_INCIDENT_RESPONSE", default=False)
 
 
 def get_all_flags() -> dict[str, bool]:
@@ -416,4 +460,20 @@ def log_feature_flags() -> None:
     logger.info(
         "Vault-backed secrets flags: VAULT_SECRETS=%s",
         FEATURE_VAULT_SECRETS,
+    )
+    logger.info(
+        "Federation flags: FEDERATION=%s",
+        FEATURE_FEDERATION,
+    )
+    logger.info(
+        "MCP flags: MCP=%s",
+        FEATURE_MCP,
+    )
+    logger.info(
+        "Time-Travel Debugging flags: TIME_TRAVEL=%s",
+        FEATURE_TIME_TRAVEL,
+    )
+    logger.info(
+        "A2A Protocol flags: A2A=%s",
+        FEATURE_A2A,
     )

@@ -1,0 +1,118 @@
+{
+  "__meta": {
+    "name": "Lancelot Governance Operations",
+    "version": "1.0.0",
+    "description": "Primary governance operations dashboard for Datadog. Built on OTel metrics.",
+    "compatible_with": "Datadog Dashboard API v2"
+  },
+  "title": "Lancelot — Governance Operations",
+  "description": "Governance health, action volume, blocked actions, T3 approvals, cost tracking",
+  "layout_type": "ordered",
+  "widgets": [
+    {
+      "definition": {
+        "title": "Active Kill Switches",
+        "type": "query_value",
+        "requests": [{ "q": "avg:lancelot.kill_switches.active{*}" }],
+        "precision": 0,
+        "conditional_formats": [
+          { "comparator": ">", "value": 0, "palette": "white_on_red" },
+          { "comparator": "<=", "value": 0, "palette": "white_on_green" }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Pending T3 Approvals",
+        "type": "query_value",
+        "requests": [{ "q": "avg:lancelot.t3_approvals.pending{*}" }],
+        "precision": 0,
+        "conditional_formats": [
+          { "comparator": ">", "value": 0, "palette": "white_on_yellow" }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Spend Rate (USD/hr)",
+        "type": "query_value",
+        "requests": [{ "q": "avg:lancelot.cost.usd_rate{*}" }],
+        "precision": 2
+      }
+    },
+    {
+      "definition": {
+        "title": "Active HIVE Agents",
+        "type": "query_value",
+        "requests": [{ "q": "avg:lancelot.hive.active_agents{*}" }],
+        "precision": 0
+      }
+    },
+    {
+      "definition": {
+        "title": "Action Volume by Risk Tier",
+        "type": "timeseries",
+        "requests": [
+          { "q": "sum:lancelot.actions.total{*} by {risk_tier}.as_rate()", "display_type": "bars" }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Blocked Actions by Reason",
+        "type": "timeseries",
+        "requests": [
+          { "q": "sum:lancelot.actions.blocked{*} by {block_reason}.as_rate()", "display_type": "line" }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "T3 Approval Response Time (p95)",
+        "type": "timeseries",
+        "requests": [
+          { "q": "p95:lancelot.t3_approvals.response_time_ms{*}" }
+        ],
+        "markers": [{ "value": "y = 300000", "label": "5min SLO", "display_type": "error dashed" }]
+      }
+    },
+    {
+      "definition": {
+        "title": "Cost Tracking",
+        "type": "timeseries",
+        "requests": [
+          { "q": "cumsum(sum:lancelot.cost.usd_total{*}.as_count())", "display_type": "line" },
+          { "q": "avg:lancelot.cost.usd_rate{*}", "display_type": "line" }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "MCP Tool Calls by Server",
+        "type": "toplist",
+        "requests": [
+          { "q": "sum:lancelot.mcp.tool_calls{*} by {server_id,status}.as_count()" }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Trust Ledger Distribution",
+        "type": "query_value",
+        "requests": [
+          { "q": "avg:lancelot.trust_ledger.tier_distribution{*} by {tier}" }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Receipt Chain Lag",
+        "type": "timeseries",
+        "requests": [
+          { "q": "avg:lancelot.receipts.chain_lag_ms{*}", "display_type": "line" }
+        ],
+        "markers": [{ "value": "y = 500", "label": "Critical Threshold", "display_type": "error dashed" }]
+      }
+    }
+  ]
+}

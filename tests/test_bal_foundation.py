@@ -140,7 +140,8 @@ class TestBALFeatureFlag:
 
     def test_feature_bal_in_restart_required(self):
         from src.core.feature_flags import RESTART_REQUIRED_FLAGS
-        assert "FEATURE_BAL" in RESTART_REQUIRED_FLAGS
+        # All flags are now hot-toggleable — no restart required
+        assert "FEATURE_BAL" not in RESTART_REQUIRED_FLAGS
 
     def test_feature_bal_in_get_all_flags(self, monkeypatch):
         monkeypatch.setenv("FEATURE_BAL", "true")

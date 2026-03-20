@@ -20,6 +20,13 @@ import {
   SkillsPanel,
   HiveAgentMesh,
   LoginPage,
+  FederationOverview,
+  GraphBuilder,
+  FederationAudit,
+  ComplianceExport,
+  TimeTravelDebugger,
+  IncidentsDashboard,
+  A2AManagement,
 } from '@/pages'
 
 function App() {
@@ -43,6 +50,7 @@ function App() {
           <Route path="/tools" element={<ToolFabric />} />
           <Route path="/memory" element={<MemoryPanel />} />
           <Route path="/skills" element={<SkillsPanel />} />
+          <Route path="/a2a" element={<A2AManagement />} />
           <Route path="/scheduler" element={<SchedulerPanel />} />
 
           {/* SYSTEM */}
@@ -51,6 +59,20 @@ function App() {
           <Route path="/connectors" element={<Connectors />} />
           <Route path="/costs" element={<CostTracker />} />
           <Route path="/flags" element={<KillSwitches />} />
+
+          {/* FEDERATION */}
+          <Route path="/federation" element={<FederationOverview />} />
+          <Route path="/federation/graph" element={<GraphBuilder />} />
+          <Route path="/federation/audit" element={<FederationAudit />} />
+
+          {/* COMPLIANCE */}
+          <Route path="/compliance" element={<ComplianceExport />} />
+
+          {/* TIME-TRAVEL */}
+          <Route path="/timetravel" element={<TimeTravelDebugger />} />
+
+          {/* INCIDENTS */}
+          <Route path="/incidents" element={<IncidentsDashboard />} />
 
           {/* BUSINESS */}
           <Route path="/business" element={<BusinessDashboard />} />

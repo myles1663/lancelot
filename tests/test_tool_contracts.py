@@ -825,7 +825,7 @@ class TestToolFabricFeatureFlags:
     def test_tool_fabric_flags_defaults(self):
         """Tool Fabric feature flags have correct defaults."""
         import os
-        from src.core.feature_flags import reload_flags, _env_bool
+        import src.core.feature_flags as ff
 
         # Clear any existing env vars
         for key in ["FEATURE_TOOLS_FABRIC", "FEATURE_TOOLS_CLI_PROVIDERS",
@@ -833,24 +833,27 @@ class TestToolFabricFeatureFlags:
                     "FEATURE_TOOLS_HOST_EXECUTION"]:
             os.environ.pop(key, None)
 
-        reload_flags()
+        # Clear persisted state so defaults are used
+        old_persisted = dict(ff._persisted_state)
+        for key in ["FEATURE_TOOLS_FABRIC", "FEATURE_TOOLS_CLI_PROVIDERS",
+                    "FEATURE_TOOLS_ANTIGRAVITY", "FEATURE_TOOLS_NETWORK",
+                    "FEATURE_TOOLS_HOST_EXECUTION"]:
+            ff._persisted_state.pop(key, None)
 
-        from src.core.feature_flags import (
-            FEATURE_TOOLS_FABRIC,
-            FEATURE_TOOLS_CLI_PROVIDERS,
-            FEATURE_TOOLS_ANTIGRAVITY,
-            FEATURE_TOOLS_NETWORK,
-            FEATURE_TOOLS_HOST_EXECUTION,
-        )
+        ff.reload_flags()
 
-        # TOOLS_FABRIC defaults to true
-        assert FEATURE_TOOLS_FABRIC is True
+        try:
+            # TOOLS_FABRIC defaults to true
+            assert ff.FEATURE_TOOLS_FABRIC is True
 
-        # Optional providers default to false
-        assert FEATURE_TOOLS_CLI_PROVIDERS is False
-        assert FEATURE_TOOLS_ANTIGRAVITY is False
-        assert FEATURE_TOOLS_NETWORK is False
-        assert FEATURE_TOOLS_HOST_EXECUTION is False
+            # Optional providers default to false
+            assert ff.FEATURE_TOOLS_CLI_PROVIDERS is False
+            assert ff.FEATURE_TOOLS_ANTIGRAVITY is False
+            assert ff.FEATURE_TOOLS_NETWORK is False
+            assert ff.FEATURE_TOOLS_HOST_EXECUTION is False
+        finally:
+            # Restore persisted state
+            ff._persisted_state.update(old_persisted)
 
 
 # =============================================================================

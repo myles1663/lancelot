@@ -13,7 +13,7 @@ import {
   revokeGoogleOAuth,
 } from '@/api'
 import type { ConnectorInfo, CredentialInfo, GoogleOAuthStatusResponse } from '@/api/connectors'
-import { StatusDot, ConfirmDialog } from '@/components'
+import { StatusDot, ConfirmDialog, MCPSection } from '@/components'
 
 // ── Google OAuth vault keys that are managed by the OAuth flow ──
 const GOOGLE_OAUTH_KEYS = new Set(['email.gmail_token', 'calendar.google_token'])
@@ -540,6 +540,9 @@ export function Connectors() {
           })}
         </div>
       )}
+
+      {/* MCP Servers Section — governed MCP tool proxy */}
+      <MCPSection />
 
       {/* Confirm Dialogs */}
       <ConfirmDialog

@@ -36,8 +36,8 @@ class TestConsentPhase:
 
     def test_shows_model_name_and_size(self, snap):
         resp = handle_local_utility_setup("", snap)
-        assert "Hermes 2 Pro" in resp
-        assert "4.4 GB" in resp
+        assert "Qwen3 8B" in resp
+        assert "5 GB" in resp
 
     def test_info_command_shows_details(self, snap):
         resp = handle_local_utility_setup("info", snap)

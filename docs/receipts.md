@@ -21,6 +21,12 @@ Every discrete action in the system emits a receipt:
 | **Skill operations** | Install, enable, disable, uninstall, execution |
 | **Trust changes** | Graduation proposals, trust score updates, revocations |
 | **APL events** | Pattern detection, rule proposals, auto-approvals |
+| **MCP operations** | Tool invocations, blocks (with block gate), receipt write failures |
+| **Federation events** | Handoffs, Soul pushes, kill commands, divergence, contradictions, cost thresholds |
+| **Hive events** | Task lifecycle, agent state transitions, interventions |
+| **UAB actions** | App control receipts with risk classification, session summaries |
+| **ActionCard events** | Card presentation and resolution (cross-channel) |
+| **Compliance exports** | Export generation with format, period, chain integrity, output hash |
 
 ---
 
@@ -53,7 +59,9 @@ Every receipt follows a consistent schema:
     "risk_tier": "T1",
     "policy_decision": "APPROVED",
     "snapshot_id": "snap_001"
-  }
+  },
+  "operator_id": "a1b2c3d4-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "session_id": "sess_abc123"
 }
 ```
 
@@ -63,7 +71,7 @@ Every receipt follows a consistent schema:
 |-------|------|-------------|
 | `id` | string | Unique identifier (UUID) |
 | `timestamp` | datetime | When the action occurred |
-| `action_type` | string | Category: `llm_call`, `tool_exec`, `file_op`, `memory_edit`, `scheduler_run`, `verification`, `governance`, `health_transition`, `soul_op`, `skill_op` |
+| `action_type` | string | Category: `llm_call`, `tool_exec`, `file_op`, `memory_edit`, `scheduler_run`, `verification`, `governance`, `health_transition`, `soul_op`, `skill_op`, `mcp_tool_call`, `mcp_tool_blocked`, `hive_task_event`, `hive_agent_event`, `hive_intervention_event`, `tool_flow_event`, `action_card_presented`, `action_card_resolved`, `kill_switch_issued`, `kill_switch_lifted`, `t3_approved`, `t3_rejected`, `soul_updated`, `soul_version_pinned`, `agent_deployed`, `agent_stopped`, `credential_registered`, `credential_revoked`, `mcp_server_registered`, `mcp_server_revoked`, `mcp_t3_approved`, `mcp_t3_rejected`, `connector_enabled`, `connector_disabled`, `allowlist_modified`, `scheduler_task_created`, `scheduler_task_deleted`, `tool_enabled`, `tool_disabled`, `apl_rule_approved`, `apl_rule_rejected`, `governance_write_error` |
 | `action_name` | string | Specific action: model name, tool capability, job name |
 | `inputs` | object | Sanitized request data (secrets redacted, PII stripped) |
 | `outputs` | object | Sanitized response data |
@@ -75,6 +83,8 @@ Every receipt follows a consistent schema:
 | `quest_id` | string | ID of the originating goal/quest |
 | `error_message` | string | Error details (on failure only) |
 | `metadata` | object | Action-specific additional data |
+| `operator_id` | string | Stable UUID of the human operator (null = automated). Derived via UUID5(namespace, username). |
+| `session_id` | string | Ephemeral UUID of the War Room session (empty for API-key or automated). |
 
 ### Cognition Tiers
 

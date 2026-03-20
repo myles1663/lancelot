@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,21 @@ _config = None
 
 
 _audit_logger = None
+
+
+def _resolve_operator_ids(request: Request):
+    """Extract operator_id and session_id from a FastAPI request.
+
+    Returns (operator_id, session_id) or (None, None) if unavailable.
+    """
+    try:
+        from src.core.governance_receipts import _resolve_identity
+        identity = _resolve_identity(request)
+        if identity:
+            return identity.operator_id, identity.session_id
+    except Exception:
+        pass
+    return None, None
 
 
 def init_hive_api(architect, lifecycle, registry, receipt_mgr, config, audit_logger=None):
@@ -176,46 +191,76 @@ async def get_task_tree(quest_id: str):
 # ── Agent Control Endpoints ──────────────────────────────────────────
 
 @router.post("/agents/{agent_id}/pause")
-async def pause_agent(agent_id: str, req: PauseRequest):
+async def pause_agent(agent_id: str, req: PauseRequest, request: Request):
     """Pause an executing agent. Requires reason."""
     if _lifecycle is None:
         raise HTTPException(status_code=503, detail="HIVE not initialized")
     try:
-        _lifecycle.pause(agent_id, req.reason)
+        op_id, sess_id = _resolve_operator_ids(request)
+        _lifecycle.pause(agent_id, req.reason, operator_id=op_id, session_id=sess_id)
         _hive_audit("HIVE_AGENT_PAUSE", f"Paused agent {agent_id}: {req.reason}")
+
+        from src.core.governance_receipts import emit_governance_receipt
+        from src.shared.receipts import ActionType
+        emit_governance_receipt(
+            request, ActionType.HIVE_INTERVENTION_EVENT,
+            action_name="pause_agent",
+            inputs={"agent_id": agent_id, "reason": req.reason},
+        )
+
         return {"status": "paused", "agent_id": agent_id}
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 
 
 @router.post("/agents/{agent_id}/resume")
-async def resume_agent(agent_id: str):
+async def resume_agent(agent_id: str, request: Request):
     """Resume a paused agent."""
     if _lifecycle is None:
         raise HTTPException(status_code=503, detail="HIVE not initialized")
     try:
-        _lifecycle.resume(agent_id)
+        op_id, sess_id = _resolve_operator_ids(request)
+        _lifecycle.resume(agent_id, operator_id=op_id, session_id=sess_id)
         _hive_audit("HIVE_AGENT_RESUME", f"Resumed agent {agent_id}")
+
+        from src.core.governance_receipts import emit_governance_receipt
+        from src.shared.receipts import ActionType
+        emit_governance_receipt(
+            request, ActionType.HIVE_INTERVENTION_EVENT,
+            action_name="resume_agent",
+            inputs={"agent_id": agent_id},
+        )
+
         return {"status": "resumed", "agent_id": agent_id}
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 
 
 @router.post("/agents/{agent_id}/kill")
-async def kill_agent(agent_id: str, req: KillRequest):
+async def kill_agent(agent_id: str, req: KillRequest, request: Request):
     """Kill an agent. Requires reason."""
     if _lifecycle is None:
         raise HTTPException(status_code=503, detail="HIVE not initialized")
     try:
-        _lifecycle.kill(agent_id, req.reason)
+        op_id, sess_id = _resolve_operator_ids(request)
+        _lifecycle.kill(agent_id, req.reason, operator_id=op_id, session_id=sess_id)
         _hive_audit("HIVE_AGENT_KILL", f"Killed agent {agent_id}: {req.reason}")
+
+        from src.core.governance_receipts import emit_governance_receipt
+        from src.shared.receipts import ActionType
+        emit_governance_receipt(
+            request, ActionType.HIVE_INTERVENTION_EVENT,
+            action_name="kill_agent",
+            inputs={"agent_id": agent_id, "reason": req.reason},
+        )
+
         return {"status": "killed", "agent_id": agent_id}
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 
 
 @router.post("/agents/{agent_id}/modify")
-async def modify_agent(agent_id: str, req: ModifyRequest):
+async def modify_agent(agent_id: str, req: ModifyRequest, request: Request):
     """Modify an agent (kill + replan). Requires reason."""
     if _architect is None:
         raise HTTPException(status_code=503, detail="HIVE not initialized")
@@ -227,18 +272,40 @@ async def modify_agent(agent_id: str, req: ModifyRequest):
         feedback=req.feedback,
         constraints=req.constraints,
     )
-    result = await _architect.handle_intervention(intervention, req.feedback)
+    op_id, sess_id = _resolve_operator_ids(request)
+    result = await _architect.handle_intervention(
+        intervention, req.feedback, operator_id=op_id, session_id=sess_id,
+    )
     _hive_audit("HIVE_AGENT_MODIFY", f"Modified agent {agent_id}: {req.reason}")
+
+    from src.core.governance_receipts import emit_governance_receipt
+    from src.shared.receipts import ActionType
+    emit_governance_receipt(
+        request, ActionType.HIVE_INTERVENTION_EVENT,
+        action_name="modify_agent",
+        inputs={"agent_id": agent_id, "reason": req.reason},
+    )
+
     return result
 
 
 @router.post("/kill-all")
-async def kill_all(req: KillAllRequest):
+async def kill_all(req: KillAllRequest, request: Request):
     """Kill all active agents. Requires reason."""
     if _lifecycle is None:
         raise HTTPException(status_code=503, detail="HIVE not initialized")
-    collapsed = _lifecycle.kill_all(req.reason)
+    op_id, sess_id = _resolve_operator_ids(request)
+    collapsed = _lifecycle.kill_all(req.reason, operator_id=op_id, session_id=sess_id)
     _hive_audit("HIVE_KILL_ALL", f"Kill-all: {req.reason} ({len(collapsed)} agents)")
+
+    from src.core.governance_receipts import emit_governance_receipt
+    from src.shared.receipts import ActionType
+    emit_governance_receipt(
+        request, ActionType.HIVE_INTERVENTION_EVENT,
+        action_name="kill_all",
+        inputs={"reason": req.reason, "collapsed_count": len(collapsed)},
+    )
+
     return {"status": "killed_all", "collapsed": collapsed}
 
 

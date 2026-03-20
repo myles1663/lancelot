@@ -19,9 +19,11 @@ class TestMCPFlow(unittest.TestCase):
 
     def test_high_risk_blocking(self):
         """Verify that a high-risk tool call (cli_shell) returns PERMISSION REQUIRED."""
-        # cli_shell is marked as 'high' in tools.json
-        result = self.orch.execute_command("ls -la")
-        
+        # Use a command that is NOT in SAFEREPL_COMMANDS so it reaches the
+        # sentry permission check inside _execute_command.  "ls" is handled
+        # directly by SafeREPL and never hits the sentry gate.
+        result = self.orch.execute_command("echo test")
+
         print(f"Blocking Result: {result}")
         self.assertIn("PERMISSION REQUIRED", result)
         self.assertIn("Request ID:", result)

@@ -125,6 +125,16 @@ async def approve_proposal(proposal_id: str, request: Request):
         data = await request.json() if request.headers.get("content-type") else {}
         reason = data.get("reason", "Approved via War Room")
         _trust_ledger.apply_graduation(proposal_id, approved=True, reason=reason)
+
+        # Governance receipt
+        from src.core.governance_receipts import emit_governance_receipt
+        from src.shared.receipts import ActionType
+        emit_governance_receipt(
+            request, ActionType.T3_APPROVED,
+            action_name="approve_graduation",
+            inputs={"proposal_id": proposal_id, "reason": reason},
+        )
+
         return {"status": "approved", "proposal_id": proposal_id}
     except Exception as exc:
         logger.error("approve_proposal error: %s", exc)
@@ -141,6 +151,16 @@ async def decline_proposal(proposal_id: str, request: Request):
         data = await request.json() if request.headers.get("content-type") else {}
         reason = data.get("reason", "Declined via War Room")
         _trust_ledger.apply_graduation(proposal_id, approved=False, reason=reason)
+
+        # Governance receipt
+        from src.core.governance_receipts import emit_governance_receipt
+        from src.shared.receipts import ActionType
+        emit_governance_receipt(
+            request, ActionType.T3_REJECTED,
+            action_name="decline_graduation",
+            inputs={"proposal_id": proposal_id, "reason": reason},
+        )
+
         return {"status": "declined", "proposal_id": proposal_id}
     except Exception as exc:
         logger.error("decline_proposal error: %s", exc)

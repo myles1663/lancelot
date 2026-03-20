@@ -137,6 +137,12 @@ _SUBSYSTEM_GATES = [
     ("/api/scheduler", "FEATURE_SCHEDULER"),
     ("/api/v1/clients", "FEATURE_BAL"),
     ("/api/hive", "FEATURE_HIVE"),
+    ("/api/federation", "FEATURE_FEDERATION"),
+    ("/api/observability", "FEATURE_OBSERVABILITY"),
+    ("/api/timetravel", "FEATURE_TIME_TRAVEL"),
+    ("/api/a2a", "FEATURE_A2A"),
+    ("/a2a", "FEATURE_A2A"),
+    ("/.well-known/agent.json", "FEATURE_A2A"),
 ]
 
 
@@ -732,6 +738,264 @@ def _shutdown_hive(objects):
     logger.info("HIVE Agent Mesh shut down.")
 
 
+def _resolve_peer_key(peer_registry, topology, instance_id: str):
+    """Resolve a peer's public key from registry or topology.
+
+    Checks PeerRegistryStore first (persistent), falls back to
+    TopologyRegistry (runtime).
+    """
+    # Try persistent peer registry first
+    try:
+        key = peer_registry.get_peer_public_key(instance_id)
+        if key:
+            return key
+    except Exception:
+        pass
+    # Fall back to topology registry
+    peer = topology.get_peer(instance_id)
+    if peer and peer.public_key_hex:
+        try:
+            return bytes.fromhex(peer.public_key_hex)
+        except ValueError:
+            return None
+    return None
+
+
+def _init_federation():
+    """Initialize the Federation subsystem (control plane + data plane)."""
+    from src.federation.config import load_federation_config
+    from src.federation.identity import load_or_generate_identity
+    from src.federation.heartbeat import HeartbeatEmitter
+    from src.federation.topology import TopologyRegistry
+    from src.federation.divergence import DivergenceDetector
+    from src.federation.receipt_manager import FederationReceiptManager
+    from src.federation.api import init_federation_api, init_federation_transport
+    from src.federation.auth import FederationAuth
+    from src.federation.transport import FederationTransport
+    from src.federation.peer_registry import PeerRegistryStore
+    from src.federation.peer_protocol import PeerRegistrationProtocol
+    from src.federation.command_relay import CommandRelay
+    from src.federation.soul_transport import SoulTransport
+    from src.federation.handoff_protocol import HandoffProtocol
+    from src.federation.cost_reporter import CostReporter
+    from src.federation.heartbeat_mesh import HeartbeatMesh
+    from src.federation.audit import FederationAuditEngine
+
+    data_dir = os.environ.get("LANCELOT_DATA_DIR", "lancelot_data")
+    config = load_federation_config()
+    identity = load_or_generate_identity(data_dir=data_dir)
+
+    topology = TopologyRegistry(
+        self_instance_id=identity.instance_id,
+        staleness_warning_s=config.staleness_warning_s,
+        staleness_critical_s=config.staleness_critical_s,
+        staleness_lost_s=config.staleness_lost_s,
+        max_peers=config.max_peers,
+        persistence_path=config.topology_path,
+    )
+
+    divergence = DivergenceDetector(
+        instance_id=identity.instance_id,
+        staleness_lost_s=config.staleness_lost_s,
+    )
+
+    receipt_mgr = FederationReceiptManager(
+        instance_id=identity.instance_id,
+        data_dir=data_dir,
+    )
+
+    # Audit engine — cross-instance audit trail
+    audit_engine = FederationAuditEngine(max_entries=10000)
+
+    # --- Control Plane (existing) ---
+    emitter = HeartbeatEmitter(
+        instance_id=identity.instance_id,
+        interval_s=config.heartbeat_interval_s,
+    )
+    emitter.set_providers(
+        peer_count=lambda: topology.peer_count(),
+    )
+
+    # --- Data Plane (transport layer) ---
+
+    # 1. Persistent peer registry (SQLite)
+    fed_data_dir = os.path.join(data_dir, "federation")
+    os.makedirs(fed_data_dir, exist_ok=True)
+    peer_db_path = config.peer_db_path or os.path.join(fed_data_dir, "peers.sqlite")
+    peer_registry = PeerRegistryStore(db_path=peer_db_path)
+
+    # 2. Auth (Ed25519 request signing + verification)
+    auth = FederationAuth(
+        identity=identity,
+        peer_key_resolver=lambda instance_id: _resolve_peer_key(peer_registry, topology, instance_id),
+        timestamp_window_s=config.auth_timestamp_window_s,
+        nonce_cache_size=config.nonce_cache_size,
+    )
+
+    # 3. Resilient HTTP transport (circuit breakers, retries, connection pooling)
+    transport = FederationTransport(
+        auth=auth,
+        max_retries=config.retry_max_attempts,
+        base_backoff_s=config.retry_base_backoff_s,
+        circuit_breaker_threshold=config.circuit_breaker_threshold,
+        circuit_breaker_recovery_s=config.circuit_breaker_recovery_s,
+        connect_timeout_s=config.connect_timeout_s,
+        read_timeout_s=config.read_timeout_s,
+    )
+
+    # 4. Peer registration handshake protocol
+    peer_protocol = PeerRegistrationProtocol(
+        identity=identity,
+        topology=topology,
+        transport=transport,
+        receipt_mgr=receipt_mgr,
+        audit=audit_engine,
+    )
+
+    # 5. Command relay (kill switch + pause propagation)
+    command_relay = CommandRelay(
+        identity=identity,
+        transport=transport,
+        topology=topology,
+        receipt_mgr=receipt_mgr,
+        audit=audit_engine,
+    )
+
+    # 6. Soul transport (push/pull with tier-aware propagation)
+    soul_transport = SoulTransport(
+        identity=identity,
+        transport=transport,
+        topology=topology,
+        receipt_mgr=receipt_mgr,
+        audit=audit_engine,
+        handoff_timeout_s=config.handoff_timeout_s,
+    )
+
+    # 7. Handoff protocol (task delegation between peers)
+    handoff_protocol = HandoffProtocol(
+        identity=identity,
+        transport=transport,
+        topology=topology,
+        receipt_mgr=receipt_mgr,
+        audit=audit_engine,
+        handoff_timeout_s=config.handoff_timeout_s,
+    )
+
+    # 8. Cost reporter (periodic budget reporting to peers)
+    cost_reporter = CostReporter(
+        identity=identity,
+        transport=transport,
+        topology=topology,
+        interval_s=config.cost_report_interval_s,
+    )
+
+    # 9. Heartbeat mesh (SSE subscription to peer health streams)
+    heartbeat_mesh = HeartbeatMesh(
+        topology=topology,
+        divergence_detector=divergence,
+        connect_timeout_s=config.connect_timeout_s,
+        read_timeout_s=120.0,
+    )
+
+    # Wire control plane API endpoints
+    init_federation_api(
+        identity=identity,
+        heartbeat_emitter=emitter,
+        config=config,
+        topology_registry=topology,
+    )
+
+    # Wire data plane transport handlers into API
+    init_federation_transport(
+        peer_protocol=peer_protocol,
+        command_relay=command_relay,
+        soul_transport=soul_transport,
+        handoff_protocol=handoff_protocol,
+        cost_reporter=cost_reporter,
+        auth=auth,
+        audit_engine=audit_engine,
+    )
+
+    # Initialize Graph Builder API
+    try:
+        from src.federation.graph_api import init_graph_api
+        graph_data_dir = os.path.join(data_dir, "federation")
+        init_graph_api(graph_data_dir)
+    except Exception as e:
+        logger.warning("Graph Builder API init failed: %s", e)
+
+    # Start synchronous background heartbeat emitter
+    emitter.start()
+
+    # Schedule async transport startup (will run when event loop is available)
+    async def _start_transport_layer():
+        try:
+            await transport.start()
+            logger.info("Federation transport started (httpx connection pool ready)")
+        except Exception as e:
+            logger.warning("Federation transport start failed: %s", e)
+        try:
+            await heartbeat_mesh.start()
+            logger.info("Federation heartbeat mesh started")
+        except Exception as e:
+            logger.warning("Federation heartbeat mesh start failed: %s", e)
+        try:
+            await cost_reporter.start()
+            logger.info("Federation cost reporter started")
+        except Exception as e:
+            logger.warning("Federation cost reporter start failed: %s", e)
+
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_start_transport_layer())
+    except RuntimeError:
+        # No event loop yet — will be started from startup_event
+        pass
+
+    logger.info(
+        "Federation initialized: instance=%s, fingerprint=%s, heartbeat=%.1fs, mode=%s, transport=ACTIVE",
+        identity.instance_id, identity.fingerprint, config.heartbeat_interval_s,
+        topology.deployment_mode.value,
+    )
+    return {
+        "config": config,
+        "identity": identity,
+        "emitter": emitter,
+        "topology": topology,
+        "divergence": divergence,
+        "receipt_mgr": receipt_mgr,
+        "peer_registry": peer_registry,
+        "auth": auth,
+        "transport": transport,
+        "peer_protocol": peer_protocol,
+        "command_relay": command_relay,
+        "soul_transport": soul_transport,
+        "handoff_protocol": handoff_protocol,
+        "cost_reporter": cost_reporter,
+        "heartbeat_mesh": heartbeat_mesh,
+        "audit_engine": audit_engine,
+    }
+
+
+def _shutdown_federation(objects):
+    """Shut down the Federation subsystem (control plane + data plane).
+
+    Note: async transport objects (transport, heartbeat_mesh, cost_reporter)
+    are stopped in shutdown_event() before this runs, since this function
+    is called synchronously by subsystem_manager.stop_all().
+    """
+    from src.federation.api import shutdown_federation_api
+
+    if objects.get("emitter"):
+        try:
+            objects["emitter"].stop()
+        except Exception:
+            pass
+
+    shutdown_federation_api()
+    logger.info("Federation shut down.")
+
+
 def _bootstrap_model_discovery():
     """Create ModelDiscovery + wire into Provider API when provider becomes available.
 
@@ -842,6 +1106,12 @@ async def startup_event():
         logger.warning("Soul API router mount failed: %s", e)
 
     try:
+        from soul.template_api import router as template_router
+        app.include_router(template_router)
+    except Exception as e:
+        logger.warning("Soul Template API router mount failed: %s", e)
+
+    try:
         from scheduler_api import router as scheduler_router
         app.include_router(scheduler_router)
     except Exception as e:
@@ -865,6 +1135,24 @@ async def startup_event():
     except Exception as e:
         logger.warning("HIVE Agent Mesh API router mount failed: %s", e)
 
+    try:
+        from src.federation.api import router as federation_router
+        app.include_router(federation_router)
+    except Exception as e:
+        logger.warning("Federation API router mount failed: %s", e)
+
+    try:
+        from src.federation.graph_api import graph_router
+        app.include_router(graph_router)
+    except Exception as e:
+        logger.warning("Graph Builder API router mount failed: %s", e)
+
+    try:
+        from src.mcp.api import router as mcp_router
+        app.include_router(mcp_router)
+    except Exception as e:
+        logger.warning("MCP API router mount failed: %s", e)
+
     # ===== REGISTER SUBSYSTEMS WITH HOT-TOGGLE MANAGER =====
     subsystem_manager.register("memory", "FEATURE_MEMORY_VNEXT", _init_memory, _shutdown_memory, ["/memory"])
     subsystem_manager.register("soul", "FEATURE_SOUL", _init_soul, _shutdown_soul, ["/soul"])
@@ -877,12 +1165,14 @@ async def startup_event():
     subsystem_manager.register("host_bridge", "FEATURE_TOOLS_HOST_BRIDGE", _init_host_bridge, _shutdown_host_bridge, [])
     subsystem_manager.register("uab_bridge", "FEATURE_TOOLS_UAB", _init_uab, _shutdown_uab, [])
     subsystem_manager.register("hive", "FEATURE_HIVE", _init_hive, _shutdown_hive, ["/api/hive"])
+    subsystem_manager.register("federation", "FEATURE_FEDERATION", _init_federation, _shutdown_federation, ["/api/federation"])
 
     # ===== CONDITIONALLY START SUBSYSTEMS =====
     from feature_flags import (
         FEATURE_MEMORY_VNEXT, FEATURE_SOUL, FEATURE_SKILLS,
         FEATURE_SCHEDULER, FEATURE_HEALTH_MONITOR, FEATURE_BAL,
         FEATURE_TOOLS_HOST_BRIDGE, FEATURE_TOOLS_UAB, FEATURE_HIVE,
+        FEATURE_FEDERATION,
     )
 
     if FEATURE_MEMORY_VNEXT:
@@ -945,6 +1235,14 @@ async def startup_event():
     else:
         logger.info("HIVE Agent Mesh disabled by feature flag.")
 
+    if FEATURE_FEDERATION:
+        try:
+            subsystem_manager.start("federation")
+        except Exception as e:
+            logger.warning("Federation initialization failed: %s", e)
+    else:
+        logger.info("Federation disabled by feature flag.")
+
     # ===== PHASE 4b: LOCAL MODEL CLIENT (V8) =====
     try:
         from feature_flags import FEATURE_LOCAL_AGENTIC
@@ -992,6 +1290,22 @@ async def startup_event():
         logger.info("Receipts API initialized.")
     except Exception as e:
         logger.warning(f"Receipts API initialization failed: {e}")
+
+    # Compliance Export API
+    try:
+        from compliance.api import router as compliance_router, init_compliance_api
+        from receipts_api import _receipt_service as _compliance_receipt_svc
+        if _compliance_receipt_svc is not None:
+            init_compliance_api(
+                receipt_service=_compliance_receipt_svc,
+                data_dir="/home/lancelot/data",
+            )
+            app.include_router(compliance_router)
+            logger.info("Compliance Export API initialized.")
+        else:
+            logger.warning("Compliance Export API skipped: receipt service not available")
+    except Exception as e:
+        logger.warning(f"Compliance Export API initialization failed: {e}")
 
     # Governance + Trust + APL APIs — wire to existing subsystem instances
     _trust_ledger_inst = getattr(main_orchestrator, 'trust_ledger', None)
@@ -1439,6 +1753,152 @@ async def startup_event():
         signal.signal(signal.SIGHUP, _sighup_handler)
         logger.info("SIGHUP handler registered for secret rotation.")
 
+    # ===== OBSERVABILITY: OTel Export + Receipt Bridge + API =====
+    try:
+        from feature_flags import FEATURE_OBSERVABILITY
+        if FEATURE_OBSERVABILITY:
+            # Mount observability config API
+            from observability.api import router as observability_router
+            app.include_router(observability_router)
+            logger.info("Observability API initialized.")
+            from observability.config import load_config as _load_obs_config
+            from observability.otel_provider import init_otel
+            from observability.receipt_bridge import configure_bridge
+
+            _obs_config = _load_obs_config()
+
+            # Metrics API
+            if _obs_config.metrics_api.enabled:
+                from observability.metrics_api import router as metrics_api_router, init_metrics_api
+                try:
+                    from receipts_api import _receipt_service as _metrics_receipt_svc
+                    if _metrics_receipt_svc:
+                        init_metrics_api(_metrics_receipt_svc, data_dir="/home/lancelot/data")
+                        app.include_router(metrics_api_router)
+                        logger.info("Metrics API initialized.")
+                except Exception as _e:
+                    logger.warning("Metrics API initialization failed: %s", _e)
+
+            # Webhooks
+            if _obs_config.webhooks.enabled and _obs_config.webhooks.endpoints:
+                from observability.webhook_engine import init_webhook_engine
+                init_webhook_engine(
+                    endpoints=_obs_config.webhooks.endpoints,
+                    deployment_id=os.getenv("LANCELOT_DEPLOYMENT_ID", ""),
+                    delivery_timeout_s=_obs_config.webhooks.delivery_timeout_s,
+                    max_retries=_obs_config.webhooks.max_retries,
+                )
+                logger.info("Webhook engine initialized (%d endpoints)",
+                            len(_obs_config.webhooks.endpoints))
+
+            # OTel
+            if _obs_config.otel.enabled and _obs_config.otel.endpoint:
+                _otel_ok = init_otel(
+                    endpoint=_obs_config.otel.endpoint,
+                    auth_header=_obs_config.otel.auth_header,
+                    export_interval_ms=_obs_config.otel.export_interval_s * 1000,
+                    resource_attributes=_obs_config.otel.resource_attributes,
+                )
+                configure_bridge(
+                    enabled=_otel_ok,
+                    sampling_rate=_obs_config.otel.sampling_rate_t0_t1,
+                )
+                if _otel_ok:
+                    logger.info("OTel export initialized (endpoint=%s)", _obs_config.otel.endpoint)
+                else:
+                    logger.warning("OTel export initialization failed — bridge disabled")
+            else:
+                logger.info("FEATURE_OBSERVABILITY enabled but OTel exporter not configured")
+    except Exception as e:
+        logger.warning(f"Observability initialization failed: {e}")
+
+    # ── Time-Travel Debugging ────────────────────────────────────
+    try:
+        from feature_flags import FEATURE_TIME_TRAVEL
+        if FEATURE_TIME_TRAVEL:
+            from timetravel.api import router as timetravel_router, init_timetravel_api
+            app.include_router(timetravel_router)
+
+            # Initialize with receipt service and active Soul
+            _tt_soul = None
+            try:
+                from soul.store import load_active_soul
+                _tt_soul = load_active_soul()
+            except Exception as e:
+                logger.warning("Time-Travel: Soul load failed, fork/replay disabled: %s", e)
+
+            if _receipt_service is not None:
+                init_timetravel_api(
+                    receipt_service=_receipt_service,
+                    soul=_tt_soul,
+                    soul_dir=None,
+                )
+                logger.info("FEATURE_TIME_TRAVEL enabled — API mounted at /api/timetravel")
+            else:
+                logger.warning("Time-Travel: receipt service unavailable")
+    except Exception as e:
+        logger.warning(f"Time-Travel initialization failed: {e}")
+
+    # ── A2A Protocol ────────────────────────────────────────────
+    try:
+        from feature_flags import FEATURE_A2A
+        if FEATURE_A2A:
+            from a2a.registry import A2ARegistry
+            from a2a.server import a2a_server_router, init_a2a_server
+            from a2a.api import router as a2a_api_router, init_a2a_api
+            from a2a.inbound_pipeline import InboundPipeline
+            from a2a.outbound_pipeline import OutboundPipeline
+            from a2a.client import A2AClient
+
+            # Initialize registry
+            _a2a_registry = A2ARegistry()
+
+            # Load Soul for A2A permissions
+            _a2a_soul = None
+            try:
+                from soul.store import load_active_soul
+                _a2a_soul = load_active_soul()
+            except Exception as e:
+                logger.warning("A2A: Soul load failed: %s", e)
+
+            # Initialize pipelines
+            _a2a_inbound = InboundPipeline(_a2a_registry, _receipt_service, _a2a_soul)
+            _a2a_outbound = OutboundPipeline(_a2a_registry, _receipt_service, _a2a_soul)
+            _a2a_client = A2AClient(_receipt_service)
+
+            # Mount protocol-standard endpoints at root
+            init_a2a_server(_a2a_soul, _receipt_service, _a2a_registry, _a2a_inbound)
+            app.include_router(a2a_server_router)
+
+            # Mount management API
+            init_a2a_api(_a2a_registry, _receipt_service, _a2a_soul, _a2a_outbound, _a2a_client)
+            app.include_router(a2a_api_router)
+
+            logger.info("FEATURE_A2A enabled — protocol at /a2a/, management at /api/a2a/")
+    except Exception as e:
+        logger.warning(f"A2A initialization failed: {e}")
+
+    # ── Incident Response Playbooks ──────────────────────────────
+    try:
+        from feature_flags import FEATURE_INCIDENT_RESPONSE
+        if FEATURE_INCIDENT_RESPONSE:
+            from src.incidents.api import router as incidents_router, init_incidents_api
+            from src.incidents.playbook_api import router as playbook_router, init_playbook_api
+            from src.incidents.receipt_hook import configure as configure_incident_hook
+
+            init_incidents_api(_receipt_service, "/home/lancelot/data")
+            app.include_router(incidents_router)
+
+            _playbooks_dir = os.path.join(os.path.dirname(__file__), "..", "..", "playbooks")
+            init_playbook_api(_playbooks_dir)
+            app.include_router(playbook_router)
+
+            configure_incident_hook(enabled=True, data_dir="/home/lancelot/data")
+
+            logger.info("FEATURE_INCIDENT_RESPONSE enabled — API at /api/incidents/, /api/playbooks/")
+    except Exception as e:
+        logger.warning(f"Incident Response initialization failed: {e}")
+
     logger.info("Lancelot Gateway started.")
 
 
@@ -1447,6 +1907,21 @@ async def shutdown_event():
     """F8: Graceful shutdown."""
     logger.info("Lancelot Gateway shutting down.")
     try:
+        # Async shutdown for federation transport layer (must happen before subsystem_manager.stop_all)
+        try:
+            fed_entry = subsystem_manager._subsystems.get("federation")
+            if fed_entry and fed_entry.running:
+                fed_objs = fed_entry.objects or {}
+                for _fname in ("cost_reporter", "heartbeat_mesh", "transport"):
+                    _fobj = fed_objs.get(_fname)
+                    if _fobj and hasattr(_fobj, "stop"):
+                        try:
+                            await _fobj.stop()
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
         # Stop all hot-toggleable subsystems (scheduler threads, health monitor, BAL DB, etc.)
         subsystem_manager.stop_all()
 
@@ -1478,6 +1953,12 @@ async def shutdown_event():
             _google_mgr = get_google_oauth_manager()
             if _google_mgr:
                 _google_mgr.stop_background_refresh()
+        except Exception:
+            pass
+        # Observability: flush pending OTel spans and metrics
+        try:
+            from observability.otel_provider import shutdown_otel
+            shutdown_otel()
         except Exception:
             pass
         main_orchestrator.audit_logger.log_event("GATEWAY_SHUTDOWN", "Graceful shutdown initiated")

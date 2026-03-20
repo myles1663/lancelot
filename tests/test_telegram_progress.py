@@ -11,7 +11,7 @@ import time
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from toolflow.telegram_bridge import (
+from src.core.toolflow.telegram_bridge import (
     TelegramProgressBridge,
     _MAX_VISIBLE_STEPS,
     _STATUS_ICONS,
@@ -68,7 +68,7 @@ class TestQuestStarted:
 
         mock_bot.send_message_with_keyboard.assert_called_once()
         text = mock_bot.send_message_with_keyboard.call_args[0][0]
-        assert "WORKING" in text
+        assert "Processing your request" in text
 
     def test_tracks_quest_state(self, bridge, mock_bot):
         """Should store quest state with message_id."""
@@ -126,7 +126,8 @@ class TestToolCallStarted:
 
         mock_bot.edit_message.assert_called_once()
         text = mock_bot.edit_message.call_args[0][1]
-        assert "network_client" in text
+        # Source replaces underscores with spaces for Telegram display
+        assert "network client" in text
 
     def test_ignores_unknown_quest(self, bridge, mock_bot):
         """Should skip if quest_id is not being tracked."""
@@ -222,7 +223,7 @@ class TestQuestCompleted:
 
         # Should have edited with completion text
         text = mock_bot.edit_message.call_args[0][1]
-        assert "COMPLETE" in text
+        assert "Quest finished" in text
         assert "3/3" in text
         assert "2500ms" in text
 
@@ -250,7 +251,7 @@ class TestQuestFailed:
         _run(bridge.on_toolflow_event(event))
 
         text = mock_bot.edit_message.call_args[0][1]
-        assert "FAILED" in text
+        assert "Quest did not complete" in text
         assert "Model timeout" in text
         assert "quest-1" not in bridge._active_quests
 
@@ -263,22 +264,22 @@ class TestBuildProgressText:
     """Tests for the _build_progress_text formatter."""
 
     def test_running_header(self, bridge):
-        """Running status shows WORKING header."""
+        """Running status shows Processing header."""
         state = {"steps": []}
         text = bridge._build_progress_text(state, status="running")
-        assert "WORKING" in text
+        assert "Processing your request" in text
 
     def test_completed_header(self, bridge):
-        """Completed status shows COMPLETE header."""
+        """Completed status shows Quest finished header."""
         state = {"steps": []}
         text = bridge._build_progress_text(state, status="completed")
-        assert "COMPLETE" in text
+        assert "Quest finished" in text
 
     def test_failed_header(self, bridge):
-        """Failed status shows FAILED header."""
+        """Failed status shows Quest did not complete header."""
         state = {"steps": []}
         text = bridge._build_progress_text(state, status="failed")
-        assert "FAILED" in text
+        assert "Quest did not complete" in text
 
     def test_shows_steps_with_status_icons(self, bridge):
         """Steps should show status icons and tool names."""
@@ -289,9 +290,10 @@ class TestBuildProgressText:
             ],
         }
         text = bridge._build_progress_text(state, status="running")
-        assert "[OK]" in text
+        # Source uses emoji icons: done=checkmark, running=hourglass
+        assert _STATUS_ICONS["done"] in text
         assert "search" in text
-        assert "..." in text
+        assert _STATUS_ICONS["running"] in text
         assert "write" in text
 
     def test_truncates_to_max_visible_steps(self, bridge):
@@ -304,10 +306,11 @@ class TestBuildProgressText:
         text = bridge._build_progress_text(state, status="running")
 
         assert "earlier step(s) omitted" in text
-        # Should show last _MAX_VISIBLE_STEPS tools
-        assert f"tool_{_MAX_VISIBLE_STEPS + 2}" in text
+        # Source replaces underscores with spaces: tool_7 -> "tool 7"
+        last_idx = _MAX_VISIBLE_STEPS + 2
+        assert f"tool {last_idx}" in text
         # Should NOT show the very first tool
-        assert "tool_0" not in text
+        assert "tool 0" not in text
 
     def test_shows_inputs_summary(self, bridge):
         """Should show truncated inputs for each step."""
@@ -322,7 +325,8 @@ class TestBuildProgressText:
             ],
         }
         text = bridge._build_progress_text(state, status="running")
-        assert "url=https://example.com" in text
+        # Underscores are replaced with spaces, but URLs should still be recognizable
+        assert "url=https://example.com" in text or "url=https://example.com/api/data" in text
 
     def test_summary_line(self, bridge):
         """Should include summary when provided."""
@@ -331,6 +335,7 @@ class TestBuildProgressText:
             state, status="completed",
             summary="Done: 5/5 tools succeeded (3200ms)",
         )
+        # Underscores in text are replaced with spaces, but this summary has none
         assert "Done: 5/5 tools succeeded (3200ms)" in text
 
 
@@ -417,5 +422,5 @@ class TestFullLifecycle:
 
         # Verify the final message contains the summary
         final_text = mock_bot.edit_message.call_args[0][1]
-        assert "COMPLETE" in final_text
+        assert "Quest finished" in final_text
         assert "2/2" in final_text

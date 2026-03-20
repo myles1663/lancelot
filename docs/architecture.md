@@ -360,6 +360,82 @@ Transitions are driven by: lifecycle events (spawn complete), operator intervent
 
 For the full reference, see [Hive](hive.md). For governance details, see [Governance — Scoped Soul Governance](governance.md#scoped-soul-governance-hive-agent-mesh).
 
+### Federation Data Plane
+
+The Federation Data Plane enables multi-instance Lancelot coordination — hierarchical parent-child trees or peer-to-peer meshes — with Soul-governed task handoff, cost governance, and cross-instance audit trails.
+
+**Architecture:**
+
+```
+Instance A (Root)                    Instance B (Child)
+┌────────────────────┐               ┌────────────────────┐
+│  FederationIdentity │  Ed25519     │  FederationIdentity │
+│  (keypair + signing)│  signed HTTP │  (keypair + signing)│
+│                     │◄────────────►│                     │
+│  TopologyRegistry   │  heartbeat   │  TopologyRegistry   │
+│  SoulTransport      │  soul push   │  SoulTransport      │
+│  HandoffProtocol    │  task handoff│  HandoffProtocol    │
+│  KillSwitch         │  kill cmds   │  KillSwitch         │
+│  CostAggregation    │  cost data   │  CostAggregation    │
+│  AuditEngine        │              │  AuditEngine        │
+└────────────────────┘               └────────────────────┘
+```
+
+**Deployment modes:** STANDALONE (single instance), HIERARCHICAL (parent-child tree with root Soul governance), FEDERATED (peer mesh). Mode is derived from topology shape, not configured directly.
+
+**Soul propagation (3-tier risk model):** T1 changes (tone/naming) are pushed directly via heartbeat. T2 changes (autonomy posture) use pause → push → activate → resume. T3 changes (risk rules, budgets) require full stop → push → per-instance confirmation.
+
+**Task handoff:** Structured task transfer with HandoffContract (assumptions, success criteria, data schema), Soul context, and receipt chain for audit continuity. The `ContradictionDetector` validates downstream outputs against upstream contract assumptions.
+
+**Security:** Per-instance Ed25519 identity, all inter-instance requests signed with canonical string construction, nonce-based replay protection (±30s window), SQLite-backed peer registry with WAL mode.
+
+**Feature flag:** `FEATURE_FEDERATION` (default: false).
+
+For the full reference, see [Federation](federation.md).
+
+### MCP Governance (Model Context Protocol)
+
+The MCP subsystem provides governed access to external MCP-compliant tool servers through an 8-gate fail-closed governance pipeline.
+
+**Architecture:**
+
+```
+Agent requests MCP tool call
+  → Gate 1: Soul Permission (mcp_permissions in Soul doc)
+  → Gate 2: Kill Switch (FEATURE_MCP + per-server flags)
+  → Gate 3: Server Status (registered, not suspended)
+  → Gate 4: Network Allowlist (domain validation)
+  → Gate 5: Argument Screening (6 injection categories)
+  → Gate 6: Credential Resolution (Vault-scoped per server)
+  → Gate 7: MCP Execution (HTTP+SSE JSON-RPC 2.0)
+  → Gate 7b: Response Guard (credential scrub, injection removal)
+  → Gate 8: Receipt Persistence (MANDATORY — failure = result discarded)
+```
+
+**Transport restriction:** HTTP+SSE only. Stdio process spawning is explicitly excluded as an attack surface in a containerized governance system.
+
+**Argument screening:** 6 injection pattern categories (SQL, path traversal, command injection, prompt injection, NoSQL, size limits). Compound attack detection: 2+ categories = critical severity hard block.
+
+**Response guard:** Scrubs 13 credential patterns and 6 prompt injection markers from MCP server responses before agent context. 500KB size limit.
+
+**Federation ceiling:** Child/peer MCP permissions monotonically narrowed from root Soul. Uses same narrowing contract as HIVE scoped Souls — child permissions ⊆ root permissions.
+
+**Feature flag:** `FEATURE_MCP` (default: false).
+
+For the full reference, see [MCP](mcp.md).
+
+### Connectors
+
+Connectors are governed integrations with external services (email, Slack, calendar, etc.). Every connector produces an HTTP request specification; the `ConnectorProxy` is the only component that makes actual network calls. `GovernedConnectorProxy` adds risk classification, policy evaluation, trust tracking, and receipt emission.
+
+**Architecture:** Connector.execute() → ConnectorResult (request spec) → ConnectorProxy (credential injection, domain validation, HTTP execution) → GovernedConnectorProxy (risk classification, policy, trust ledger, receipts).
+
+**Credential isolation:** 7 injection modes (Bearer, API Key, Basic, Bot Token, URL Token, OAuth 1.0a, composed Basic). Domain validation uses exact hostname matching against the connector's declared `target_domains`.
+
+**Feature flag:** `FEATURE_CONNECTORS` (default: false, requires `FEATURE_TOOLS_FABRIC`).
+
+For the full reference, see [Connectors](connectors.md).
+
 ### Health Monitor (Heartbeat)
 
 Continuous background monitoring at 30-second intervals.
@@ -416,6 +492,24 @@ SQLite-backed job scheduler supporting cron and interval triggers.
 **Network allowlist:** Requires `accounts.google.com` and `oauth2.googleapis.com` in `config/network_allowlist.yaml`.
 
 **Fallback:** When the feature flag is disabled or no Google OAuth token is present, Gmail and Calendar connectors are unavailable. The flag has no effect on other providers or subsystems.
+
+### Incident Response Playbooks
+
+(`src/incidents/`, 7 modules, `FEATURE_INCIDENT_RESPONSE`, default disabled)
+
+Structured response protocols for governance events. The subsystem monitors the receipt stream via a non-blocking hook in the receipt bridge, evaluates 12 trigger rules with fixed-window burst counters and per-trigger dedup, and opens incident records with attached playbook checklists.
+
+**Key architectural properties:**
+- **Read-only with respect to governance** — reads receipts, does not write to the governance pipeline
+- **Separate persistence** — incident records stored as JSON in `data/incidents/`, distinct from receipt system
+- **Playbook registry** — 12 base YAML playbooks across 5 categories (governance, security, cost, availability, compliance) with 3 industry variant overlays (finance, healthcare, regulated-general)
+- **Industry variant overlays** — append-after strategy using explicit `insert_after` field to extend base playbooks
+- **PDF reports** — generated via shared ReportLab helpers (`src/shared/pdf_helpers.py`) extracted for cross-subsystem reuse
+- **14 REST endpoints** — 11 at `/api/incidents/` (lifecycle management) + 3 at `/api/playbooks/` (registry and reload)
+- **10 receipt types** — INCIDENT_OPENED through PLAYBOOK_UPDATED; 8 identity-required
+- **War Room panel** — Incidents Dashboard at `/incidents` with stats, table, detail, playbook checklist, timeline, and close flow
+
+For the full reference, see [Incident Response](incident-response.md).
 
 ### War Room (Operator Dashboard)
 
@@ -484,8 +578,17 @@ A core architectural principle: **any subsystem can be disabled without breaking
 | UAB | No desktop app control; all other tool capabilities still available |
 | Hive | No sub-agent decomposition; single-agent execution still works |
 | Hive UAB | No UAB actions within Hive agents; standalone UAB and Hive still work independently |
+| Federation | No multi-instance coordination; standalone operation only |
+| MCP | No external MCP tool server access; built-in connectors and tools still available |
+| Connectors | No external service integrations; direct tool execution still works |
+| Compliance Export | No one-click audit artifacts; receipt DAG still available for manual audit |
+| Observability | No OTel export, webhooks, or Metrics API; War Room and receipt explorer still provide full visibility |
+| Time-Travel | No fork/replay/inspect of quest histories; receipt DAG is still viewable in Receipt Explorer |
+| A2A | No agent-to-agent communication; Lancelot operates as a standalone agent without inbound/outbound A2A capabilities |
+| Incident Response | No incident auto-detection, playbook checklists, or PDF reports; receipt DAG and manual audit still available |
+| Soul Template Library | Always available (no feature flag). Depends on Soul Store, Soul Linter, Soul Amendments. Template registry and apply flow unavailable only if Soul subsystem itself is disabled |
 
-This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FEATURE_DEEP_REASONING_LOOP`, `FEATURE_PROVIDER_SDK`, `FEATURE_ANTHROPIC_OAUTH`, `FEATURE_GOOGLE_OAUTH`, etc.) that gate each subsystem at initialization. When a subsystem is disabled, its code paths are skipped and its API endpoints return appropriate "not available" responses.
+This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FEATURE_DEEP_REASONING_LOOP`, `FEATURE_PROVIDER_SDK`, `FEATURE_ANTHROPIC_OAUTH`, `FEATURE_GOOGLE_OAUTH`, `FEATURE_A2A`, `FEATURE_INCIDENT_RESPONSE`, etc.) that gate each subsystem at initialization. When a subsystem is disabled, its code paths are skipped and its API endpoints return appropriate "not available" responses.
 
 ---
 

@@ -328,8 +328,8 @@ class TestTelegramBotVoice:
 
         # Verify STT was called
         vp.process_voice_note.assert_called_once()
-        # Verify orchestrator received transcribed text
-        orch.chat.assert_called_once_with("Hello Lancelot")
+        # Verify orchestrator received transcribed text with channel
+        orch.chat.assert_called_once_with("Hello Lancelot", channel="telegram")
         # Verify response was sent
         assert len(sent) == 1
         assert "at your service" in sent[0]
@@ -382,8 +382,10 @@ class TestTelegramBotVoice:
         }
         bot._handle_update(update)
 
-        # TTS was called with orchestrator response
-        vp.synthesize_reply.assert_called_once_with("All systems nominal.")
+        # TTS was called with sanitized orchestrator response
+        vp.synthesize_reply.assert_called_once()
+        tts_arg = vp.synthesize_reply.call_args[0][0]
+        assert "nominal" in tts_arg
         # Voice reply sent
         assert len(voice_sent) == 1
         assert voice_sent[0] == b"\xff\xfe\xfd"
@@ -395,6 +397,7 @@ class TestTelegramBotVoice:
         """Regular text messages still route through orchestrator."""
         orch = MagicMock()
         orch.chat.return_value = "Text response"
+        orch._telegram_already_sent = False
 
         bot = self._make_bot(orchestrator=orch, voice_processor=MagicMock())
         sent = []

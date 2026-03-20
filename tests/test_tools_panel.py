@@ -301,8 +301,18 @@ class TestRoutingSummary:
         mock_fabric.get_routing_summary.assert_called_once()
         assert "capability_providers" in summary
 
-    def test_get_capability_providers(self, panel):
+    def test_get_capability_providers(self, panel, mock_fabric):
         """Test getting capability providers."""
+        # The source uses routing.get("capabilities", {}), so update mock
+        mock_fabric.get_routing_summary.return_value = {
+            "capabilities": {
+                "shell_exec": ["local_sandbox"],
+                "repo_ops": ["local_sandbox"],
+                "file_ops": ["local_sandbox"],
+                "ui_builder": ["ui_templates", "ui_antigravity"],
+            },
+            "safe_mode": False,
+        }
         cap_provs = panel.get_capability_providers()
 
         assert "shell_exec" in cap_provs

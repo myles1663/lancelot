@@ -37,7 +37,14 @@ const NAV_GROUPS: NavGroup[] = [
       { label: 'Tool Fabric', path: '/tools', shortcut: '7' },
       { label: 'Memory', path: '/memory', shortcut: '8' },
       { label: 'Skills', path: '/skills' },
+      { label: 'A2A Protocol', path: '/a2a' },
       { label: 'Scheduler', path: '/scheduler', shortcut: '9' },
+    ],
+  },
+  {
+    title: 'INCIDENTS',
+    items: [
+      { label: 'Incident Response', path: '/incidents' },
     ],
   },
   {
@@ -48,6 +55,26 @@ const NAV_GROUPS: NavGroup[] = [
       { label: 'Connectors', path: '/connectors' },
       { label: 'Cost Tracker', path: '/costs' },
       { label: 'Kill Switches', path: '/flags' },
+    ],
+  },
+  {
+    title: 'FEDERATION',
+    items: [
+      { label: 'Overview', path: '/federation' },
+      { label: 'Graph Builder', path: '/federation/graph' },
+      { label: 'Audit Trail', path: '/federation/audit' },
+    ],
+  },
+  {
+    title: 'COMPLIANCE',
+    items: [
+      { label: 'Compliance Export', path: '/compliance' },
+    ],
+  },
+  {
+    title: 'DEBUGGING',
+    items: [
+      { label: 'Time-Travel Debugger', path: '/timetravel' },
     ],
   },
   {

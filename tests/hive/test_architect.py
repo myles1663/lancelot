@@ -208,7 +208,7 @@ class TestInterventionHandling:
             intervention_type=InterventionType.KILL_ALL,
             reason="Emergency stop",
         )
-        result = await architect.handle_intervention(intervention)
+        result = await architect.handle_intervention(intervention, operator_id="test-op", session_id="test-sess")
         assert result["action"] == "kill_all"
         assert registry.active_count() == 0
 
@@ -221,7 +221,7 @@ class TestInterventionHandling:
             agent_id=record.agent_id,
             reason="Test kill",
         )
-        result = await architect.handle_intervention(intervention)
+        result = await architect.handle_intervention(intervention, operator_id="test-op", session_id="test-sess")
         assert result["action"] == "kill"
         assert result["agent_id"] == record.agent_id
 
@@ -247,7 +247,7 @@ class TestInterventionHandling:
             agent_id=record.agent_id,
             reason="Check progress",
         )
-        result = await architect.handle_intervention(intervention)
+        result = await architect.handle_intervention(intervention, operator_id="test-op", session_id="test-sess")
         assert result["action"] == "pause"
         mgr.shutdown()
 
@@ -274,7 +274,7 @@ class TestInterventionHandling:
             agent_id=record.agent_id,
             reason="Continue",
         )
-        result = await architect.handle_intervention(intervention)
+        result = await architect.handle_intervention(intervention, operator_id="test-op", session_id="test-sess")
         assert result["action"] == "resume"
         mgr.shutdown()
 
@@ -292,7 +292,7 @@ class TestReplan:
             reason="Change approach",
             feedback="Use a different strategy",
         )
-        result = await architect.handle_intervention(intervention)
+        result = await architect.handle_intervention(intervention, operator_id="test-op", session_id="test-sess")
         assert result["action"] == "replan"
         # Same plan hash → aborted
         assert result.get("aborted") is True
@@ -305,7 +305,7 @@ class TestReplan:
             intervention_type=InterventionType.MODIFY,
             reason="Retry",
         )
-        result = await architect.handle_intervention(intervention)
+        result = await architect.handle_intervention(intervention, operator_id="test-op", session_id="test-sess")
         # The mock always returns the same plan, so it should detect identical
         assert result.get("aborted") is True
         assert "identical" in result.get("error", "").lower()

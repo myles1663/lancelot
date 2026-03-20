@@ -1,0 +1,343 @@
+# Lancelot — A Governed Autonomous System
+# Copyright (c) 2026 Myles Russell Hamilton
+# Licensed under BUSL-1.1. See LICENSE for details.
+
+"""Unit tests for the War Room Metrics API."""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src", "core"))
+
+import base64
+import json
+import sqlite3
+import time
+
+import pytest
+from unittest.mock import MagicMock, patch
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+import src.observability.metrics_api as metrics_module
+from src.observability.metrics_api import (
+    router,
+    init_metrics_api,
+    _encode_cursor,
+    _decode_cursor,
+    _check_rate_limit,
+    _envelope,
+)
+
+
+# ── Fixtures ─────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def app():
+    """Create a FastAPI app with the metrics router mounted."""
+    _app = FastAPI()
+    _app.include_router(router)
+    return _app
+
+
+@pytest.fixture
+def mock_receipt_service(tmp_path):
+    """Create a mock receipt service backed by a real SQLite DB."""
+    db_path = str(tmp_path / "receipts.db")
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("""
+        CREATE TABLE receipts (
+            id TEXT PRIMARY KEY,
+            timestamp TEXT,
+            action_type TEXT,
+            action_name TEXT,
+            status TEXT,
+            tier INTEGER DEFAULT 0,
+            duration_ms INTEGER,
+            quest_id TEXT,
+            operator_id TEXT,
+            inputs TEXT DEFAULT '{}',
+            outputs TEXT DEFAULT '{}'
+        )
+    """)
+
+    # Seed some test data
+    for i in range(5):
+        conn.execute(
+            "INSERT INTO receipts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                f"rcpt-{i:03d}",
+                f"2026-03-17T12:{i:02d}:00Z",
+                "task_executed",
+                f"action_{i}",
+                "success",
+                i % 4,
+                100 + i * 10,
+                f"quest-{i % 2}",
+                f"op-{i % 3}",
+                json.dumps({}),
+                json.dumps({"cost_usd": 0.01 * (i + 1), "provider": "gemini"}),
+            ),
+        )
+    conn.commit()
+
+    svc = MagicMock()
+    svc._get_connection.return_value = conn
+    svc.get.return_value = None  # Default: not found
+    return svc
+
+
+@pytest.fixture
+def client(app, mock_receipt_service):
+    """Provide a TestClient with an initialized metrics API."""
+    init_metrics_api(mock_receipt_service)
+    # Reset rate limit buckets
+    metrics_module._rate_buckets.clear()
+    return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def patch_externals():
+    """Patch external imports that won't be available in test env."""
+    with patch.object(metrics_module, "_get_soul_version", return_value="test-soul-v1"), \
+         patch.object(metrics_module, "_get_deployment_id", return_value="test-deploy"):
+        yield
+
+
+# ── GET /metrics/summary ─────────────────────────────────────────
+
+
+class TestMetricsSummary:
+    @patch("src.observability.metrics_api.metrics_summary.__wrapped__",
+           new=None, create=True)
+    def test_returns_valid_structure(self, client):
+        """Summary endpoint returns expected envelope and data keys."""
+        resp = client.get("/api/metrics/summary")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "api_version" in body
+        assert "data" in body
+        data = body["data"]
+        assert "active_kill_switches" in data
+        assert "pending_t3_approvals" in data
+        assert "current_spend_rate_usd_hr" in data
+        assert "active_hive_agents" in data
+        assert "soul_version" in data
+
+    def test_envelope_has_soul_version(self, client):
+        resp = client.get("/api/metrics/summary")
+        body = resp.json()
+        assert body["soul_version"] == "test-soul-v1"
+        assert body["deployment_id"] == "test-deploy"
+
+
+# ── GET /metrics/receipts ────────────────────────────────────────
+
+
+class TestMetricsReceipts:
+    def test_returns_receipts(self, client):
+        resp = client.get("/api/metrics/receipts")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "data" in body
+        assert "receipts" in body["data"]
+        assert len(body["data"]["receipts"]) == 5
+
+    def test_pagination_limit(self, client):
+        resp = client.get("/api/metrics/receipts?limit=2")
+        body = resp.json()
+        assert len(body["data"]["receipts"]) == 2
+        assert body["pagination"]["has_more"] is True
+        assert body["pagination"]["cursor"] is not None
+
+    def test_pagination_cursor_follows(self, client):
+        """Cursor from first page fetches next page."""
+        resp1 = client.get("/api/metrics/receipts?limit=2")
+        cursor = resp1.json()["pagination"]["cursor"]
+
+        resp2 = client.get(f"/api/metrics/receipts?limit=2&cursor={cursor}")
+        body2 = resp2.json()
+        assert len(body2["data"]["receipts"]) == 2
+
+        # Receipts should be different between pages
+        ids1 = {r["id"] for r in resp1.json()["data"]["receipts"]}
+        ids2 = {r["id"] for r in body2["data"]["receipts"]}
+        assert ids1.isdisjoint(ids2)
+
+    def test_filter_by_action_type(self, client):
+        resp = client.get("/api/metrics/receipts?receipt_type=task_executed")
+        body = resp.json()
+        for r in body["data"]["receipts"]:
+            assert r["action_type"] == "task_executed"
+
+    def test_filter_by_quest_id(self, client):
+        resp = client.get("/api/metrics/receipts?quest_id=quest-0")
+        body = resp.json()
+        for r in body["data"]["receipts"]:
+            assert r["quest_id"] == "quest-0"
+
+
+# ── GET /metrics/receipts/{receipt_id} ───────────────────────────
+
+
+class TestMetricsReceiptDetail:
+    def test_not_found_returns_404(self, client):
+        resp = client.get("/api/metrics/receipts/nonexistent-id")
+        assert resp.status_code == 404
+
+    def test_found_returns_receipt(self, client, mock_receipt_service):
+        mock_receipt = MagicMock()
+        mock_receipt.to_dict.return_value = {
+            "id": "rcpt-found",
+            "action_type": "task_executed",
+            "status": "success",
+        }
+        mock_receipt_service.get.return_value = mock_receipt
+
+        resp = client.get("/api/metrics/receipts/rcpt-found")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["data"]["receipt"]["id"] == "rcpt-found"
+
+
+# ── GET /metrics/actions ─────────────────────────────────────────
+
+
+class TestMetricsActions:
+    def test_returns_action_counts(self, client):
+        resp = client.get("/api/metrics/actions")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "groups" in body["data"]
+        assert body["data"]["group_by"] == "risk_tier"
+
+    def test_group_by_receipt_type(self, client):
+        resp = client.get("/api/metrics/actions?group_by=receipt_type")
+        body = resp.json()
+        assert body["data"]["group_by"] == "receipt_type"
+        # All 5 are task_executed
+        groups = body["data"]["groups"]
+        assert any(g["key"] == "task_executed" for g in groups)
+
+
+# ── GET /metrics/cost ────────────────────────────────────────────
+
+
+class TestMetricsCost:
+    def test_returns_cost_data(self, client):
+        resp = client.get("/api/metrics/cost")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "cost_groups" in body["data"]
+
+    def test_cost_aggregation(self, client):
+        resp = client.get("/api/metrics/cost?group_by=provider")
+        body = resp.json()
+        groups = body["data"]["cost_groups"]
+        # All 5 receipts have provider=gemini
+        assert len(groups) >= 1
+        gemini = next((g for g in groups if g["key"] == "gemini"), None)
+        assert gemini is not None
+        assert gemini["total_usd"] > 0
+
+
+# ── GET /metrics/trust-ledger ────────────────────────────────────
+
+
+class TestMetricsTrustLedger:
+    def test_returns_trust_data(self, client):
+        resp = client.get("/api/metrics/trust-ledger")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "entries" in body["data"]
+
+
+# ── GET /metrics/soul ────────────────────────────────────────────
+
+
+class TestMetricsSoul:
+    def test_returns_soul_metadata(self, client):
+        resp = client.get("/api/metrics/soul")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "version" in body["data"]
+
+
+# ── GET /metrics/kill-switches ───────────────────────────────────
+
+
+class TestMetricsKillSwitches:
+    def test_returns_flag_states(self, client):
+        resp = client.get("/api/metrics/kill-switches")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "switches" in body["data"]
+        assert "total" in body["data"]
+
+
+# ── Cursor Encoding / Decoding ───────────────────────────────────
+
+
+class TestCursorPagination:
+    def test_encode_decode_roundtrip(self):
+        for offset in [0, 1, 50, 100, 999]:
+            cursor = _encode_cursor(offset)
+            assert _decode_cursor(cursor) == offset
+
+    def test_cursor_is_base64_urlsafe(self):
+        cursor = _encode_cursor(42)
+        # Should be valid base64 urlsafe
+        decoded = base64.urlsafe_b64decode(cursor).decode()
+        assert decoded == "42"
+
+    def test_invalid_cursor_defaults_to_zero(self):
+        assert _decode_cursor("not-valid-base64!!!") == 0
+
+    def test_none_cursor_returns_zero(self):
+        assert _decode_cursor(None) == 0
+
+    def test_empty_cursor_returns_zero(self):
+        assert _decode_cursor("") == 0
+
+
+# ── Rate Limiting ────────────────────────────────────────────────
+
+
+class TestRateLimiting:
+    def setup_method(self):
+        metrics_module._rate_buckets.clear()
+
+    def test_allows_within_limit(self):
+        for _ in range(60):
+            assert _check_rate_limit("op-test", max_per_minute=60) is True
+
+    def test_blocks_over_limit(self):
+        for _ in range(60):
+            _check_rate_limit("op-test", max_per_minute=60)
+        assert _check_rate_limit("op-test", max_per_minute=60) is False
+
+    def test_separate_operators_have_separate_buckets(self):
+        for _ in range(60):
+            _check_rate_limit("op-a", max_per_minute=60)
+        # op-a is at limit, but op-b should still be allowed
+        assert _check_rate_limit("op-b", max_per_minute=60) is True
+
+    def test_old_entries_expire(self):
+        """Entries older than 60s are pruned."""
+        metrics_module._rate_buckets["op-expire"] = [time.time() - 120] * 60
+        assert _check_rate_limit("op-expire", max_per_minute=60) is True
+
+
+# ── Service Not Initialized ──────────────────────────────────────
+
+
+class TestServiceNotInitialized:
+    def test_summary_returns_503_when_not_initialized(self, app):
+        """Endpoints return 503 when receipt service is None."""
+        metrics_module._receipt_service = None
+        tc = TestClient(app)
+        resp = tc.get("/api/metrics/summary")
+        assert resp.status_code == 503

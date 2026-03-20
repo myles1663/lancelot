@@ -10,9 +10,24 @@ import tempfile
 import pytest
 
 # Ensure project root is importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-# Mirror Docker PYTHONPATH so bare provider imports (e.g. 'from providers.base') resolve
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "core"))
+_project_root = os.path.join(os.path.dirname(__file__), "..")
+sys.path.insert(0, _project_root)
+
+# Mirror Docker PYTHONPATH so bare imports resolve identically to production.
+# Docker sets: src/core : src/ui : src/agents : src/memory : src/shared : src/integrations : src : .
+# Order matters — src/core first (gateway, orchestrator, providers), then peers.
+for _subdir in (
+    os.path.join("src", "core"),
+    os.path.join("src", "ui"),
+    os.path.join("src", "agents"),
+    os.path.join("src", "memory"),
+    os.path.join("src", "shared"),
+    os.path.join("src", "integrations"),
+    "src",
+):
+    _path = os.path.join(_project_root, _subdir)
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +62,42 @@ def pytest_collection_modifyitems(config, items):
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _reset_receipt_singleton():
+    """Reset the receipt service singleton between tests.
+
+    Without this, the first test to call get_receipt_service() locks the
+    singleton to its data_dir, and all subsequent tests reuse the same
+    (possibly stale or wrong-path) instance.
+    """
+    yield
+    try:
+        from src.shared.receipts import _service_lock
+        import src.shared.receipts as _receipts_mod
+        with _service_lock:
+            if _receipts_mod._service_instance is not None:
+                try:
+                    _receipts_mod._service_instance.close()
+                except Exception:
+                    pass
+                _receipts_mod._service_instance = None
+    except Exception:
+        pass
+
+    # Also reset bare-import singleton if it exists (Docker-path imports)
+    try:
+        import receipts as _bare_receipts
+        if hasattr(_bare_receipts, '_service_instance'):
+            if _bare_receipts._service_instance is not None:
+                try:
+                    _bare_receipts._service_instance.close()
+                except Exception:
+                    pass
+                _bare_receipts._service_instance = None
+    except Exception:
+        pass
+
+
 @pytest.fixture
 def tmp_data_dir(tmp_path):
     """Provide an isolated temporary data directory for a test."""

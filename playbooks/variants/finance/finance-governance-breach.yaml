@@ -1,0 +1,62 @@
+_playbook_metadata:
+  name: finance-governance-breach
+  display_name: "Kill Switch Response — Financial Services"
+  description: "Financial services extension of the kill switch activation response. Adds mandatory CISO notification, financial workflow suspension for security-related activations, and post-incident review scheduling."
+  category: GOVERNANCE_BREACH
+  severity_default: HIGH
+  industry: finance
+  version: "1.0"
+  author: Lancelot
+  tags: [variant, finance, governance, kill-switch, ciso, regulatory]
+
+extends: governance-breach-kill-switch
+
+variant_steps:
+  - step: 100
+    insert_after: 5
+    title: "Notify CISO — financial workflow kill switch"
+    description: "For any kill switch activation affecting financial workflow agents, notify the CISO within 30 minutes. Provide the kill switch name, affected quest and agent identifiers, blast radius assessment from Step 5, and current incident severity. Log the notification as a receipt in the incident timeline. CISO notification is mandatory regardless of whether the activation was intentional or automatic."
+    action_type: MANUAL
+    sla_minutes: 30
+    decision_points:
+      - condition: "If CISO acknowledges within SLA"
+        action: "Record acknowledgment receipt and proceed."
+      - condition: "If CISO does not respond within 30 minutes"
+        action: "Escalate to deputy CISO or security team lead. Do not proceed without executive acknowledgment."
+    actions:
+      - notify: ciso
+      - create_receipt: ciso_notification
+
+  - step: 101
+    insert_after: 7
+    title: "Suspend all financial workflow quests if security-related"
+    description: "If the root cause analysis from Step 7 determines the kill switch activation was security-related (injection, unauthorized access, credential compromise, or Soul violation with security implications), suspend ALL financial workflow quests — not just the affected quest. Financial workflows have elevated risk profiles and cross-contamination must be ruled out before any financial quest resumes. Document each suspended quest and the suspension receipt."
+    action_type: MANUAL
+    sla_minutes: 15
+    decision_points:
+      - condition: "If kill switch was security-related"
+        action: "Suspend all financial workflow quests. Each suspension must generate a receipt. Do not resume any financial quest until security team clears the environment."
+      - condition: "If kill switch was not security-related (e.g., APL false positive, operator error)"
+        action: "No broad suspension required. Document the determination and proceed."
+    actions:
+      - suspend_quests:
+          category: financial_workflow
+          scope: all
+
+  - step: 102
+    insert_after: 9
+    title: "Schedule post-incident review and compliance filing"
+    description: "Schedule a formal post-incident review within 5 business days of incident close. Attendees must include the security team lead, the operator involved, and a compliance representative. The review must produce a written report documenting root cause, timeline, remediation actions, and process improvements. File the report with the compliance record system. For security-related activations, the report must also address whether any regulatory notification obligations were triggered."
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "If review is scheduled and compliance filing is initiated"
+        action: "Document the scheduled review date and compliance filing reference. Close the variant steps."
+      - condition: "If scheduling conflicts prevent review within 5 business days"
+        action: "Escalate to compliance officer. Regulatory timelines may require expedited scheduling."
+    actions:
+      - schedule_review:
+          deadline_business_days: 5
+      - file_compliance_record: true
+
+paging: {}

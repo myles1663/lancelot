@@ -385,7 +385,7 @@ class TestRealLockfileIntegration:
 
     def test_model_path_from_real_lockfile(self):
         path = model_path()
-        assert path.name == "Hermes-2-Pro-Mistral-7B.Q4_K_M.gguf"
+        assert path.name == "Qwen3-8B-Q4_K_M.gguf"
         assert path.parent.name == "weights"
 
     def test_real_lockfile_hash_is_64_chars(self):
@@ -400,4 +400,4 @@ class TestRealLockfileIntegration:
         data = load_lockfile()
         url = data["model"]["sources"][0]["url"]
         assert url.startswith("https://")
-        assert "Hermes-2-Pro-Mistral-7B" in url
+        assert "Qwen3-8B" in url
