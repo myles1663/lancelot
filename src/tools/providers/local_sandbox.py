@@ -304,17 +304,22 @@ class LocalSandboxProvider(BaseProvider):
         error_message = None
         state = ProviderState.HEALTHY
 
+        available_capabilities = [c.value for c in self.capabilities]
+
         # Check Docker availability
         docker_ok, docker_version = self._check_docker()
         if not docker_ok:
-            state = ProviderState.OFFLINE
-            error_message = "Docker not available"
+            state = ProviderState.DEGRADED
+            error_message = "Docker not available for container-backed operations"
+            degraded_reasons.append("Docker not available; only local file operations are available")
+            available_capabilities = [Capability.FILE_OPS.value]
         else:
             # Check if image is available
             image_ok = self._check_image()
             if not image_ok:
                 state = ProviderState.DEGRADED
                 degraded_reasons.append(f"Image {self.config.docker_image} not pulled")
+                available_capabilities = [Capability.FILE_OPS.value]
 
         self._docker_available = docker_ok
         self._last_health_check = datetime.now(timezone.utc).isoformat()
@@ -330,6 +335,7 @@ class LocalSandboxProvider(BaseProvider):
             metadata={
                 "docker_image": self.config.docker_image,
                 "network_enabled": self.config.network_enabled,
+                "available_capabilities": available_capabilities,
             },
         )
 
@@ -720,12 +726,11 @@ class LocalSandboxProvider(BaseProvider):
         files: Optional[List[str]] = None,
     ) -> str:
         """Create a commit. Returns commit hash."""
-        # Stage files
-        if files:
-            for f in files:
-                self.run(f"git add {shlex.quote(f)}", workspace)
-        else:
-            self.run("git add -A", workspace)
+        if not files:
+            return "Error: local_sandbox.commit requires an explicit file list"
+
+        for f in files:
+            self.run(f"git add {shlex.quote(f)}", workspace)
 
         # Commit (shlex.quote handles all shell escaping)
         safe_message = shlex.quote(message)

@@ -13,9 +13,11 @@ import {
   deployTopology,
   saveTopologyVersion,
   fetchTopologyVersions,
+  fetchFederationSettings,
   type TopologyDocument,
   type TopologyVersion,
   type DeploymentGateResult,
+  type FederationSettings,
 } from '@/api/federation'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 
@@ -31,7 +33,13 @@ function EdgeStateIndicator({ state }: { state: string }) {
   return <span className={`w-2.5 h-2.5 rounded-full inline-block ${colors[state] || colors.unknown}`} />
 }
 
-function AddNodeForm({ onAdd }: { onAdd: () => void }) {
+function AddNodeForm({
+  onAdd,
+  localSettings,
+}: {
+  onAdd: () => void
+  localSettings: FederationSettings | null
+}) {
   const [nodeId, setNodeId] = useState('')
   const [name, setName] = useState('')
   const [endpoint, setEndpoint] = useState('')
@@ -46,6 +54,15 @@ function AddNodeForm({ onAdd }: { onAdd: () => void }) {
   const [budgetCeiling, setBudgetCeiling] = useState(10.0)
   const [isLocal, setIsLocal] = useState(false)
   const [error, setError] = useState('')
+
+  const applyLocalDefaults = (checked: boolean) => {
+    setIsLocal(checked)
+    if (!checked || !localSettings) return
+    if (!endpoint.trim()) setEndpoint(localSettings.self_address || '')
+    if (!pubKey.trim()) setPubKey(localSettings.public_key || '')
+    if (!fingerprint.trim()) setFingerprint(localSettings.fingerprint || '')
+    if (!name.trim()) setName('This Instance')
+  }
 
   const handleSubmit = async () => {
     if (!nodeId.trim()) { setError('Node ID required'); return }
@@ -182,7 +199,7 @@ function AddNodeForm({ onAdd }: { onAdd: () => void }) {
           <span className="text-xs text-text-muted">/day</span>
         </div>
         <label className="flex items-center gap-1.5 text-sm text-text-secondary">
-          <input type="checkbox" checked={isLocal} onChange={e => setIsLocal(e.target.checked)} />
+          <input type="checkbox" checked={isLocal} onChange={e => applyLocalDefaults(e.target.checked)} />
           Local
         </label>
         <button
@@ -192,6 +209,11 @@ function AddNodeForm({ onAdd }: { onAdd: () => void }) {
           Add Node
         </button>
       </div>
+      {isLocal && localSettings && !localSettings.self_address && (
+        <p className="text-xs text-state-warning">
+          This instance does not have a federation self address yet. Set it on Federation Overview before deploying this node.
+        </p>
+      )}
       {error && <p className="text-xs text-state-error">{error}</p>}
     </div>
   )
@@ -261,6 +283,10 @@ export function GraphBuilder() {
   const { data: topology, refetch } = usePolling<TopologyDocument>({
     fetcher: fetchActiveTopology,
     interval: 30000,
+  })
+  const { data: federationSettings } = usePolling<FederationSettings>({
+    fetcher: fetchFederationSettings,
+    interval: 15000,
   })
 
   const [gateResult, setGateResult] = useState<DeploymentGateResult | null>(null)
@@ -478,7 +504,7 @@ export function GraphBuilder() {
       {topology && (
         <div className="space-y-4">
           {/* Node editor */}
-          <AddNodeForm onAdd={refetch} />
+          <AddNodeForm onAdd={refetch} localSettings={federationSettings} />
 
           {/* Existing nodes */}
           {topology.nodes.length > 0 && (

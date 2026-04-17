@@ -33,6 +33,7 @@ from src.hive.receipt_manager import HiveReceiptManager
 from src.hive.scoped_soul import ScopedSoulGenerator
 from src.hive.runtime import SubAgentRuntime
 from src.hive.integration.governance_bridge import GovernanceBridge
+from src.core.runtime_pause import get_runtime_pause_status, is_runtime_paused
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,9 @@ class AgentLifecycleManager:
         governance_bridge: Optional[GovernanceBridge] = None,
         parent_soul=None,
         action_executor: Optional[Callable] = None,
+        spawn_gate: Optional[Callable[[TaskSpec], None]] = None,
+        spawn_record_hook: Optional[Callable[[SubAgentRecord], None]] = None,
+        collapse_record_hook: Optional[Callable[[SubAgentRecord, TaskResult], None]] = None,
     ):
         self._config = config
         self._registry = registry
@@ -61,6 +65,9 @@ class AgentLifecycleManager:
         self._governance = governance_bridge
         self._parent_soul = parent_soul
         self._action_executor = action_executor
+        self._spawn_gate = spawn_gate
+        self._spawn_record_hook = spawn_record_hook
+        self._collapse_record_hook = collapse_record_hook
 
         # Thread pool for agent execution
         self._executor = ThreadPoolExecutor(
@@ -73,6 +80,22 @@ class AgentLifecycleManager:
         self._futures: Dict[str, Future] = {}
         self._lock = threading.Lock()
 
+    def update_parent_soul(self, parent_soul) -> None:
+        """Refresh the parent Soul used for future scoped-agent spawns."""
+        self._parent_soul = parent_soul
+
+    def update_spawn_controls(
+        self,
+        *,
+        spawn_gate: Optional[Callable[[TaskSpec], None]] = None,
+        spawn_record_hook: Optional[Callable[[SubAgentRecord], None]] = None,
+        collapse_record_hook: Optional[Callable[[SubAgentRecord, TaskResult], None]] = None,
+    ) -> None:
+        """Refresh runtime hooks used for federation spawn governance."""
+        self._spawn_gate = spawn_gate
+        self._spawn_record_hook = spawn_record_hook
+        self._collapse_record_hook = collapse_record_hook
+
     # ── Spawn ────────────────────────────────────────────────────────
 
     def spawn(
@@ -80,6 +103,10 @@ class AgentLifecycleManager:
         task_spec: TaskSpec,
         quest_id: Optional[str] = None,
         actions: Optional[List[Dict[str, Any]]] = None,
+        parent_receipt_id: Optional[str] = None,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        operator_name: Optional[str] = None,
     ) -> SubAgentRecord:
         """Spawn a new sub-agent.
 
@@ -92,11 +119,23 @@ class AgentLifecycleManager:
 
         Returns the agent record.
         """
+        if is_runtime_paused():
+            pause_state = get_runtime_pause_status()
+            raise AgentSpawnDeniedError(
+                pause_state.get("reason") or "Runtime paused by operator"
+            )
+        if self._spawn_gate:
+            self._spawn_gate(task_spec)
+
         # Generate scoped soul
         scoped_soul = None
         soul_hash = None
         if self._parent_soul:
             scoped_soul = self._soul_gen.generate(self._parent_soul, task_spec)
+            if not self._soul_gen.validate_more_restrictive(scoped_soul, self._parent_soul):
+                raise AgentSpawnDeniedError(
+                    "Generated scoped Soul is not more restrictive than parent"
+                )
             soul_hash = ScopedSoulGenerator.hash_soul(scoped_soul)
 
         # Register
@@ -104,7 +143,29 @@ class AgentLifecycleManager:
             task_spec=task_spec,
             quest_id=quest_id,
             scoped_soul_hash=soul_hash,
+            operator_id=operator_id,
+            session_id=session_id,
+            operator_name=operator_name,
+            parent_receipt_id=parent_receipt_id,
         )
+
+        if self._spawn_record_hook:
+            try:
+                self._spawn_record_hook(record)
+            except Exception as exc:
+                logger.error("Agent %s federation spawn recording failed: %s", record.agent_id, exc)
+                try:
+                    self._registry.transition(
+                        record.agent_id,
+                        AgentState.COLLAPSED,
+                        collapse_reason=CollapseReason.ERROR,
+                        collapse_message=str(exc),
+                    )
+                except (AgentCollapsedError, ValueError, KeyError):
+                    pass
+                raise AgentSpawnDeniedError(
+                    f"Federation spawn governance recording failed: {exc}"
+                ) from exc
 
         # Create runtime
         runtime = SubAgentRuntime(
@@ -121,13 +182,21 @@ class AgentLifecycleManager:
 
         # Transition to READY
         self._registry.transition(record.agent_id, AgentState.READY)
-        self._receipts.record_agent_spawned(record)
-        self._receipts.record_agent_state_transition(
+        spawn_receipt_id = self._receipts.record_agent_spawned(
+            record,
+            parent_receipt_id=parent_receipt_id,
+        )
+        transition_receipt_id = self._receipts.record_agent_state_transition(
             agent_id=record.agent_id,
             from_state=AgentState.SPAWNING,
             to_state=AgentState.READY,
             quest_id=quest_id,
+            parent_receipt_id=spawn_receipt_id,
+            operator_id=record.operator_id,
+            session_id=record.session_id,
+            operator_name=record.operator_name,
         )
+        record.latest_receipt_id = transition_receipt_id
 
         logger.info("Agent spawned: %s (quest=%s)", record.agent_id, quest_id)
         return record
@@ -144,18 +213,23 @@ class AgentLifecycleManager:
         Transitions READY → EXECUTING, then runs the action loop.
         Returns a Future that resolves to TaskResult.
         """
-        self._registry.transition(agent_id, AgentState.EXECUTING)
-        self._receipts.record_agent_state_transition(
-            agent_id=agent_id,
-            from_state=AgentState.READY,
-            to_state=AgentState.EXECUTING,
-            quest_id=self._get_quest_id(agent_id),
-        )
-
         with self._lock:
             runtime = self._runtimes.get(agent_id)
         if runtime is None:
             raise KeyError(f"No runtime for agent {agent_id}")
+
+        self._registry.transition(agent_id, AgentState.EXECUTING)
+        transition_receipt_id = self._receipts.record_agent_state_transition(
+            agent_id=agent_id,
+            from_state=AgentState.READY,
+            to_state=AgentState.EXECUTING,
+            quest_id=self._get_quest_id(agent_id),
+            parent_receipt_id=getattr(runtime._record, "latest_receipt_id", None),
+            operator_id=runtime._record.operator_id,
+            session_id=runtime._record.session_id,
+            operator_name=runtime._record.operator_name,
+        )
+        runtime._record.latest_receipt_id = transition_receipt_id
 
         def _run():
             try:
@@ -176,12 +250,26 @@ class AgentLifecycleManager:
                 except (AgentCollapsedError, ValueError, KeyError):
                     pass
 
-                self._receipts.record_agent_collapsed(
+                collapse_receipt_id = self._receipts.record_agent_collapsed(
                     agent_id=agent_id,
                     reason=collapse_reason,
                     message=result.error_message,
                     quest_id=self._get_quest_id(agent_id),
+                    parent_receipt_id=getattr(runtime._record, "latest_receipt_id", None),
+                    operator_id=runtime._record.operator_id,
+                    session_id=runtime._record.session_id,
+                    operator_name=runtime._record.operator_name,
                 )
+                runtime._record.latest_receipt_id = collapse_receipt_id
+                if self._collapse_record_hook:
+                    try:
+                        self._collapse_record_hook(runtime._record, result)
+                    except Exception as exc:
+                        logger.warning(
+                            "Agent %s federation collapse recording failed: %s",
+                            agent_id,
+                            exc,
+                        )
                 return result
             except Exception as exc:
                 logger.error("Agent %s execution error: %s", agent_id, exc)
@@ -194,13 +282,23 @@ class AgentLifecycleManager:
                     )
                 except (AgentCollapsedError, ValueError, KeyError):
                     pass
-                return TaskResult(
+                result = TaskResult(
                     task_id=runtime._record.task_spec.task_id,
                     agent_id=agent_id,
                     success=False,
                     error_message=str(exc),
                     collapse_reason=CollapseReason.ERROR,
                 )
+                if self._collapse_record_hook:
+                    try:
+                        self._collapse_record_hook(runtime._record, result)
+                    except Exception as hook_exc:
+                        logger.warning(
+                            "Agent %s federation collapse recording failed: %s",
+                            agent_id,
+                            hook_exc,
+                        )
+                return result
             finally:
                 with self._lock:
                     self._runtimes.pop(agent_id, None)
@@ -257,6 +355,14 @@ class AgentLifecycleManager:
             self._registry.transition(agent_id, AgentState.EXECUTING)
         except (ValueError, AgentCollapsedError):
             pass
+        self._receipts.record_agent_resumed(
+            agent_id=agent_id,
+            quest_id=self._get_quest_id(agent_id),
+            parent_receipt_id=getattr(runtime._record, "latest_receipt_id", None),
+            operator_id=runtime._record.operator_id,
+            session_id=runtime._record.session_id,
+            operator_name=runtime._record.operator_name,
+        )
 
     def kill(
         self,
@@ -290,14 +396,18 @@ class AgentLifecycleManager:
             "type": InterventionType.KILL.value,
             "reason": reason,
         })
-        self._receipts.record_intervention(
+        receipt_id = self._receipts.record_intervention(
             intervention_type=InterventionType.KILL,
             agent_id=agent_id,
             reason=reason,
             quest_id=self._get_quest_id(agent_id),
             operator_id=operator_id,
             session_id=session_id,
+            parent_receipt_id=getattr(self._registry.get(agent_id), "latest_receipt_id", None),
         )
+        record = self._registry.get(agent_id)
+        if record is not None:
+            record.latest_receipt_id = receipt_id
 
     def kill_all(
         self,
@@ -322,12 +432,16 @@ class AgentLifecycleManager:
             message=reason,
         )
 
-        self._receipts.record_intervention(
+        receipt_id = self._receipts.record_intervention(
             intervention_type=InterventionType.KILL_ALL,
             reason=reason,
             operator_id=operator_id,
             session_id=session_id,
         )
+        for agent_id in collapsed:
+            record = self._registry.get(agent_id)
+            if record is not None:
+                record.latest_receipt_id = receipt_id
 
         logger.warning("Kill all: %d agents collapsed", len(collapsed))
         return collapsed
@@ -353,7 +467,8 @@ class AgentLifecycleManager:
             # Modify = kill + replan (handled by architect)
             self.kill(agent_id, intervention.reason, operator_id=operator_id, session_id=session_id)
 
-        self._receipts.record_intervention(
+        record = self._registry.get(agent_id)
+        receipt_id = self._receipts.record_intervention(
             intervention_type=intervention.intervention_type,
             agent_id=agent_id,
             reason=intervention.reason,
@@ -361,7 +476,10 @@ class AgentLifecycleManager:
             quest_id=self._get_quest_id(agent_id),
             operator_id=operator_id,
             session_id=session_id,
+            parent_receipt_id=getattr(record, "latest_receipt_id", None),
         )
+        if record is not None:
+            record.latest_receipt_id = receipt_id
 
     # ── Helpers ──────────────────────────────────────────────────────
 

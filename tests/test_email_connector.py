@@ -5,16 +5,31 @@ Tests HTTP request spec production. No actual Gmail API calls.
 """
 
 import base64
+import os
 import pytest
 
 from src.connectors.connectors.email import EmailConnector
 from src.connectors.models import HTTPMethod
+from src.core import feature_flags
 from src.core.governance.models import RiskTier
 
 
 @pytest.fixture
 def email():
     return EmailConnector()
+
+
+@pytest.fixture(autouse=True)
+def enable_google_oauth(monkeypatch):
+    old = os.environ.get("FEATURE_GOOGLE_OAUTH")
+    monkeypatch.setenv("FEATURE_GOOGLE_OAUTH", "true")
+    feature_flags.reload_flags()
+    yield
+    if old is None:
+        monkeypatch.delenv("FEATURE_GOOGLE_OAUTH", raising=False)
+    else:
+        monkeypatch.setenv("FEATURE_GOOGLE_OAUTH", old)
+    feature_flags.reload_flags()
 
 
 # ── Manifest ──────────────────────────────────────────────────────
@@ -161,3 +176,45 @@ class TestWriteOperations:
 class TestCredentialValidation:
     def test_validate_without_vault_returns_false(self, email):
         assert email.validate_credentials() is False
+
+    def test_gmail_backend_disabled_when_google_oauth_flag_off(self, monkeypatch):
+        old = os.environ.get("FEATURE_GOOGLE_OAUTH")
+        monkeypatch.setenv("FEATURE_GOOGLE_OAUTH", "false")
+        feature_flags.reload_flags()
+
+        class _Vault:
+            def exists(self, key):
+                return key == "email.gmail_token"
+
+        try:
+            email = EmailConnector(vault=_Vault())
+            assert email.validate_credentials() is False
+            with pytest.raises(RuntimeError, match="Google OAuth is disabled"):
+                email.execute("list_messages", {})
+        finally:
+            if old is None:
+                monkeypatch.delenv("FEATURE_GOOGLE_OAUTH", raising=False)
+            else:
+                monkeypatch.setenv("FEATURE_GOOGLE_OAUTH", old)
+            feature_flags.reload_flags()
+
+    def test_outlook_backend_unaffected_when_google_oauth_flag_off(self, monkeypatch):
+        old = os.environ.get("FEATURE_GOOGLE_OAUTH")
+        monkeypatch.setenv("FEATURE_GOOGLE_OAUTH", "false")
+        feature_flags.reload_flags()
+
+        class _Vault:
+            def exists(self, key):
+                return key == "email.outlook_token"
+
+        try:
+            email = EmailConnector(backend="outlook", vault=_Vault())
+            assert email.validate_credentials() is True
+            result = email.execute("list_messages", {})
+            assert result.method == HTTPMethod.GET
+        finally:
+            if old is None:
+                monkeypatch.delenv("FEATURE_GOOGLE_OAUTH", raising=False)
+            else:
+                monkeypatch.setenv("FEATURE_GOOGLE_OAUTH", old)
+            feature_flags.reload_flags()

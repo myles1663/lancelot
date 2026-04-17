@@ -24,17 +24,21 @@
 import { FrameworkDetector } from './detector.js';
 import { PluginManager } from './plugins/base.js';
 import { ElectronPlugin } from './plugins/electron/index.js';
+import { BrowserPlugin } from './plugins/browser/index.js';
 import { WinUIAPlugin } from './plugins/win-uia/index.js';
 import { QtPlugin } from './plugins/qt/index.js';
 import { GtkPlugin } from './plugins/gtk/index.js';
 import { JavaPlugin } from './plugins/java/index.js';
 import { FlutterPlugin } from './plugins/flutter/index.js';
 import { OfficePlugin } from './plugins/office/index.js';
+import { VisionPlugin } from './plugins/vision/index.js';
 import { ControlRouter, RoutedConnection } from './router.js';
 import { ConnectionManager } from './connection-manager.js';
 import { ElementCache } from './cache.js';
 import { PermissionManager } from './permissions.js';
 import { ChainExecutor, type ChainDefinition, type ChainResult } from './chains.js';
+import { CompositeEngine, type CompositeOptions, type CompositeResult } from './composite.js';
+import type { SpatialElement } from './spatial.js';
 import { withRetry } from './retry.js';
 import type {
   DetectedApp, UIElement, ElementSelector,
@@ -55,6 +59,7 @@ export class UABService {
   private cache: ElementCache;
   readonly permissions: PermissionManager;
   private chainExecutor: ChainExecutor;
+  private _composite: CompositeEngine | null = null;
 
   constructor() {
     this.detector = new FrameworkDetector();
@@ -80,14 +85,16 @@ export class UABService {
     const fs = await import('fs');
     fs.mkdirSync('data/screenshots', { recursive: true });
 
-    // Register framework plugins (priority order: specific -> generic)
+    // Register framework plugins (priority order: specific -> generic -> fallback)
     this.pluginManager.register(new ElectronPlugin());    // CDP -- best for Electron
+    this.pluginManager.register(new BrowserPlugin());     // CDP -- Chrome/Edge/Brave/Vivaldi/Opera
     this.pluginManager.register(new OfficePlugin());      // Office (Word/Excel/PPT) + document content
     this.pluginManager.register(new QtPlugin());          // Qt via UIA
     this.pluginManager.register(new GtkPlugin());         // GTK via UIA
     this.pluginManager.register(new JavaPlugin());        // Java via JAB->UIA
     this.pluginManager.register(new FlutterPlugin());     // Flutter via UIA
     this.pluginManager.register(new WinUIAPlugin());      // Universal Windows fallback
+    this.pluginManager.register(new VisionPlugin());      // Vision + Claude AI (last resort)
 
     // Start connection health monitoring
     this.connectionMgr.startMonitoring();
@@ -370,6 +377,31 @@ export class UABService {
   /** Trigger a manual health check on all connections */
   async checkHealth(): Promise<void> {
     await this.connectionMgr.runHealthChecks();
+  }
+
+  // ─── Composite / Spatial Map ──────────────────────────────────
+
+  /** Lazy-init composite engine (depends on this service being started). */
+  private get composite(): CompositeEngine {
+    if (!this._composite) {
+      this._composite = new CompositeEngine(this);
+    }
+    return this._composite;
+  }
+
+  /** Get a full spatial map with text enrichment for a connected app. */
+  async spatialMap(pid: number, options?: CompositeOptions): Promise<CompositeResult> {
+    return this.composite.query(pid, options);
+  }
+
+  /** Generate a text-based UI map for AI consumption (replaces screenshots). */
+  async textMap(pid: number, format?: 'detailed' | 'compact' | 'json'): Promise<{ text: string; timing: number }> {
+    return this.composite.textMap(pid, { format });
+  }
+
+  /** Find UI elements by natural language description using spatial map. */
+  async findByDescription(pid: number, description: string): Promise<SpatialElement[]> {
+    return this.composite.findElement(pid, description);
   }
 
   // ─── Convenience ────────────────────────────────────────────────

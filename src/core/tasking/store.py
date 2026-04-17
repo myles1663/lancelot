@@ -43,6 +43,8 @@ class TaskStore:
         receipts_index TEXT NOT NULL DEFAULT '[]',
         last_error TEXT,
         session_id TEXT NOT NULL DEFAULT '',
+        operator_id TEXT NOT NULL DEFAULT '',
+        quest_id TEXT NOT NULL DEFAULT '',
         FOREIGN KEY (task_graph_id) REFERENCES task_graphs(id)
     );
 
@@ -79,6 +81,17 @@ class TaskStore:
     def _init_database(self):
         with self._transaction() as conn:
             conn.executescript(self.CREATE_TABLE_SQL)
+            self._ensure_columns(conn)
+
+    def _ensure_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(task_runs)").fetchall()
+        }
+        if "operator_id" not in existing:
+            conn.execute("ALTER TABLE task_runs ADD COLUMN operator_id TEXT NOT NULL DEFAULT ''")
+        if "quest_id" not in existing:
+            conn.execute("ALTER TABLE task_runs ADD COLUMN quest_id TEXT NOT NULL DEFAULT ''")
 
     # --- TaskGraph CRUD ---
 
@@ -122,14 +135,14 @@ class TaskStore:
                 INSERT INTO task_runs (
                     id, task_graph_id, execution_token_id, status,
                     current_step_id, created_at, updated_at,
-                    receipts_index, last_error, session_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    receipts_index, last_error, session_id, operator_id, quest_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 run.id, run.task_graph_id, run.execution_token_id,
                 run.status, run.current_step_id,
                 run.created_at, run.updated_at,
                 json.dumps(run.receipts_index),
-                run.last_error, run.session_id,
+                run.last_error, run.session_id, run.operator_id, run.quest_id,
             ))
         return run.id
 
@@ -137,6 +150,16 @@ class TaskStore:
         """Retrieve a TaskRun by ID."""
         conn = self._get_connection()
         cursor = conn.execute("SELECT * FROM task_runs WHERE id = ?", (run_id,))
+        row = cursor.fetchone()
+        return self._row_to_run(row) if row else None
+
+    def get_run_by_quest_id(self, quest_id: str) -> Optional[TaskRun]:
+        """Retrieve the most recent TaskRun associated with a quest ID."""
+        conn = self._get_connection()
+        cursor = conn.execute(
+            "SELECT * FROM task_runs WHERE quest_id = ? ORDER BY created_at DESC LIMIT 1",
+            (quest_id,),
+        )
         row = cursor.fetchone()
         return self._row_to_run(row) if row else None
 
@@ -219,6 +242,8 @@ class TaskStore:
             receipts_index=json.loads(row["receipts_index"]),
             last_error=row["last_error"],
             session_id=row["session_id"],
+            operator_id=row["operator_id"] if "operator_id" in row.keys() else "",
+            quest_id=row["quest_id"] if "quest_id" in row.keys() else "",
         )
 
     def close(self):

@@ -87,13 +87,16 @@ class TestLancelotVNext(unittest.TestCase):
         """Verify Sleep/Wake transitions."""
         print("\n[Test] Runtime State")
         self.orch.wake_up("Test Start")
-        self.assertEqual(self.orch.state, RuntimeState.ACTIVE)
-        
+        # Compare by .value to avoid dual-import enum identity mismatch
+        # (sys.path has both src/core/ and project root, so the same module
+        # can be imported as 'orchestrator' and 'src.core.orchestrator')
+        self.assertEqual(self.orch.state.value, RuntimeState.ACTIVE.value)
+
         self.orch.enter_sleep()
-        self.assertEqual(self.orch.state, RuntimeState.SLEEPING)
-        
+        self.assertEqual(self.orch.state.value, RuntimeState.SLEEPING.value)
+
         self.orch.wake_up("Test End")
-        self.assertEqual(self.orch.state, RuntimeState.ACTIVE)
+        self.assertEqual(self.orch.state.value, RuntimeState.ACTIVE.value)
         print("✅ Runtime State Verified")
 
     def test_06_input_sanitizer(self):

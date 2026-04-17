@@ -22,6 +22,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from src.a2a.types import (
     AgentCard, AgentCardSkill, RemoteAgent, AgentCardStatus,
@@ -101,6 +102,82 @@ class A2AClient:
             return card.governance_declaration.get("governance_framework") == "lancelot"
         return False
 
+    def assess_agent_card(
+        self,
+        agent: RemoteAgent,
+        *,
+        allow_repin: bool = False,
+    ) -> Dict[str, Any]:
+        """Verify a remote agent card against the pinned registry contract.
+
+        When ``allow_repin`` is False, the fetched card must match the pinned
+        cached card content. When True, a successful verification updates the
+        in-memory cache on the provided agent object so the caller can persist it.
+        """
+        if not agent.agent_card_url:
+            return {"allowed": False, "reason": "Agent Card URL is not configured."}
+
+        card = self.fetch_agent_card(agent.agent_card_url)
+        if card is None:
+            return {"allowed": False, "reason": "Remote Agent Card fetch failed."}
+
+        if self.is_lancelot_instance(card):
+            return {"allowed": False, "reason": "Lancelot instances must use Federation."}
+
+        expected_origin = self._origin(agent.agent_card_url)
+        actual_origin = self._origin(card.url or agent.agent_card_url)
+        if expected_origin and actual_origin and expected_origin != actual_origin:
+            return {
+                "allowed": False,
+                "reason": f"Agent Card origin mismatch: expected {expected_origin}, got {actual_origin}.",
+            }
+
+        framework_claim = self._framework_claim(card)
+        expected_framework = (agent.agent_framework or "").strip().lower()
+        if expected_framework and expected_framework != "unknown" and framework_claim and framework_claim != expected_framework:
+            return {
+                "allowed": False,
+                "reason": f"Agent framework mismatch: expected {expected_framework}, got {framework_claim}.",
+            }
+
+        declared_auth = str(card.authentication.get("type", "")).strip().lower() if card.authentication else ""
+        expected_auth = (agent.auth_type or "").strip().lower()
+        if expected_auth and expected_auth != "none" and declared_auth and declared_auth != expected_auth:
+            return {
+                "allowed": False,
+                "reason": f"Agent authentication mismatch: expected {expected_auth}, got {declared_auth}.",
+            }
+
+        claimed_agent_id = self._agent_id_claim(card)
+        if claimed_agent_id and claimed_agent_id != agent.agent_id:
+            return {
+                "allowed": False,
+                "reason": f"Agent Card identity mismatch: expected {agent.agent_id}, got {claimed_agent_id}.",
+            }
+
+        normalized = self._normalized_card_payload(card)
+        record = {
+            "card": normalized,
+            "card_hash": self._hash_payload(normalized),
+            "card_url": agent.agent_card_url,
+            "card_origin": expected_origin,
+            "verified_at": datetime.now(timezone.utc).isoformat(),
+            "framework_claim": framework_claim,
+            "auth_type": declared_auth,
+        }
+
+        existing = agent.agent_card_cache or {}
+        existing_hash = existing.get("card_hash")
+        if existing_hash:
+            if existing_hash != record["card_hash"]:
+                if not allow_repin:
+                    return {"allowed": False, "reason": "Pinned Agent Card content changed and requires operator re-verification."}
+        elif not allow_repin:
+            return {"allowed": False, "reason": "Agent Card is not pinned; operator verification is required."}
+
+        agent.agent_card_cache = record
+        return {"allowed": True, "card": card, "cache_record": record}
+
     def send_task(
         self,
         agent: RemoteAgent,
@@ -176,6 +253,8 @@ class A2AClient:
             if credentials:
                 if credentials.get("type") == "bearer_token":
                     headers["Authorization"] = f"Bearer {credentials['token']}"
+                elif credentials.get("type") == "api_key":
+                    headers["X-API-Key"] = credentials["key"]
 
             base_url = agent.agent_card_url.replace("/.well-known/agent.json", "")
             endpoint = f"{base_url}/a2a/tasks/{task_id}"
@@ -192,27 +271,62 @@ class A2AClient:
     def verify_agent_card(
         self,
         agent: RemoteAgent,
+        *,
+        allow_repin: bool = False,
     ) -> bool:
         """Verify a remote agent's Agent Card is still valid.
 
         Fetches the card and compares with cached version.
         Returns True if verified successfully.
         """
-        if not agent.agent_card_url:
-            return False
+        result = self.assess_agent_card(agent, allow_repin=allow_repin)
+        if not result["allowed"]:
+            logger.warning("A2A Agent Card verification failed for %s: %s", agent.agent_id, result["reason"])
+        return result["allowed"]
 
-        card = self.fetch_agent_card(agent.agent_card_url)
-        if card is None:
-            return False
+    @staticmethod
+    def _origin(url: str) -> str:
+        if not url:
+            return ""
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.hostname:
+            return ""
+        host = parsed.hostname.lower()
+        if parsed.port is not None:
+            return f"{parsed.scheme.lower()}://{host}:{parsed.port}"
+        return f"{parsed.scheme.lower()}://{host}"
 
-        # Check for Lancelot instances (should use Federation)
-        if self.is_lancelot_instance(card):
-            logger.warning(
-                "Agent %s is a Lancelot instance — should use Federation API",
-                agent.agent_id,
-            )
+    @staticmethod
+    def _framework_claim(card: AgentCard) -> str:
+        if card.governance_declaration:
+            framework = card.governance_declaration.get("governance_framework")
+            if framework:
+                return str(framework).strip().lower()
+        metadata = card.metadata or {}
+        for key in ("agent_framework", "framework"):
+            value = metadata.get(key)
+            if value:
+                return str(value).strip().lower()
+        return ""
 
-        return True
+    @staticmethod
+    def _agent_id_claim(card: AgentCard) -> str:
+        metadata = card.metadata or {}
+        for key in ("agent_id", "id"):
+            value = metadata.get(key)
+            if value:
+                return str(value).strip()
+        return ""
+
+    @staticmethod
+    def _normalized_card_payload(card: AgentCard) -> Dict[str, Any]:
+        return card.to_dict()
+
+    @staticmethod
+    def _hash_payload(payload: Dict[str, Any]) -> str:
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True).encode("utf-8")
+        ).hexdigest()
 
     def _emit_receipt(
         self,

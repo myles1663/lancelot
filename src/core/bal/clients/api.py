@@ -10,8 +10,10 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability
 
 from src.core.bal.clients.models import (
     Client,
@@ -30,7 +32,14 @@ from src.core.bal.clients.state_machine import ClientStateMachine, InvalidTransi
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/clients", tags=["bal-clients"])
+router = APIRouter(
+    prefix="/api/v1/clients",
+    tags=["bal-clients"],
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("bal.admin")),
+    ],
+)
 
 # Module-level references, set during init
 _repository = None

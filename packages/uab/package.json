@@ -1,7 +1,7 @@
 {
   "name": "universal-app-bridge",
-  "version": "0.5.0",
-  "description": "Framework-level desktop app control for AI agents. Hook into Electron, Qt, GTK, WPF, Flutter, Java, and Office apps with a unified API.",
+  "version": "1.3.0",
+  "description": "Smart function discovery and framework-level desktop app control for AI agents. Desktop + server dual-mode with Vision fallback. Hook into Chrome, Electron, Qt, GTK, WPF, Flutter, Java, and Office apps with a unified API.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -17,16 +17,30 @@
     "./cli": {
       "types": "./dist/cli.d.ts",
       "import": "./dist/cli.js"
+    },
+    "./connector": {
+      "types": "./dist/connector.d.ts",
+      "import": "./dist/connector.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./environment": {
+      "types": "./dist/environment.d.ts",
+      "import": "./dist/environment.js"
     }
   },
   "files": [
     "dist",
+    "data/chrome-extension",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "npx tsc",
     "daemon": "node dist/daemon.js",
+    "test": "node tests/daemon.test.js",
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {
@@ -51,7 +65,9 @@
     "app-control",
     "framework-hook",
     "uia",
-    "windows-automation"
+    "windows-automation",
+    "chrome-extension",
+    "browser-automation"
   ],
   "author": "ClaudeClaw",
   "license": "BUSL-1.1",

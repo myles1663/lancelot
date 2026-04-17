@@ -24,7 +24,7 @@ Time-Travel Debugging allows operators to inspect, replay, and fork past quest e
 4. **Risk Reclassification** — re-tier under current Soul (uses max source tier)
 5. **T3 Approval Gate** — request and check trust tier approval
 6. **Fork Quest Creation** — mint new quest_id, link to source
-7. **Governed Execution** — actual re-execution (handled by orchestrator)
+7. **Governed Execution** — actual re-execution through the TaskRun pipeline using the live runtime Soul
 8. **Fork Receipt** — emit `QUEST_FORKED` receipt
 
 ---
@@ -92,10 +92,25 @@ Base path: `/api/timetravel`
 | `POST` | `/replay` | Replay a quest (requires identity) |
 | `POST` | `/fork` | Fork a quest with modifications (requires identity) |
 
-### Headers
+### Authentication
 
-- `X-Operator-ID` — required for replay and fork operations
-- `X-Session-ID` — optional session identifier
+- Browser requests use the authenticated War Room session cookie
+- API clients use the configured bearer/API-key auth path
+- Replay and fork derive operator identity from the authenticated request; they no longer trust legacy `X-Operator-ID` headers
+
+### Runtime Status Contract
+
+`GET /api/timetravel/status` now exposes runtime readiness explicitly instead of only reporting `enabled`:
+
+- `engine_ready`
+- `quest_executor_ready`
+- `snapshot_reader_ready`
+- `receipt_service_ready`
+- `runtime_degraded`
+- `degraded_reasons`
+- `runtime_errors`
+
+If the live Soul cannot be resolved, or replay/fork execution is not wired to the governed quest executor, the status surface now degrades explicitly instead of quietly behaving as if replay/fork were still operational.
 
 ### Example: Inspect
 
@@ -110,7 +125,7 @@ curl -X POST http://localhost:8000/api/timetravel/inspect \
 ```bash
 curl -X POST http://localhost:8000/api/timetravel/fork \
   -H "Content-Type: application/json" \
-  -H "X-Operator-ID: operator-uuid" \
+  -H "Authorization: Bearer $LANCELOT_API_TOKEN" \
   -d '{
     "source_quest_id": "quest-uuid",
     "modifications": {"inputs.query": "new prompt"}
@@ -157,6 +172,7 @@ The `StateSnapshotReader` reconstructs governance context at any point in time:
 - Fork/replay operations always run under the **current Soul**, never the historical one
 - Each fork/replay creates a **new quest_id** — never reuses the source quest_id
 - The T3 approval gate uses synchronous trust tier checking (async War Room approval planned)
+- Replay and fork now fail closed if the governed quest executor is not configured; they no longer emit success-shaped receipts with an empty execution result
 - `FORK_SOUL_REJECTED` receipts are emitted by the system, not the operator
 - Fork operations are always classified as T3 (Synthesis tier)
 - Cost accounting is isolated per fork quest_id

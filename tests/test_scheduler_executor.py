@@ -8,6 +8,7 @@ from pathlib import Path
 
 from src.core.scheduler.service import SchedulerService
 from src.core.scheduler.executor import JobExecutor, Gate, JobExecutionResult
+from src.core.runtime_pause import init_runtime_pause, pause_runtime, resume_runtime
 
 
 # ---------------------------------------------------------------------------
@@ -34,6 +35,18 @@ def _write_config(tmp_path, jobs=None):
         yaml.dump({"jobs": jobs}), encoding="utf-8",
     )
     return str(config_dir)
+
+
+@pytest.fixture
+def runtime_pause_state(tmp_path):
+    init_runtime_pause(str(tmp_path / "runtime"))
+    yield
+    resume_runtime(
+        operator_id="test",
+        operator_name="Test",
+        session_id="test",
+        source="test",
+    )
 
 
 @pytest.fixture
@@ -67,7 +80,7 @@ def _noop_skill(name, inputs):
 
 class TestJobSkippedWhenNotReady:
 
-    def test_skipped_when_not_ready(self, service):
+    def test_skipped_when_not_ready(self, service, runtime_pause_state):
         """Blueprint requirement: job skipped when not READY."""
         executor = JobExecutor(
             service,
@@ -79,7 +92,7 @@ class TestJobSkippedWhenNotReady:
         assert result.executed is False
         assert "READY" in result.skip_reason
 
-    def test_skipped_emits_receipt(self, service):
+    def test_skipped_emits_receipt(self, service, runtime_pause_state):
         executor = JobExecutor(
             service,
             skill_execute_fn=_noop_skill,
@@ -96,7 +109,7 @@ class TestJobSkippedWhenNotReady:
 
 class TestJobRunsWhenReady:
 
-    def test_runs_when_ready(self, service):
+    def test_runs_when_ready(self, service, runtime_pause_state):
         """Blueprint requirement: job runs when READY and emits receipt."""
         executor = JobExecutor(
             service,
@@ -108,7 +121,7 @@ class TestJobRunsWhenReady:
         assert result.success is True
         assert result.skipped is False
 
-    def test_emits_scheduled_job_run_receipt(self, service):
+    def test_emits_scheduled_job_run_receipt(self, service, runtime_pause_state):
         executor = JobExecutor(
             service,
             skill_execute_fn=_noop_skill,
@@ -118,7 +131,7 @@ class TestJobRunsWhenReady:
         assert result.receipt["event"] == "scheduled_job_run"
         assert result.receipt["job_id"] == "test_job"
 
-    def test_run_updates_scheduler_record(self, service):
+    def test_run_updates_scheduler_record(self, service, runtime_pause_state):
         executor = JobExecutor(
             service,
             skill_execute_fn=_noop_skill,
@@ -129,6 +142,21 @@ class TestJobRunsWhenReady:
         assert job.run_count == 1
         assert job.last_run_at is not None
 
+    def test_skipped_when_runtime_paused(self, service, tmp_path, runtime_pause_state):
+        init_runtime_pause(str(tmp_path))
+        pause_runtime("Maintenance window", operator_id="op-1", operator_name="Arthur", session_id="session-1")
+        try:
+            executor = JobExecutor(
+                service,
+                skill_execute_fn=_noop_skill,
+                gates=[_ready_gate()],
+            )
+            result = executor.execute_job("test_job")
+            assert result.skipped is True
+            assert "Maintenance window" in (result.skip_reason or "")
+        finally:
+            resume_runtime(operator_id="op-1", operator_name="Arthur", session_id="session-1")
+
 
 # ===================================================================
 # Multiple gates
@@ -136,13 +164,13 @@ class TestJobRunsWhenReady:
 
 class TestMultipleGates:
 
-    def test_all_gates_pass(self, service):
+    def test_all_gates_pass(self, service, runtime_pause_state):
         gates = [_ready_gate(), _healthy_gate()]
         executor = JobExecutor(service, _noop_skill, gates)
         result = executor.execute_job("test_job")
         assert result.executed is True
 
-    def test_second_gate_fails(self, service):
+    def test_second_gate_fails(self, service, runtime_pause_state):
         gates = [
             _ready_gate(),
             Gate("local_llm", lambda: False, "LLM not healthy"),
@@ -152,7 +180,7 @@ class TestMultipleGates:
         assert result.skipped is True
         assert "LLM" in result.skip_reason
 
-    def test_gate_exception_skips(self, service):
+    def test_gate_exception_skips(self, service, runtime_pause_state):
         def error_gate():
             raise RuntimeError("gate error")
 
@@ -168,7 +196,7 @@ class TestMultipleGates:
 
 class TestDisabledJobs:
 
-    def test_disabled_job_skipped(self, service):
+    def test_disabled_job_skipped(self, service, runtime_pause_state):
         service.disable_job("test_job")
         executor = JobExecutor(service, _noop_skill, [_ready_gate()])
         result = executor.execute_job("test_job")
@@ -182,7 +210,7 @@ class TestDisabledJobs:
 
 class TestApprovals:
 
-    def test_job_with_approvals_skipped(self, tmp_path):
+    def test_job_with_approvals_skipped(self, tmp_path, runtime_pause_state):
         config_dir = _write_config(tmp_path, jobs=[{
             "id": "approval_job",
             "name": "Approval Job",
@@ -201,6 +229,88 @@ class TestApprovals:
         assert result.skipped is True
         assert "approval" in result.skip_reason.lower()
 
+    def test_pending_approval_survives_executor_restart(self, tmp_path, runtime_pause_state):
+        config_dir = _write_config(tmp_path, jobs=[{
+            "id": "approval_job",
+            "name": "Approval Job",
+            "trigger": {"type": "interval", "seconds": 60},
+            "enabled": True,
+            "requires_approvals": ["owner"],
+            "timeout_s": 30,
+            "skill": "echo",
+        }])
+        data_dir = str(tmp_path / "data")
+        svc = SchedulerService(data_dir=data_dir, config_dir=config_dir)
+        svc.register_from_config()
+
+        first = JobExecutor(svc, _noop_skill, [_ready_gate()])
+        result = first.execute_job("approval_job")
+        assert result.skipped is True
+        assert "approval_job" in first.pending_approvals
+
+        reloaded = JobExecutor(svc, _noop_skill, [_ready_gate()])
+        assert "approval_job" in reloaded.pending_approvals
+
+    def test_granted_approval_survives_executor_restart(self, tmp_path, runtime_pause_state):
+        config_dir = _write_config(tmp_path, jobs=[{
+            "id": "approval_job",
+            "name": "Approval Job",
+            "trigger": {"type": "interval", "seconds": 60},
+            "enabled": True,
+            "requires_approvals": ["owner"],
+            "timeout_s": 30,
+            "skill": "echo",
+        }])
+        data_dir = str(tmp_path / "data")
+        svc = SchedulerService(data_dir=data_dir, config_dir=config_dir)
+        svc.register_from_config()
+
+        first = JobExecutor(svc, _noop_skill, [_ready_gate()])
+        first.execute_job("approval_job")
+        assert first.approve_job("approval_job") is True
+
+        reloaded = JobExecutor(svc, _noop_skill, [_ready_gate()])
+        result = reloaded.execute_job("approval_job")
+        assert result.executed is True
+        assert result.success is True
+
+    def test_clear_approval_state_clears_and_persists(self, tmp_path, runtime_pause_state):
+        config_dir = _write_config(tmp_path, jobs=[{
+            "id": "approval_job",
+            "name": "Approval Job",
+            "trigger": {"type": "interval", "seconds": 60},
+            "enabled": True,
+            "requires_approvals": ["owner"],
+            "timeout_s": 30,
+            "skill": "echo",
+        }])
+        data_dir = str(tmp_path / "data")
+        svc = SchedulerService(data_dir=data_dir, config_dir=config_dir)
+        svc.register_from_config()
+
+        executor = JobExecutor(svc, _noop_skill, [_ready_gate()])
+        executor.execute_job("approval_job")
+        assert executor.approve_job("approval_job") is True
+
+        cleared = executor.clear_approval_state(
+            reason="Federation full stop",
+            operator_id="federation-peer",
+            session_id="federation-peer",
+            actor="Federation Peer",
+        )
+
+        assert cleared == {
+            "pending_cleared": 1,
+            "granted_cleared": 1,
+        }
+        assert executor.pending_approvals == {}
+
+        reloaded = JobExecutor(svc, _noop_skill, [_ready_gate()])
+        assert reloaded.pending_approvals == {}
+        result = reloaded.execute_job("approval_job")
+        assert result.skipped is True
+        assert "approval" in (result.skip_reason or "").lower()
+
 
 # ===================================================================
 # Skill execution failure
@@ -208,7 +318,7 @@ class TestApprovals:
 
 class TestSkillFailure:
 
-    def test_skill_failure_emits_receipt(self, service):
+    def test_skill_failure_emits_receipt(self, service, runtime_pause_state):
         def failing_skill(name, inputs):
             raise ValueError("skill error")
 
@@ -218,6 +328,14 @@ class TestSkillFailure:
         assert result.success is False
         assert result.receipt["event"] == "scheduled_job_failed"
 
+    def test_missing_skill_executor_fails_closed(self, service, runtime_pause_state):
+        executor = JobExecutor(service, None, [_ready_gate()])
+        result = executor.execute_job("test_job")
+        assert result.executed is True
+        assert result.success is False
+        assert result.receipt["event"] == "scheduled_job_failed"
+        assert "not configured" in result.error
+
 
 # ===================================================================
 # Job not found
@@ -225,7 +343,7 @@ class TestSkillFailure:
 
 class TestJobNotFound:
 
-    def test_nonexistent_job_skipped(self, service):
+    def test_nonexistent_job_skipped(self, service, runtime_pause_state):
         executor = JobExecutor(service, _noop_skill, [_ready_gate()])
         result = executor.execute_job("nonexistent")
         assert result.skipped is True

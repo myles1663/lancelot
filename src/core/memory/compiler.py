@@ -16,7 +16,7 @@ Features:
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -34,6 +34,8 @@ from .schemas import (
     MemoryItem,
     MemoryStatus,
     MemoryTier,
+    Provenance,
+    ProvenanceType,
 )
 from .store import CoreBlockStore, estimate_tokens
 
@@ -531,6 +533,66 @@ class ContextCompilerService:
             working_items=working_items,
             retrieved_items=retrieved_items,
         )
+
+    def record_active_objective(
+        self,
+        *,
+        objective: str,
+        quest_id: Optional[str],
+        channel: str = "api",
+        ttl_hours: int = 24,
+    ) -> MemoryItem:
+        """Persist the current objective into working memory as a TTL-backed task scratch item."""
+        if ttl_hours <= 0:
+            raise ValueError("ttl_hours must be positive")
+
+        quest_key = (quest_id or "global").replace("-", "_")
+        item_id = f"active_objective_{quest_key}"
+        namespace = f"quest:{quest_id}" if quest_id else "global"
+        now = datetime.utcnow()
+        content = (
+            f"Objective: {objective}\n"
+            f"Quest ID: {quest_id or 'global'}\n"
+            f"Channel: {channel}\n"
+            f"Recorded At: {now.isoformat()}"
+        )
+        store = self.memory_manager.working
+        existing = store.get(item_id)
+        item = existing or MemoryItem(
+            id=item_id,
+            tier=MemoryTier.working,
+            namespace=namespace,
+            title="Active Objective",
+            content="",
+        )
+        item.namespace = namespace
+        item.title = "Active Objective"
+        item.content = content
+        item.tags = sorted({"active_objective", f"channel:{channel}"})
+        item.confidence = 0.9
+        item.status = MemoryStatus.active
+        item.updated_at = now
+        item.expires_at = now + timedelta(hours=ttl_hours)
+        item.provenance = [
+            Provenance(
+                type=ProvenanceType.user_message,
+                ref=quest_id or "global-objective",
+                snippet=objective[:160],
+                timestamp=now,
+            )
+        ]
+        item.metadata = {
+            "quest_id": quest_id or "",
+            "channel": channel,
+            "kind": "active_objective",
+        }
+        item.token_count = estimate_tokens(content)
+
+        if existing:
+            store.update(item)
+        else:
+            store.insert(item)
+        return item
 
     def get_core_blocks_summary(self) -> dict[str, dict[str, Any]]:
         """

@@ -11,12 +11,19 @@ proposals and APL rule proposals.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability
+from src.core.operator_identity import OperatorIdentity
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/governance", tags=["governance"])
+router = APIRouter(
+    prefix="/api/governance",
+    tags=["governance"],
+    dependencies=[Depends(require_authenticated_request)],
+)
 
 _trust_ledger = None
 _rule_engine = None
@@ -58,6 +65,124 @@ def _log_sentry_decision(approval_id: str, capability: str, target: str, decisio
         )
     except Exception as exc:
         logger.warning("Failed to log sentry decision: %s", exc)
+
+
+def _approve_item_direct(
+    approval_id: str,
+    *,
+    reason: str = "Approved via ActionCard",
+    identity: Optional[OperatorIdentity] = None,
+):
+    """Approve a governance item without going through the HTTP request layer."""
+    from src.core.governance_receipts import emit_governance_receipt_for_identity
+    from src.shared.receipts import ActionType
+
+    if _mcp_sentry and approval_id in _mcp_sentry.pending_requests:
+        req = _mcp_sentry.pending_requests[approval_id]
+        if _mcp_sentry.approve_request(approval_id):
+            logger.info("Sentry approval granted via ActionCard: %s (reason: %s)", approval_id, reason)
+            _log_sentry_decision(
+                approval_id,
+                capability=req.get("tool", "unknown"),
+                target=str(req.get("params", {})),
+                decision="approved",
+                reason=reason,
+            )
+            if identity is not None:
+                emit_governance_receipt_for_identity(
+                    identity,
+                    ActionType.MCP_T3_APPROVED,
+                    action_name="approve_sentry",
+                    inputs={"approval_id": approval_id, "tool": req.get("tool"), "reason": reason},
+                )
+            return {"status": "approved", "id": approval_id, "type": "sentry"}
+
+    if _trust_ledger:
+        for p in _trust_ledger.pending_proposals():
+            if p.id == approval_id:
+                _trust_ledger.apply_graduation(approval_id, approved=True, reason=reason)
+                if identity is not None:
+                    emit_governance_receipt_for_identity(
+                        identity,
+                        ActionType.T3_APPROVED,
+                        action_name="approve_graduation",
+                        inputs={"proposal_id": approval_id, "capability": p.capability, "reason": reason},
+                    )
+                return {"status": "approved", "id": approval_id, "type": "graduation"}
+
+    if _rule_engine:
+        for rule in _rule_engine.list_rules(status="proposed"):
+            if rule.id == approval_id:
+                _rule_engine.activate_rule(approval_id)
+                if identity is not None:
+                    emit_governance_receipt_for_identity(
+                        identity,
+                        ActionType.APL_RULE_APPROVED,
+                        action_name="approve_apl_rule",
+                        inputs={"rule_id": approval_id, "rule_name": rule.name, "reason": reason},
+                    )
+                return {"status": "approved", "id": approval_id, "type": "apl_rule"}
+
+    return None
+
+
+def _deny_item_direct(
+    approval_id: str,
+    *,
+    reason: str = "Denied via ActionCard",
+    identity: Optional[OperatorIdentity] = None,
+):
+    """Deny a governance item without going through the HTTP request layer."""
+    from src.core.governance_receipts import emit_governance_receipt_for_identity
+    from src.shared.receipts import ActionType
+
+    if _mcp_sentry and approval_id in _mcp_sentry.pending_requests:
+        req = _mcp_sentry.pending_requests[approval_id]
+        if _mcp_sentry.deny_request(approval_id):
+            logger.info("Sentry approval denied via ActionCard: %s (reason: %s)", approval_id, reason)
+            _log_sentry_decision(
+                approval_id,
+                capability=req.get("tool", "unknown"),
+                target=str(req.get("params", {})),
+                decision="denied",
+                reason=reason,
+            )
+            if identity is not None:
+                emit_governance_receipt_for_identity(
+                    identity,
+                    ActionType.MCP_T3_REJECTED,
+                    action_name="deny_sentry",
+                    inputs={"approval_id": approval_id, "tool": req.get("tool"), "reason": reason},
+                )
+            return {"status": "denied", "id": approval_id, "type": "sentry"}
+
+    if _trust_ledger:
+        for p in _trust_ledger.pending_proposals():
+            if p.id == approval_id:
+                _trust_ledger.apply_graduation(approval_id, approved=False, reason=reason)
+                if identity is not None:
+                    emit_governance_receipt_for_identity(
+                        identity,
+                        ActionType.T3_REJECTED,
+                        action_name="deny_graduation",
+                        inputs={"proposal_id": approval_id, "capability": p.capability, "reason": reason},
+                    )
+                return {"status": "denied", "id": approval_id, "type": "graduation"}
+
+    if _rule_engine:
+        for rule in _rule_engine.list_rules(status="proposed"):
+            if rule.id == approval_id:
+                _rule_engine.decline_rule(approval_id, reason=reason)
+                if identity is not None:
+                    emit_governance_receipt_for_identity(
+                        identity,
+                        ActionType.APL_RULE_REJECTED,
+                        action_name="deny_apl_rule",
+                        inputs={"rule_id": approval_id, "rule_name": rule.name, "reason": reason},
+                    )
+                return {"status": "denied", "id": approval_id, "type": "apl_rule"}
+
+    return None
 
 
 @router.get("/stats")
@@ -175,7 +300,11 @@ async def governance_approvals():
 
 
 @router.post("/approvals/{approval_id}/approve")
-async def approve_item(approval_id: str, request: Request):
+async def approve_item(
+    approval_id: str,
+    request: Request,
+    _authz: None = Depends(require_operator_capability("governance.admin")),
+):
     """Approve a T3 action, graduation proposal, or APL rule."""
     try:
         data = await request.json() if request.headers.get("content-type") else {}
@@ -234,7 +363,11 @@ async def approve_item(approval_id: str, request: Request):
 
 
 @router.post("/approvals/{approval_id}/deny")
-async def deny_item(approval_id: str, request: Request):
+async def deny_item(
+    approval_id: str,
+    request: Request,
+    _authz: None = Depends(require_operator_capability("governance.admin")),
+):
     """Deny a T3 action, graduation proposal, or APL rule."""
     try:
         data = await request.json() if request.headers.get("content-type") else {}

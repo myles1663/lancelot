@@ -17,6 +17,8 @@ from unittest.mock import MagicMock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from src.core import api_auth
+from src.core.operator_identity import OperatorIdentity
 from src.timetravel import api as tt_api
 from src.timetravel.api import router
 from src.timetravel.resume_engine import (
@@ -49,6 +51,21 @@ def _reset_api_globals():
     ) = original
 
 
+@pytest.fixture(autouse=True)
+def _auth_and_identity(monkeypatch):
+    api_auth.init_api_auth(lambda request: True)
+    identity = OperatorIdentity(
+        operator_id="op-1",
+        display_name="Operator One",
+        session_id="sess-1",
+        auth_method="api_key",
+    )
+    monkeypatch.setattr(tt_api, "resolve_operator_identity", lambda request: None)
+    monkeypatch.setattr(tt_api, "get_api_key_identity", lambda request: identity)
+    yield
+    api_auth.init_api_auth(None)
+
+
 @pytest.fixture
 def mock_soul():
     soul = MagicMock()
@@ -67,7 +84,9 @@ def mock_receipt_service():
 
 @pytest.fixture
 def mock_resume_engine():
-    return MagicMock()
+    engine = MagicMock()
+    engine._quest_executor = None
+    return engine
 
 
 @pytest.fixture
@@ -123,6 +142,10 @@ class TestGetStatus:
         assert resp.status_code == 200
         data = resp.json()
         assert data["enabled"] is True
+        assert data["engine_ready"] is True
+        assert data["quest_executor_ready"] is False
+        assert data["runtime_degraded"] is True
+        assert any("quest executor not initialized" in reason.lower() for reason in data["degraded_reasons"])
         assert data["soul_version"] == "v2"
 
     def test_returns_disabled_when_uninitialized(self, uninitialized_client):
@@ -130,6 +153,47 @@ class TestGetStatus:
         assert resp.status_code == 200
         data = resp.json()
         assert data["enabled"] is False
+        assert data["runtime_degraded"] is True
+        assert data["engine_ready"] is False
+        assert any("engine not initialized" in reason.lower() for reason in data["degraded_reasons"])
+
+    def test_status_reports_executor_ready_when_present(self, mock_soul, mock_receipt_service, mock_snapshot_reader):
+        tt_api._receipt_service = mock_receipt_service
+        tt_api._soul = mock_soul
+        tt_api.init_timetravel_api(
+            receipt_service=mock_receipt_service,
+            soul=mock_soul,
+            soul_dir=None,
+            quest_executor=lambda **kwargs: {"run_id": "run-1", "status": "SUCCEEDED"},
+        )
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+
+        resp = client.get("/api/timetravel/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["engine_ready"] is True
+        assert data["quest_executor_ready"] is True
+
+    def test_status_degrades_when_soul_resolution_fails(self, mock_receipt_service, mock_resume_engine, mock_snapshot_reader):
+        tt_api._receipt_service = mock_receipt_service
+        tt_api._soul = lambda: (_ for _ in ()).throw(RuntimeError("soul exploded"))
+        tt_api._resume_engine = mock_resume_engine
+        tt_api._snapshot_reader = mock_snapshot_reader
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+
+        resp = client.get("/api/timetravel/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["runtime_degraded"] is True
+        assert any("soul status unavailable" in reason.lower() for reason in data["degraded_reasons"])
+        assert any("soul not loaded" in reason.lower() for reason in data["degraded_reasons"])
+        assert any("soul exploded" in err.lower() for err in data["runtime_errors"])
 
 
 # ---------------------------------------------------------------------------
@@ -235,19 +299,28 @@ class TestPostReplay:
         resp = client.post(
             "/api/timetravel/replay",
             json={"source_quest_id": "q-001"},
-            headers={"X-Operator-ID": "op-1"},
         )
         assert resp.status_code == 200
         data = resp.json()
         assert data["success"] is True
         assert data["replay_quest_id"] == "rq-new"
 
-    def test_missing_operator_returns_401(self, client):
+    def test_authenticated_request_no_longer_requires_legacy_header(self, client, mock_resume_engine):
+        mock_resume_engine.create_replay.return_value = ReplayResult(
+            success=False,
+            source_quest_id="q-missing",
+            error="Source quest not found: q-missing",
+        )
         resp = client.post(
             "/api/timetravel/replay",
-            json={"source_quest_id": "q-001"},
+            json={"source_quest_id": "q-missing"},
         )
-        assert resp.status_code == 401
+        assert resp.status_code == 400
+        mock_resume_engine.create_replay.assert_called_once_with(
+            source_quest_id="q-missing",
+            operator_id="op-1",
+            session_id="sess-1",
+        )
 
     def test_invalid_quest_returns_error(self, client, mock_resume_engine):
         mock_resume_engine.create_replay.return_value = ReplayResult(
@@ -258,7 +331,6 @@ class TestPostReplay:
         resp = client.post(
             "/api/timetravel/replay",
             json={"source_quest_id": "q-bad"},
-            headers={"X-Operator-ID": "op-1"},
         )
         assert resp.status_code == 400
 
@@ -272,7 +344,6 @@ class TestPostReplay:
         resp = client.post(
             "/api/timetravel/replay",
             json={"source_quest_id": "q-001"},
-            headers={"X-Operator-ID": "op-1"},
         )
         assert resp.status_code == 403
 
@@ -297,19 +368,29 @@ class TestPostFork:
                 "source_quest_id": "q-001",
                 "modifications": {"inputs.query": "new"},
             },
-            headers={"X-Operator-ID": "op-1"},
         )
         assert resp.status_code == 200
         data = resp.json()
         assert data["success"] is True
         assert data["fork_quest_id"] == "fq-new"
 
-    def test_missing_operator_returns_401(self, client):
+    def test_authenticated_fork_no_longer_requires_legacy_header(self, client, mock_resume_engine):
+        mock_resume_engine.create_fork.return_value = ForkResult(
+            success=False,
+            source_quest_id="q-001",
+            error="Invalid fork target",
+        )
         resp = client.post(
             "/api/timetravel/fork",
             json={"source_quest_id": "q-001", "modifications": {}},
         )
-        assert resp.status_code == 401
+        assert resp.status_code == 400
+        mock_resume_engine.create_fork.assert_called_once_with(
+            source_quest_id="q-001",
+            modifications={},
+            operator_id="op-1",
+            session_id="sess-1",
+        )
 
     def test_soul_rejects_returns_403(self, client, mock_resume_engine):
         mock_resume_engine.create_fork.return_value = ForkResult(
@@ -324,7 +405,6 @@ class TestPostFork:
                 "source_quest_id": "q-001",
                 "modifications": {"operator_id": "evil"},
             },
-            headers={"X-Operator-ID": "op-1"},
         )
         assert resp.status_code == 403
 
@@ -341,7 +421,6 @@ class TestPostFork:
                 "source_quest_id": "q-001",
                 "modifications": {"inputs.q": "new"},
             },
-            headers={"X-Operator-ID": "op-1"},
         )
         assert resp.status_code == 403
 
@@ -349,6 +428,5 @@ class TestPostFork:
         resp = uninitialized_client.post(
             "/api/timetravel/fork",
             json={"source_quest_id": "q-001", "modifications": {}},
-            headers={"X-Operator-ID": "op-1"},
         )
         assert resp.status_code == 503

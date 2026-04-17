@@ -24,10 +24,20 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability, resolve_authenticated_identity
+from src.observability.config import load_config
 
 logger = logging.getLogger("lancelot.observability.metrics_api")
 
-router = APIRouter(prefix="/api/metrics", tags=["metrics"])
+router = APIRouter(
+    prefix="/api/metrics",
+    tags=["metrics"],
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("observability.admin")),
+    ],
+)
 
 # Module-level references
 _receipt_service = None
@@ -40,6 +50,15 @@ def init_metrics_api(receipt_service, data_dir: str = "/home/lancelot/data") -> 
     _receipt_service = receipt_service
     _data_dir = data_dir
     logger.info("Metrics API initialized")
+
+
+def _soul_payload(soul: Any) -> Dict[str, Any]:
+    """Serialize a Soul model across Pydantic versions."""
+    if hasattr(soul, "model_dump"):
+        return soul.model_dump()
+    if hasattr(soul, "dict"):
+        return soul.dict()
+    return dict(soul)
 
 
 # ── Response Envelope ─────────────────────────────────────────────
@@ -64,12 +83,11 @@ def _envelope(data: Any, cursor: Optional[str] = None, has_more: bool = False, l
 def _get_soul_version() -> str:
     """Get the current Soul version hash."""
     try:
-        from soul.store import SoulStore
-        store = SoulStore()
-        soul = store.load()
+        from src.core.soul.store import load_active_soul
+        soul = load_active_soul()
         if soul:
             return hashlib.sha256(
-                json.dumps(soul.dict(), sort_keys=True).encode()
+                json.dumps(_soul_payload(soul), sort_keys=True).encode()
             ).hexdigest()[:16]
     except Exception:
         pass
@@ -122,22 +140,61 @@ def _check_rate_limit(operator_id: str, max_per_minute: int = 60) -> bool:
     return True
 
 
+def _authorize_metrics_request(request: Request):
+    """Enforce runtime enablement and per-operator rate limiting."""
+    config = load_config()
+    if not config.metrics_api.enabled:
+        raise HTTPException(status_code=503, detail="Metrics API disabled")
+
+    identity = resolve_authenticated_identity(request)
+    rate_key = identity.operator_id or identity.display_name or "operator"
+    if not _check_rate_limit(rate_key, config.metrics_api.rate_limit_per_minute):
+        raise HTTPException(status_code=429, detail="Metrics API rate limit exceeded")
+
+    return identity, config
+
+
+def _emit_metrics_query_receipt(request: Request, receipt_id: str, config) -> None:
+    """Emit a metrics lookup receipt when detailed query receipting is enabled."""
+    if not config.metrics_api.receipt_queries or _receipt_service is None:
+        return
+
+    try:
+        from src.shared.receipts import ActionType, Receipt, ReceiptStatus
+
+        identity = resolve_authenticated_identity(request)
+        receipt = Receipt(
+            action_type=ActionType.METRICS_API_QUERY.value,
+            action_name="metrics_receipt_lookup",
+            inputs={"receipt_id": receipt_id},
+            outputs={"status": "lookup"},
+            status=ReceiptStatus.SUCCESS.value,
+            operator_id=identity.operator_id,
+            session_id=identity.session_id or "",
+            metadata={"query_type": "receipt_detail"},
+        )
+        _receipt_service.create(receipt)
+    except Exception as exc:
+        logger.warning("Failed to emit metrics query receipt: %s", exc)
+
+
 # ── Endpoints ─────────────────────────────────────────────────────
 
 @router.get("/summary")
-async def metrics_summary():
+async def metrics_summary(request: Request):
     """Current governance health summary.
 
     Active kill switches, pending T3 approvals, current spend rate,
     active agents, Soul version.
     """
+    _authorize_metrics_request(request)
     if _receipt_service is None:
         return JSONResponse(status_code=503, content={"error": "Not initialized"})
 
     # Active kill switches
     active_kills = 0
     try:
-        from feature_flags import get_all_flags
+        from src.core.feature_flags import get_all_flags
         flags = get_all_flags()
         # Count flags that are OFF (kill switch = feature disabled)
         for name, val in flags.items():
@@ -149,7 +206,7 @@ async def metrics_summary():
     # Pending T3 approvals
     pending_t3 = 0
     try:
-        from governance_api import _get_pending_approvals_count
+        from src.core.governance_api import _get_pending_approvals_count
         pending_t3 = _get_pending_approvals_count()
     except Exception:
         pass
@@ -157,7 +214,7 @@ async def metrics_summary():
     # Active HIVE agents
     active_agents = 0
     try:
-        from hive.runtime import get_runtime
+        from src.hive.runtime import get_runtime
         rt = get_runtime()
         if rt:
             active_agents = len(rt.active_agents())
@@ -167,7 +224,7 @@ async def metrics_summary():
     # Cost rate
     cost_rate = 0.0
     try:
-        from control_plane import get_usage_tracker
+        from src.core.control_plane import get_usage_tracker
         tracker = get_usage_tracker()
         if tracker:
             cost_rate = getattr(tracker, 'current_rate_usd_per_hour', 0.0)
@@ -185,6 +242,7 @@ async def metrics_summary():
 
 @router.get("/receipts")
 async def metrics_receipts(
+    request: Request,
     start: Optional[str] = Query(None, description="ISO 8601 start"),
     end: Optional[str] = Query(None, description="ISO 8601 end"),
     receipt_type: Optional[str] = Query(None),
@@ -195,6 +253,7 @@ async def metrics_receipts(
     cursor: Optional[str] = Query(None),
 ):
     """Paginated receipt query with filters."""
+    _authorize_metrics_request(request)
     if _receipt_service is None:
         return JSONResponse(status_code=503, content={"error": "Not initialized"})
 
@@ -238,8 +297,9 @@ async def metrics_receipts(
 
 
 @router.get("/receipts/{receipt_id}")
-async def metrics_receipt_detail(receipt_id: str):
+async def metrics_receipt_detail(receipt_id: str, request: Request):
     """Full receipt payload for a single receipt."""
+    _identity, config = _authorize_metrics_request(request)
     if _receipt_service is None:
         return JSONResponse(status_code=503, content={"error": "Not initialized"})
 
@@ -247,17 +307,20 @@ async def metrics_receipt_detail(receipt_id: str):
     if receipt is None:
         raise HTTPException(status_code=404, detail="Receipt not found")
 
+    _emit_metrics_query_receipt(request, receipt_id, config)
     return _envelope({"receipt": receipt.to_dict()})
 
 
 @router.get("/actions")
 async def metrics_actions(
+    request: Request,
     start: Optional[str] = Query(None),
     end: Optional[str] = Query(None),
     group_by: str = Query("risk_tier", description="risk_tier, receipt_type, operator_id, quest_id"),
     interval: str = Query("1h", description="Aggregation interval: 1h, 6h, 1d"),
 ):
     """Aggregated action counts for charting."""
+    _authorize_metrics_request(request)
     if _receipt_service is None:
         return JSONResponse(status_code=503, content={"error": "Not initialized"})
 
@@ -284,11 +347,13 @@ async def metrics_actions(
 
 @router.get("/cost")
 async def metrics_cost(
+    request: Request,
     start: Optional[str] = Query(None),
     end: Optional[str] = Query(None),
     group_by: str = Query("provider", description="provider, model, quest_id"),
 ):
     """Cost aggregation for custom dashboards."""
+    _authorize_metrics_request(request)
     if _receipt_service is None:
         return JSONResponse(status_code=503, content={"error": "Not initialized"})
 
@@ -320,13 +385,14 @@ async def metrics_cost(
 
 
 @router.get("/trust-ledger")
-async def metrics_trust_ledger():
+async def metrics_trust_ledger(request: Request):
     """Current Trust Ledger state."""
+    _authorize_metrics_request(request)
     if _receipt_service is None:
         return JSONResponse(status_code=503, content={"error": "Not initialized"})
 
     try:
-        from trust_api import _trust_ledger
+        from src.core.trust_api import _trust_ledger
         if _trust_ledger:
             entries = _trust_ledger.get_all_entries()
             return _envelope({"entries": [e.to_dict() if hasattr(e, 'to_dict') else str(e) for e in entries]})
@@ -336,13 +402,13 @@ async def metrics_trust_ledger():
 
 
 @router.get("/soul")
-async def metrics_soul():
+async def metrics_soul(request: Request):
     """Current Soul document summary (not full text)."""
+    _authorize_metrics_request(request)
     soul_data: Dict[str, Any] = {"version": "unknown"}
     try:
-        from soul.store import SoulStore
-        store = SoulStore()
-        soul = store.load()
+        from src.core.soul.store import load_active_soul
+        soul = load_active_soul()
         if soul:
             soul_data = {
                 "version": _get_soul_version(),
@@ -356,10 +422,11 @@ async def metrics_soul():
 
 
 @router.get("/kill-switches")
-async def metrics_kill_switches():
+async def metrics_kill_switches(request: Request):
     """Current kill switch state with dependency info."""
+    _authorize_metrics_request(request)
     try:
-        from feature_flags import get_all_flags
+        from src.core.feature_flags import get_all_flags
         flags = get_all_flags()
         switches = []
         for name, val in sorted(flags.items()):
@@ -374,11 +441,12 @@ async def metrics_kill_switches():
 
 
 @router.get("/hive")
-async def metrics_hive():
+async def metrics_hive(request: Request):
     """Current HIVE state — active agents, quests."""
+    _authorize_metrics_request(request)
     hive_data: Dict[str, Any] = {"active_agents": 0, "quests": []}
     try:
-        from hive.runtime import get_runtime
+        from src.hive.runtime import get_runtime
         rt = get_runtime()
         if rt:
             agents = rt.active_agents()
@@ -389,8 +457,9 @@ async def metrics_hive():
 
 
 @router.get("/webhooks/status")
-async def metrics_webhook_status():
+async def metrics_webhook_status(request: Request):
     """Webhook delivery health per endpoint."""
+    _authorize_metrics_request(request)
     try:
         from src.observability.webhook_engine import get_webhook_engine
         engine = get_webhook_engine()

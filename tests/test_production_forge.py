@@ -105,19 +105,55 @@ async def _test_security_bridge():
             print("3.3 Automation Timed Out")
             return False
 
-    await mfa.request_mfa(task_id, "Login to Bank")
+    await mfa.request_mfa(
+        task_id,
+        "Login to Bank",
+        operator_id="op-1",
+        session_id="session-1",
+        actor="Arthur",
+    )
 
     wait_task = asyncio.create_task(waiter())
     await asyncio.sleep(0.5) # Let it wait
 
     print("3.2 User Submitting Code...")
-    mfa.submit_code(task_id, "123456")
+    accepted, _reason = mfa.submit_code(
+        task_id,
+        "123456",
+        operator_id="op-1",
+        session_id="session-1",
+        actor="Arthur",
+    )
+    assert accepted is True
 
     result = await wait_task
     if result:
         print("3.4 MFA Handshake Complete")
     else:
         print("3.4 MFA Handshake Failed")
+
+
+def test_security_bridge_rejects_foreign_submitter():
+    async def _run():
+        mfa = MFAListener()
+        await mfa.request_mfa(
+            "foreign_test",
+            "Sensitive login",
+            operator_id="op-1",
+            session_id="session-1",
+            actor="Arthur",
+        )
+        ok, reason = mfa.submit_code(
+            "foreign_test",
+            "999999",
+            operator_id="op-2",
+            session_id="session-2",
+            actor="Mallory",
+        )
+        assert ok is False
+        assert reason == "forbidden"
+
+    asyncio.run(_run())
 
 
 def test_antigravity():

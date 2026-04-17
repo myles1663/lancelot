@@ -17,6 +17,17 @@ from typing import Any, Dict, List
 from src.shared.receipts import ActionType, Receipt
 from src.compliance.chain_integrity import ChainIntegrityResult
 from src.compliance.redaction import redact_receipts
+from src.compliance.audit_report import (
+    build_attribution_summary,
+    build_evidence_entry,
+    build_exception_summary,
+    build_export_scope,
+    build_integrity_block,
+    build_legacy_attribution_summary,
+    build_system_context,
+    collect_soul_versions,
+    summarize_evidence_entries,
+)
 
 
 ISO27001_CONTROL_MAP: Dict[str, Dict[str, Any]] = {
@@ -120,17 +131,7 @@ ISO27001_EXCLUDED_CONTROLS = {
 
 def _receipt_to_evidence(receipt_dict: Dict[str, Any]) -> Dict[str, Any]:
     """Convert a redacted receipt dict to an ISO 27001 evidence entry."""
-    return {
-        "receipt_id": receipt_dict.get("id", ""),
-        "receipt_type": receipt_dict.get("action_type", ""),
-        "timestamp": receipt_dict.get("timestamp", ""),
-        "operator_id": receipt_dict.get("operator_id"),
-        "action_name": receipt_dict.get("action_name", ""),
-        "status": receipt_dict.get("status", ""),
-        "pre_identity_migration": receipt_dict.get(
-            "pre_identity_migration", False
-        ),
-    }
+    return build_evidence_entry(receipt_dict)
 
 
 def transform_iso27001(
@@ -141,6 +142,7 @@ def transform_iso27001(
     operator_id: str,
     generated_at: str,
     export_id: str,
+    operator_display_name: str = "",
 ) -> Dict[str, Any]:
     """Transform receipts into ISO 27001:2022 JSON export format."""
 
@@ -159,27 +161,76 @@ def transform_iso27001(
             for rd in by_type.get(rtype, []):
                 evidence.append(_receipt_to_evidence(rd))
 
+        evidence_summary = summarize_evidence_entries(evidence)
+        exceptions = build_exception_summary(evidence)
+        if not evidence:
+            control_status = "not_observed_in_period"
+        elif exceptions["total_exception_receipts"] > 0:
+            control_status = "observed_with_exceptions"
+        else:
+            control_status = "observed"
+
         controls[control_id] = {
             "description": control_def["description"],
             "notes": control_def["notes"],
+            "control_status": control_status,
             "evidence_count": len(evidence),
+            "evidence_summary": evidence_summary,
+            "exception_count": exceptions["total_exception_receipts"],
+            "exceptions": exceptions["sample_receipts"],
             "evidence": evidence,
         }
+
+    soul_versions = collect_soul_versions(redacted)
+    evidence_entries = [build_evidence_entry(rd) for rd in redacted]
+    quest_ids = {rd.get("quest_id") for rd in redacted if rd.get("quest_id")}
 
     return {
         "export_metadata": {
             "format": "ISO27001_2022",
-            "format_version": "1.0",
+            "format_version": "2.0",
             "generated_at": generated_at,
-            "generated_by": {"operator_id": operator_id},
+            "generated_by": {
+                "operator_id": operator_id,
+                "display_name": operator_display_name or operator_id,
+            },
             "period_start": period_start,
             "period_end": period_end,
             "export_id": export_id,
             "receipt_count": len(receipts),
             "chain_integrity": chain_result.status,
-            "chain_anomaly_detail": (
-                chain_result.to_dict() if not chain_result.is_intact else None
-            ),
+            "chain_anomaly_detail": build_integrity_block(
+                chain_result, export_id
+            )["chain_anomaly_detail"],
+        },
+        "system_context": build_system_context(
+            generated_at=generated_at,
+            operator_id=operator_id,
+            operator_display_name=operator_display_name,
+            format_name="ISO27001_2022",
+            format_version="2.0",
+            active_soul_versions=soul_versions,
+        ),
+        "export_scope": build_export_scope(
+            period_start,
+            period_end,
+            receipt_count=len(receipts),
+            quest_count=len(quest_ids),
+        ),
+        "integrity": build_integrity_block(chain_result, export_id),
+        "evidence_population_summary": summarize_evidence_entries(
+            evidence_entries
+        ),
+        "operator_attribution_summary": build_attribution_summary(redacted),
+        "exception_summary": build_exception_summary(
+            evidence_entries, include_legacy_attribution=False
+        ),
+        "legacy_attribution_summary": build_legacy_attribution_summary(
+            evidence_entries
+        ),
+        "statement_of_applicability": {
+            "controls_in_scope": len(controls),
+            "controls_out_of_scope": len(ISO27001_EXCLUDED_CONTROLS),
         },
         "controls": controls,
         "excluded_controls": ISO27001_EXCLUDED_CONTROLS,

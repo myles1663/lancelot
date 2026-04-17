@@ -12,11 +12,14 @@ This module provides REST API endpoints for:
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability, resolve_authenticated_identity
 
 from .schemas import (
     CoreBlockType,
@@ -33,7 +36,11 @@ logger = logging.getLogger(__name__)
 import threading
 
 # Create router for memory endpoints
-router = APIRouter(prefix="/memory", tags=["memory"])
+router = APIRouter(
+    prefix="/memory",
+    tags=["memory"],
+    dependencies=[Depends(require_authenticated_request)],
+)
 
 
 # ---------------------------------------------------------------------------
@@ -87,9 +94,28 @@ class SearchResponse(BaseModel):
     query: str
 
 
+class RecentMemoryItemResponse(BaseModel):
+    """Recent memory item summary."""
+    id: str
+    tier: str
+    title: str
+    content: str
+    namespace: str
+    confidence: float
+    token_count: int
+    created_at: str
+    updated_at: str
+    tags: list[str]
+
+
+class RecentMemoryResponse(BaseModel):
+    """Response for recent memory listing."""
+    items: list[RecentMemoryItemResponse]
+    total_count: int
+
+
 class BeginCommitRequest(BaseModel):
     """Request to begin a staged commit."""
-    created_by: str
     message: str = ""
 
 
@@ -106,6 +132,7 @@ class AddEditRequest(BaseModel):
     after: Optional[str] = None
     reason: str
     confidence: float = 0.5
+    editor: str = "agent"
     provenance_type: Optional[str] = None
     provenance_ref: Optional[str] = None
 
@@ -131,13 +158,32 @@ class FinishCommitResponse(BaseModel):
 class RollbackRequest(BaseModel):
     """Request to rollback a commit."""
     reason: str
-    created_by: str
 
 
 class RollbackResponse(BaseModel):
     """Response for rollback."""
     rollback_commit_id: str
     rolled_back_commit_id: str
+
+
+class CommitSummaryResponse(BaseModel):
+    """Compact summary of a committed or staged memory commit."""
+    commit_id: str
+    created_at: str
+    created_by: str
+    status: str
+    message: str
+    edit_count: int
+    affected_targets: list[str]
+    has_core_edits: bool
+    receipt_id: Optional[str] = None
+    rollback_of: Optional[str] = None
+
+
+class CommitHistoryResponse(BaseModel):
+    """Response for recent commit history."""
+    commits: list[CommitSummaryResponse]
+    total_count: int
 
 
 class QuarantineItemResponse(BaseModel):
@@ -157,7 +203,21 @@ class QuarantineResponse(BaseModel):
 
 class PromoteRequest(BaseModel):
     """Request to promote a quarantined item."""
-    approver: str
+    pass
+
+
+class MemoryActionRequest(BaseModel):
+    """Request model for governed memory actions."""
+    reason: str = ""
+
+
+class MemoryActionResponse(BaseModel):
+    """Response for governed memory mutations."""
+    status: str
+    item_id: str
+    tier: Optional[str] = None
+    block_type: Optional[str] = None
+    reason: str = ""
 
 
 class CompileContextRequest(BaseModel):
@@ -185,6 +245,11 @@ _memory_service = None
 _service_lock = threading.Lock()
 
 
+def _get_memory_data_dir() -> Path:
+    """Return the canonical memory data directory used by the live app."""
+    return Path(os.getenv("LANCELOT_DATA_DIR", "/home/lancelot/data"))
+
+
 def get_memory_service():
     """Get or create the memory service singleton (thread-safe)."""
     global _memory_service
@@ -210,7 +275,7 @@ def get_memory_service():
         from .index import MemoryIndex
         from .compiler import ContextCompilerService
 
-        data_dir = Path("lancelot_data")
+        data_dir = _get_memory_data_dir()
 
         core_store = CoreBlockStore(data_dir=data_dir)
         core_store.initialize()
@@ -334,19 +399,62 @@ async def search_memory(
     )
 
 
+@router.get("/recent", response_model=RecentMemoryResponse)
+async def get_recent_memory(
+    limit: int = 12,
+    service: dict = Depends(get_memory_service),
+):
+    """Get recent memory items across all non-core tiers."""
+    memory_index = service["memory_index"]
+
+    recent_items = []
+    per_tier_limit = max(1, min(limit, 50))
+    for tier in (MemoryTier.working, MemoryTier.episodic, MemoryTier.archival):
+        try:
+            recent_items.extend(memory_index.get_recent(tier=tier, limit=per_tier_limit))
+        except Exception as exc:
+            logger.warning("Failed to fetch recent memory for tier %s: %s", tier.value, exc)
+
+    recent_items.sort(key=lambda item: item.updated_at, reverse=True)
+    recent_items = recent_items[:limit]
+
+    return RecentMemoryResponse(
+        items=[
+            RecentMemoryItemResponse(
+                id=item.id,
+                tier=item.tier.value,
+                title=item.title,
+                content=item.content[:500],
+                namespace=item.namespace,
+                confidence=item.confidence,
+                token_count=item.token_count,
+                created_at=item.created_at.isoformat(),
+                updated_at=item.updated_at.isoformat(),
+                tags=item.tags,
+            )
+            for item in recent_items
+        ],
+        total_count=len(recent_items),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Commit Endpoints
 # ---------------------------------------------------------------------------
 @router.post("/commit/begin", response_model=BeginCommitResponse)
 async def begin_commit(
     request: BeginCommitRequest,
+    http_request: Request,
+    _authz: None = Depends(require_operator_capability("memory.admin")),
     service: dict = Depends(get_memory_service),
 ):
     """Begin a new staged commit."""
     commit_manager = service["commit_manager"]
 
+    identity = resolve_authenticated_identity(http_request)
+    created_by = identity.display_name or identity.operator_id or "operator"
     commit_id = commit_manager.begin_edits(
-        created_by=request.created_by,
+        created_by=created_by,
         message=request.message,
     )
 
@@ -360,6 +468,7 @@ async def begin_commit(
 async def add_edit(
     commit_id: str,
     request: AddEditRequest,
+    _authz: None = Depends(require_operator_capability("memory.admin")),
     service: dict = Depends(get_memory_service),
 ):
     """Add an edit to a staged commit."""
@@ -397,19 +506,24 @@ async def add_edit(
         confidence=request.confidence or 0.5,
         provenance=provenance,
     )
-    gate_result = gate_validator.validate_edit(edit, editor="agent")
+    if request.editor not in {"agent", "owner", "system"}:
+        raise HTTPException(status_code=400, detail=f"Invalid editor: {request.editor}")
+
+    gate_result = gate_validator.validate_edit(edit, editor=request.editor)
     if not gate_result.allowed:
         raise HTTPException(
             status_code=403,
             detail=f"Edit blocked by write gate: {gate_result.reason}",
         )
 
+    after_content = gate_result.scrubbed_content if gate_result.scrubbed_content is not None else request.after
+
     try:
         edit_id = commit_manager.add_edit(
             commit_id=commit_id,
             op=op,
             target=request.target,
-            after=request.after,
+            after=after_content,
             reason=request.reason,
             confidence=request.confidence,
             provenance=provenance,
@@ -425,10 +539,40 @@ async def add_edit(
         raise HTTPException(status_code=400, detail="Failed to add edit to commit")
 
 
+@router.get("/commits", response_model=CommitHistoryResponse)
+async def list_commits(
+    limit: int = 25,
+    service: dict = Depends(get_memory_service),
+):
+    """List recent governed memory commits."""
+    commit_manager = service["commit_manager"]
+    commits = commit_manager.list_commits(limit=max(1, min(limit, 100)))
+
+    return CommitHistoryResponse(
+        commits=[
+            CommitSummaryResponse(
+                commit_id=commit.commit_id,
+                created_at=commit.created_at.isoformat(),
+                created_by=commit.created_by,
+                status=commit.status.value,
+                message=commit.message,
+                edit_count=len(commit.edits),
+                affected_targets=sorted(commit.get_affected_targets()),
+                has_core_edits=commit.has_core_edits(),
+                receipt_id=commit.receipt_id,
+                rollback_of=commit.rollback_of,
+            )
+            for commit in commits
+        ],
+        total_count=len(commits),
+    )
+
+
 @router.post("/commit/{commit_id}/finish", response_model=FinishCommitResponse)
 async def finish_commit(
     commit_id: str,
     request: FinishCommitRequest,
+    _authz: None = Depends(require_operator_capability("memory.admin")),
     service: dict = Depends(get_memory_service),
 ):
     """Finish and apply a staged commit."""
@@ -458,16 +602,20 @@ async def finish_commit(
 async def rollback_commit(
     commit_id: str,
     request: RollbackRequest,
+    http_request: Request,
+    _authz: None = Depends(require_operator_capability("memory.admin")),
     service: dict = Depends(get_memory_service),
 ):
     """Rollback a commit."""
     commit_manager = service["commit_manager"]
 
     try:
+        identity = resolve_authenticated_identity(http_request)
+        created_by = identity.display_name or identity.operator_id or "operator"
         rollback_id = commit_manager.rollback(
             commit_id=commit_id,
             reason=request.reason,
-            created_by=request.created_by,
+            created_by=created_by,
         )
 
         return RollbackResponse(
@@ -516,27 +664,195 @@ async def get_quarantine(service: dict = Depends(get_memory_service)):
 async def promote_item(
     item_id: str,
     request: PromoteRequest,
+    http_request: Request,
     tier: str = "working",
+    _authz: None = Depends(require_operator_capability("memory.admin")),
     service: dict = Depends(get_memory_service),
 ):
     """Promote a quarantined item to active."""
     quarantine_manager = service["quarantine_manager"]
 
+    identity = resolve_authenticated_identity(http_request)
+    approver = identity.display_name or identity.operator_id or "operator"
     # Check if it's a core block
     if item_id.startswith("core:"):
         block_type_str = item_id.replace("core:", "")
         try:
             block_type = CoreBlockType(block_type_str)
-            result = quarantine_manager.approve_core_block(block_type, request.approver)
+            result = quarantine_manager.approve_core_block(block_type, approver)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid block type: {block_type_str}")
     else:
-        result = quarantine_manager.approve_item(item_id, tier, request.approver)
+        result = quarantine_manager.approve_item(item_id, tier, approver)
 
     if not result:
         raise HTTPException(status_code=404, detail="Item not found or not quarantined")
 
     return {"status": "promoted", "item_id": item_id}
+
+
+@router.post("/quarantine/core/{block_type}/approve", response_model=MemoryActionResponse)
+async def approve_quarantined_core_block(
+    block_type: str,
+    request: MemoryActionRequest,
+    http_request: Request,
+    _authz: None = Depends(require_operator_capability("memory.admin")),
+    service: dict = Depends(get_memory_service),
+):
+    """Approve a quarantined core block."""
+    quarantine_manager = service["quarantine_manager"]
+
+    try:
+        core_block_type = CoreBlockType(block_type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid block type: {block_type}")
+
+    identity = resolve_authenticated_identity(http_request)
+    operator = identity.display_name or identity.operator_id or "operator"
+    if not quarantine_manager.approve_core_block(core_block_type, operator):
+        raise HTTPException(status_code=404, detail="Core block not found or not quarantined")
+
+    return MemoryActionResponse(status="approved", item_id=f"core:{block_type}", block_type=block_type, reason=request.reason)
+
+
+@router.post("/quarantine/core/{block_type}/reject", response_model=MemoryActionResponse)
+async def reject_quarantined_core_block(
+    block_type: str,
+    request: MemoryActionRequest,
+    http_request: Request,
+    _authz: None = Depends(require_operator_capability("memory.admin")),
+    service: dict = Depends(get_memory_service),
+):
+    """Reject a quarantined core block."""
+    quarantine_manager = service["quarantine_manager"]
+
+    try:
+        core_block_type = CoreBlockType(block_type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid block type: {block_type}")
+
+    identity = resolve_authenticated_identity(http_request)
+    operator = identity.display_name or identity.operator_id or "operator"
+    if not quarantine_manager.reject_core_block(core_block_type, operator, request.reason):
+        raise HTTPException(status_code=404, detail="Core block not found or not quarantined")
+
+    return MemoryActionResponse(status="rejected", item_id=f"core:{block_type}", block_type=block_type, reason=request.reason)
+
+
+@router.post("/quarantine/{tier}/{item_id}/approve", response_model=MemoryActionResponse)
+async def approve_quarantined_item(
+    tier: str,
+    item_id: str,
+    request: MemoryActionRequest,
+    http_request: Request,
+    _authz: None = Depends(require_operator_capability("memory.admin")),
+    service: dict = Depends(get_memory_service),
+):
+    """Approve a quarantined tiered memory item."""
+    quarantine_manager = service["quarantine_manager"]
+
+    try:
+        MemoryTier(tier)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid tier: {tier}")
+
+    identity = resolve_authenticated_identity(http_request)
+    operator = identity.display_name or identity.operator_id or "operator"
+    if not quarantine_manager.approve_item(item_id, tier, operator):
+        raise HTTPException(status_code=404, detail="Item not found or not quarantined")
+
+    return MemoryActionResponse(status="approved", item_id=item_id, tier=tier, reason=request.reason)
+
+
+@router.post("/quarantine/{tier}/{item_id}/reject", response_model=MemoryActionResponse)
+async def reject_quarantined_item(
+    tier: str,
+    item_id: str,
+    request: MemoryActionRequest,
+    http_request: Request,
+    _authz: None = Depends(require_operator_capability("memory.admin")),
+    service: dict = Depends(get_memory_service),
+):
+    """Reject and delete a quarantined tiered memory item."""
+    quarantine_manager = service["quarantine_manager"]
+
+    try:
+        MemoryTier(tier)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid tier: {tier}")
+
+    identity = resolve_authenticated_identity(http_request)
+    operator = identity.display_name or identity.operator_id or "operator"
+    if not quarantine_manager.reject_item(item_id, tier, operator):
+        raise HTTPException(status_code=404, detail="Item not found or not quarantined")
+
+    return MemoryActionResponse(status="rejected", item_id=item_id, tier=tier, reason=request.reason)
+
+
+@router.post("/item/{tier}/{item_id}/status", response_model=MemoryActionResponse)
+async def update_memory_item_status(
+    tier: str,
+    item_id: str,
+    request: MemoryActionRequest,
+    http_request: Request,
+    status: str,
+    _authz: None = Depends(require_operator_capability("memory.admin")),
+    service: dict = Depends(get_memory_service),
+):
+    """Update the lifecycle status of a tiered memory item."""
+    store_manager = service["store_manager"]
+
+    try:
+        tier_enum = MemoryTier(tier)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid tier: {tier}")
+
+    if tier_enum == MemoryTier.core:
+        raise HTTPException(status_code=400, detail="Core blocks must be managed through governed commit actions")
+
+    try:
+        status_enum = MemoryStatus(status)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
+
+    identity = resolve_authenticated_identity(http_request)
+    operator = identity.display_name or identity.operator_id or "operator"
+    store = store_manager.get_store(tier_enum)
+    if not store.update_status(item_id, status_enum):
+        raise HTTPException(status_code=404, detail="Memory item not found")
+
+    logger.info("Operator %s updated memory item %s in %s to %s", operator, item_id, tier, status)
+    return MemoryActionResponse(status=status_enum.value, item_id=item_id, tier=tier, reason=request.reason)
+
+
+@router.post("/item/{tier}/{item_id}/delete", response_model=MemoryActionResponse)
+async def delete_memory_item(
+    tier: str,
+    item_id: str,
+    request: MemoryActionRequest,
+    http_request: Request,
+    _authz: None = Depends(require_operator_capability("memory.admin")),
+    service: dict = Depends(get_memory_service),
+):
+    """Hard-delete a tiered memory item."""
+    store_manager = service["store_manager"]
+
+    try:
+        tier_enum = MemoryTier(tier)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid tier: {tier}")
+
+    if tier_enum == MemoryTier.core:
+        raise HTTPException(status_code=400, detail="Core blocks cannot be deleted directly")
+
+    identity = resolve_authenticated_identity(http_request)
+    operator = identity.display_name or identity.operator_id or "operator"
+    store = store_manager.get_store(tier_enum)
+    if not store.delete(item_id):
+        raise HTTPException(status_code=404, detail="Memory item not found")
+
+    logger.info("Operator %s deleted memory item %s in %s", operator, item_id, tier)
+    return MemoryActionResponse(status="deleted", item_id=item_id, tier=tier, reason=request.reason)
 
 
 # ---------------------------------------------------------------------------

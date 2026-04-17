@@ -27,12 +27,21 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import get_api_key_identity, require_operator_capability, resolve_operator_identity
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/a2a", tags=["a2a-management"])
+router = APIRouter(
+    prefix="/api/a2a",
+    tags=["a2a-management"],
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("a2a.admin")),
+    ],
+)
 
 # Module-level dependencies
 _registry: Any = None
@@ -40,6 +49,24 @@ _receipt_service: Any = None
 _soul: Any = None
 _outbound_pipeline: Any = None
 _a2a_client: Any = None
+
+
+def _get_soul():
+    """Resolve the live A2A Soul."""
+    soul = _soul
+    if soul is None:
+        return None
+    if hasattr(soul, "inbound_a2a_permissions") or hasattr(soul, "outbound_a2a_permissions"):
+        return soul
+    return soul() if callable(soul) else soul
+
+
+def _resolve_request_identity(request: Request):
+    """Resolve operator identity from the authenticated request."""
+    identity = resolve_operator_identity(request)
+    if identity is None:
+        identity = get_api_key_identity(request)
+    return identity
 
 
 def init_a2a_api(
@@ -82,23 +109,52 @@ class DelegateRequest(BaseModel):
 @router.get("/status")
 async def get_status():
     """Get A2A subsystem status."""
-    inbound_perms = getattr(_soul, "inbound_a2a_permissions", None) if _soul else None
-    outbound_perms = getattr(_soul, "outbound_a2a_permissions", None) if _soul else None
+    degraded_reasons: List[str] = []
+    runtime_errors: List[str] = []
+    registry_ready = _registry is not None
+    outbound_pipeline_ready = _outbound_pipeline is not None
+    client_ready = _a2a_client is not None
+
+    soul = None
+    try:
+        soul = _get_soul()
+    except Exception as exc:
+        runtime_errors.append(f"soul_error: {exc}")
+        degraded_reasons.append("A2A Soul status unavailable")
+
+    inbound_perms = getattr(soul, "inbound_a2a_permissions", None) if soul else None
+    outbound_perms = getattr(soul, "outbound_a2a_permissions", None) if soul else None
 
     agent_count = 0
     if _registry:
         try:
             agent_count = len(_registry.list_agents())
-        except Exception:
-            pass
+        except Exception as exc:
+            runtime_errors.append(f"registry_error: {exc}")
+            degraded_reasons.append("A2A registry status unavailable")
+    else:
+        degraded_reasons.append("A2A registry not initialized")
+
+    if soul is None:
+        degraded_reasons.append("A2A Soul not loaded")
+    if _outbound_pipeline is None:
+        degraded_reasons.append("A2A outbound pipeline not initialized")
+    if _a2a_client is None:
+        degraded_reasons.append("A2A client not initialized")
 
     return {
         "enabled": _registry is not None,
-        "soul_version": getattr(_soul, "version", None) if _soul else None,
+        "soul_version": getattr(soul, "version", None) if soul else None,
         "inbound_enabled": inbound_perms is not None and inbound_perms.allow_inbound if inbound_perms else False,
         "outbound_enabled": outbound_perms is not None and outbound_perms.allow_outbound if outbound_perms else False,
         "registered_agents": agent_count,
         "max_delegation_depth": outbound_perms.max_delegation_depth if outbound_perms else 2,
+        "registry_ready": registry_ready,
+        "outbound_pipeline_ready": outbound_pipeline_ready,
+        "client_ready": client_ready,
+        "runtime_degraded": bool(degraded_reasons),
+        "degraded_reasons": degraded_reasons,
+        "runtime_errors": runtime_errors,
     }
 
 
@@ -153,7 +209,8 @@ async def get_agent(agent_id: str):
             result["recent_receipts"] = []
 
     # Include Soul permission view
-    if _soul:
+    soul = _get_soul()
+    if soul:
         result["soul_permissions"] = _get_agent_soul_permissions(agent)
 
     return result
@@ -191,7 +248,7 @@ async def register_agent(body: RegisterAgentRequest, request: Request):
     _registry.register(agent)
 
     # Emit registration receipt (manual = identity-required handled at API layer)
-    operator_id = request.headers.get("X-Operator-ID")
+    identity = _resolve_request_identity(request)
     if _receipt_service:
         from src.shared.receipts import Receipt, ActionType, ReceiptStatus, CognitionTier
         receipt = Receipt(
@@ -201,7 +258,8 @@ async def register_agent(body: RegisterAgentRequest, request: Request):
             outputs={"auto_registered": False, "kill_switch_id": agent.kill_switch_id},
             status=ReceiptStatus.SUCCESS.value,
             tier=CognitionTier.DETERMINISTIC.value,
-            operator_id=operator_id,
+            operator_id=identity.operator_id,
+            session_id=identity.session_id,
             metadata={"subsystem": "a2a"},
         )
         try:
@@ -239,7 +297,7 @@ async def verify_agent_card(agent_id: str):
     if not _a2a_client:
         raise HTTPException(status_code=503, detail="A2A client not initialized")
 
-    verified = _a2a_client.verify_agent_card(agent)
+    verified = _a2a_client.verify_agent_card(agent, allow_repin=True)
     if verified:
         agent.last_verified = datetime.now(timezone.utc).isoformat()
         _registry.update(agent)
@@ -254,29 +312,31 @@ async def verify_agent_card(agent_id: str):
 @router.get("/card")
 async def get_own_card(request: Request):
     """View Lancelot's own Agent Card as external callers see it."""
-    if not _soul:
+    soul = _get_soul()
+    if not soul:
         raise HTTPException(status_code=503, detail="Soul not loaded")
 
     from src.a2a.agent_card import generate_agent_card
     base_url = str(request.base_url).rstrip("/")
-    card = generate_agent_card(soul=_soul, base_url=base_url)
+    card = generate_agent_card(soul=soul, base_url=base_url)
     return card.to_dict()
 
 
 @router.post("/card/regenerate")
 async def regenerate_card(request: Request):
     """Force regeneration of Lancelot's Agent Card."""
-    if not _soul:
+    soul = _get_soul()
+    if not soul:
         raise HTTPException(status_code=503, detail="Soul not loaded")
 
     from src.a2a.agent_card import invalidate_card, generate_agent_card
     invalidate_card()
 
     base_url = str(request.base_url).rstrip("/")
-    card = generate_agent_card(soul=_soul, base_url=base_url)
+    card = generate_agent_card(soul=soul, base_url=base_url)
 
     # Emit card update receipt
-    operator_id = request.headers.get("X-Operator-ID")
+    identity = _resolve_request_identity(request)
     if _receipt_service:
         from src.shared.receipts import Receipt, ActionType, ReceiptStatus, CognitionTier
         receipt = Receipt(
@@ -286,7 +346,8 @@ async def regenerate_card(request: Request):
             outputs={"skills_count": len(card.skills), "version": card.version},
             status=ReceiptStatus.SUCCESS.value,
             tier=CognitionTier.DETERMINISTIC.value,
-            operator_id=operator_id,
+            operator_id=identity.operator_id,
+            session_id=identity.session_id,
             metadata={"subsystem": "a2a"},
         )
         try:
@@ -303,10 +364,13 @@ async def delegate_task(body: DelegateRequest, request: Request):
     if not _outbound_pipeline:
         raise HTTPException(status_code=503, detail="Outbound A2A pipeline not initialized")
 
+    identity = _resolve_request_identity(request)
     result = _outbound_pipeline.delegate(
         target_agent_id=body.target_agent_id,
         task_content=body.content,
         task_type=body.task_type,
+        operator_id=identity.operator_id,
+        session_id=identity.session_id,
     )
 
     if not result.success:
@@ -347,7 +411,8 @@ def _get_agent_soul_permissions(agent: Any) -> Dict[str, Any]:
     """Extract Soul permission rules governing a specific agent."""
     result: Dict[str, Any] = {"inbound": None, "outbound": None}
 
-    inbound = getattr(_soul, "inbound_a2a_permissions", None)
+    soul = _get_soul()
+    inbound = getattr(soul, "inbound_a2a_permissions", None) if soul else None
     if inbound:
         for rule in inbound.allowed_callers:
             if rule.get("agent_id") == agent.agent_id or \
@@ -355,7 +420,7 @@ def _get_agent_soul_permissions(agent: Any) -> Dict[str, Any]:
                 result["inbound"] = rule
                 break
 
-    outbound = getattr(_soul, "outbound_a2a_permissions", None)
+    outbound = getattr(soul, "outbound_a2a_permissions", None) if soul else None
     if outbound:
         for target in outbound.allowed_targets:
             if target.get("agent_id") == agent.agent_id or \

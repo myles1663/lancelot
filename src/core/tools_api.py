@@ -8,12 +8,17 @@ for the War Room Tool Fabric page.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
+from src.core.api_auth import require_authenticated_request
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/tools", tags=["tools"])
+router = APIRouter(
+    prefix="/api/tools",
+    tags=["tools"],
+    dependencies=[Depends(require_authenticated_request)],
+)
 
 _fabric = None
 

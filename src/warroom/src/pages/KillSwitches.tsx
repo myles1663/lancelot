@@ -750,6 +750,12 @@ function UABPanel() {
             <div className="flex items-center justify-between"><span className="text-[10px] text-text-muted">Version</span><span className="text-[10px] font-mono text-text-primary">v{status.version}</span></div>
             <div className="flex items-center justify-between"><span className="text-[10px] text-text-muted">Connected Apps</span><span className="text-[10px] font-mono text-text-primary">{status.connected_apps}</span></div>
             <div className="flex items-center justify-between"><span className="text-[10px] text-text-muted">Frameworks</span><span className="text-[10px] font-mono text-text-primary">{status.supported_frameworks.length > 0 ? status.supported_frameworks.join(', ') : 'none'}</span></div>
+            {status.transport && (
+              <div className="flex items-center justify-between"><span className="text-[10px] text-text-muted">Transport</span><span className="text-[10px] font-mono text-text-primary">{status.transport}</span></div>
+            )}
+            {!!status.standalone_features?.length && (
+              <div className="flex items-center justify-between"><span className="text-[10px] text-text-muted">Bridge Features</span><span className="text-[10px] font-mono text-text-primary">{status.standalone_features.join(', ')}</span></div>
+            )}
             {status.uptime_seconds > 0 && (
               <div className="flex items-center justify-between"><span className="text-[10px] text-text-muted">Uptime</span><span className="text-[10px] font-mono text-text-primary">{Math.floor(status.uptime_seconds / 60)}m {status.uptime_seconds % 60}s</span></div>
             )}
@@ -776,10 +782,12 @@ function UABPanel() {
                   <span className="w-1.5 h-1.5 rounded-full bg-state-healthy" />
                   <span className="text-[10px] font-medium text-text-primary">{app.name}</span>
                   <span className="text-[9px] font-mono text-text-muted">PID {app.pid}</span>
+                  {!!app.windowTitle && <span className="text-[9px] text-text-muted truncate max-w-[12rem]">{app.windowTitle}</span>}
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent-primary/10 text-accent-primary font-mono">{app.framework}</span>
                   <span className="text-[9px] text-text-muted">{app.connectionMethod}</span>
+                  {typeof app.elementCount === 'number' && app.elementCount > 0 && <span className="text-[9px] text-text-muted">{app.elementCount} el</span>}
                 </div>
               </div>
             ))}

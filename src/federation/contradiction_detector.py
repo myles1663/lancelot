@@ -128,6 +128,108 @@ class ContradictionDetector:
         self._contradictions: Dict[str, Contradiction] = {}
         self._lock = threading.Lock()
 
+    def check_receipt_chain(
+        self,
+        receipt_chain: List[Dict[str, Any]],
+        *,
+        federation_quest_id: str = "",
+        source_instance_id: str = "",
+        target_instance_id: str = "",
+        contract: Optional[Dict[str, Any]] = None,
+        result: Optional[Dict[str, Any]] = None,
+        edge_id: str = "",
+    ) -> List[Contradiction]:
+        """Run the live contradiction checks used by federation handoffs."""
+        contradictions: List[Contradiction] = []
+        contract = contract or {}
+        result = result or {}
+
+        previous_timestamp: Optional[str] = None
+        previous_receipt_id: str = ""
+        for index, receipt in enumerate(receipt_chain or []):
+            current_timestamp = self._extract_timestamp(receipt)
+            if previous_timestamp and current_timestamp:
+                contradiction = self.check_temporal(
+                    contradiction_id=f"{edge_id or 'handoff'}:temporal:{index}",
+                    federation_quest_id=federation_quest_id,
+                    source_instance_id=source_instance_id,
+                    target_instance_id=target_instance_id,
+                    assumption_text="Federation receipt chain must remain temporally ordered",
+                    upstream_timestamp=previous_timestamp,
+                    downstream_timestamp=current_timestamp,
+                    source_receipt_id=previous_receipt_id,
+                    target_receipt_id=str(receipt.get("id", "")),
+                    edge_id=edge_id,
+                )
+                if contradiction:
+                    contradictions.append(contradiction)
+            if current_timestamp:
+                previous_timestamp = current_timestamp
+                previous_receipt_id = str(receipt.get("id", ""))
+
+        expected_schema = (
+            contract.get("result_schema")
+            or contract.get("result_payload_schema")
+            or contract.get("data_payload_schema")
+            or {}
+        )
+        if expected_schema and isinstance(result, dict):
+            contradiction = self.check_factual(
+                contradiction_id=f"{edge_id or 'handoff'}:factual:result",
+                federation_quest_id=federation_quest_id,
+                source_instance_id=source_instance_id,
+                target_instance_id=target_instance_id,
+                assumption_text="Federation completion result must satisfy the declared payload schema",
+                expected_schema=self._normalize_schema(expected_schema),
+                actual_data=result,
+                source_receipt_id=previous_receipt_id,
+                edge_id=edge_id,
+            )
+            if contradiction:
+                contradictions.append(contradiction)
+
+        for field_name, bounds in (contract.get("constraint_bounds") or {}).items():
+            if not isinstance(bounds, dict):
+                continue
+            value = self._lookup_field(result, field_name)
+            if value is None or not isinstance(value, (int, float)) or isinstance(value, bool):
+                continue
+            contradiction = self.check_constraint(
+                contradiction_id=f"{edge_id or 'handoff'}:constraint:{field_name}",
+                federation_quest_id=federation_quest_id,
+                source_instance_id=source_instance_id,
+                target_instance_id=target_instance_id,
+                assumption_text=f"Federation completion field '{field_name}' must remain within declared bounds",
+                field_name=field_name,
+                value=float(value),
+                min_value=bounds.get("min"),
+                max_value=bounds.get("max"),
+                source_receipt_id=previous_receipt_id,
+                edge_id=edge_id,
+            )
+            if contradiction:
+                contradictions.append(contradiction)
+
+        if contract.get("success_criteria") and self._result_failed(result):
+            contradiction = Contradiction(
+                contradiction_id=f"{edge_id or 'handoff'}:success_criteria",
+                federation_quest_id=federation_quest_id,
+                source_instance_id=source_instance_id,
+                target_instance_id=target_instance_id,
+                source_receipt_id=previous_receipt_id,
+                edge_id=edge_id,
+                category=AssumptionCategory.CONSTRAINT,
+                severity=ContradictionSeverity.HIGH,
+                description="Completion result did not satisfy declared success criteria",
+                assumption_text="Federation handoff completion must satisfy its declared success criteria",
+                expected=str(contract.get("success_criteria", [])),
+                actual=str(result),
+            )
+            self._record(contradiction)
+            contradictions.append(contradiction)
+
+        return contradictions
+
     def check_factual(
         self,
         contradiction_id: str,
@@ -352,3 +454,37 @@ class ContradictionDetector:
                 self._on_contradiction(c)
             except Exception as e:
                 logger.error("Contradiction callback failed: %s", e)
+
+    @staticmethod
+    def _extract_timestamp(receipt: Dict[str, Any]) -> Optional[str]:
+        for key in ("timestamp", "created_at", "completed_at", "detected_at"):
+            value = receipt.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    @staticmethod
+    def _normalize_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+        required = list(schema.get("required", []) or [])
+        properties = schema.get("properties", {}) or {}
+        normalized = {key: {} for key in required}
+        for key in required:
+            if isinstance(properties.get(key), dict):
+                normalized[key] = properties[key]
+        return normalized
+
+    @staticmethod
+    def _lookup_field(payload: Dict[str, Any], field_name: str) -> Any:
+        current: Any = payload
+        for part in field_name.split("."):
+            if not isinstance(current, dict) or part not in current:
+                return None
+            current = current[part]
+        return current
+
+    @staticmethod
+    def _result_failed(result: Dict[str, Any]) -> bool:
+        if result.get("success") is False:
+            return True
+        status = str(result.get("status", "")).strip().lower()
+        return status in {"failed", "failure", "error", "rejected", "denied"}

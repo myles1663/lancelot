@@ -25,7 +25,10 @@ import hmac
 import time
 import uuid
 import os
+import json
 import logging
+from oauth_callback_pages import render_callback_exception_page, render_callback_page
+from src.core.runtime_pause import init_runtime_pause
 
 # F1: Configurable log level
 LOG_LEVEL = os.getenv("LANCELOT_LOG_LEVEL", "INFO").upper()
@@ -55,6 +58,23 @@ def error_response(status_code: int, message: str, detail: str = None, request_i
     if request_id:
         content["request_id"] = request_id
     return JSONResponse(status_code=status_code, content=content)
+
+
+def _resolve_audit_user(request: Request) -> str:
+    """Resolve the authenticated operator display name for text audit logs."""
+    try:
+        from src.core.auth_api import get_api_key_identity, resolve_operator_identity
+
+        identity = resolve_operator_identity(request)
+        if identity is None:
+            identity = get_api_key_identity(request)
+        if identity.display_name:
+            return identity.display_name
+        if identity.operator_id:
+            return identity.operator_id
+    except Exception as exc:
+        logger.debug("Falling back to generic audit user: %s", exc)
+    return "operator"
 
 
 class RateLimiter:
@@ -138,11 +158,16 @@ _SUBSYSTEM_GATES = [
     ("/api/v1/clients", "FEATURE_BAL"),
     ("/api/hive", "FEATURE_HIVE"),
     ("/api/federation", "FEATURE_FEDERATION"),
+    ("/api/mcp", "FEATURE_MCP"),
     ("/api/observability", "FEATURE_OBSERVABILITY"),
+    ("/api/metrics", "FEATURE_OBSERVABILITY"),
     ("/api/timetravel", "FEATURE_TIME_TRAVEL"),
     ("/api/a2a", "FEATURE_A2A"),
     ("/a2a", "FEATURE_A2A"),
     ("/.well-known/agent.json", "FEATURE_A2A"),
+    ("/api/incidents", "FEATURE_INCIDENT_RESPONSE"),
+    ("/api/playbooks", "FEATURE_INCIDENT_RESPONSE"),
+    ("/api/actioncards", "FEATURE_ACTION_CARDS"),
 ]
 
 
@@ -206,7 +231,7 @@ def verify_token(request: Request) -> bool:
             return True
         # Fall back to War Room session check
         try:
-            from auth_api import verify_warroom_session
+            from src.core.auth_api import verify_warroom_session
             if verify_warroom_session(request):
                 return True
         except ImportError:
@@ -222,10 +247,31 @@ def verify_token(request: Request) -> bool:
             return True
     # Fall back to War Room session check
     try:
-        from auth_api import verify_warroom_session
+        from src.core.auth_api import verify_warroom_session
         return verify_warroom_session(request)
     except ImportError:
         return False
+
+
+def _require_request_capability(
+    request: Request,
+    capability: str,
+    *,
+    request_id: str | None = None,
+) -> JSONResponse | None:
+    """Require authenticated access plus a coarse operator capability."""
+    if not verify_token(request):
+        return error_response(401, "Unauthorized", request_id=request_id)
+    try:
+        from src.core.auth_api import request_has_capability
+
+        if request_has_capability(request, capability):
+            return None
+    except Exception as exc:
+        logger.warning("Capability enforcement failed for %s: %s", capability, exc)
+        return error_response(503, "Authorization unavailable", request_id=request_id)
+
+    return error_response(403, f"Missing capability: {capability}", request_id=request_id)
 
 
 # F7: Generate unique request ID
@@ -241,6 +287,7 @@ main_orchestrator = LancelotOrchestrator(data_dir="/home/lancelot/data")
 onboarding_orch = OnboardingOrchestrator(data_dir="/home/lancelot/data")
 librarian = LibrarianV2(data_dir="/home/lancelot/data")
 antigravity = AntigravityEngine(data_dir="/home/lancelot/data")
+init_runtime_pause("/home/lancelot/data")
 mfa_guard = MFAListener()
 webhook_auth = WebhookAuthenticator()
 
@@ -272,9 +319,16 @@ if COMMS_TYPE == "telegram":
             logger.warning("Voice processor init failed: %s", _vp_err)
     telegram_bot = TelegramBot(orchestrator=main_orchestrator, voice_processor=_voice_proc)
     logger.info("Comms backend: Telegram")
-else:
+elif COMMS_TYPE == "google_chat":
     chat_poller = ChatPoller(data_dir="/home/lancelot/data", orchestrator=main_orchestrator)
     logger.info("Comms backend: Google Chat")
+elif COMMS_TYPE in ("", "none"):
+    logger.info("Comms backend: disabled")
+else:
+    logger.warning(
+        "Unsupported comms backend '%s' configured; communications disabled.",
+        COMMS_TYPE,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +369,55 @@ def _shutdown_memory(objects):
     logger.info("Memory vNext shut down.")
 
 
+def _refresh_runtime_soul_from_store():
+    """Reload the active Soul from store and apply it to live runtime subscribers."""
+    from soul.store import load_active_soul
+    from soul.layers import load_overlays, merge_soul
+
+    active_soul = load_active_soul()
+    if active_soul is None:
+        raise RuntimeError("No active Soul found for runtime refresh")
+
+    overlays = load_overlays()
+    if overlays:
+        active_soul = merge_soul(active_soul, overlays)
+
+    apply_runtime_soul = getattr(app.state, "apply_runtime_soul", None)
+    if callable(apply_runtime_soul):
+        apply_runtime_soul(active_soul)
+    else:
+        main_orchestrator.soul = active_soul
+        app.state.active_soul = active_soul
+
+    return active_soul
+
+
+def _transition_crusader_mode(action: str) -> tuple[bool, str]:
+    """Apply a Crusader mode transition and refresh live runtime Soul subscribers."""
+    if action == "activate":
+        response_text = crusader_mode.activate()
+        rollback = crusader_mode.deactivate
+        failure_prefix = "Crusader activation"
+    elif action == "deactivate":
+        response_text = crusader_mode.deactivate()
+        rollback = crusader_mode.activate
+        failure_prefix = "Crusader deactivation"
+    else:
+        raise ValueError(f"Unsupported Crusader action: {action}")
+
+    try:
+        _refresh_runtime_soul_from_store()
+        return True, response_text
+    except Exception as exc:
+        logger.error("%s runtime Soul refresh failed: %s", failure_prefix, exc)
+        try:
+            rollback()
+            _refresh_runtime_soul_from_store()
+        except Exception as rollback_exc:
+            logger.error("%s rollback failed: %s", failure_prefix, rollback_exc)
+        return False, f"{failure_prefix} failed to refresh runtime Soul: {exc}"
+
+
 def _init_soul():
     """Initialize Soul subsystem."""
     from soul.store import load_active_soul, SoulStoreError
@@ -339,6 +442,11 @@ def _init_soul():
         logger.warning("Soul overlay loading failed: %s — using base soul", exc)
 
     main_orchestrator.soul = active_soul
+    if getattr(main_orchestrator, "_risk_classifier", None) is not None:
+        try:
+            main_orchestrator._risk_classifier.update_soul(active_soul)
+        except Exception as exc:
+            logger.warning("Risk classifier Soul update failed during Soul init: %s", exc)
     logger.info("Soul loaded: version=%s", active_soul.version)
     return {"soul": active_soul}
 
@@ -400,18 +508,64 @@ def _init_scheduler():
     main_orchestrator.scheduler_service = service
     logger.info("Scheduler initialized: %d jobs registered", count)
 
-    # Connect job executor if skills available
-    job_exec = None
+    memory_job_executor = None
+    MEMORY_JOB_SKILLS = set()
+    execute_memory_job = None
     skill_executor = main_orchestrator.skill_executor
-    if skill_executor:
+    memory_jobs_inserted = 0
+    memory_jobs_updated = 0
+
+    if getattr(main_orchestrator, "_memory_enabled", False) and main_orchestrator.context_compiler:
+        try:
+            from memory.jobs import (
+                MEMORY_JOB_SKILLS,
+                MemoryJobExecutor,
+                execute_memory_job,
+                get_memory_job_specs,
+            )
+
+            compiler_svc = main_orchestrator.context_compiler
+            memory_job_executor = MemoryJobExecutor(
+                core_store=compiler_svc.core_store,
+                store_manager=compiler_svc.memory_manager,
+                data_dir=Path("/home/lancelot/data"),
+            )
+            memory_jobs_inserted, memory_jobs_updated = service.ensure_job_specs(get_memory_job_specs())
+            logger.info(
+                "Memory scheduler jobs ensured: %d inserted, %d updated",
+                memory_jobs_inserted,
+                memory_jobs_updated,
+            )
+        except Exception as e:
+            logger.error("Memory scheduler job initialization failed: %s", e)
+            memory_job_executor = None
+
+    # Connect job executor if skills or memory jobs are available
+    job_exec = None
+    if skill_executor or memory_job_executor:
         from scheduler.executor import JobExecutor
+
+        def _execute_scheduled_job(name, inputs):
+            if memory_job_executor and name in MEMORY_JOB_SKILLS:
+                result = execute_memory_job(memory_job_executor, name, inputs)
+                if not result.success:
+                    raise RuntimeError("; ".join(result.errors) or f"Memory job {name} failed")
+                return result.to_dict()
+            if skill_executor:
+                return skill_executor.run(name, inputs)
+            raise RuntimeError(f"No executor available for scheduled job '{name}'")
+
         job_exec = JobExecutor(
             scheduler_service=service,
-            skill_execute_fn=lambda name, inputs: skill_executor.run(name, inputs),
+            skill_execute_fn=_execute_scheduled_job,
         )
         main_orchestrator.job_executor = job_exec
         job_exec.start_tick_loop()
-        logger.info("Job executor wired to skill executor.")
+        logger.info(
+            "Job executor wired (skills=%s, memory_jobs=%s).",
+            "yes" if skill_executor else "no",
+            "yes" if memory_job_executor else "no",
+        )
 
     # Init scheduler API
     try:
@@ -421,7 +575,13 @@ def _init_scheduler():
     except Exception as e:
         logger.warning("Scheduler API initialization failed: %s", e)
 
-    return {"service": service, "job_executor": job_exec}
+    return {
+        "service": service,
+        "job_executor": job_exec,
+        "memory_job_executor": memory_job_executor,
+        "memory_jobs_inserted": memory_jobs_inserted,
+        "memory_jobs_updated": memory_jobs_updated,
+    }
 
 
 def _shutdown_scheduler(objects):
@@ -464,13 +624,25 @@ def _init_health_monitor():
     if main_orchestrator.scheduler_service:
         checks.append(HealthCheck(
             name="scheduler",
-            check_fn=lambda: main_orchestrator.scheduler_service is not None,
-            degraded_reason="Scheduler not available",
+            check_fn=lambda: bool(
+                main_orchestrator.job_executor
+                and main_orchestrator.job_executor.is_running
+            ),
+            degraded_reason="Scheduler not running",
+            snapshot_details_fn=lambda: {
+                "last_scheduler_tick_at": (
+                    main_orchestrator.scheduler_service.last_scheduler_tick_at
+                    if main_orchestrator.scheduler_service
+                    else None
+                )
+            },
         ))
 
     monitor = HealthMonitor(checks=checks, interval_s=30.0)
     monitor.start_monitor()
-    set_snapshot_provider(lambda: monitor.latest_snapshot)
+    # Serve a fresh readiness snapshot on each /health/ready request so the
+    # panel reflects current provider/local-LLM state even after startup races.
+    set_snapshot_provider(monitor.compute_snapshot)
     logger.info("Health monitor started.")
     return {"monitor": monitor}
 
@@ -616,8 +788,8 @@ class _OrchestratorRouterAdapter:
         try:
             # Use the deep model for decomposition (planning tasks)
             deep_model = self._orch._get_deep_model()
-            messages = [{"role": "user", "content": text}]
-            result = provider.generate(
+            messages = [self._orch._build_frontier_user_message(text)]
+            result = self._orch._provider_generate(
                 model=deep_model,
                 messages=messages,
                 system_instruction="You are a task decomposer. Return only valid JSON.",
@@ -628,8 +800,8 @@ class _OrchestratorRouterAdapter:
             logger.error("HIVE router adapter LLM call failed: %s", exc)
             # Fall back to the fast model
             try:
-                messages = [{"role": "user", "content": text}]
-                result = provider.generate(
+                messages = [self._orch._build_frontier_user_message(text)]
+                result = self._orch._provider_generate(
                     model=self._orch.model_name,
                     messages=messages,
                     system_instruction="You are a task decomposer. Return only valid JSON.",
@@ -650,6 +822,7 @@ def _init_hive():
     from src.hive.decomposer import TaskDecomposer
     from src.hive.architect import ArchitectAgent
     from src.hive.api import init_hive_api
+    from src.hive.integration.governance_bridge import GovernanceBridge
     from src.hive.integration.uab_executor import HiveUABExecutor
     from feature_flags import FEATURE_HIVE_UAB
 
@@ -658,6 +831,13 @@ def _init_hive():
     data_dir = os.environ.get("LANCELOT_DATA_DIR", "lancelot_data")
     receipt_mgr = HiveReceiptManager(data_dir=data_dir)
     soul_gen = ScopedSoulGenerator()
+    parent_soul = getattr(main_orchestrator, "soul", None)
+    governance_bridge = GovernanceBridge(
+        risk_classifier=getattr(main_orchestrator, "_risk_classifier", None),
+        trust_ledger=getattr(main_orchestrator, "trust_ledger", None),
+        decision_log=getattr(main_orchestrator, "decision_log", None),
+        mcp_sentry=sentry,
+    )
 
     # Bridge orchestrator's provider to the ModelRouter interface
     router_adapter = _OrchestratorRouterAdapter(main_orchestrator)
@@ -670,6 +850,7 @@ def _init_hive():
             action_executor = HiveUABExecutor(
                 uab_provider=uab_provider,
                 llm_router=router_adapter,
+                governance_bridge=governance_bridge,
             )
             logger.info("HIVE UAB executor wired — sub-agents will execute real desktop actions")
         else:
@@ -680,8 +861,21 @@ def _init_hive():
         registry=registry,
         receipt_manager=receipt_mgr,
         soul_generator=soul_gen,
+        governance_bridge=governance_bridge,
+        parent_soul=parent_soul,
         action_executor=action_executor,
     )
+
+    federation_entry = subsystem_manager._subsystems.get("federation")
+    if federation_entry and federation_entry.running:
+        try:
+            lifecycle.update_spawn_controls(
+                spawn_gate=federation_entry.objects.get("spawn_gate"),
+                spawn_record_hook=federation_entry.objects.get("spawn_record_hook"),
+                collapse_record_hook=federation_entry.objects.get("collapse_record_hook"),
+            )
+        except Exception as exc:
+            logger.warning("Failed to wire existing federation budget governance into HIVE lifecycle: %s", exc)
 
     decomposer = TaskDecomposer(model_router=router_adapter)
 
@@ -718,10 +912,10 @@ def _get_uab_provider():
         health = provider.health_check()
         if health.state.value == "healthy":
             return provider
-        logger.warning("UAB provider health check: %s", health.state.value)
+        logger.info("UAB provider unavailable at startup: %s", health.state.value)
         return provider  # Return anyway — daemon might come up later
     except Exception as exc:
-        logger.warning("Failed to create UABProvider: %s", exc)
+        logger.info("UAB provider unavailable at startup: %s", exc)
         return None
 
 
@@ -768,23 +962,35 @@ def _init_federation():
     from src.federation.heartbeat import HeartbeatEmitter
     from src.federation.topology import TopologyRegistry
     from src.federation.divergence import DivergenceDetector
+    from src.federation.divergence import ReconciliationOutcome, reconcile_divergence
     from src.federation.receipt_manager import FederationReceiptManager
     from src.federation.api import init_federation_api, init_federation_transport
     from src.federation.auth import FederationAuth
+    from src.federation.soul_compat import hash_soul
     from src.federation.transport import FederationTransport
     from src.federation.peer_registry import PeerRegistryStore
     from src.federation.peer_protocol import PeerRegistrationProtocol
     from src.federation.command_relay import CommandRelay
     from src.federation.soul_transport import SoulTransport
+    from src.federation.soul_propagation import SoulPropagationEngine
     from src.federation.handoff_protocol import HandoffProtocol
     from src.federation.cost_reporter import CostReporter
+    from src.federation.cost_aggregation import FederatedCostAggregator
+    from src.federation.budget import FederationBudgetTracker
     from src.federation.heartbeat_mesh import HeartbeatMesh
     from src.federation.audit import FederationAuditEngine
+    from src.federation.runtime_budget_source import RuntimeBudgetResolver
+    from src.federation.runtime_budget_control import (
+        handle_federation_cost_threshold_change,
+    )
 
     data_dir = os.environ.get("LANCELOT_DATA_DIR", "lancelot_data")
     config = load_federation_config()
     identity = load_or_generate_identity(data_dir=data_dir)
 
+    fed_data_dir = os.path.join(data_dir, "federation")
+    graph_data_dir = os.path.join(data_dir, "federation")
+    os.makedirs(fed_data_dir, exist_ok=True)
     topology = TopologyRegistry(
         self_instance_id=identity.instance_id,
         staleness_warning_s=config.staleness_warning_s,
@@ -805,22 +1011,150 @@ def _init_federation():
     )
 
     # Audit engine — cross-instance audit trail
-    audit_engine = FederationAuditEngine(max_entries=10000)
+    audit_engine = FederationAuditEngine(
+        max_entries=10000,
+        persistence_path=os.path.join(fed_data_dir, "audit_log.json"),
+    )
 
     # --- Control Plane (existing) ---
     emitter = HeartbeatEmitter(
         instance_id=identity.instance_id,
         interval_s=config.heartbeat_interval_s,
     )
+
+    budget_tracker = FederationBudgetTracker()
+    cost_aggregator = None
+    runtime_budget_resolver = RuntimeBudgetResolver(
+        topology_data_dir=graph_data_dir,
+        identity=identity,
+        fallback_daily_ceiling_usd=float(config.daily_budget_ceiling_usd),
+    )
+
+    def _record_cost_threshold_change(old_threshold, new_threshold) -> None:
+        try:
+            handle_federation_cost_threshold_change(
+                old_threshold,
+                new_threshold,
+                cost_aggregator=cost_aggregator,
+                receipt_mgr=receipt_mgr,
+                audit_engine=audit_engine,
+                identity=identity,
+                soul_hash_provider=lambda: hash_soul(
+                    getattr(app.state, "active_soul", getattr(main_orchestrator, "soul", None))
+                ) if getattr(app.state, "active_soul", getattr(main_orchestrator, "soul", None)) is not None else "",
+                pause_runtime_fn=_federation_local_pause_handler,
+            )
+        except Exception as exc:
+            logger.warning("Failed to record federation cost threshold change: %s", exc)
+
+    def _federation_usage_provider():
+        tracker = getattr(main_orchestrator, "usage_tracker", None)
+        usage_summary = tracker.summary() if tracker else {}
+        total_cost = float(usage_summary.get("total_cost_est", 0.0) or 0.0)
+        total_tokens = int(usage_summary.get("total_tokens_est", 0) or 0)
+
+        hive_entry = subsystem_manager._subsystems.get("hive")
+        active_spawns = 0
+        if hive_entry and hive_entry.running:
+            registry = hive_entry.objects.get("registry")
+            if registry is not None:
+                try:
+                    active_spawns = int(registry.active_count())
+                except Exception:
+                    active_spawns = 0
+
+        # Federation budget tracking is cost-governance oriented today, not
+        # a second token-budget system. We surface live cost/usage from the
+        # main orchestrator and active HIVE spawn pressure from the registry.
+        daily_ceiling = runtime_budget_resolver.resolve_daily_ceiling_usd()
+        projected_today = total_cost
+
+        return {
+            "actual_today_usd": total_cost,
+            "projected_today_usd": projected_today,
+            "daily_ceiling_usd": daily_ceiling,
+            "active_spawns": active_spawns,
+            "spawn_cost_rate_usd_hr": 0.0,
+            "total_tokens_today": total_tokens,
+            "budget_tracker": budget_tracker.get_snapshot(),
+        }
+
+    def _runtime_federation_soul():
+        return getattr(app.state, "active_soul", getattr(main_orchestrator, "soul", None))
+
+    def _runtime_federation_soul_hash() -> str:
+        current_soul = _runtime_federation_soul()
+        return hash_soul(current_soul) if current_soul is not None else ""
+
+    def _record_divergence(peer_instance_id, snapshot) -> None:
+        receipt_mgr.record_divergence(
+            peer_instance_id=peer_instance_id,
+            staleness_seconds=divergence.get_divergence_duration_s(),
+            soul_version_hash=snapshot.soul_hash_at_divergence,
+        )
+        audit_engine.record(
+            event_type="divergence_detected",
+            instance_id=identity.instance_id,
+            soul_version_hash=snapshot.soul_hash_at_divergence,
+            details={
+                "peer_instance_id": peer_instance_id,
+                "snapshot": snapshot.to_dict(),
+            },
+        )
+
+    def _reconcile_after_reconnect(peer_instance_id, detector) -> None:
+        snapshot = detector.divergence_snapshot
+        if snapshot is None:
+            return
+        outcome, conflicts = reconcile_divergence(
+            divergence_snapshot=snapshot,
+            reconnection_soul_hash=_runtime_federation_soul_hash(),
+            reconnection_budget_pct=float(
+                cost_reporter.get_aggregate_status().get("utilization_pct", 0.0)
+            ) if cost_reporter else 0.0,
+        )
+        detector.mark_reconciled(outcome, conflicts)
+        receipt_mgr.record_reconnection(
+            peer_instance_id=peer_instance_id,
+            divergence_duration_s=detector.get_divergence_duration_s(),
+            reconciliation_result=outcome.value,
+        )
+        audit_engine.record(
+            event_type="reconciliation_completed",
+            instance_id=identity.instance_id,
+            soul_version_hash=_runtime_federation_soul_hash(),
+            details={
+                "peer_instance_id": peer_instance_id,
+                "outcome": outcome.value,
+                "conflicts": [
+                    {
+                        "conflict_type": c.conflict_type,
+                        "description": c.description,
+                        "resolution": c.resolution,
+                        "affected_component": c.affected_component,
+                    }
+                    for c in conflicts
+                ],
+            },
+        )
+        if outcome == ReconciliationOutcome.COMPATIBLE:
+            detector.reset_to_connected()
+
     emitter.set_providers(
+        soul_hash=lambda: (
+            _runtime_federation_soul_hash()
+        ),
+        mode=lambda: topology.deployment_mode.value,
+        budget=lambda: (
+            float(_federation_usage_provider().get("actual_today_usd", 0.0))
+            / max(float(_federation_usage_provider().get("daily_ceiling_usd", 10.0)), 0.0001)
+        ) * 100.0,
         peer_count=lambda: topology.peer_count(),
     )
 
     # --- Data Plane (transport layer) ---
 
     # 1. Persistent peer registry (SQLite)
-    fed_data_dir = os.path.join(data_dir, "federation")
-    os.makedirs(fed_data_dir, exist_ok=True)
     peer_db_path = config.peer_db_path or os.path.join(fed_data_dir, "peers.sqlite")
     peer_registry = PeerRegistryStore(db_path=peer_db_path)
 
@@ -830,6 +1164,7 @@ def _init_federation():
         peer_key_resolver=lambda instance_id: _resolve_peer_key(peer_registry, topology, instance_id),
         timestamp_window_s=config.auth_timestamp_window_s,
         nonce_cache_size=config.nonce_cache_size,
+        nonce_store=peer_registry,
     )
 
     # 3. Resilient HTTP transport (circuit breakers, retries, connection pooling)
@@ -843,6 +1178,12 @@ def _init_federation():
         read_timeout_s=config.read_timeout_s,
     )
 
+    def _handle_federation_peer_removed(instance_id: str) -> None:
+        if heartbeat_mesh:
+            heartbeat_mesh.on_peer_removed(instance_id)
+        if cost_aggregator:
+            cost_aggregator.remove_instance(instance_id)
+
     # 4. Peer registration handshake protocol
     peer_protocol = PeerRegistrationProtocol(
         identity=identity,
@@ -850,15 +1191,207 @@ def _init_federation():
         transport=transport,
         receipt_mgr=receipt_mgr,
         audit=audit_engine,
+        self_address=config.self_address,
+        on_peer_registered=lambda instance_id, address: heartbeat_mesh.on_peer_added(instance_id, address) if heartbeat_mesh else None,
+        on_peer_removed=_handle_federation_peer_removed,
+        persistence_path=os.path.join(fed_data_dir, "pending_registrations.json"),
     )
 
     # 5. Command relay (kill switch + pause propagation)
+    def _federation_local_kill_handler(reason: str) -> int:
+        hive_entry = subsystem_manager._subsystems.get("hive")
+        lifecycle = hive_entry.objects.get("lifecycle") if hive_entry and hive_entry.running else None
+        if lifecycle is None:
+            logger.warning("Federation kill requested but HIVE lifecycle is not available")
+            return 0
+        collapsed = lifecycle.kill_all(
+            reason,
+            operator_id="federation-peer",
+            session_id="federation-peer",
+        )
+        return len(collapsed)
+
+    def _cancel_federation_approval_queues(reason: str) -> dict:
+        scheduler_pending = 0
+        scheduler_granted = 0
+        sentry_pending_denied = 0
+
+        job_executor = getattr(main_orchestrator, "job_executor", None)
+        if job_executor is not None:
+            try:
+                cleared = job_executor.clear_approval_state(
+                    reason=reason,
+                    operator_id="federation-peer",
+                    session_id="federation-peer",
+                    actor="Federation Peer",
+                )
+                scheduler_pending = int(cleared.get("pending_cleared", 0) or 0)
+                scheduler_granted = int(cleared.get("granted_cleared", 0) or 0)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to clear scheduler approvals during federation full stop: %s",
+                    exc,
+                )
+
+        try:
+            sentry._cleanup_expired()
+            for req_id, req in list(sentry.pending_requests.items()):
+                if req.get("status") == "PENDING" and sentry.deny_request(req_id):
+                    sentry_pending_denied += 1
+        except Exception as exc:
+            logger.warning(
+                "Failed to clear sentry approvals during federation full stop: %s",
+                exc,
+            )
+
+        return {
+            "scheduler_pending_cleared": scheduler_pending,
+            "scheduler_granted_cleared": scheduler_granted,
+            "sentry_pending_denied": sentry_pending_denied,
+        }
+
+    def _federation_local_pause_handler(
+        reason: str,
+        *,
+        full_stop: bool = False,
+        source: str = "federation",
+    ) -> dict:
+        from src.core.runtime_pause import pause_runtime
+
+        pause_runtime(
+            reason,
+            operator_id="federation-peer",
+            operator_name="Federation Peer",
+            session_id="federation-peer",
+            source=source,
+        )
+
+        approval_queue_result = {
+            "scheduler_pending_cleared": 0,
+            "scheduler_granted_cleared": 0,
+            "sentry_pending_denied": 0,
+        }
+        if full_stop:
+            approval_queue_result = _cancel_federation_approval_queues(reason)
+
+        hive_entry = subsystem_manager._subsystems.get("hive")
+        lifecycle = hive_entry.objects.get("lifecycle") if hive_entry and hive_entry.running else None
+        registry = hive_entry.objects.get("registry") if hive_entry and hive_entry.running else None
+        if lifecycle is None or registry is None:
+            return {
+                "paused_agents": 0,
+                "already_paused_agents": 0,
+                "execution_state": "paused",
+                "full_stop": full_stop,
+                **approval_queue_result,
+            }
+
+        from src.hive.types import AgentState
+
+        paused_agents = 0
+        failed_agents = []
+
+        for record in registry.list_by_state(AgentState.EXECUTING):
+            try:
+                lifecycle.pause(
+                    record.agent_id,
+                    reason,
+                    operator_id="federation-peer",
+                    session_id="federation-peer",
+                )
+                paused_agents += 1
+            except KeyError:
+                # Agent may have completed between roster read and pause request.
+                continue
+            except Exception:
+                failed_agents.append(record.agent_id)
+
+        if failed_agents:
+            raise RuntimeError(
+                f"Failed to pause active agents: {', '.join(sorted(failed_agents))}"
+            )
+
+        already_paused_agents = len(registry.list_by_state(AgentState.PAUSED))
+        execution_state = "paused" if (paused_agents or already_paused_agents) else "idle"
+        return {
+            "paused_agents": paused_agents,
+            "already_paused_agents": already_paused_agents,
+            "execution_state": execution_state,
+            "full_stop": full_stop,
+            **approval_queue_result,
+        }
+
+    def _federation_local_resume_handler(reason: str) -> dict:
+        from src.core.runtime_pause import resume_runtime
+
+        resume_runtime(
+            operator_id="federation-peer",
+            operator_name="Federation Peer",
+            session_id="federation-peer",
+            source="federation",
+        )
+
+        hive_entry = subsystem_manager._subsystems.get("hive")
+        lifecycle = hive_entry.objects.get("lifecycle") if hive_entry and hive_entry.running else None
+        registry = hive_entry.objects.get("registry") if hive_entry and hive_entry.running else None
+        if lifecycle is None or registry is None:
+            return {
+                "resumed_agents": 0,
+                "execution_state": "running",
+            }
+
+        from src.hive.types import AgentState
+
+        resumed_agents = 0
+        failed_agents = []
+
+        for record in registry.list_by_state(AgentState.PAUSED):
+            try:
+                lifecycle.resume(
+                    record.agent_id,
+                    operator_id="federation-peer",
+                    session_id="federation-peer",
+                )
+                resumed_agents += 1
+            except KeyError:
+                continue
+            except Exception:
+                failed_agents.append(record.agent_id)
+
+        if failed_agents:
+            raise RuntimeError(
+                f"Failed to resume paused agents: {', '.join(sorted(failed_agents))}"
+            )
+
+        return {
+            "resumed_agents": resumed_agents,
+            "execution_state": "running",
+        }
+
+    from src.federation.kill_switch import FederatedKillSwitch
+
+    kill_switch = FederatedKillSwitch(
+        self_instance_id=identity.instance_id,
+        peer_ids=[p.instance_id for p in topology.list_peers()],
+        local_kill_handler=_federation_local_kill_handler,
+        persistence_path=os.path.join(fed_data_dir, "kill_commands.json"),
+    )
+
     command_relay = CommandRelay(
         identity=identity,
         transport=transport,
         topology=topology,
+        kill_switch=kill_switch,
+        local_pause_handler=_federation_local_pause_handler,
+        local_resume_handler=_federation_local_resume_handler,
         receipt_mgr=receipt_mgr,
         audit=audit_engine,
+    )
+
+    propagation_engine = SoulPropagationEngine(
+        self_instance_id=identity.instance_id,
+        peer_ids=[p.instance_id for p in topology.list_peers()],
+        persistence_path=os.path.join(fed_data_dir, "soul_propagation.json"),
     )
 
     # 6. Soul transport (push/pull with tier-aware propagation)
@@ -866,9 +1399,16 @@ def _init_federation():
         identity=identity,
         transport=transport,
         topology=topology,
+        propagation_engine=propagation_engine,
         receipt_mgr=receipt_mgr,
         audit=audit_engine,
         handoff_timeout_s=config.handoff_timeout_s,
+        current_soul_provider=lambda: getattr(app.state, "active_soul", getattr(main_orchestrator, "soul", None)),
+        runtime_reload_callback=getattr(app.state, "apply_runtime_soul", None),
+        soul_dir=os.environ.get("SOUL_DIR", None),
+        heartbeat_emitter=emitter,
+        local_pause_handler=_federation_local_pause_handler,
+        local_resume_handler=_federation_local_resume_handler,
     )
 
     # 7. Handoff protocol (task delegation between peers)
@@ -879,13 +1419,22 @@ def _init_federation():
         receipt_mgr=receipt_mgr,
         audit=audit_engine,
         handoff_timeout_s=config.handoff_timeout_s,
+        current_soul_provider=lambda: getattr(main_orchestrator, "soul", None),
+        persistence_path=os.path.join(fed_data_dir, "active_handoffs.json"),
     )
 
     # 8. Cost reporter (periodic budget reporting to peers)
+    cost_aggregator = FederatedCostAggregator(
+        on_threshold_change=_record_cost_threshold_change,
+        persistence_path=os.path.join(fed_data_dir, "cost_aggregate.json"),
+        stale_after_s=max(config.cost_report_interval_s * 2.0, config.staleness_lost_s),
+    )
     cost_reporter = CostReporter(
         identity=identity,
         transport=transport,
         topology=topology,
+        cost_aggregator=cost_aggregator,
+        usage_provider=_federation_usage_provider,
         interval_s=config.cost_report_interval_s,
     )
 
@@ -893,9 +1442,143 @@ def _init_federation():
     heartbeat_mesh = HeartbeatMesh(
         topology=topology,
         divergence_detector=divergence,
+        auth=auth,
         connect_timeout_s=config.connect_timeout_s,
         read_timeout_s=120.0,
+        current_soul_hash_provider=lambda: (
+            _runtime_federation_soul_hash()
+        ),
+        active_task_count_provider=lambda: int(bool(getattr(main_orchestrator, "agent_busy", False))),
+        hive_spawn_count_provider=lambda: (
+            hive_entry.objects["registry"].active_count()
+            if (
+                (hive_entry := subsystem_manager._subsystems.get("hive"))
+                and hive_entry.running
+                and hive_entry.objects.get("registry") is not None
+            ) else 0
+        ),
+        hive_spawn_states_provider=lambda: (
+            {
+                record.agent_id: record.state.value
+                for record in hive_entry.objects["registry"].list_active()
+            }
+            if (
+                (hive_entry := subsystem_manager._subsystems.get("hive"))
+                and hive_entry.running
+                and hive_entry.objects.get("registry") is not None
+            ) else {}
+        ),
+        pending_handoffs_provider=lambda: (
+            [
+                {
+                    "handoff_id": handoff["handoff_id"],
+                    "state": handoff["status"],
+                    "target_instance_id": handoff.get("target_instance_id", ""),
+                }
+                for handoff in handoff_protocol.list_active_handoffs()
+            ] if handoff_protocol else []
+        ),
+        budget_utilization_provider=lambda: float(
+            cost_reporter.get_aggregate_status().get("utilization_pct", 0.0)
+        ) if cost_reporter else 0.0,
+        on_diverged=_record_divergence,
+        on_reconnecting=_reconcile_after_reconnect,
     )
+
+    def _federation_spawn_gate(task_spec) -> None:
+        model_tier = (
+            str(task_spec.context.get("model_tier", "")).strip()
+            if getattr(task_spec, "context", None) else ""
+        ) or "T2"
+        estimated_tokens = 0
+        if getattr(task_spec, "context", None):
+            try:
+                estimated_tokens = int(task_spec.context.get("estimated_tokens", 0) or 0)
+            except Exception:
+                estimated_tokens = 0
+
+        if divergence.state.value == "diverged" and model_tier.upper() == "T3":
+            divergence_duration_s = divergence.get_divergence_duration_s()
+            receipt_mgr.record_budget_threshold(
+                threshold_level="diverged",
+                utilization_pct=float(cost_aggregator.get_aggregate().utilization_pct),
+                action_taken="block_t3_spawn",
+            )
+            audit_engine.record(
+                event_type="divergence_detected",
+                instance_id=identity.instance_id,
+                soul_version_hash=_runtime_federation_soul_hash(),
+                risk_tier="T3",
+                details={
+                    "action": "spawn_blocked",
+                    "reason": "federation_diverged",
+                    "model_tier": model_tier,
+                    "estimated_tokens": estimated_tokens,
+                    "divergence_duration_s": divergence_duration_s,
+                },
+            )
+            raise RuntimeError(
+                "Federation divergence active - T3 spawns are blocked until reconciliation completes"
+            )
+
+        if (
+            heartbeat_mesh
+            and getattr(heartbeat_mesh, "divergence_evaluation_failed", False)
+            and model_tier.upper() == "T3"
+        ):
+            raise RuntimeError(
+                "Federation divergence evaluation unavailable - T3 spawns are blocked until mesh health recovers"
+            )
+
+        allowed, reason = cost_aggregator.check_spawn_allowed(identity.instance_id)
+        if not allowed:
+            raise RuntimeError(f"Federation spawn budget blocked: {reason}")
+
+        decision, reason = budget_tracker.check_spawn(
+            model_tier=model_tier,
+            estimated_tokens=estimated_tokens,
+        )
+        if decision.value == "blocked":
+            raise RuntimeError(f"Federation spawn budget blocked: {reason}")
+        if decision.value == "restricted":
+            receipt_mgr.record_budget_threshold(
+                threshold_level=budget_tracker.threshold_level.value,
+                utilization_pct=budget_tracker.utilization_pct,
+                action_taken="spawn_allowed_with_notice",
+            )
+
+    def _federation_record_spawn(record) -> None:
+        model_tier = (
+            str(record.task_spec.context.get("model_tier", "")).strip()
+            if getattr(record.task_spec, "context", None) else ""
+        ) or "T2"
+        estimated_tokens = 0
+        if getattr(record.task_spec, "context", None):
+            try:
+                estimated_tokens = int(record.task_spec.context.get("estimated_tokens", 0) or 0)
+            except Exception:
+                estimated_tokens = 0
+        budget_tracker.record_spawn(
+            agent_id=record.agent_id,
+            instance_id=identity.instance_id,
+            model_tier=model_tier,
+            estimated_tokens=estimated_tokens,
+        )
+        receipt_mgr.record_spawn_receipt(
+            agent_id=record.agent_id,
+            model_tier=model_tier,
+            estimated_cost=float(estimated_tokens),
+            federation_quest_id=record.quest_id,
+        )
+
+    def _federation_record_collapse(record, result) -> None:
+        actual_tokens = 0
+        outputs = getattr(result, "outputs", {}) or {}
+        try:
+            actual_tokens = int(outputs.get("actual_tokens", 0) or 0)
+        except Exception:
+            actual_tokens = 0
+        budget_tracker.record_collapse(record.agent_id, actual_tokens=actual_tokens)
 
     # Wire control plane API endpoints
     init_federation_api(
@@ -903,6 +1586,7 @@ def _init_federation():
         heartbeat_emitter=emitter,
         config=config,
         topology_registry=topology,
+        divergence_detector=divergence,
     )
 
     # Wire data plane transport handlers into API
@@ -914,12 +1598,24 @@ def _init_federation():
         cost_reporter=cost_reporter,
         auth=auth,
         audit_engine=audit_engine,
+        transport=transport,
+        heartbeat_mesh=heartbeat_mesh,
     )
+
+    hive_entry = subsystem_manager._subsystems.get("hive")
+    if hive_entry and hive_entry.running and hive_entry.objects.get("lifecycle") is not None:
+        try:
+            hive_entry.objects["lifecycle"].update_spawn_controls(
+                spawn_gate=_federation_spawn_gate,
+                spawn_record_hook=_federation_record_spawn,
+                collapse_record_hook=_federation_record_collapse,
+            )
+        except Exception as exc:
+            logger.warning("Failed to wire federation budget governance into HIVE lifecycle: %s", exc)
 
     # Initialize Graph Builder API
     try:
         from src.federation.graph_api import init_graph_api
-        graph_data_dir = os.path.join(data_dir, "federation")
         init_graph_api(graph_data_dir)
     except Exception as e:
         logger.warning("Graph Builder API init failed: %s", e)
@@ -969,11 +1665,17 @@ def _init_federation():
         "transport": transport,
         "peer_protocol": peer_protocol,
         "command_relay": command_relay,
+        "propagation_engine": propagation_engine,
         "soul_transport": soul_transport,
         "handoff_protocol": handoff_protocol,
+        "budget_tracker": budget_tracker,
+        "cost_aggregator": cost_aggregator,
         "cost_reporter": cost_reporter,
         "heartbeat_mesh": heartbeat_mesh,
         "audit_engine": audit_engine,
+        "spawn_gate": _federation_spawn_gate,
+        "spawn_record_hook": _federation_record_spawn,
+        "collapse_record_hook": _federation_record_collapse,
     }
 
 
@@ -1042,6 +1744,7 @@ def _bootstrap_model_discovery():
                 logger.warning("Failed to apply lane override %s=%s: %s", _lane, _model_id, _e)
 
         init_provider_api(discovery, orchestrator=main_orchestrator)
+        _bootstrap_model_router()
         logger.info(
             "Model discovery: %d models found, lanes: %s",
             len(discovery.discovered_models),
@@ -1050,6 +1753,42 @@ def _bootstrap_model_discovery():
         return True
     except Exception as e:
         logger.warning("Model discovery bootstrap failed: %s", e)
+        return False
+
+
+def _bootstrap_model_router() -> bool:
+    """Create the live ModelRouter and wire it into the orchestrator + control plane."""
+    if main_orchestrator.provider is None:
+        return False
+
+    try:
+        from model_router import ModelRouter
+        from provider_profile import ProfileRegistry
+        from src.core.control_plane import set_model_router, set_usage_tracker
+
+        router = ModelRouter(
+            registry=ProfileRegistry(),
+            local_client=getattr(main_orchestrator, "local_model", None),
+            provider_client=main_orchestrator.provider,
+        )
+
+        existing_tracker = getattr(main_orchestrator, "usage_tracker", None)
+        persistence = getattr(existing_tracker, "_persistence", None)
+        if persistence is not None:
+            router.usage.set_persistence(persistence)
+
+        main_orchestrator.model_router = router
+        main_orchestrator.usage_tracker = router.usage
+        set_model_router(router)
+        set_usage_tracker(router.usage)
+        logger.info(
+            "Model router wired live (local_model=%s, provider=%s).",
+            "ready" if getattr(main_orchestrator, "local_model", None) else "none",
+            main_orchestrator.provider.provider_name,
+        )
+        return True
+    except Exception as exc:
+        logger.warning("Model router bootstrap failed: %s", exc)
         return False
 
 
@@ -1090,6 +1829,65 @@ async def startup_event():
         log_feature_flags()
     except Exception as e:
         logger.warning(f"Feature flag logging failed: {e}")
+
+    # Shared backend auth for War Room/control-plane routers.
+    try:
+        from src.core.api_auth import init_api_auth
+        init_api_auth(verify_token)
+    except Exception as e:
+        logger.warning("Shared API auth initialization failed: %s", e)
+
+    def _apply_runtime_soul(active_soul):
+        """Refresh live runtime policy objects after Soul activation."""
+        main_orchestrator.soul = active_soul
+
+        risk_classifier = getattr(main_orchestrator, "_risk_classifier", None)
+        if risk_classifier is not None:
+            risk_classifier.update_soul(active_soul)
+
+        try:
+            from src.a2a.agent_card import invalidate_card
+            invalidate_card()
+        except Exception:
+            pass
+
+        try:
+            from src.timetravel.api import update_timetravel_soul
+            update_timetravel_soul(active_soul)
+        except Exception as exc:
+            logger.warning("Time-Travel Soul refresh failed: %s", exc)
+
+        try:
+            from src.mcp.api import update_mcp_soul
+            update_mcp_soul(active_soul)
+        except Exception as exc:
+            logger.warning("MCP Soul refresh failed: %s", exc)
+
+        try:
+            hive_entry = subsystem_manager._subsystems.get("hive")
+            lifecycle = hive_entry.objects.get("lifecycle") if hive_entry and hive_entry.running else None
+            if lifecycle is not None:
+                lifecycle.update_parent_soul(active_soul)
+        except Exception as exc:
+            logger.warning("HIVE Soul refresh failed: %s", exc)
+
+        app.state.active_soul = active_soul
+
+        try:
+            federation_entry = subsystem_manager._subsystems.get("federation")
+            emitter = federation_entry.objects.get("emitter") if federation_entry and federation_entry.running else None
+            if emitter is not None:
+                emitter.emit_once()
+        except Exception as exc:
+            logger.warning("Federation heartbeat Soul refresh failed: %s", exc)
+
+    app.state.apply_runtime_soul = _apply_runtime_soul
+
+    try:
+        from soul.api import init_soul_runtime
+        init_soul_runtime(_apply_runtime_soul)
+    except Exception as e:
+        logger.warning("Soul runtime refresh initialization failed: %s", e)
 
     # ===== ALWAYS MOUNT SUBSYSTEM ROUTERS =====
     # Routes are gated by middleware when their flag is OFF.
@@ -1257,12 +2055,6 @@ async def startup_event():
     except Exception as e:
         logger.warning("Local model client initialization failed: %s", e)
 
-    if FEATURE_HEALTH_MONITOR:
-        try:
-            subsystem_manager.start("health_monitor")
-        except Exception as e:
-            logger.warning("Health monitor initialization failed: %s", e)
-
     if FEATURE_BAL:
         try:
             subsystem_manager.start("bal")
@@ -1273,9 +2065,34 @@ async def startup_event():
 
     # ===== PHASE 6: CONTROL PLANE =====
     try:
-        from control_plane import init_control_plane
-        from control_plane import router as cp_router
+        from src.core.control_plane import init_control_plane, set_runtime_control_hooks
+        from src.core.control_plane import router as cp_router
+
+        def _runtime_emergency_stop_handler(
+            *,
+            reason: str,
+            operator_id: str = "",
+            operator_name: str = "",
+            session_id: str = "",
+        ) -> dict:
+            hive_entry = subsystem_manager._subsystems.get("hive")
+            lifecycle = hive_entry.objects.get("lifecycle") if hive_entry and hive_entry.running else None
+            if lifecycle is None:
+                raise RuntimeError("HIVE emergency stop engine is not available")
+
+            collapsed = lifecycle.kill_all(
+                reason,
+                operator_id=operator_id or "operator",
+                session_id=session_id or "system",
+            )
+            return {
+                "stopped_hive_agents": len(collapsed),
+                "stopped_agent_ids": collapsed,
+                "execution_state": "emergency_stopped",
+            }
+
         init_control_plane(data_dir="/home/lancelot/data")
+        set_runtime_control_hooks(emergency_stop_handler=_runtime_emergency_stop_handler)
         app.include_router(cp_router)
         logger.info("Control plane initialized.")
     except Exception as e:
@@ -1284,8 +2101,12 @@ async def startup_event():
     # ===== WAR ROOM APIs =====
     # Receipts API
     try:
+        import receipts_api as _receipts_api_module
         from receipts_api import router as receipts_router, init_receipts_api
+        from src.core.governance_receipts import init_governance_receipts
         init_receipts_api(data_dir="/home/lancelot/data")
+        if _receipts_api_module._receipt_service is not None:
+            init_governance_receipts(_receipts_api_module._receipt_service)
         app.include_router(receipts_router)
         logger.info("Receipts API initialized.")
     except Exception as e:
@@ -1398,11 +2219,28 @@ async def startup_event():
             # Governance (sentry) handler
             try:
                 from governance_api import _approve_item_direct, _deny_item_direct
-                def _gov_handler(item_id, button_id):
+                from src.core.operator_identity import OperatorIdentity
+
+                def _gov_handler(item_id, button_id, **context):
+                    identity = OperatorIdentity(
+                        operator_id=context.get("operator_id", "") or "",
+                        display_name=context.get("actor", "") or "",
+                        session_id=context.get("session_id", "") or "",
+                    )
                     if button_id == "approve":
-                        return _approve_item_direct(item_id)
+                        result = _approve_item_direct(
+                            item_id,
+                            reason="Approved via ActionCard",
+                            identity=identity if identity.operator_id and identity.display_name else None,
+                        )
+                        return result or {"status": "error", "message": f"Approval item {item_id} not found"}
                     elif button_id in ("deny", "reject"):
-                        return _deny_item_direct(item_id)
+                        result = _deny_item_direct(
+                            item_id,
+                            reason="Denied via ActionCard",
+                            identity=identity if identity.operator_id and identity.display_name else None,
+                        )
+                        return result or {"status": "error", "message": f"Approval item {item_id} not found"}
                     return {"status": "error", "message": f"Unknown button: {button_id}"}
                 _ac_resolver.register_handler("governance", _gov_handler)
             except Exception as _e:
@@ -1411,9 +2249,14 @@ async def startup_event():
             # Scheduler handler
             try:
                 if main_orchestrator.job_executor:
-                    def _sched_handler(job_id, button_id):
+                    def _sched_handler(job_id, button_id, **context):
                         if button_id == "approve":
-                            ok = main_orchestrator.job_executor.approve_job(job_id)
+                            ok = main_orchestrator.job_executor.approve_job(
+                                job_id,
+                                operator_id=context.get("operator_id", "") or "",
+                                session_id=context.get("session_id", "") or "",
+                                actor=context.get("actor", "") or "",
+                            )
                             return {"status": "approved" if ok else "error",
                                     "message": "Approved" if ok else "Not pending"}
                         return {"status": "denied", "message": "Denied"}
@@ -1423,14 +2266,18 @@ async def startup_event():
 
             # Soul handler
             try:
-                from soul.api import approve_proposal as _soul_approve
-                def _soul_handler(proposal_id, button_id):
-                    # Soul uses a 2-phase flow: approve then activate
-                    # ActionCard just handles the approve/deny step
+                from soul.api import _approve_proposal_direct, _reject_proposal_direct
+
+                def _soul_handler(proposal_id, button_id, **context):
+                    actor = context.get("actor", "") or context.get("operator_id", "") or "operator"
                     if button_id == "approve":
-                        return {"status": "approved", "message": f"Soul proposal {proposal_id} approved via ActionCard"}
+                        result = _approve_proposal_direct(proposal_id, actor=actor)
+                        result["message"] = f"Soul proposal {proposal_id} approved via ActionCard"
+                        return result
                     elif button_id in ("deny", "reject"):
-                        return {"status": "denied", "message": f"Soul proposal {proposal_id} denied"}
+                        result = _reject_proposal_direct(proposal_id, actor=actor)
+                        result["message"] = f"Soul proposal {proposal_id} denied via ActionCard"
+                        return result
                     return {"status": "error", "message": f"Unknown button: {button_id}"}
                 _ac_resolver.register_handler("soul", _soul_handler)
             except Exception as _e:
@@ -1438,10 +2285,14 @@ async def startup_event():
 
             # Skills handler
             try:
-                def _skills_handler(proposal_id, button_id):
+                def _skills_handler(proposal_id, button_id, **context):
+                    actor = context.get("actor", "") or context.get("operator_id", "") or "operator"
                     if button_id == "approve":
                         if main_orchestrator.skill_factory:
-                            main_orchestrator.skill_factory.approve_proposal(proposal_id)
+                            main_orchestrator.skill_factory.approve_proposal(
+                                proposal_id,
+                                approved_by=actor,
+                            )
                             return {"status": "approved", "message": f"Skill proposal {proposal_id} approved"}
                         return {"status": "error", "message": "Skill factory not available"}
                     elif button_id in ("reject", "deny"):
@@ -1489,6 +2340,7 @@ async def startup_event():
         from connectors.registry import ConnectorRegistry
         from connectors.base import ConnectorStatus
         from connectors.vault import CredentialVault as ConnectorVault
+        from connectors.runtime import ConnectorRuntime
         from connectors.credential_api import router as cred_router, init_credential_api
         from connectors_api import router as connectors_mgmt_router, init_connectors_api
 
@@ -1504,32 +2356,69 @@ async def startup_event():
             for _cid, _ccfg in _conn_config.items():
                 if _ccfg.get("enabled", False):
                     try:
-                        from connectors_api import _instantiate_connector
-                        _conn = _instantiate_connector(_cid, _ccfg)
+                        from connectors_api import register_connector_with_vault_access
+                        from src.connectors.google_feature_gate import (
+                            google_connector_disabled_reason,
+                            is_google_connector_enabled,
+                        )
+
+                        _backend = _ccfg.get("backend")
+                        if not is_google_connector_enabled(_cid, _backend):
+                            logger.info(
+                                "Skipping connector %s registration: %s",
+                                _cid,
+                                google_connector_disabled_reason(_cid, _backend),
+                            )
+                            continue
+
+                        _conn = register_connector_with_vault_access(
+                            _connector_registry,
+                            _connector_vault,
+                            _cid,
+                            _ccfg,
+                        )
                         if _conn:
-                            # Inject vault for credential validation
-                            if hasattr(_conn, '_vault') and _conn._vault is None:
-                                _conn._vault = _connector_vault
-                            _connector_registry.register(_conn)
-                            # V22: Validate credentials and set status
-                            try:
-                                if _conn.validate_credentials():
-                                    _conn.set_status(ConnectorStatus.CONFIGURED)
-                                    logger.info(f"Connector registered + configured: {_cid}")
-                                else:
-                                    logger.warning(f"Connector registered but NOT configured (missing credentials): {_cid}")
-                            except Exception:
-                                logger.warning(f"Connector registered but credential check failed: {_cid}")
+                            if _conn.status == ConnectorStatus.CONFIGURED:
+                                logger.info(f"Connector registered + configured: {_cid}")
+                            else:
+                                logger.warning(f"Connector registered but NOT configured (missing credentials): {_cid}")
                     except Exception as _e:
                         logger.warning(f"Failed to register connector {_cid}: {_e}")
 
-        # V22: Inject connector registry into orchestrator for dynamic capability reporting
-        main_orchestrator._connector_registry = _connector_registry
+        _connector_policy_engine = None
+        try:
+            from src.tools.fabric import get_tool_fabric
+            _connector_policy_engine = getattr(get_tool_fabric(), "_policy_engine", None)
+        except Exception as _e:
+            logger.debug("Connector policy engine unavailable: %s", _e)
 
+        # Mount management APIs even if governed execution wiring later degrades.
         init_credential_api(_connector_registry, _connector_vault)
         init_connectors_api(_connector_registry, _connector_vault)
         app.include_router(cred_router)
         app.include_router(connectors_mgmt_router)
+
+        try:
+            _connector_runtime = ConnectorRuntime(
+                registry=_connector_registry,
+                vault=_connector_vault,
+                risk_classifier=getattr(main_orchestrator, "_risk_classifier", None),
+                policy_engine=_connector_policy_engine,
+                receipt_service=getattr(main_orchestrator, "receipt_service", None),
+                trust_ledger=getattr(main_orchestrator, "trust_ledger", None),
+            )
+            for _entry in _connector_registry.list_connectors():
+                _connector_runtime.register_connector(_entry.manifest.id)
+
+            main_orchestrator.connector_runtime = _connector_runtime
+            if getattr(main_orchestrator, "task_runner", None) is not None:
+                main_orchestrator.task_runner.connector_runtime = _connector_runtime
+            app.state.connector_runtime = _connector_runtime
+        except Exception as _e:
+            logger.warning("Connector runtime degraded: %s", _e)
+
+        # V22: Inject connector registry into orchestrator for dynamic capability reporting
+        main_orchestrator._connector_registry = _connector_registry
 
         # Seed vault with current workspace path from docker-compose.yml
         if not _connector_vault.exists("shared_workspace.host_path"):
@@ -1554,6 +2443,67 @@ async def startup_event():
         logger.info("Connectors subsystem initialized (FEATURE_CONNECTORS=%s).", FEATURE_CONNECTORS)
     except Exception as e:
         logger.warning(f"Connectors initialization failed: {e}")
+
+    # ===== MCP SUBSYSTEM =====
+    try:
+        from feature_flags import FEATURE_MCP
+        if FEATURE_MCP:
+            from src.mcp.api import init_mcp_api
+            from src.mcp.argument_screen import MCPArgumentScreener
+            from src.mcp.network_policy import MCPNetworkPolicy
+            from src.mcp.permissions import MCPPermissionEvaluator
+            from src.mcp.proxy import GovernedMCPProxy
+            from src.mcp.receipts import MCPReceiptManager
+            from src.mcp.registry import MCPServerRegistry
+            from src.mcp.response_guard import MCPResponseGuard
+
+            _mcp_vault = _connector_vault if '_connector_vault' in dir() else _boot_vault
+            _mcp_registry = MCPServerRegistry(vault=_mcp_vault)
+            _mcp_evaluator = MCPPermissionEvaluator()
+
+            try:
+                _mcp_soul = getattr(main_orchestrator, "soul", None)
+                if _mcp_soul is not None:
+                    if hasattr(_mcp_soul, "model_dump"):
+                        _mcp_evaluator.load_from_soul(_mcp_soul.model_dump())
+                    elif hasattr(_mcp_soul, "dict"):
+                        _mcp_evaluator.load_from_soul(_mcp_soul.dict())
+            except Exception as _mcp_soul_exc:
+                logger.warning("MCP Soul permission load failed: %s", _mcp_soul_exc)
+
+            _mcp_network_policy = MCPNetworkPolicy(
+                network_interceptor=getattr(main_orchestrator, "network_interceptor", None),
+            )
+
+            _mcp_receipt_service = getattr(main_orchestrator, "receipt_service", None)
+            _mcp_proxy = None
+            if _mcp_receipt_service is not None:
+                try:
+                    _mcp_proxy = GovernedMCPProxy(
+                        permission_evaluator=_mcp_evaluator,
+                        registry=_mcp_registry,
+                        receipt_manager=MCPReceiptManager(_mcp_receipt_service),
+                        argument_screener=MCPArgumentScreener(
+                            input_sanitizer=getattr(main_orchestrator, "sanitizer", None),
+                        ),
+                        response_guard=MCPResponseGuard(),
+                        network_interceptor=getattr(main_orchestrator, "network_interceptor", None),
+                        input_sanitizer=getattr(main_orchestrator, "sanitizer", None),
+                    )
+                except Exception as _mcp_proxy_exc:
+                    logger.warning("MCP proxy initialization failed: %s", _mcp_proxy_exc)
+
+            init_mcp_api(
+                registry=_mcp_registry,
+                evaluator=_mcp_evaluator,
+                proxy=_mcp_proxy,
+                vault=_mcp_vault,
+                network_policy=_mcp_network_policy,
+                receipt_service=_mcp_receipt_service,
+            )
+            logger.info("MCP subsystem initialized.")
+    except Exception as e:
+        logger.warning(f"MCP initialization failed: {e}")
 
     # ===== OAUTH TOKEN MANAGER (V28) =====
     try:
@@ -1592,6 +2542,44 @@ async def startup_event():
     except Exception as e:
         logger.warning("OAuth token manager initialization failed: %s", e)
 
+    # ===== OPENAI CODEX OAUTH TOKEN MANAGER =====
+    try:
+        from openai_codex_oauth_manager import OpenAICodexOAuthManager, set_openai_codex_manager
+        _codex_vault = _connector_vault if '_connector_vault' in dir() else None
+        if _codex_vault:
+            _codex_mgr = OpenAICodexOAuthManager(vault=_codex_vault, port=1455)
+            set_openai_codex_manager(_codex_mgr)
+            _codex_mgr.start_background_refresh()
+            logger.info("OpenAI Codex OAuth token manager initialized.")
+
+            # If Codex OAuth token is now available and provider is openai-codex
+            # but wasn't initialized at startup, re-init the provider.
+            from openai_codex_oauth_manager import get_codex_oauth_token as _get_codex_token
+            _current_provider = os.getenv("LANCELOT_PROVIDER", "gemini")
+            if _current_provider == "openai-codex" and main_orchestrator.provider is None and _get_codex_token():
+                logger.info("Re-initializing provider with Codex OAuth token...")
+                main_orchestrator._init_provider()
+                if main_orchestrator.provider:
+                    logger.info("Provider initialized via Codex OAuth (post-startup recovery).")
+
+            # Update onboarding from oauth_pending if Codex OAuth is connected
+            if _current_provider == "openai-codex" and _get_codex_token():
+                try:
+                    from onboarding_snapshot import OnboardingState
+                    snap = onboarding_orch.snapshot
+                    if snap.credential_status in ("oauth_pending", "none"):
+                        snap.credential_status = "verified"
+                        if snap.state != OnboardingState.READY:
+                            snap.state = OnboardingState.READY
+                        snap.save()
+                        logger.info("Onboarding auto-updated to READY (Codex OAuth token found).")
+                except Exception as _e:
+                    logger.warning("Onboarding Codex OAuth recovery failed: %s", _e)
+        else:
+            logger.warning("Codex OAuth token manager skipped — connector vault not available.")
+    except Exception as e:
+        logger.warning("Codex OAuth token manager initialization failed: %s", e)
+
     # ===== GOOGLE OAUTH MANAGER (V26) =====
     try:
         from google_oauth_manager import GoogleOAuthManager, set_google_oauth_manager
@@ -1608,9 +2596,17 @@ async def startup_event():
     except Exception as e:
         logger.warning("Google OAuth initialization failed: %s", e)
 
+    # Start health monitoring after OAuth/provider recovery so the first
+    # readiness snapshot reflects the settled provider state.
+    if FEATURE_HEALTH_MONITOR:
+        try:
+            subsystem_manager.start("health_monitor")
+        except Exception as e:
+            logger.warning("Health monitor initialization failed: %s", e)
+
     # ===== AUTH API =====
     try:
-        from auth_api import router as auth_router, init_auth_api
+        from src.core.auth_api import router as auth_router, init_auth_api
         init_auth_api(audit_logger=main_orchestrator.audit_logger)
         app.include_router(auth_router)
         logger.info("Auth API initialized.")
@@ -1627,6 +2623,7 @@ async def startup_event():
             audit_logger=main_orchestrator.audit_logger,
             connector_vault=_connector_vault if '_connector_vault' in dir() else None,
             receipt_service=_setup_receipt_svc,
+            verify_request=verify_token,
         )
         app.include_router(setup_router)
         logger.info("Setup API initialized.")
@@ -1650,18 +2647,19 @@ async def startup_event():
     try:
         from usage_tracker import UsageTracker
         from usage_persistence import UsagePersistence
-        from control_plane import set_usage_tracker, set_usage_persistence
+        from src.core.control_plane import set_usage_tracker, set_usage_persistence
 
         _usage_persistence = UsagePersistence(data_dir="/home/lancelot/data")
-        _usage_tracker = UsageTracker()
-        _usage_tracker.set_persistence(_usage_persistence)
-
-        set_usage_tracker(_usage_tracker)
         set_usage_persistence(_usage_persistence)
 
-        # Wire into orchestrator so every LLM call is recorded
-        main_orchestrator.usage_tracker = _usage_tracker
-        logger.info("Usage tracker + persistence initialized.")
+        if _bootstrap_model_router():
+            logger.info("Usage tracker + model router initialized.")
+        else:
+            _usage_tracker = UsageTracker()
+            _usage_tracker.set_persistence(_usage_persistence)
+            set_usage_tracker(_usage_tracker)
+            main_orchestrator.usage_tracker = _usage_tracker
+            logger.info("Usage tracker + persistence initialized (router unavailable).")
     except Exception as e:
         logger.warning(f"Usage tracker initialization failed: {e}")
 
@@ -1768,16 +2766,15 @@ async def startup_event():
             _obs_config = _load_obs_config()
 
             # Metrics API
-            if _obs_config.metrics_api.enabled:
-                from observability.metrics_api import router as metrics_api_router, init_metrics_api
-                try:
-                    from receipts_api import _receipt_service as _metrics_receipt_svc
-                    if _metrics_receipt_svc:
-                        init_metrics_api(_metrics_receipt_svc, data_dir="/home/lancelot/data")
-                        app.include_router(metrics_api_router)
-                        logger.info("Metrics API initialized.")
-                except Exception as _e:
-                    logger.warning("Metrics API initialization failed: %s", _e)
+            from observability.metrics_api import router as metrics_api_router, init_metrics_api
+            try:
+                from receipts_api import _receipt_service as _metrics_receipt_svc
+                if _metrics_receipt_svc:
+                    init_metrics_api(_metrics_receipt_svc, data_dir="/home/lancelot/data")
+                    app.include_router(metrics_api_router)
+                    logger.info("Metrics API initialized.")
+            except Exception as _e:
+                logger.warning("Metrics API initialization failed: %s", _e)
 
             # Webhooks
             if _obs_config.webhooks.enabled and _obs_config.webhooks.endpoints:
@@ -1787,6 +2784,7 @@ async def startup_event():
                     deployment_id=os.getenv("LANCELOT_DEPLOYMENT_ID", ""),
                     delivery_timeout_s=_obs_config.webhooks.delivery_timeout_s,
                     max_retries=_obs_config.webhooks.max_retries,
+                    data_dir=main_orchestrator.data_dir,
                 )
                 logger.info("Webhook engine initialized (%d endpoints)",
                             len(_obs_config.webhooks.endpoints))
@@ -1812,6 +2810,8 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Observability initialization failed: {e}")
 
+    _optional_receipt_service = getattr(main_orchestrator, "receipt_service", None)
+
     # ── Time-Travel Debugging ────────────────────────────────────
     try:
         from feature_flags import FEATURE_TIME_TRAVEL
@@ -1819,19 +2819,68 @@ async def startup_event():
             from timetravel.api import router as timetravel_router, init_timetravel_api
             app.include_router(timetravel_router)
 
-            # Initialize with receipt service and active Soul
-            _tt_soul = None
-            try:
-                from soul.store import load_active_soul
-                _tt_soul = load_active_soul()
-            except Exception as e:
-                logger.warning("Time-Travel: Soul load failed, fork/replay disabled: %s", e)
+            # Initialize with receipt service and live Soul provider
+            _tt_soul = lambda: getattr(main_orchestrator, "soul", None)
 
-            if _receipt_service is not None:
+            def _apply_timetravel_modifications(graph_dict, modifications):
+                for field_path, value in (modifications or {}).items():
+                    parts = str(field_path).split(".")
+                    cursor = graph_dict
+                    for raw_part in parts[:-1]:
+                        part = int(raw_part) if isinstance(cursor, list) and raw_part.isdigit() else raw_part
+                        cursor = cursor[part]
+                    leaf = parts[-1]
+                    leaf_key = int(leaf) if isinstance(cursor, list) and leaf.isdigit() else leaf
+                    cursor[leaf_key] = value
+                return graph_dict
+
+            def _execute_timetravel_quest(*, mode, source_quest_id, new_quest_id, modifications, operator_id, session_id):
+                from datetime import datetime, timezone
+                from src.core.tasking.schema import TaskGraph, TaskRun
+
+                source_run = main_orchestrator.task_store.get_run_by_quest_id(source_quest_id)
+                if source_run is None:
+                    raise RuntimeError(f"Source quest is not replayable by TaskRun: {source_quest_id}")
+
+                source_graph = main_orchestrator.task_store.get_graph(source_run.task_graph_id)
+                if source_graph is None:
+                    raise RuntimeError(
+                        f"TaskGraph not found for source quest {source_quest_id}: {source_run.task_graph_id}"
+                    )
+
+                cloned_graph = source_graph.to_dict()
+                cloned_graph["id"] = str(uuid.uuid4())
+                cloned_graph["created_at"] = datetime.now(timezone.utc).isoformat()
+                cloned_graph["session_id"] = session_id or source_graph.session_id or source_run.session_id
+
+                if mode == "fork" and modifications:
+                    cloned_graph = _apply_timetravel_modifications(cloned_graph, modifications)
+
+                replay_graph = TaskGraph.from_dict(cloned_graph)
+                main_orchestrator.task_store.save_graph(replay_graph)
+
+                replay_run = TaskRun(
+                    task_graph_id=replay_graph.id,
+                    execution_token_id=source_run.execution_token_id,
+                    session_id=session_id or source_run.session_id,
+                    operator_id=operator_id or source_run.operator_id,
+                    quest_id=new_quest_id,
+                )
+                main_orchestrator.task_store.create_run(replay_run)
+                result = main_orchestrator.task_runner.run(replay_run.id)
+                return {
+                    "run_id": replay_run.id,
+                    "task_graph_id": replay_graph.id,
+                    "status": result.status,
+                    "step_count": len(result.step_results),
+                }
+
+            if _optional_receipt_service is not None:
                 init_timetravel_api(
-                    receipt_service=_receipt_service,
+                    receipt_service=_optional_receipt_service,
                     soul=_tt_soul,
                     soul_dir=None,
+                    quest_executor=_execute_timetravel_quest,
                 )
                 logger.info("FEATURE_TIME_TRAVEL enabled — API mounted at /api/timetravel")
             else:
@@ -1849,29 +2898,87 @@ async def startup_event():
             from a2a.inbound_pipeline import InboundPipeline
             from a2a.outbound_pipeline import OutboundPipeline
             from a2a.client import A2AClient
+            from a2a.types import A2AArtifact, A2AMessagePart
 
             # Initialize registry
             _a2a_registry = A2ARegistry()
 
             # Load Soul for A2A permissions
-            _a2a_soul = None
-            try:
-                from soul.store import load_active_soul
-                _a2a_soul = load_active_soul()
-            except Exception as e:
-                logger.warning("A2A: Soul load failed: %s", e)
+            _a2a_soul_provider = lambda: getattr(main_orchestrator, "soul", None)
+
+            _a2a_client = A2AClient(_optional_receipt_service)
+            _a2a_vault = _connector_vault if '_connector_vault' in dir() else None
 
             # Initialize pipelines
-            _a2a_inbound = InboundPipeline(_a2a_registry, _receipt_service, _a2a_soul)
-            _a2a_outbound = OutboundPipeline(_a2a_registry, _receipt_service, _a2a_soul)
-            _a2a_client = A2AClient(_receipt_service)
+            _a2a_inbound = InboundPipeline(
+                _a2a_registry,
+                _optional_receipt_service,
+                _a2a_soul_provider,
+                vault=_a2a_vault,
+                a2a_client=_a2a_client,
+            )
+            _a2a_outbound = OutboundPipeline(
+                _a2a_registry,
+                _optional_receipt_service,
+                _a2a_soul_provider,
+                vault=_a2a_vault,
+                a2a_client=_a2a_client,
+            )
+
+            def _execute_inbound_a2a_task(*, task, caller, quest_id):
+                """Route inbound A2A work through the live orchestrator."""
+                text_parts = []
+                if task.message:
+                    for part in task.message.parts:
+                        if part.text:
+                            text_parts.append(part.text)
+                        elif part.data is not None:
+                            text_parts.append(json.dumps(part.data, sort_keys=True))
+                        elif part.file_uri:
+                            text_parts.append(f"[file] {part.file_uri}")
+
+                user_message = "\n".join(p for p in text_parts if p).strip()
+                if not user_message:
+                    raise ValueError("Inbound A2A task contained no executable content")
+
+                envelope = (
+                    f"[External A2A task from {caller.display_name or caller.agent_id}"
+                    f" ({caller.agent_framework})]\n{user_message}"
+                )
+                response_text = main_orchestrator.chat(
+                    envelope,
+                    channel="api",
+                    quest_id=quest_id,
+                )
+                artifacts = [
+                    A2AArtifact(
+                        parts=[A2AMessagePart(type="text", text=response_text)],
+                        metadata={
+                            "quest_id": quest_id,
+                            "source": "lancelot",
+                            "external_peer": caller.agent_id,
+                        },
+                    ).to_dict()
+                ]
+                return {
+                    "status": "completed",
+                    "artifacts": artifacts,
+                    "message": "Task executed successfully.",
+                }
 
             # Mount protocol-standard endpoints at root
-            init_a2a_server(_a2a_soul, _receipt_service, _a2a_registry, _a2a_inbound)
+            init_a2a_server(
+                _a2a_soul_provider,
+                _optional_receipt_service,
+                _a2a_registry,
+                _a2a_inbound,
+                task_executor=_execute_inbound_a2a_task,
+                data_dir="/home/lancelot/data",
+            )
             app.include_router(a2a_server_router)
 
             # Mount management API
-            init_a2a_api(_a2a_registry, _receipt_service, _a2a_soul, _a2a_outbound, _a2a_client)
+            init_a2a_api(_a2a_registry, _optional_receipt_service, _a2a_soul_provider, _a2a_outbound, _a2a_client)
             app.include_router(a2a_api_router)
 
             logger.info("FEATURE_A2A enabled — protocol at /a2a/, management at /api/a2a/")
@@ -1886,7 +2993,7 @@ async def startup_event():
             from src.incidents.playbook_api import router as playbook_router, init_playbook_api
             from src.incidents.receipt_hook import configure as configure_incident_hook
 
-            init_incidents_api(_receipt_service, "/home/lancelot/data")
+            init_incidents_api(_optional_receipt_service, "/home/lancelot/data")
             app.include_router(incidents_router)
 
             _playbooks_dir = os.path.join(os.path.dirname(__file__), "..", "..", "playbooks")
@@ -2012,6 +3119,18 @@ async def chat_webhook(request: Request):
         return error_response(413, "Request body too large.", request_id=request_id)
 
     try:
+        from src.core.runtime_pause import get_runtime_pause_status, is_runtime_paused
+        from src.core.auth_api import resolve_authenticated_identity
+
+        if is_runtime_paused():
+            pause_state = get_runtime_pause_status()
+            return error_response(
+                423,
+                pause_state.get("reason") or "Runtime paused by operator",
+                request_id=request_id,
+            )
+
+        identity = resolve_authenticated_identity(request)
         data = await request.json()
         message = data.get("text", "")
         user = data.get("user", "Unknown")
@@ -2031,19 +3150,21 @@ async def chat_webhook(request: Request):
 
             if is_trigger:
                 if action == "activate":
-                    response_text = crusader_mode.activate()
-                    main_orchestrator.audit_logger.log_event(
-                        "CRUSADER_MODE_ACTIVATED",
-                        "User activated Crusader Mode",
-                        user
-                    )
+                    ok, response_text = _transition_crusader_mode("activate")
+                    if ok:
+                        main_orchestrator.audit_logger.log_event(
+                            "CRUSADER_MODE_ACTIVATED",
+                            "User activated Crusader Mode",
+                            user
+                        )
                 else:
-                    response_text = crusader_mode.deactivate()
-                    main_orchestrator.audit_logger.log_event(
-                        "CRUSADER_MODE_DEACTIVATED",
-                        "User deactivated Crusader Mode",
-                        user
-                    )
+                    ok, response_text = _transition_crusader_mode("deactivate")
+                    if ok:
+                        main_orchestrator.audit_logger.log_event(
+                            "CRUSADER_MODE_DEACTIVATED",
+                            "User deactivated Crusader Mode",
+                            user
+                        )
             elif crusader_mode.is_active:
                 if crusader_adapter.check_auto_pause(message):
                     response_text = (
@@ -2057,14 +3178,25 @@ async def chat_webhook(request: Request):
                     )
                 else:
                     response_text = main_orchestrator.chat(
-                        message, crusader_mode=True, channel=req_channel
+                        message,
+                        crusader_mode=True,
+                        channel=req_channel,
+                        session_id=identity.session_id,
+                        operator_id=identity.operator_id,
+                        operator_name=identity.display_name or user,
                     )
                     response_text = crusader_adapter.format_response(
                         response_text
                     )
             else:
                 # Standard mode
-                response_text = main_orchestrator.chat(message, channel=req_channel)
+                response_text = main_orchestrator.chat(
+                    message,
+                    channel=req_channel,
+                    session_id=identity.session_id,
+                    operator_id=identity.operator_id,
+                    operator_name=identity.display_name or user,
+                )
 
         return {
             "response": response_text,
@@ -2102,6 +3234,19 @@ async def chat_with_files(
 
     try:
         from orchestrator import ChatAttachment
+        from src.core.auth_api import resolve_authenticated_identity
+        from src.core.runtime_pause import get_runtime_pause_status, is_runtime_paused
+
+        if is_runtime_paused():
+            pause_state = get_runtime_pause_status()
+            return error_response(
+                423,
+                pause_state.get("reason") or "Runtime paused by operator",
+                request_id=request_id,
+            )
+
+        identity = resolve_authenticated_identity(request)
+        resolved_user = _resolve_audit_user(request)
 
         attachments = []
         for f in files:
@@ -2123,27 +3268,42 @@ async def chat_with_files(
                     wf.write(file_bytes)
                 logger.info(f"[{request_id}] Saved upload to workspace: {save_path}")
 
-        logger.info(f"[{request_id}] Upload from {user}: text={text[:50]}... files={len(attachments)}")
+        logger.info(f"[{request_id}] Upload from {resolved_user}: text={text[:50]}... files={len(attachments)}")
 
         # Route through onboarding/crusader/orchestrator
         onboarding_orch.state = onboarding_orch._determine_state()
         if onboarding_orch.state != "READY":
-            response_text = onboarding_orch.process(user, text)
+            response_text = onboarding_orch.process(resolved_user, text)
         else:
             is_trigger, action = crusader_mode.should_intercept(text)
             if is_trigger:
                 if action == "activate":
-                    response_text = crusader_mode.activate()
+                    _ok, response_text = _transition_crusader_mode("activate")
                 else:
-                    response_text = crusader_mode.deactivate()
+                    _ok, response_text = _transition_crusader_mode("deactivate")
             elif crusader_mode.is_active:
                 if crusader_adapter.check_auto_pause(text):
                     response_text = "Authority required.\nThis operation is restricted even in Crusader Mode."
                 else:
-                    response_text = main_orchestrator.chat(text, crusader_mode=True, attachments=attachments, channel="warroom")
+                    response_text = main_orchestrator.chat(
+                        text,
+                        crusader_mode=True,
+                        attachments=attachments,
+                        channel="warroom",
+                        session_id=identity.session_id,
+                        operator_id=identity.operator_id,
+                        operator_name=identity.display_name or resolved_user,
+                    )
                     response_text = crusader_adapter.format_response(response_text)
             else:
-                response_text = main_orchestrator.chat(text, attachments=attachments, channel="warroom")
+                response_text = main_orchestrator.chat(
+                    text,
+                    attachments=attachments,
+                    channel="warroom",
+                    session_id=identity.session_id,
+                    operator_id=identity.operator_id,
+                    operator_name=identity.display_name or resolved_user,
+                )
 
         return {
             "response": response_text,
@@ -2166,16 +3326,33 @@ async def mfa_submit(request: Request):
     if not verify_token(request):
         return error_response(401, "Unauthorized", request_id=request_id)
     try:
+        from src.core.auth_api import resolve_authenticated_identity, request_has_capability
+
+        identity = resolve_authenticated_identity(request)
         data = await request.json()
         code = data.get("code")
         task_id = data.get("task_id", "default")
-        
+        if not code:
+            return error_response(400, "Missing 'code' field", request_id=request_id)
+
         logger.info(f"[{request_id}] MFA Code Received for Task {task_id}")
-        
-        success = mfa_guard.submit_code(task_id, code)
-        
+
+        success, reason = mfa_guard.submit_code(
+            task_id,
+            code,
+            operator_id=identity.operator_id,
+            session_id=identity.session_id,
+            actor=identity.display_name or identity.operator_id,
+            is_admin=(
+                request_has_capability(request, "governance.admin")
+                or request_has_capability(request, "platform.admin")
+            ),
+        )
+
         if success:
             return {"status": "Code Accepted. Bridge Released.", "request_id": request_id}
+        if reason == "forbidden":
+            return error_response(403, "MFA challenge is bound to a different operator/session.", request_id=request_id)
         else:
             return error_response(404, "Unknown Task ID or no pending challenge.", request_id=request_id)
             
@@ -2192,8 +3369,9 @@ async def reload_secrets(request: Request):
     Emits SYSTEM receipt with action secret_rotation.
     """
     global API_TOKEN
-    if not verify_token(request):
-        return JSONResponse(status_code=403, content={"error": "Unauthorized"})
+    authz_error = _require_request_capability(request, "platform.admin")
+    if authz_error is not None:
+        return authz_error
     try:
         if not _boot_vault or not secret_cache.is_bootstrapped():
             return JSONResponse(status_code=503, content={
@@ -2283,30 +3461,36 @@ def crusader_status(request: Request):
 
 @app.post("/api/crusader/activate")
 def api_crusader_activate(request: Request):
-    if not verify_token(request):
-        return error_response(401, "Unauthorized")
+    authz_error = _require_request_capability(request, "platform.admin")
+    if authz_error is not None:
+        return authz_error
     if crusader_mode.is_active:
         return {"status": "already_active", **crusader_mode.get_status()}
-    response_text = crusader_mode.activate()
+    ok, response_text = _transition_crusader_mode("activate")
+    if not ok:
+        return error_response(500, response_text)
     main_orchestrator.audit_logger.log_event(
         "CRUSADER_MODE_ACTIVATED",
         "User activated Crusader Mode via API",
-        "Commander"
+        _resolve_audit_user(request),
     )
     return {"status": "activated", "message": response_text, **crusader_mode.get_status()}
 
 
 @app.post("/api/crusader/deactivate")
 def api_crusader_deactivate(request: Request):
-    if not verify_token(request):
-        return error_response(401, "Unauthorized")
+    authz_error = _require_request_capability(request, "platform.admin")
+    if authz_error is not None:
+        return authz_error
     if not crusader_mode.is_active:
         return {"status": "already_inactive", **crusader_mode.get_status()}
-    response_text = crusader_mode.deactivate()
+    ok, response_text = _transition_crusader_mode("deactivate")
+    if not ok:
+        return error_response(500, response_text)
     main_orchestrator.audit_logger.log_event(
         "CRUSADER_MODE_DEACTIVATED",
         "User deactivated Crusader Mode via API",
-        "Commander"
+        _resolve_audit_user(request),
     )
     return {"status": "deactivated", "message": response_text, **crusader_mode.get_status()}
 
@@ -2335,8 +3519,14 @@ async def mcp_callback(request: Request):
     Payload: {"request_id": "...", "action": "APPROVE"}
     """
     req_request_id = make_request_id()
-    if not verify_token(request):
-        return error_response(401, "Unauthorized", request_id=req_request_id)
+    auth_header = request.headers.get("authorization", "")
+    webhook_authorized = webhook_auth.verify_remote_header(auth_header)
+    if not webhook_authorized:
+        authz_error = _require_request_capability(
+            request, "governance.admin", request_id=req_request_id
+        )
+        if authz_error is not None:
+            return authz_error
     try:
         data = await request.json()
         req_id = data.get("request_id")
@@ -2362,8 +3552,11 @@ async def forge_discover(request: Request):
     Payload: {"url": "https://... or raw doc text"}
     """
     request_id = make_request_id()
-    if not verify_token(request):
-        return error_response(401, "Unauthorized", request_id=request_id)
+    authz_error = _require_request_capability(
+        request, "platform.admin", request_id=request_id
+    )
+    if authz_error is not None:
+        return authz_error
     try:
         data = await request.json()
         url_or_text = data.get("url", "")
@@ -2391,8 +3584,11 @@ async def forge_dispatch(request: Request):
     Payload: {"content": "...", "prompt": "Post this [twitter:local:post]"}
     """
     request_id = make_request_id()
-    if not verify_token(request):
-        return error_response(401, "Unauthorized", request_id=request_id)
+    authz_error = _require_request_capability(
+        request, "platform.admin", request_id=request_id
+    )
+    if authz_error is not None:
+        return authz_error
     try:
         data = await request.json()
         content = data.get("content", "")
@@ -2426,20 +3622,42 @@ from live_session import LiveSessionManager
 async def live_stream(websocket: WebSocket):
     """
     WebSocket endpoint for real-time streaming via Gemini Live API.
-    Auth via query param: ws://host:8000/live?token=<LANCELOT_API_TOKEN>
+    Browser clients authenticate via the War Room session cookie.
+    Programmatic clients can authenticate via first-message auth:
+    {"type": "auth", "token": "<LANCELOT_API_TOKEN>"}
     """
     await websocket.accept()
 
-    # Auth check via query param (deprecated — tokens in URLs are logged)
-    token = websocket.query_params.get("token", "")
-    if token:
-        logger.warning(
-            "SECURITY: WebSocket auth via URL query parameter is deprecated. "
-            "Token may appear in server logs and browser history."
+    authenticated = False
+
+    try:
+        from src.core.auth_api import (
+            get_warroom_session_cookie_name,
+            verify_warroom_session_token,
         )
-    if API_TOKEN and not hmac.compare_digest(token or "", API_TOKEN):
-        await websocket.close(code=4001, reason="Unauthorized")
-        return
+
+        cookie_name = get_warroom_session_cookie_name()
+        cookie_token = websocket.cookies.get(cookie_name, "")
+        authenticated = verify_warroom_session_token(cookie_token)
+    except Exception:
+        authenticated = False
+
+    if not authenticated:
+        try:
+            auth_payload = await asyncio.wait_for(websocket.receive_text(), timeout=10)
+            auth_msg = json.loads(auth_payload)
+        except (asyncio.TimeoutError, json.JSONDecodeError, WebSocketDisconnect):
+            await websocket.close(code=4001, reason="Unauthorized")
+            return
+
+        if auth_msg.get("type") != "auth":
+            await websocket.close(code=4001, reason="Unauthorized")
+            return
+
+        token = auth_msg.get("token", "")
+        if API_TOKEN and not hmac.compare_digest(token or "", API_TOKEN):
+            await websocket.close(code=4001, reason="Unauthorized")
+            return
 
     if not main_orchestrator.client:
         await websocket.send_text("Error: Gemini client not initialized.")
@@ -2482,8 +3700,11 @@ ucp_connector = UCPConnector(audit_logger=main_orchestrator.audit_logger)
 async def ucp_discover(request: Request):
     """Discovers UCP capabilities from a merchant URL."""
     request_id = make_request_id()
-    if not verify_token(request):
-        return error_response(401, "Unauthorized", request_id=request_id)
+    authz_error = _require_request_capability(
+        request, "platform.admin", request_id=request_id
+    )
+    if authz_error is not None:
+        return authz_error
     try:
         data = await request.json()
         merchant_url = data.get("merchant_url", "")
@@ -2500,8 +3721,11 @@ async def ucp_discover(request: Request):
 async def ucp_search(request: Request):
     """Searches products via a UCP-enabled merchant."""
     request_id = make_request_id()
-    if not verify_token(request):
-        return error_response(401, "Unauthorized", request_id=request_id)
+    authz_error = _require_request_capability(
+        request, "platform.admin", request_id=request_id
+    )
+    if authz_error is not None:
+        return authz_error
     try:
         data = await request.json()
         merchant_url = data.get("merchant_url", "")
@@ -2519,8 +3743,11 @@ async def ucp_search(request: Request):
 async def ucp_transact(request: Request):
     """Initiates a commerce transaction (requires Sentry approval)."""
     request_id = make_request_id()
-    if not verify_token(request):
-        return error_response(401, "Unauthorized", request_id=request_id)
+    authz_error = _require_request_capability(
+        request, "platform.admin", request_id=request_id
+    )
+    if authz_error is not None:
+        return authz_error
     try:
         data = await request.json()
         merchant_url = data.get("merchant_url", "")
@@ -2554,8 +3781,11 @@ async def ucp_transact(request: Request):
 async def ucp_confirm(request: Request):
     """Confirms a pending UCP transaction after user approval."""
     request_id = make_request_id()
-    if not verify_token(request):
-        return error_response(401, "Unauthorized", request_id=request_id)
+    authz_error = _require_request_capability(
+        request, "platform.admin", request_id=request_id
+    )
+    if authz_error is not None:
+        return authz_error
     try:
         data = await request.json()
         transaction_id = data.get("transaction_id", "")
@@ -2576,20 +3806,14 @@ async def oauth_anthropic_callback(request: Request):
     error = request.query_params.get("error")
     if error:
         desc = request.query_params.get("error_description", error)
-        return HTMLResponse(
-            "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
-            f"<h2>Authorization Failed</h2><p>{desc}</p>"
-            "</body></html>",
-            status_code=400,
-        )
+        return render_callback_page("Authorization Failed", desc, status_code=400)
 
     code = request.query_params.get("code")
     state = request.query_params.get("state")
     if not code or not state:
-        return HTMLResponse(
-            "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
-            "<h2>Missing Parameters</h2><p>No authorization code received.</p>"
-            "</body></html>",
+        return render_callback_page(
+            "Missing Parameters",
+            "No authorization code received.",
             status_code=400,
         )
 
@@ -2631,21 +3855,100 @@ async def oauth_anthropic_callback(request: Request):
                 "</body></html>"
             )
         else:
-            return HTMLResponse(
-                "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
-                "<h2>Authorization Failed</h2>"
-                "<p>Invalid or expired authorization state. Please try again from Lancelot.</p>"
-                "</body></html>",
+            return render_callback_page(
+                "Authorization Failed",
+                "Invalid or expired authorization state. Please try again from Lancelot.",
                 status_code=400,
             )
     except Exception as e:
         logger.error("OAuth callback error: %s", e)
-        return HTMLResponse(
-            "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
-            f"<h2>Error</h2><p>{e}</p>"
-            "</body></html>",
-            status_code=500,
+        return render_callback_exception_page("OAuth")
+
+
+# --- OpenAI Codex OAuth Callback (unauthenticated — browser redirect) ---
+
+@app.get("/auth/callback")
+async def oauth_codex_callback(request: Request):
+    """Receive OAuth authorization code from browser redirect after user authorises with ChatGPT.
+
+    Path must be /auth/callback to match OpenAI's registered redirect URI for the Codex public client.
+    """
+    error = request.query_params.get("error")
+    if error:
+        desc = request.query_params.get("error_description", error)
+        return render_callback_page("Authorization Failed", desc, status_code=400)
+
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    if not code or not state:
+        return render_callback_page(
+            "Missing Parameters",
+            "No authorization code received.",
+            status_code=400,
         )
+
+    try:
+        from openai_codex_oauth_manager import get_openai_codex_manager
+        manager = get_openai_codex_manager()
+        if manager is None:
+            raise RuntimeError("Codex OAuth manager not initialized")
+        success = manager.exchange_code(code, state)
+        if success:
+            # Re-init provider if it wasn't initialized at startup
+            if main_orchestrator.provider is None or main_orchestrator._provider_name != "openai-codex":
+                # Switch to openai-codex provider
+                os.environ["LANCELOT_PROVIDER"] = "openai-codex"
+                os.environ["LANCELOT_AUTH_MODE"] = "OAUTH"
+                main_orchestrator._init_provider()
+                if main_orchestrator.provider:
+                    logger.info("Provider hot-initialized via Codex OAuth callback.")
+
+            # Persist provider selection so restarts recover onto Codex OAuth.
+            try:
+                from providers.api import _read_current_config, _save_config, _update_env_file
+
+                _update_env_file("LANCELOT_PROVIDER", "openai-codex")
+                _update_env_file("LANCELOT_AUTH_MODE", "OAUTH")
+
+                _provider_cfg = _read_current_config()
+                _provider_cfg["active_provider"] = "openai-codex"
+                _save_config(_provider_cfg)
+            except Exception as _e:
+                logger.warning("Could not persist Codex OAuth provider selection: %s", _e)
+
+            # Bootstrap model discovery so lanes appear in War Room
+            _bootstrap_model_discovery()
+
+            # Update onboarding snapshot
+            try:
+                from onboarding_snapshot import OnboardingState
+                snap = onboarding_orch.snapshot
+                if snap.credential_status in ("oauth_pending", "none"):
+                    snap.credential_status = "verified"
+                    if snap.state != OnboardingState.READY:
+                        snap.state = OnboardingState.READY
+                    snap.save()
+                    logger.info("Onboarding credential_status updated to verified (Codex OAuth complete).")
+            except Exception as _e:
+                logger.warning("Could not update onboarding after Codex OAuth: %s", _e)
+
+            return HTMLResponse(
+                "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+                "<h2 style='color:#22c55e'>Authorization Successful</h2>"
+                "<p>Lancelot is now connected to your ChatGPT account via Codex OAuth.</p>"
+                "<p style='color:#888'>Your Pro subscription will be used for API access. You may close this tab.</p>"
+                "<script>setTimeout(function(){window.close()},3000)</script>"
+                "</body></html>"
+            )
+        else:
+            return render_callback_page(
+                "Authorization Failed",
+                "Invalid or expired authorization state. Please try again from Lancelot.",
+                status_code=400,
+            )
+    except Exception as e:
+        logger.error("Codex OAuth callback error: %s", e)
+        return render_callback_exception_page("Codex OAuth")
 
 
 # --- V26: Google OAuth 2.0 Endpoints (Gmail + Calendar) ---
@@ -2654,8 +3957,11 @@ async def oauth_anthropic_callback(request: Request):
 async def google_oauth_start(request: Request):
     """Accept client_id + client_secret, store in vault, return Google consent URL."""
     request_id = str(uuid.uuid4())[:8]
-    if not verify_token(request):
-        return error_response(401, "Unauthorized", request_id=request_id)
+    authz_error = _require_request_capability(
+        request, "connectors.admin", request_id=request_id
+    )
+    if authz_error is not None:
+        return authz_error
 
     from feature_flags import FEATURE_GOOGLE_OAUTH
     if not FEATURE_GOOGLE_OAUTH:
@@ -2710,20 +4016,14 @@ async def google_oauth_callback(request: Request):
     error = request.query_params.get("error")
     if error:
         desc = request.query_params.get("error_description", error)
-        return HTMLResponse(
-            "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
-            f"<h2>Authorization Failed</h2><p>{desc}</p>"
-            "</body></html>",
-            status_code=400,
-        )
+        return render_callback_page("Authorization Failed", desc, status_code=400)
 
     code = request.query_params.get("code")
     state = request.query_params.get("state")
     if not code or not state:
-        return HTMLResponse(
-            "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
-            "<h2>Missing Parameters</h2><p>No authorization code received.</p>"
-            "</body></html>",
+        return render_callback_page(
+            "Missing Parameters",
+            "No authorization code received.",
             status_code=400,
         )
 
@@ -2744,29 +4044,25 @@ async def google_oauth_callback(request: Request):
                 "</body></html>"
             )
         else:
-            return HTMLResponse(
-                "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
-                "<h2>Authorization Failed</h2>"
-                "<p>Invalid or expired authorization state. Please try again from Lancelot.</p>"
-                "</body></html>",
+            return render_callback_page(
+                "Authorization Failed",
+                "Invalid or expired authorization state. Please try again from Lancelot.",
                 status_code=400,
             )
     except Exception as e:
         logger.error("Google OAuth callback error: %s", e)
-        return HTMLResponse(
-            "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
-            f"<h2>Error</h2><p>{e}</p>"
-            "</body></html>",
-            status_code=500,
-        )
+        return render_callback_exception_page("Google OAuth")
 
 
 @app.get("/api/google-oauth/status")
 async def google_oauth_status(request: Request):
     """Return current Google OAuth token health."""
     request_id = str(uuid.uuid4())[:8]
-    if not verify_token(request):
-        return error_response(401, "Unauthorized", request_id=request_id)
+    authz_error = _require_request_capability(
+        request, "connectors.admin", request_id=request_id
+    )
+    if authz_error is not None:
+        return authz_error
 
     try:
         from google_oauth_manager import get_google_oauth_manager
@@ -2791,8 +4087,11 @@ async def google_oauth_status(request: Request):
 async def google_oauth_revoke(request: Request):
     """Revoke Google OAuth tokens and clear stored credentials."""
     request_id = str(uuid.uuid4())[:8]
-    if not verify_token(request):
-        return error_response(401, "Unauthorized", request_id=request_id)
+    authz_error = _require_request_capability(
+        request, "connectors.admin", request_id=request_id
+    )
+    if authz_error is not None:
+        return authz_error
 
     try:
         from google_oauth_manager import get_google_oauth_manager
@@ -2824,12 +4123,8 @@ async def serve_workspace_file(file_path: str, request: Request):
     for documents created by document_creator, research reports, etc.
     Path traversal is blocked — only files under the workspace directory are served.
     """
-    # Authenticate
-    if API_TOKEN:
-        auth = request.headers.get("Authorization", "")
-        token_param = request.query_params.get("token", "")
-        if not (auth == f"Bearer {API_TOKEN}" or token_param == API_TOKEN):
-            return error_response(401, "Unauthorized")
+    if not verify_token(request):
+        return error_response(401, "Unauthorized")
 
     # Resolve and validate path (block traversal)
     try:
@@ -2860,13 +4155,8 @@ _warroom_dist = Path(__file__).resolve().parent.parent / "warroom" / "dist"
 
 if _warroom_dist.is_dir():
     def _serve_warroom_index():
-        """Serve index.html with API token injected into localStorage."""
+        """Serve index.html for the War Room SPA."""
         html = (_warroom_dist / "index.html").read_text(encoding="utf-8")
-        if API_TOKEN:
-            token_script = (
-                f'<script>localStorage.setItem("lancelot_api_token","{API_TOKEN}")</script>'
-            )
-            html = html.replace("</head>", f"{token_script}</head>")
         return HTMLResponse(html)
 
     @app.get("/war-room/{full_path:path}")

@@ -1,0 +1,114 @@
+{
+  "skill_name": "hygiene_protocol",
+  "app_name": "System Hygiene Protocol",
+  "executable": null,
+  "app_framework": "Universal — applies to all UAB-controlled apps",
+  "target_flow": "Rules for responsible system stewardship. Agents MUST follow these to avoid disrupting the user's workflow, wasting resources, or leaving messes behind.",
+  "version": "1.0",
+  "last_verified": "2026-03-25",
+
+  "1_app_lifecycle": {
+    "rule": "Track what you opened vs what was already running. Clean up after yourself.",
+    "details": {
+      "before_launching": "Run desktop_scan to snapshot what is currently running. Store this as your baseline.",
+      "tagging_intent": "When you open an app, tag it with an intent: 'present_to_user' or 'tool_use_only'.",
+      "present_to_user": "Apps whose state IS the deliverable. Leave open. Examples: Excel with a dashboard you built, Word with a document you edited, Outlook after composing a draft, a browser showing results.",
+      "tool_use_only": "Apps you used as a tool to produce a file or get information. Close when done. Examples: CapCut after exporting a video, FocuSee after recording, a calculator after getting a result, Notepad after copying text out.",
+      "never_close": "NEVER close an app the user had open before you started. Even if you used it. It was theirs first.",
+      "closing_method": "Use desktop_invoke('Close') or Alt+F4. If the app prompts to save, decide based on context — save if you made changes the user wants, don't save if it was scratch work."
+    }
+  },
+
+  "2_window_discipline": {
+    "rule": "The user's window layout is sacred. Do not touch it.",
+    "details": {
+      "never_move": "NEVER move or resize a window you didn't open. The user has arranged their windows deliberately — snap layouts, multi-monitor positions, specific sizes. Moving a window destroys their setup.",
+      "never_minimize_others": "NEVER minimize the user's windows to make room. Work within the existing layout.",
+      "multi_monitor": "Negative coordinates or coordinates >2000 are NORMAL — they indicate secondary monitors. Do not interpret them as 'off-screen' or try to 'fix' them.",
+      "your_windows": "If you open a new app, let it open at its default position. Don't force it to a specific location unless the task requires it.",
+      "restore_state": "If you MUST change a window's state (e.g., maximize to see more content), restore it to its original state when done."
+    }
+  },
+
+  "3_clipboard_respect": {
+    "rule": "The clipboard belongs to the user. Borrow it, don't steal it.",
+    "details": {
+      "save_before": "Before using Set-Clipboard or Ctrl+C, save the current clipboard contents.",
+      "restore_after": "After your clipboard operation is complete, restore the user's original clipboard contents.",
+      "sensitive_data": "NEVER leave passwords, API keys, personal data, or email content on the clipboard when you're done.",
+      "implementation": "PowerShell: $saved = [System.Windows.Forms.Clipboard]::GetText() ... do your work ... [System.Windows.Forms.Clipboard]::SetText($saved)"
+    }
+  },
+
+  "4_focus_etiquette": {
+    "rule": "Don't interrupt the user. Minimize focus stealing.",
+    "details": {
+      "batch_actions": "If you need to do 5 things in one app, do them all at once. Don't switch away and come back 5 times.",
+      "check_user_activity": "Before stealing focus to a new app, check desktop_focused to see if the user is actively typing somewhere. If they are, wait or ask.",
+      "minimize_switches": "Plan your work to minimize the number of app switches. Group all Outlook work together, all Excel work together, etc.",
+      "no_rapid_switching": "Never rapidly alt-tab between apps — it's disorienting for the user watching their screen."
+    }
+  },
+
+  "5_resource_management": {
+    "rule": "Don't burden the user's system.",
+    "details": {
+      "memory_awareness": "If the system is running hot (check Task Manager or system metrics), don't launch heavy apps. Mention it to the user.",
+      "process_cleanup": "Don't leave orphaned PowerShell processes running. UAB's atomic chains handle this, but verify.",
+      "no_unnecessary_launches": "Don't open an app 'just to check' — use desktop_scan first to see if it's already running.",
+      "close_tool_apps": "Per the app lifecycle rules, close tool_use_only apps promptly. Don't leave 10 apps open that you're done with."
+    }
+  },
+
+  "6_temp_file_cleanup": {
+    "rule": "Leave no trace unless the trace IS the deliverable.",
+    "details": {
+      "screenshots": "Delete screenshots from data/screenshots/ after you've used them for verification.",
+      "temp_scripts": "PowerShell temp scripts in AppData/Local/Temp/uab-ps/ are auto-cleaned, but verify.",
+      "generated_files": "If you created temp files (CSVs, text files, intermediate exports), delete them when the task is complete.",
+      "deliverable_files": "Files the user asked for (the Excel dashboard, the exported video, etc.) stay. They're the point."
+    }
+  },
+
+  "7_state_preservation": {
+    "rule": "Leave apps in the state you found them.",
+    "details": {
+      "dont_change_settings": "Don't change an app's zoom level, view mode, sort order, theme, or preferences unless the task requires it.",
+      "restore_if_changed": "If you changed a setting to do your work (e.g., zoomed in to read small text), change it back when done.",
+      "dont_save_without_permission": "Don't save or overwrite the user's documents without explicit permission. If you need to modify a file, work on a copy.",
+      "sheet_tabs": "In Excel, return to the sheet tab that was active when you started. Don't leave the user on a random sheet."
+    }
+  },
+
+  "8_transparency": {
+    "rule": "Tell the user what you did to their system.",
+    "details": {
+      "action_summary": "At the end of a task, briefly report: what apps you opened, what files you created, what you cleaned up.",
+      "unresolved_state": "If you couldn't clean something up (a file you couldn't delete, an app that wouldn't close), tell the user explicitly.",
+      "changes_made": "If you changed any settings or saved any files, list them.",
+      "example": "Done. Opened Excel (left open with your dashboard), used FocuSee to record (closed), created Nexus_Sales_Dashboard.xlsx on your Desktop. Clipboard restored."
+    }
+  },
+
+  "agent_checklist": {
+    "before_starting": [
+      "Run desktop_scan — snapshot what's currently running",
+      "Note which app has focus (desktop_focused)",
+      "Save clipboard contents if you'll need the clipboard"
+    ],
+    "during_work": [
+      "Tag each app you open: present_to_user or tool_use_only",
+      "Don't move or resize existing windows",
+      "Batch actions per app to minimize focus switches",
+      "Don't change app settings unless required"
+    ],
+    "after_finishing": [
+      "Close tool_use_only apps you opened",
+      "Restore clipboard",
+      "Delete temp files and screenshots",
+      "Restore any settings you changed",
+      "Return focus to the user's original app",
+      "Report what you did"
+    ]
+  }
+}

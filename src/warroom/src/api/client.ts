@@ -7,14 +7,6 @@ import type { ApiError } from '@/types/api'
 
 const API_BASE = '' // Same origin — Vite proxy in dev, FastAPI static in prod
 
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem('lancelot_api_token')
-  if (token) {
-    return { Authorization: `Bearer ${token}` }
-  }
-  return {}
-}
-
 export class ApiClientError extends Error {
   constructor(
     public status: number,
@@ -29,8 +21,6 @@ async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     // Session expired — redirect to login
     if (res.status === 401) {
-      localStorage.removeItem('lancelot_api_token')
-      localStorage.removeItem('lancelot_session_expires')
       window.location.href = '/war-room/login'
       throw new ApiClientError(401, { error: 'Session expired', status: 401 })
     }
@@ -53,7 +43,7 @@ export async function apiGet<T>(path: string, params?: Record<string, string>): 
     })
   }
   const res = await fetch(url.toString(), {
-    headers: { ...getAuthHeaders() },
+    credentials: 'include',
   })
   return handleResponse<T>(res)
 }
@@ -61,9 +51,9 @@ export async function apiGet<T>(path: string, params?: Record<string, string>): 
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      ...getAuthHeaders(),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
@@ -73,9 +63,9 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
 export async function apiPut<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'PUT',
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      ...getAuthHeaders(),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
@@ -85,9 +75,9 @@ export async function apiPut<T>(path: string, body?: unknown): Promise<T> {
 export async function apiPatch<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'PATCH',
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      ...getAuthHeaders(),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
@@ -97,7 +87,7 @@ export async function apiPatch<T>(path: string, body?: unknown): Promise<T> {
 export async function apiDelete<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'DELETE',
-    headers: { ...getAuthHeaders() },
+    credentials: 'include',
   })
   return handleResponse<T>(res)
 }
@@ -105,7 +95,7 @@ export async function apiDelete<T>(path: string): Promise<T> {
 export async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
-    headers: { ...getAuthHeaders() },
+    credentials: 'include',
     body: formData,
   })
   return handleResponse<T>(res)

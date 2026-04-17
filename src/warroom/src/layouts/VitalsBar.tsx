@@ -22,10 +22,12 @@ function barColor(val: number, thresholds: [number, number] = [50, 90]) {
 function connectionState(health: HealthCheckResponse | null, ready: HealthReadyResponse | null) {
   if (!health && !ready) return { label: 'INITIALIZING', color: 'text-state-inactive', pulse: true }
   const components = health?.components ?? {}
-  const allOk = Object.values(components).every((v) => v === 'ok')
-  const anyDegraded = Object.values(components).some((v) => v === 'degraded')
-  if (allOk) return { label: 'ACTIVE', color: 'text-state-healthy', pulse: false }
-  if (anyDegraded) return { label: 'DEGRADED', color: 'text-state-degraded', pulse: false }
+  const values = Object.values(components)
+  const allHealthy = values.every((v) => v === 'ok' || v === 'disabled')
+  const anyDegraded = values.some((v) => v === 'degraded')
+  const anyError = values.some((v) => v !== 'ok' && v !== 'disabled' && v !== 'degraded')
+  if (allHealthy) return { label: 'ACTIVE', color: 'text-state-healthy', pulse: false }
+  if (anyDegraded && !anyError) return { label: 'DEGRADED', color: 'text-state-degraded', pulse: false }
   return { label: 'SEVERED', color: 'text-state-error', pulse: false }
 }
 

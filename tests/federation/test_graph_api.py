@@ -10,16 +10,36 @@ import pytest
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 
+from src.core import api_auth, auth_api
+from src.core.operator_identity import OperatorIdentity
 from src.federation.graph_api import graph_router, init_graph_api
 
 
 @pytest.fixture
 def client():
     tmpdir = tempfile.mkdtemp()
+    api_auth.init_api_auth(lambda request: True)
+    auth_api._sessions.clear()
+    auth_api._sessions["graph-test-session"] = {
+        "expires_at": 9999999999,
+        "username": "Arthur",
+        "operator_identity": OperatorIdentity(
+            operator_id="op-arthur",
+            display_name="Arthur",
+            session_id="session-1",
+            session_started_at="2026-04-10T00:00:00Z",
+            auth_method="local",
+            ip_address="127.0.0.1",
+        ),
+        "capabilities": sorted({"warroom.login", "federation.admin"}),
+        "groups": [],
+    }
     app = FastAPI()
     app.include_router(graph_router)
     init_graph_api(tmpdir)
-    return TestClient(app)
+    client = TestClient(app)
+    client.cookies.set(auth_api.get_warroom_session_cookie_name(), "graph-test-session")
+    return client
 
 
 @pytest.fixture

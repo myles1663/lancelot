@@ -20,8 +20,8 @@ export function fetchSoulContent() {
 }
 
 /** POST /soul/propose — Create amendment proposal from edited YAML */
-export function proposeSoulAmendment(proposed_yaml: string, author: string = 'Commander') {
-  return apiPost<SoulProposeResponse>('/soul/propose', { proposed_yaml, author })
+export function proposeSoulAmendment(proposed_yaml: string) {
+  return apiPost<SoulProposeResponse>('/soul/propose', { proposed_yaml })
 }
 
 /** POST /soul/proposals/:id/approve — Approve a pending proposal */
@@ -48,12 +48,12 @@ export function fetchSoulTemplateDetail(name: string) {
 /** POST /soul/templates/:name/apply — Apply template as a proposal */
 export function applySoulTemplate(
   name: string,
-  operatorId: string,
-  sessionId?: string,
+  _operatorId: string,
+  _sessionId?: string,
   customizations?: Record<string, unknown>,
 ) {
   return apiPost<SoulTemplateApplyResponse>(
     `/soul/templates/${encodeURIComponent(name)}/apply`,
-    { operator_id: operatorId, session_id: sessionId, customizations },
+    { customizations },
   )
 }

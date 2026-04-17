@@ -6,11 +6,12 @@
 """
 Federation Cost Reporter — Periodic cost data reporting between peers.
 
-In hierarchical mode, children report their cost data to the root instance
-at a configurable interval. The root aggregates this data via the
-FederatedCostAggregator.
+In hierarchical mode, children report their cost data upward to the root
+instance at a configurable interval. The root alone aggregates remote cost
+data into federation-wide threshold decisions.
 
-In federated mode, peers report to each other for mutual visibility.
+In non-hierarchical/peer mode, runtime cost governance remains local; remote
+peer reports are not allowed to drive threshold actions on this instance.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from src.federation.cost_aggregation import InstanceCostData
 from src.federation.identity import FederationIdentity
 from src.federation.topology import TopologyRegistry
 from src.federation.transport import FederationTransport
@@ -58,6 +60,42 @@ class CostReporter:
         self._interval_s = interval_s
         self._task: Optional[asyncio.Task] = None
         self._running = False
+
+    def _root_peers(self):
+        return [peer for peer in self._topology.list_peers() if peer.role == "root"]
+
+    def _child_peers(self):
+        return [peer for peer in self._topology.list_peers() if peer.role == "child"]
+
+    def _accepts_remote_budget_reports(self) -> bool:
+        return self._cost_aggregator is not None and bool(self._child_peers())
+
+    def _gather_local_usage(self) -> Optional[dict]:
+        """Collect a local cost snapshot from the configured provider."""
+        if not self._usage_provider:
+            return None
+        try:
+            return self._usage_provider()
+        except Exception as exc:
+            logger.warning("Failed to gather local cost data: %s", exc)
+            return None
+
+    def _update_aggregator_with_local_usage(self, local_data: Optional[dict]) -> None:
+        """Keep the root/local aggregate truthful for this instance."""
+        if not self._cost_aggregator or not local_data:
+            return
+        try:
+            self._cost_aggregator.update_instance(InstanceCostData(
+                instance_id=self._identity.instance_id,
+                actual_today_usd=local_data.get("actual_today_usd", 0.0),
+                projected_today_usd=local_data.get("projected_today_usd", 0.0),
+                daily_ceiling_usd=local_data.get("daily_ceiling_usd", 10.0),
+                active_spawns=local_data.get("active_spawns", 0),
+                spawn_cost_rate_usd_hr=local_data.get("spawn_cost_rate_usd_hr", 0.0),
+                total_tokens_today=local_data.get("total_tokens_today", 0),
+            ))
+        except Exception as exc:
+            logger.warning("Failed to refresh local federation cost aggregate: %s", exc)
 
     async def start(self) -> None:
         """Start the background cost reporting loop."""
@@ -101,11 +139,11 @@ class CostReporter:
             return {}
 
         # Gather local cost data
-        try:
-            local_data = self._usage_provider()
-        except Exception as exc:
-            logger.warning("Failed to gather local cost data: %s", exc)
+        local_data = self._gather_local_usage()
+        if not local_data:
             return {}
+
+        self._update_aggregator_with_local_usage(local_data)
 
         cost_report = {
             "instance_id": self._identity.instance_id,
@@ -120,17 +158,13 @@ class CostReporter:
         }
 
         # Determine reporting targets
-        peers = self._topology.list_peers()
-        if not peers:
+        root_peers = self._root_peers()
+        if not root_peers:
             return {}
-
-        # In hierarchical mode, report to root only
-        root_peers = [p for p in peers if p.role == "root"]
-        targets = root_peers if root_peers else peers
 
         peer_dicts = [
             {"instance_id": p.instance_id, "address": p.address}
-            for p in targets
+            for p in root_peers
         ]
 
         results = await self._transport.broadcast(
@@ -142,7 +176,11 @@ class CostReporter:
 
         return {pid: r.success for pid, r in results.items()}
 
-    def handle_cost_report(self, request_data: dict) -> dict:
+    def handle_cost_report(
+        self,
+        request_data: dict,
+        authenticated_instance_id: Optional[str] = None,
+    ) -> dict:
         """Handle an incoming cost report from a peer.
 
         Feeds the data into the FederatedCostAggregator if available.
@@ -154,6 +192,16 @@ class CostReporter:
             Response dict with acceptance.
         """
         instance_id = request_data.get("instance_id", "")
+        if authenticated_instance_id:
+            if instance_id and instance_id != authenticated_instance_id:
+                return {
+                    "accepted": False,
+                    "error": (
+                        "Reported instance does not match authenticated peer: "
+                        f"{instance_id} != {authenticated_instance_id}"
+                    ),
+                }
+            instance_id = authenticated_instance_id
 
         # Validate source is a known peer
         peer = self._topology.get_peer(instance_id)
@@ -163,20 +211,41 @@ class CostReporter:
                 "error": f"Unknown peer: {instance_id}",
             }
 
+        if not self._accepts_remote_budget_reports():
+            return {
+                "accepted": False,
+                "error": "Local federation budget aggregation is not enabled for remote peers",
+                "instance_id": self._identity.instance_id,
+            }
+
+        if peer.role != "child":
+            return {
+                "accepted": False,
+                "error": (
+                    "Peer role is not permitted to influence local federation budget governance: "
+                    f"{peer.role}"
+                ),
+                "instance_id": self._identity.instance_id,
+            }
+
         # Feed to aggregator
-        if self._cost_aggregator:
-            try:
-                self._cost_aggregator.update_instance(
-                    instance_id=instance_id,
-                    actual_today_usd=request_data.get("actual_today_usd", 0.0),
-                    projected_today_usd=request_data.get("projected_today_usd", 0.0),
-                    daily_ceiling_usd=request_data.get("daily_ceiling_usd", 10.0),
-                    active_spawns=request_data.get("active_spawns", 0),
-                    spawn_cost_rate_usd_hr=request_data.get("spawn_cost_rate_usd_hr", 0.0),
-                    total_tokens_today=request_data.get("total_tokens_today", 0),
-                )
-            except Exception as exc:
-                logger.warning("Cost aggregator update failed: %s", exc)
+        try:
+            self._cost_aggregator.update_instance(InstanceCostData(
+                instance_id=instance_id,
+                actual_today_usd=request_data.get("actual_today_usd", 0.0),
+                projected_today_usd=request_data.get("projected_today_usd", 0.0),
+                daily_ceiling_usd=request_data.get("daily_ceiling_usd", 10.0),
+                active_spawns=request_data.get("active_spawns", 0),
+                spawn_cost_rate_usd_hr=request_data.get("spawn_cost_rate_usd_hr", 0.0),
+                total_tokens_today=request_data.get("total_tokens_today", 0),
+            ))
+        except Exception as exc:
+            logger.warning("Cost aggregator update failed: %s", exc)
+            return {
+                "accepted": False,
+                "error": f"Cost aggregator update failed: {exc}",
+                "instance_id": self._identity.instance_id,
+            }
 
         return {
             "accepted": True,
@@ -189,17 +258,25 @@ class CostReporter:
         Returns aggregator data if this is a root instance, otherwise
         returns local cost data only.
         """
+        local_data = self._gather_local_usage()
+        self._update_aggregator_with_local_usage(local_data)
+
         if self._cost_aggregator:
             try:
-                return self._cost_aggregator.get_aggregate()
-            except Exception:
-                pass
+                aggregate = self._cost_aggregator.get_aggregate()
+                payload = aggregate.to_dict() if hasattr(aggregate, "to_dict") else aggregate
+                if isinstance(payload, dict):
+                    payload["stale_instance_ids"] = self._cost_aggregator.get_stale_instance_ids()
+                return payload
+            except Exception as exc:
+                logger.warning("Failed to compute federated cost aggregate: %s", exc)
+                return {
+                    "error": f"Failed to compute federated cost aggregate: {exc}",
+                    "stale_instance_ids": [],
+                }
 
-        if self._usage_provider:
-            try:
-                return self._usage_provider()
-            except Exception:
-                pass
+        if local_data:
+            return local_data
 
         return {"error": "No cost data available"}
 

@@ -15,12 +15,21 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability, resolve_authenticated_identity
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/actioncards", tags=["actioncards"])
+router = APIRouter(
+    prefix="/api/actioncards",
+    tags=["actioncards"],
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("platform.admin")),
+    ],
+)
 
 # These are set by gateway.py during startup
 _card_store = None
@@ -90,7 +99,15 @@ async def resolve_actioncard(
     if not _card_resolver:
         raise HTTPException(503, "ActionCard resolver not initialized")
 
-    result = _card_resolver.resolve(card_id, button_id, channel="warroom")
+    identity = resolve_authenticated_identity(request)
+    result = _card_resolver.resolve(
+        card_id,
+        button_id,
+        channel="warroom",
+        operator_id=identity.operator_id,
+        session_id=identity.session_id,
+        actor=identity.display_name or identity.operator_id,
+    )
 
     if result.get("status") == "error":
         raise HTTPException(400, result.get("message", "Resolution failed"))

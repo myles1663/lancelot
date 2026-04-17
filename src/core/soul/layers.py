@@ -250,6 +250,28 @@ def merge_soul(base: Soul, overlays: List[SoulOverlay]) -> Soul:
             "require_ready_state": base.scheduling_boundaries.require_ready_state,
             "description": merged_sched_description,
         },
+        spawn_budget=base.spawn_budget.model_dump() if hasattr(base.spawn_budget, "model_dump") else base.spawn_budget,
+        mcp_permissions=[
+            p.model_dump() if hasattr(p, "model_dump") else p
+            for p in getattr(base, "mcp_permissions", [])
+        ],
+        fork_permissions=(
+            base.fork_permissions.model_dump()
+            if hasattr(base.fork_permissions, "model_dump")
+            else base.fork_permissions
+        ),
+        inbound_a2a_permissions=(
+            base.inbound_a2a_permissions.model_dump()
+            if getattr(base, "inbound_a2a_permissions", None) is not None
+            and hasattr(base.inbound_a2a_permissions, "model_dump")
+            else getattr(base, "inbound_a2a_permissions", None)
+        ),
+        outbound_a2a_permissions=(
+            base.outbound_a2a_permissions.model_dump()
+            if getattr(base, "outbound_a2a_permissions", None) is not None
+            and hasattr(base.outbound_a2a_permissions, "model_dump")
+            else getattr(base, "outbound_a2a_permissions", None)
+        ),
     )
 
     overlay_names = [o.overlay_name for o in overlays]

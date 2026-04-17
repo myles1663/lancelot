@@ -116,9 +116,9 @@ def lifecycle(config, registry, receipt_mgr, soul_gen):
 
 
 def _make_runtime(registry, receipt_mgr, action_executor=None,
-                  governance=None, timeout=300, max_actions=50):
+                  governance=None, timeout=300, max_actions=50, spec=None, scoped_soul=None):
     """Helper: create a runtime in EXECUTING state."""
-    spec = TaskSpec(timeout_seconds=timeout, max_actions=max_actions)
+    spec = spec or TaskSpec(timeout_seconds=timeout, max_actions=max_actions)
     record = registry.register(spec)
     registry.transition(record.agent_id, AgentState.READY)
     registry.transition(record.agent_id, AgentState.EXECUTING)
@@ -127,6 +127,7 @@ def _make_runtime(registry, receipt_mgr, action_executor=None,
         registry=registry,
         receipt_manager=receipt_mgr,
         governance_bridge=governance,
+        scoped_soul=scoped_soul,
         action_executor=action_executor,
     )
     return runtime, record
@@ -250,6 +251,49 @@ class TestFailureInjection:
             assert agent.state == AgentState.COLLAPSED
         finally:
             mgr.shutdown()
+
+    def test_runtime_collapses_when_action_targets_forbidden_app(self, registry, receipt_mgr):
+        spec = TaskSpec(allowed_apps=["notepad"], allowed_categories=["read"])
+        runtime, _ = _make_runtime(registry, receipt_mgr, spec=spec)
+
+        result = runtime.run([{
+            "action": "execute_subtask",
+            "capability": "read_document",
+            "context": {"target_app": "chrome"},
+        }])
+
+        assert result.success is False
+        assert result.collapse_reason == CollapseReason.SOUL_VIOLATION
+        assert "forbids app" in (result.error_message or "")
+
+    def test_runtime_collapses_when_action_exceeds_allowed_category(self, registry, receipt_mgr):
+        spec = TaskSpec(allowed_categories=["read"])
+        runtime, _ = _make_runtime(registry, receipt_mgr, spec=spec)
+
+        result = runtime.run([{
+            "action": "execute_subtask",
+            "capability": "deploy_release",
+            "context": {"target_app": "notepad"},
+        }])
+
+        assert result.success is False
+        assert result.collapse_reason == CollapseReason.SOUL_VIOLATION
+        assert "outside scoped categories" in (result.error_message or "")
+
+    def test_executor_soul_violation_collapses_agent(self, registry, receipt_mgr):
+        def soul_violation_executor(action):
+            raise ScopedSoulViolationError(
+                agent_id="agent-test",
+                action="uab_type",
+                reason="uab_type requires approval",
+            )
+
+        runtime, _ = _make_runtime(registry, receipt_mgr, action_executor=soul_violation_executor)
+        result = runtime.run([{"action": "execute_subtask", "context": {"target_app": "notepad"}}])
+
+        assert result.success is False
+        assert result.collapse_reason == CollapseReason.SOUL_VIOLATION
+        assert "requires approval" in (result.error_message or "")
 
 
 # =====================================================================

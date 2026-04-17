@@ -515,6 +515,49 @@ class TestContextCompilerService:
         assert summary["mission"]["status"] == "active"
         assert summary["mission"]["updated_by"] == "owner"
 
+    def test_record_active_objective_writes_working_memory(self, tmp_data_dir):
+        """Active objectives should be persisted into working memory for the current quest."""
+        service = ContextCompilerService(data_dir=tmp_data_dir)
+
+        item = service.record_active_objective(
+            objective="Investigate connector outage",
+            quest_id="quest-123",
+            channel="warroom",
+            ttl_hours=6,
+        )
+
+        stored = service.memory_manager.working.get(item.id)
+        assert stored is not None
+        assert stored.namespace == "quest:quest-123"
+        assert stored.status == MemoryStatus.active
+        assert stored.metadata["kind"] == "active_objective"
+        assert stored.expires_at is not None
+
+    def test_recorded_active_objective_is_compiled_into_context(self, tmp_data_dir):
+        """Recorded working-memory objectives should appear in compiled quest context."""
+        service = ContextCompilerService(data_dir=tmp_data_dir)
+        prov = Provenance(type=ProvenanceType.system, ref="test")
+        service.core_store.set_block(
+            block_type=CoreBlockType.persona,
+            content="I am a test assistant.",
+            updated_by="system",
+            provenance=[prov],
+        )
+        service.record_active_objective(
+            objective="Trace the memory scheduler path",
+            quest_id="quest-abc",
+            channel="api",
+        )
+
+        ctx = service.compile_for_objective(
+            objective="Trace the memory scheduler path",
+            quest_id="quest-abc",
+            mode="normal",
+        )
+
+        assert "WORKING MEMORY" in ctx.rendered_prompt
+        assert "Active Objective" in ctx.rendered_prompt
+
 
 # ---------------------------------------------------------------------------
 # Determinism Tests

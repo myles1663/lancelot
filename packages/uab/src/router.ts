@@ -99,6 +99,7 @@ export class ControlRouter {
       methods.push('uab-hook');
     }
     methods.push('accessibility');
+    methods.push('vision'); // Last resort — screenshot + Claude Vision
     return methods;
   }
 
@@ -114,8 +115,15 @@ export class ControlRouter {
           return this.uiaFallback.connect(app);
         }
         throw new Error('Accessibility API fallback not available for this app');
-      case 'vision':
-        throw new Error('Vision fallback not yet implemented');
+      case 'vision': {
+        // Vision plugin — screenshot + Claude Vision API (universal fallback)
+        const { VisionPlugin } = await import('./plugins/vision/index.js');
+        const visionPlugin = new VisionPlugin();
+        if (visionPlugin.canHandle(app)) {
+          return visionPlugin.connect(app);
+        }
+        throw new Error('Vision fallback not available');
+      }
       case 'direct-api':
         throw new Error('Direct API method not yet implemented');
       default:

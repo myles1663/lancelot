@@ -232,7 +232,7 @@ Critical security boundaries for memory:
 - Environment variables injected at container startup, not baked into images
 - Docker env var sanitization prevents shell injection through environment variables
 - Sealed secret references allow the system to *use* credentials without *seeing* them in plaintext
-- PII redaction via local model runs before any content is sent to external APIs
+- When the local model is enabled, PII redaction runs locally before content is sent to frontier APIs. If the instance is installed without the local model, prompts and tool payloads go directly to the configured provider and that privacy boundary no longer applies.
 
 **Operator responsibility:** The `.env` file and the host machine's security are the operator's responsibility. Lancelot protects secrets within its runtime but cannot protect against host compromise.
 

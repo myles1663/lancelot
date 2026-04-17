@@ -7,16 +7,23 @@ This is the PRIVATE development repo for Lancelot.
 
 Never push directly to `public` without explicit instruction from Myles.
 
+The fuller SOP lives at `C:\Users\SSAdministrator\Desktop\Lancelot_Git_SOP.md`.
+
 ---
 
 ## Day-to-Day Dev Workflow
 All development happens on this private repo. Commit freely and often.
 Push to origin (private) after every meaningful working state:
 ```bash
-git add .
+git add <specific files>
 git commit -m "descriptive message"
-git push origin main
+git push origin master
 ```
+
+Rules:
+- Stage specific files only. Do not use `git add -A` or `git add .`.
+- Never push directly to `public` unless Myles explicitly instructs a release.
+- Never commit `.env`, credentials, secrets, or unnecessary large generated artifacts.
 
 ---
 
@@ -136,11 +143,11 @@ Never initiate a release on your own judgment.
 
 When release is approved:
 ```bash
-# Create a clean release branch from current main
+# Create a clean release branch from current master
 git checkout -b release-prep
 
-# Squash all dev commits into a single clean commit
-git merge --squash main
+# Squash all dev commits into a single clean commit from master
+git merge --squash master
 
 # Myles will provide the release commit message
 # Wait for it before committing
@@ -150,7 +157,7 @@ git commit -m "[RELEASE MESSAGE PROVIDED BY MYLES]"
 git push public release-prep:main
 
 # Clean up release branch
-git checkout main
+git checkout master
 git branch -d release-prep
 ```
 
@@ -190,7 +197,7 @@ git push origin master --force
 ```
 
 **Rules:**
-- Claude should suggest tagging after completing meaningful work.
+- Tag after confirmed working states, before risky changes, and after successful rebuild plus smoke test.
 - Never delete tags — they're the safety net.
 - Tag messages should be brief but descriptive (e.g., "NVIDIA provider + installer credential fix").
 

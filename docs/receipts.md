@@ -102,7 +102,7 @@ Receipts are tagged with a cognition tier indicating the level of processing inv
 Receipt inputs and outputs are sanitized before persistence:
 
 - **Secrets** are redacted (API keys, tokens, passwords replaced with `[REDACTED]`)
-- **PII** is stripped via local model redaction
+- **PII** is stripped via local-model redaction when that lane is enabled; reduced-footprint installs that skip the local model rely on the upstream provider path instead
 - **Large payloads** are truncated with size noted
 - **Binary content** is replaced with type and size metadata
 

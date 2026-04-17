@@ -90,7 +90,7 @@ export const STEPS = [
   'clone',
   'provider',
   'comms',
-  'warroom_creds',
+  'warroom_auth',
   'config',
   'model',
   'docker_build',

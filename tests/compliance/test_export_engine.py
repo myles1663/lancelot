@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src", "c
 
 import hashlib
 import json
+import zipfile
 import pytest
 from unittest.mock import MagicMock, patch, call
 from pathlib import Path
@@ -260,9 +261,9 @@ class TestFetchReceipts:
 # ---------------------------------------------------------------------------
 
 class TestExportFilename:
-    def test_json_extension_for_soc2(self):
+    def test_zip_extension_for_soc2(self):
         name = _export_filename("SOC2_JSON", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z", "abc12345-6789")
-        assert name.endswith(".json")
+        assert name.endswith(".zip")
         assert "soc2_json" in name
         assert "2026-01-01" in name
         assert "2026-01-31" in name
@@ -332,7 +333,7 @@ class TestWriteExportReceipt:
 # ---------------------------------------------------------------------------
 
 class TestRunExport:
-    def test_soc2_format_produces_json_file(self, tmp_path):
+    def test_soc2_format_produces_zip_bundle(self, tmp_path):
         svc = _mock_receipt_service_for_export()
         result = run_export(
             receipt_service=svc,
@@ -345,12 +346,24 @@ class TestRunExport:
         assert result.success is True
         assert result.export_format == ExportFormat.SOC2_JSON
         assert Path(result.output_path).exists()
-        assert result.output_path.endswith(".json")
-        # Verify valid JSON
-        with open(result.output_path) as f:
-            data = json.load(f)
+        assert result.output_path.endswith(".zip")
+        with zipfile.ZipFile(result.output_path) as zf:
+            names = set(zf.namelist())
+            assert "manifest.json" in names
+            assert "README.txt" in names
+            json_name = next(name for name in names if name.endswith(".json") and name != "manifest.json")
+            pdf_name = next(name for name in names if name.endswith("_summary.pdf"))
+            csv_name = next(name for name in names if name.endswith("_index.csv"))
+            data = json.loads(zf.read(json_name))
+            manifest = json.loads(zf.read("manifest.json"))
         assert "controls" in data
         assert "export_metadata" in data
+        assert "system_context" in data
+        assert "integrity" in data
+        manifest_names = {entry["name"] for entry in manifest["files"]}
+        assert json_name in manifest_names
+        assert pdf_name in manifest_names
+        assert csv_name in manifest_names
 
     def test_iso27001_format(self, tmp_path):
         svc = _mock_receipt_service_for_export()
@@ -363,10 +376,15 @@ class TestRunExport:
             operator_id="op-001",
         )
         assert result.success is True
-        with open(result.output_path) as f:
-            data = json.load(f)
+        with zipfile.ZipFile(result.output_path) as zf:
+            json_name = next(
+                name for name in zf.namelist()
+                if name.endswith(".json") and name != "manifest.json"
+            )
+            data = json.loads(zf.read(json_name))
         assert "controls" in data
         assert "excluded_controls" in data
+        assert "statement_of_applicability" in data
 
     def test_gdpr_format(self, tmp_path):
         svc = _mock_receipt_service_for_export()
@@ -379,9 +397,14 @@ class TestRunExport:
             operator_id="op-001",
         )
         assert result.success is True
-        with open(result.output_path) as f:
-            data = json.load(f)
+        with zipfile.ZipFile(result.output_path) as zf:
+            json_name = next(
+                name for name in zf.namelist()
+                if name.endswith(".json") and name != "manifest.json"
+            )
+            data = json.loads(zf.read(json_name))
         assert "processing_activities" in data
+        assert "processing_summary" in data
 
     def test_sha256_integrity_hash(self, tmp_path):
         svc = _mock_receipt_service_for_export()
@@ -479,9 +502,26 @@ class TestRunExport:
             operator_id="op-001",
         )
         assert result.success is True  # file is written, just with error content
-        with open(result.output_path) as f:
-            data = json.load(f)
+        with zipfile.ZipFile(result.output_path) as zf:
+            json_name = next(
+                name for name in zf.namelist()
+                if name.endswith(".json") and name != "manifest.json"
+            )
+            data = json.loads(zf.read(json_name))
         assert "error" in data
+
+    def test_pdf_format_still_produces_pdf(self, tmp_path):
+        svc = _mock_receipt_service_for_export()
+        result = run_export(
+            receipt_service=svc,
+            export_format=ExportFormat.PDF,
+            period_start="2026-01-01",
+            period_end="2026-01-31",
+            data_dir=str(tmp_path),
+            operator_id="op-001",
+        )
+        assert result.success is True
+        assert result.output_path.endswith(".pdf")
 
     def test_export_receipt_failure_does_not_fail_export(self, tmp_path):
         svc = _mock_receipt_service_for_export()

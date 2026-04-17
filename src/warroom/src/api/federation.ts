@@ -10,10 +10,39 @@ import { apiGet, apiPost, apiPut, apiDelete } from './client'
 export interface FederationStatus {
   enabled: boolean
   instance_id: string
+  fingerprint: string
+  public_key: string
   deployment_mode: string
   peer_count: number
   soul_consistency: string
+  active_propagations?: Array<Record<string, unknown>>
   cost_threshold: string
+  self_address: string
+  transport_ready?: boolean
+  transport_started?: boolean
+  heartbeat_mesh_running?: boolean
+  cost_reporter_running?: boolean
+  runtime_degraded?: boolean
+  degraded_reasons?: string[]
+  runtime_errors?: string[]
+  subscription_status?: Record<string, string>
+  subscription_stream_outcome?: Record<string, string>
+  subscription_stream_errors?: Record<string, string>
+  circuit_breaker_summary?: {
+    closed: number
+    open: number
+    half_open: number
+  }
+  stale_instance_ids?: string[]
+}
+
+export interface FederationSettings {
+  instance_id: string
+  fingerprint: string
+  public_key: string
+  self_address: string
+  deployment_mode: string
+  restart_required: boolean
 }
 
 export interface FederationPeer {
@@ -32,6 +61,22 @@ export interface FederationHealthSummary {
   critical: number
   lost: number
   deployment_mode: string
+  runtime_degraded?: boolean
+  degraded_reasons?: string[]
+  transport_started?: boolean
+  heartbeat_mesh_running?: boolean
+  cost_reporter_running?: boolean
+  subscription_status?: Record<string, string>
+  subscription_stream_outcome?: Record<string, string>
+  subscription_stream_errors?: Record<string, string>
+  circuit_breaker_summary?: {
+    closed: number
+    open: number
+    half_open: number
+  }
+  stale_instance_ids?: string[]
+  divergence_state?: string
+  active_propagation_count?: number
 }
 
 // Graph Builder types
@@ -254,6 +299,19 @@ export interface Contradiction {
 
 export async function fetchFederationStatus(): Promise<FederationStatus> {
   return apiGet<FederationStatus>('/api/federation/status')
+}
+
+export async function fetchFederationSettings(): Promise<FederationSettings> {
+  return apiGet<FederationSettings>('/api/federation/settings')
+}
+
+export async function updateFederationSettings(selfAddress: string): Promise<{
+  saved: boolean
+  self_address: string
+  restart_required: boolean
+  message: string
+}> {
+  return apiPut('/api/federation/settings', { self_address: selfAddress })
 }
 
 export async function fetchFederationPeers(): Promise<FederationPeer[]> {

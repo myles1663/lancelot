@@ -22,12 +22,13 @@ os.environ["FEATURE_MEMORY_VNEXT"] = "true"
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 
-from src.core.memory.api import router, get_memory_service, _memory_service
+from src.core.memory.api import router, get_memory_service, _memory_service, _get_memory_data_dir
 from src.core.memory.schemas import (
     CoreBlockType,
     MemoryTier,
     MemoryStatus,
     ProvenanceType,
+    MemoryItem,
 )
 
 
@@ -216,6 +217,33 @@ class TestSearchEndpoint:
         assert data["total_count"] == 0
 
 
+class TestRecentEndpoint:
+    """Tests for recent memory listing."""
+
+    def test_recent_returns_latest_items(self, client, app):
+        service = next(iter(app.dependency_overrides.values()))()
+        item = MemoryItem(
+            tier=MemoryTier.episodic,
+            namespace="conversation",
+            title="Recent conversation",
+            content="Latest memory content",
+            status=MemoryStatus.active,
+            token_count=12,
+            confidence=0.8,
+        )
+        service["store_manager"].episodic.insert(item)
+
+        response = client.get("/memory/recent?limit=5")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 1
+        assert data["items"][0]["title"] == "Recent conversation"
+        assert data["items"][0]["tier"] == "episodic"
+        assert data["items"][0]["namespace"] == "conversation"
+        assert data["items"][0]["token_count"] == 12
+
+
 # ---------------------------------------------------------------------------
 # Commit Workflow Endpoint Tests
 # ---------------------------------------------------------------------------
@@ -342,6 +370,57 @@ class TestCommitEndpoints:
         assert response.status_code == 400
         assert "Invalid operation" in response.json()["detail"]
 
+    def test_list_recent_commits(self, client):
+        """Test listing recent governed memory commits."""
+        begin_response = client.post(
+            "/memory/commit/begin",
+            json={"created_by": "test_agent", "message": "Listed commit"}
+        )
+        commit_id = begin_response.json()["commit_id"]
+
+        client.post(
+            f"/memory/commit/{commit_id}/edit",
+            json={
+                "op": "replace",
+                "target": "core:mission",
+                "after": "Committed content",
+                "reason": "List me",
+                "confidence": 0.9,
+            }
+        )
+        client.post(f"/memory/commit/{commit_id}/finish", json={})
+
+        response = client.get("/memory/commits?limit=5")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] >= 1
+        assert data["commits"][0]["message"] == "Listed commit"
+
+    def test_owner_edit_to_persona_allowed_with_system_provenance(self, client):
+        """Governed owner edits should be able to change owner-only blocks."""
+        begin_response = client.post(
+            "/memory/commit/begin",
+            json={"created_by": "owner_user", "message": "Owner persona update"}
+        )
+        commit_id = begin_response.json()["commit_id"]
+
+        response = client.post(
+            f"/memory/commit/{commit_id}/edit",
+            json={
+                "op": "replace",
+                "target": "core:persona",
+                "after": "Owner curated persona",
+                "reason": "Governed update",
+                "confidence": 1.0,
+                "editor": "owner",
+                "provenance_type": "system",
+                "provenance_ref": "warroom-memory-manager",
+            }
+        )
+
+        assert response.status_code == 200
+
 
 # ---------------------------------------------------------------------------
 # Rollback Endpoint Tests
@@ -427,6 +506,101 @@ class TestQuarantineEndpoints:
         )
 
         assert response.status_code == 400
+
+    def test_approve_and_reject_quarantined_items(self, client, app):
+        """Approve and reject endpoints should govern quarantined tiered items."""
+        service = next(iter(app.dependency_overrides.values()))()
+        item = MemoryItem(
+            tier=MemoryTier.working,
+            namespace="global",
+            title="Needs review",
+            content="Quarantined content",
+            status=MemoryStatus.quarantined,
+        )
+        service["store_manager"].working.insert(item)
+
+        approve_response = client.post(
+            f"/memory/quarantine/working/{item.id}/approve",
+            json={"operator": "admin", "reason": "Looks good"},
+        )
+        assert approve_response.status_code == 200
+        assert approve_response.json()["status"] == "approved"
+
+        second_item = MemoryItem(
+            tier=MemoryTier.working,
+            namespace="global",
+            title="Reject me",
+            content="Bad quarantined content",
+            status=MemoryStatus.quarantined,
+        )
+        service["store_manager"].working.insert(second_item)
+
+        reject_response = client.post(
+            f"/memory/quarantine/working/{second_item.id}/reject",
+            json={"operator": "admin", "reason": "Bad memory"},
+        )
+        assert reject_response.status_code == 200
+        assert reject_response.json()["status"] == "rejected"
+
+    def test_approve_and_reject_quarantined_core_blocks(self, client, app):
+        """Governed endpoints should handle quarantined core blocks."""
+        service = next(iter(app.dependency_overrides.values()))()
+        service["core_store"].set_block(
+            block_type=CoreBlockType.mission,
+            content="Quarantined mission",
+            updated_by="agent",
+            provenance=[],
+            confidence=0.9,
+            status=MemoryStatus.quarantined,
+        )
+
+        approve_response = client.post(
+            "/memory/quarantine/core/mission/approve",
+            json={"operator": "admin", "reason": "Approved"},
+        )
+        assert approve_response.status_code == 200
+        assert approve_response.json()["status"] == "approved"
+
+        service["core_store"].set_block(
+            block_type=CoreBlockType.mission,
+            content="Reject this mission",
+            updated_by="agent",
+            provenance=[],
+            confidence=0.9,
+            status=MemoryStatus.quarantined,
+        )
+        reject_response = client.post(
+            "/memory/quarantine/core/mission/reject",
+            json={"operator": "admin", "reason": "Rejected"},
+        )
+        assert reject_response.status_code == 200
+        assert reject_response.json()["status"] == "rejected"
+
+    def test_archive_and_delete_tiered_items(self, client, app):
+        """Tiered items should support lifecycle updates and governed deletion."""
+        service = next(iter(app.dependency_overrides.values()))()
+        item = MemoryItem(
+            tier=MemoryTier.episodic,
+            namespace="conversation",
+            title="Archive me",
+            content="Archive candidate",
+            status=MemoryStatus.active,
+        )
+        service["store_manager"].episodic.insert(item)
+
+        archive_response = client.post(
+            f"/memory/item/episodic/{item.id}/status?status=deprecated",
+            json={"operator": "admin", "reason": "Archive"},
+        )
+        assert archive_response.status_code == 200
+        assert archive_response.json()["status"] == "deprecated"
+
+        delete_response = client.post(
+            f"/memory/item/episodic/{item.id}/delete",
+            json={"operator": "admin", "reason": "Delete"},
+        )
+        assert delete_response.status_code == 200
+        assert delete_response.json()["status"] == "deleted"
 
 
 # ---------------------------------------------------------------------------
@@ -563,6 +737,14 @@ class TestErrorHandling:
         )
 
         assert response.status_code == 400
+
+
+class TestMemoryDataDir:
+    """Tests for canonical memory data directory selection."""
+
+    def test_prefers_lancelot_data_dir_env(self, monkeypatch):
+        monkeypatch.setenv("LANCELOT_DATA_DIR", "/tmp/lancelot-test")
+        assert _get_memory_data_dir() == Path("/tmp/lancelot-test")
 
 
 # ---------------------------------------------------------------------------

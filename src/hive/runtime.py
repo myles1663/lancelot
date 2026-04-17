@@ -93,6 +93,9 @@ class SubAgentRuntime:
             agent_id=self.agent_id,
             reason=reason,
             quest_id=self._record.quest_id,
+            operator_id=self._record.operator_id,
+            session_id=self._record.session_id,
+            operator_name=self._record.operator_name,
         )
         logger.info("Agent %s pause requested: %s", self.agent_id, reason)
 
@@ -102,6 +105,9 @@ class SubAgentRuntime:
         self._receipts.record_agent_resumed(
             agent_id=self.agent_id,
             quest_id=self._record.quest_id,
+            operator_id=self._record.operator_id,
+            session_id=self._record.session_id,
+            operator_name=self._record.operator_name,
         )
         logger.info("Agent %s resumed", self.agent_id)
 
@@ -166,7 +172,10 @@ class SubAgentRuntime:
                     )
                     break
 
-                # 5. Governance check
+                # 5. Scoped Soul boundary check
+                self._validate_scoped_action(action)
+
+                # 6. Governance check
                 if self._governance:
                     capability = action.get("capability", action.get("action", "unknown"))
                     gov_result = self._governance.validate_action(
@@ -174,13 +183,18 @@ class SubAgentRuntime:
                         agent_id=self.agent_id,
                     )
                     if not gov_result.approved:
-                        self._receipts.record_governance_check(
+                        receipt_id = self._receipts.record_governance_check(
+                            parent_receipt_id=self._record.latest_receipt_id,
                             agent_id=self.agent_id,
                             capability=capability,
                             approved=False,
                             tier=gov_result.tier,
                             quest_id=self._record.quest_id,
+                            operator_id=self._record.operator_id,
+                            session_id=self._record.session_id,
+                            operator_name=self._record.operator_name,
                         )
+                        self._record.latest_receipt_id = receipt_id
                         if gov_result.requires_operator_approval:
                             # Pause for operator approval
                             self.pause(f"Governance requires approval: {capability}")
@@ -194,35 +208,71 @@ class SubAgentRuntime:
                             )
                             break
 
-                # 6. Execute action
+                # 7. Execute action
                 action_result = None
                 if self._action_executor:
                     try:
-                        action_result = self._action_executor(action)
+                        action_payload = dict(action)
+                        action_payload.setdefault("agent_id", self.agent_id)
+                        action_payload.setdefault("scoped_soul", self._scoped_soul)
+                        action_payload.setdefault(
+                            "allowed_apps",
+                            list(self._record.task_spec.allowed_apps or []),
+                        )
+                        action_result = self._action_executor(action_payload)
+                    except ScopedSoulViolationError as exc:
+                        error_msg = str(exc)
+                        receipt_id = self._receipts.record_agent_action(
+                            agent_id=self.agent_id,
+                            action_name=action.get("action", "unknown"),
+                            action_inputs=action,
+                            action_result={"error": error_msg, "type": "soul_violation"},
+                            quest_id=self._record.quest_id,
+                            parent_receipt_id=self._record.latest_receipt_id,
+                            operator_id=self._record.operator_id,
+                            session_id=self._record.session_id,
+                            operator_name=self._record.operator_name,
+                        )
+                        self._record.latest_receipt_id = receipt_id
+                        self.request_collapse(CollapseReason.SOUL_VIOLATION, error_msg)
+                        break
                     except Exception as exc:
                         error_msg = str(exc)
-                        self._receipts.record_agent_action(
+                        receipt_id = self._receipts.record_agent_action(
                             agent_id=self.agent_id,
                             action_name=action.get("action", "unknown"),
                             action_inputs=action,
                             action_result={"error": error_msg},
                             quest_id=self._record.quest_id,
+                            parent_receipt_id=self._record.latest_receipt_id,
+                            operator_id=self._record.operator_id,
+                            session_id=self._record.session_id,
+                            operator_name=self._record.operator_name,
                         )
+                        self._record.latest_receipt_id = receipt_id
                         self.request_collapse(CollapseReason.ERROR, error_msg)
                         break
 
-                # 7. Emit receipt
-                self._receipts.record_agent_action(
+                # 8. Emit receipt
+                receipt_id = self._receipts.record_agent_action(
                     agent_id=self.agent_id,
                     action_name=action.get("action", "unknown"),
                     action_inputs=action,
                     action_result=action_result,
                     quest_id=self._record.quest_id,
+                    parent_receipt_id=self._record.latest_receipt_id,
+                    operator_id=self._record.operator_id,
+                    session_id=self._record.session_id,
+                    operator_name=self._record.operator_name,
                 )
+                self._record.latest_receipt_id = receipt_id
 
                 if action_result:
                     outputs[f"action_{i}"] = action_result
 
+        except ScopedSoulViolationError as exc:
+            error_msg = str(exc)
+            self.request_collapse(CollapseReason.SOUL_VIOLATION, error_msg)
         except Exception as exc:
             error_msg = str(exc)
             logger.error("Agent %s runtime error: %s", self.agent_id, exc)
@@ -267,3 +317,36 @@ class SubAgentRuntime:
                 CollapseReason.TIMEOUT,
                 "Timeout while paused",
             )
+    
+    def _validate_scoped_action(self, action: Dict[str, Any]) -> None:
+        """Enforce task-scoped boundaries before governance and execution."""
+        task_spec = self._record.task_spec
+        context = action.get("context") or {}
+        capability = str(action.get("capability") or action.get("action") or "").strip().lower()
+
+        allowed_apps = {a.lower() for a in (task_spec.allowed_apps or []) if a}
+        target_app = str(
+            context.get("target_app") or context.get("app_name") or ""
+        ).strip().lower()
+        if allowed_apps and target_app and target_app not in allowed_apps:
+            raise ScopedSoulViolationError(
+                agent_id=self.agent_id,
+                action=capability or action.get("action", "unknown"),
+                reason=f"Scoped Soul forbids app '{target_app}' for agent {self.agent_id}",
+            )
+
+        allowed_categories = [c.lower() for c in (task_spec.allowed_categories or []) if c]
+        if allowed_categories and capability and capability not in {
+            "execute",
+            "execute_subtask",
+            "app_control",
+        }:
+            if not any(cat in capability for cat in allowed_categories):
+                raise ScopedSoulViolationError(
+                    agent_id=self.agent_id,
+                    action=capability,
+                    reason=(
+                        f"Capability '{capability}' is outside scoped categories "
+                        f"{allowed_categories}"
+                    ),
+                )

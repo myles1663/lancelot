@@ -29,6 +29,8 @@ import os
 import secrets
 import threading
 import time
+import json
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlencode
 
@@ -92,6 +94,11 @@ class OAuthTokenManager:
         self._lock = threading.Lock()
         self._refresh_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._state_file = Path(
+            os.getenv("LANCELOT_ANTHROPIC_OAUTH_STATE_FILE", "/home/lancelot/data/anthropic_oauth_pending.json")
+        )
+        self._state_file.parent.mkdir(parents=True, exist_ok=True)
+        self._load_pending_flows()
 
     # ── Auth URL Generation ──────────────────────────────────────
 
@@ -109,6 +116,7 @@ class OAuthTokenManager:
         }
         # Housekeep expired flows
         self._cleanup_pending_flows()
+        self._save_pending_flows()
 
         params = urlencode({
             "code": "true",
@@ -129,6 +137,7 @@ class OAuthTokenManager:
     def exchange_code(self, code: str, state: str) -> bool:
         """Exchange authorization code for tokens. Returns True on success."""
         flow = self._pending_flows.pop(state, None)
+        self._save_pending_flows()
         if not flow:
             logger.warning("OAuth exchange: unknown or expired state %s…", state[:8])
             return False
@@ -337,6 +346,34 @@ class OAuthTokenManager:
                    if now - f["created_at"] > PENDING_FLOW_TTL]
         for s in expired:
             del self._pending_flows[s]
+
+    def _load_pending_flows(self) -> None:
+        if not self._state_file.exists():
+            return
+        try:
+            raw = self._state_file.read_text(encoding="utf-8").strip()
+            if not raw:
+                self._pending_flows = {}
+                return
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                self._pending_flows = {
+                    state: flow for state, flow in data.items() if isinstance(flow, dict)
+                }
+                self._cleanup_pending_flows()
+                self._save_pending_flows()
+        except Exception as exc:
+            logger.warning("Failed to load Anthropic OAuth pending state: %s", exc)
+            self._pending_flows = {}
+
+    def _save_pending_flows(self) -> None:
+        try:
+            self._state_file.write_text(
+                json.dumps(self._pending_flows, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning("Failed to persist Anthropic OAuth pending state: %s", exc)
 
     def _background_refresh_loop(self) -> None:
         """Background thread: check and refresh tokens periodically."""

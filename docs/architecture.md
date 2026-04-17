@@ -2,7 +2,7 @@
 
 A full walkthrough of Lancelot's system architecture — how the subsystems connect, how a request flows from input to governed execution, and the key design decisions behind each component.
 
-For how to get the system running, see the [Quickstart](quickstart.md). For the governance model specifically, see [Governance](governance.md).
+For how to get the system running, see the [Quickstart](quickstart.md). For the governance model specifically, see [Governance](governance.md). For the authentication target state, see [Authentication Architecture](authentication.md).
 
 ---
 
@@ -85,6 +85,8 @@ The Model Router selects the appropriate LLM lane based on task type, risk level
 
 The `ProviderProfile` dataclass carries a `mode` field (`"sdk"` | `"api"`) and each `LaneConfig` now accepts an optional `thinking` dict (see Extended Thinking below). A new onboarding state, `PROVIDER_MODE_SELECTION`, appears between `HANDSHAKE` and `LOCAL_UTILITY_SETUP` to let the owner choose the provider mode at first run.
 
+When a frontier provider is selected, user prompts and tool-result payloads are scrubbed through the local redaction lane before they are sent to `ProviderClient.generate()` / `generate_with_tools()`. The local model therefore serves two roles in the live runtime: low-grade/low-risk execution and privacy-preserving redaction before frontier egress.
+
 ### 4. Planning Pipeline (for complex requests)
 
 **V28 Simple Action Detector** (v0.2.28): In the `EXEC_REQUEST` path, the orchestrator's `_build_simple_action_plan()` method detects single-action requests (create file, send message, run command) via a keyword→skill mapping. When matched, it produces a targeted 3-step `PlanArtifact` directly, bypassing the generic plan builder and LLM enrichment. This saves an API call and produces cleaner permission requests for straightforward actions.
@@ -138,6 +140,20 @@ Every action is classified into one of four risk tiers:
 
 The governance overhead scales with risk. T0 actions are near-instant (precomputed policy lookup). T3 actions require explicit owner approval before execution.
 
+### Runtime Pause and Emergency Stop
+
+Lancelot now has a real persisted runtime pause layer in the control plane. This is separate from conversational intent handling.
+
+The runtime pause boundary blocks new work at these ingress points:
+
+- War Room chat execution
+- scheduler dispatch
+- HIVE task intake and sub-agent spawning
+- inbound A2A task execution
+- TaskRun execution
+
+Emergency stop is the stronger operator control. It forces the persisted runtime pause state and invokes the live local HIVE stop path when available. The War Room pause and emergency-stop controls are therefore real backend controls, not chat commands disguised as buttons.
+
 **Tier boundary enforcement:** Before any T2 or T3 action:
 1. All pending batch receipts are flushed to disk
 2. All pending async verifications are drained and completed
@@ -156,7 +172,7 @@ Tool Request
   → ToolReceipt (sanitized inputs/outputs, policy decisions)
 ```
 
-Eight capability types are available: `ShellExec`, `RepoOps`, `FileOps`, `WebOps`, `UIBuilder`, `DeployOps`, `VisionControl`, `AppControl` (UAB). Each has explicit security constraints.
+Eight capability types are available: `ShellExec`, `RepoOps`, `FileOps`, `WebOps`, `UIBuilder`, `DeployOps`, `VisionControl`, `AppControl` (UAB — 10 plugins, 61 action types). Each has explicit security constraints.
 
 ### 8. Receipt Generation
 
@@ -182,6 +198,30 @@ Every action — LLM call, tool execution, file operation, memory edit, schedule
 Receipts form the ground truth of system behavior. They are persisted to `lancelot_data/receipts/` and are searchable through the War Room.
 
 **V29 Receipt Context Endpoint** (v0.2.29): `GET /api/receipts/{id}/context` returns the receipt's child receipts, parent summary, and quest sibling count in a single response. This powers the Receipt Explorer's context connections panel, enabling drill-down from any receipt to its parent chain, child operations, and sibling receipts within the same quest — without requiring multiple API calls.
+
+### Runtime-Truthful Status Surfaces
+
+Recent hardening standardized status surfaces across multiple subsystems so operators do not get healthy-looking empty responses when a subsystem is mounted but degraded.
+
+This contract now applies to:
+
+- Federation `/api/federation/status`
+- A2A `/api/a2a/status`
+- HIVE `/api/hive/status`
+- Time-Travel `/api/timetravel/status`
+- MCP `/api/mcp/servers`
+
+Common fields where applicable:
+
+- `runtime_degraded`
+- `degraded_reasons`
+- `runtime_errors`
+
+Operational meaning:
+
+- **disabled** means intentionally unavailable
+- **not initialized** means expected but not wired
+- **runtime degraded** means mounted but failing live checks
 
 ---
 
@@ -231,7 +271,7 @@ Lancelot maintains structured memory across four tiers:
 
 **Quarantine:** Risky memory writes (those that modify core blocks or contain sensitive patterns) land in quarantine. Promotion to active memory requires owner verification or approval.
 
-**Context compiler:** Before each LLM call, the context compiler assembles memory tiers into a token-budgeted context window. Priority is Core > Working > Episodic > Archival, with LRU eviction when the budget is exceeded.
+**Context compiler:** Before each LLM call, the context compiler assembles memory tiers into a token-budgeted context window. Priority is Core > Working > Episodic > Archival, with LRU eviction when the budget is exceeded. The orchestrator records the active objective into quest-scoped working memory before compilation, and the scheduler ensures working compaction, episodic summarization to archival, archival decay, and integrity audit jobs stay registered.
 
 For more details, see [Memory](memory.md).
 
@@ -276,7 +316,9 @@ The Tool Fabric provides sandboxed tool execution with seven capability protocol
 
 ### Universal Application Bridge (UAB)
 
-The Universal Application Bridge enables Lancelot to interact with desktop applications through native UI automation frameworks — not brittle vision+mouse simulation. UAB runs as a host-side daemon (Node.js, port 7900) that communicates with the Lancelot container via JSON-RPC 2.0.
+Lancelot now embeds the standalone UAB 1.3.0 core, but preserves the existing host-side JSON-RPC contract on port `7900` through a compatibility daemon so the Python bridge and governance path do not change.
+
+The Universal Application Bridge enables Lancelot to interact with desktop applications through native UI automation frameworks — not brittle vision+mouse simulation. UAB runs as a host-side daemon (Node.js, port 7900) that communicates with the Lancelot container via JSON-RPC 2.0. As of v0.6.0, UAB also provides a standalone `UABConnector` library, MCP Server, Agent SDK, and CLI for use by any agent framework.
 
 **Architecture:**
 
@@ -286,31 +328,41 @@ Lancelot Core (Docker)               Host Machine
 │  UABProvider         │  JSON-RPC   │  UAB Daemon (:7900)      │
 │  (Python client)     │────────────→│  ├── Framework Plugins   │
 │                      │  over HTTP  │  │   ├── Electron (CDP)  │
-│  Registers as Tool   │             │  │   ├── Qt (UIA)        │
-│  Fabric provider     │             │  │   ├── WPF (UIA)       │
-│  (AppControl cap)    │             │  │   ├── GTK (UIA)       │
-└─────────────────────┘              │  │   ├── Flutter (UIA)   │
-                                     │  │   ├── Java (JAB→UIA)  │
-                                     │  │   ├── Office (COM)    │
-                                     │  │   └── Win32 (UIA)     │
+│  Registers as Tool   │             │  │   ├── Browser (CDP)   │
+│  Fabric provider     │             │  │   ├── ChromeExt (WS)  │
+│  (AppControl cap)    │             │  │   ├── Qt (UIA)        │
+│                      │             │  │   ├── WPF (UIA)       │
+│  Also available via: │             │  │   ├── GTK (UIA)       │
+│  - UABConnector      │             │  │   ├── Flutter (UIA)   │
+│  - MCP Server        │             │  │   ├── Java (JAB→UIA)  │
+│  - Agent SDK         │             │  │   ├── Office (COM)    │
+│  - CLI               │             │  │   ├── Win32 (UIA)     │
+└─────────────────────┘              │  │   └── Vision (AI)     │
+                                     │  ├── CompositeEngine     │
+                                     │  ├── SpatialIndex        │
+                                     │  ├── AppRegistry         │
                                      │  └── Connection Manager  │
                                      └──────────────────────────┘
 ```
 
-**Supported frameworks (8):** Each framework has a dedicated plugin that hooks into the application's native accessibility or debug protocol. The daemon auto-detects which framework an application uses and selects the appropriate plugin.
+**Supported frameworks (10 plugins):** Each framework has a dedicated plugin that hooks into the application's native accessibility or debug protocol. The daemon auto-detects which framework an application uses and selects the appropriate plugin via the `ControlRouter`. New in v0.6.0: Browser (CDP for Chrome/Edge/Brave/Vivaldi/Opera), Chrome Extension (WebSocket bridge, no relaunch needed), and Vision (Claude AI fallback for any application).
 
-**Unified element model:** All framework interactions are normalized into a common set of dataclasses — `UIElement`, `DetectedApp`, `AppActionResult`, `AppState`, `ConnectionResult` — so the rest of Lancelot sees a single interface regardless of the underlying framework.
+**Unified element model:** All framework interactions are normalized into a common set of dataclasses — `UIElement`, `DetectedApp`, `AppActionResult`, `AppState`, `ConnectionResult` — so the rest of Lancelot sees a single interface regardless of the underlying framework. 61 action types (up from 34), including browser session/cookie/storage/navigation/tab operations.
+
+**Spatial Map Engine (v0.6.0):** The `CompositeEngine` combines UIA tree, bounding rects, text reading, and optional Vision into a `SpatialMap` that replaces screenshots for most use cases. Structured data is faster and more accurate for AI processing. The Python bridge exposes `spatial_map()`, `text_map()`, and `find_by_description()` methods.
+
+**Compatibility bridge:** The host daemon now fronts the newer `UABConnector` and standalone server runtime while still answering the legacy JSON-RPC methods Lancelot expects. New connector-backed methods such as `scan`, `apps`, `find`, `focused`, `findByPath`, `watchChanges`, `atomicChain`, and `smartInvoke` are available without changing the container-side governance flow.
 
 **Risk classification (3-tier):**
-- **LOW** — read-only actions: detect, enumerate, query, state, screenshot
-- **MEDIUM** — mutating actions: click, type, select, scroll, keypress, hotkey
-- **HIGH** — destructive/irreversible: close, invoke, move, resize, sendEmail
+- **LOW** — read-only actions: detect, enumerate, query, state, screenshot, browser reads
+- **MEDIUM** — mutating actions: click, type, select, scroll, keypress, hotkey, navigate, executeScript
+- **HIGH** — destructive/irreversible: close, invoke, move, resize, sendEmail, clearCookies, clearStorage, closeTab
 
 Sensitive applications (password managers, banking apps, email clients, shells) auto-escalate risk: read operations become MEDIUM, mutations become HIGH.
 
 **Receipt system:** Every UAB action produces an `AppControlReceipt` with risk classification, app name, action type, and success/failure. Per-session summaries are stored as `AppSessionEntry` records. Storage: `data/receipts/uab/`.
 
-**Feature flag:** `FEATURE_TOOLS_UAB` (default: false, requires `FEATURE_TOOLS_FABRIC`). The daemon must run on the host machine (not inside Docker) because UI frameworks require host-level access.
+**Feature flag:** `FEATURE_TOOLS_UAB` (default: false, requires `FEATURE_TOOLS_FABRIC` + `FEATURE_TOOLS_HOST_BRIDGE`). The daemon must run on the host machine (not inside Docker) because UI frameworks require host-level access. On Windows, `scripts\install-uab.bat` installs a `LancelotUABDaemon` Scheduled Task backed by `scripts\run-uab-daemon.bat` for persistent auto-start.
 
 For the full reference, see [UAB](uab.md).
 
@@ -476,6 +528,26 @@ SQLite-backed job scheduler supporting cron and interval triggers.
 
 **Fallback:** When the feature flag is disabled or no OAuth token is present, the Anthropic provider falls back to API key authentication. OAuth and API key auth are mutually exclusive per session; OAuth takes priority when a valid token exists.
 
+### OpenAI Codex OAuth Manager (ChatGPT Pro Subscription)
+
+`src/core/openai_codex_oauth_manager.py` provides OAuth 2.0 with PKCE authentication for OpenAI's Codex API, enabling ChatGPT Plus/Pro subscribers to use their subscription for Lancelot API access at flat rate (no per-token billing).
+
+**Token lifecycle:**
+1. **Initiation** — `POST /api/v1/providers/oauth/openai-codex/initiate` starts the PKCE flow: generates `code_verifier` + `code_challenge`, builds the OpenAI authorization URL (`auth.openai.com/oauth/authorize`), and returns it to the owner.
+2. **Callback** — `GET /auth/callback` (Gateway) receives the authorization code, exchanges it for access + refresh tokens via `auth.openai.com/oauth/token`, and stores tokens in the encrypted vault (`openai.codex.access_token`, `openai.codex.refresh_token`, `openai.codex.token_expiry`, `openai.codex.account_id`).
+3. **CLI auth source** — The official Codex CLI reads the mounted host session from `~/.codex/auth.json` inside the container (`/home/lancelot/.codex/auth.json`) so non-interactive `codex exec` calls can authenticate without an API key.
+4. **Background refresh** — A daemon thread (`codex-oauth-refresh`) wakes every 2 minutes, checks token expiry, and proactively refreshes 5 minutes before the access token expires.
+5. **Revocation** — `POST /api/v1/providers/oauth/openai-codex/revoke` clears all stored tokens from the vault.
+6. **Status** — `GET /api/v1/providers/oauth/openai-codex/status` returns current token validity, expiry time, and account binding.
+
+**Client ID:** Uses OpenAI's public Codex client (`app_EMoamEEZ73f0CkXaXp7hrann`). Scopes: `openid profile email offline_access`.
+
+**Provider routing:** When `LANCELOT_PROVIDER=openai-codex`, the provider factory creates `CodexCLIProviderClient`, which runs `codex exec` in ephemeral mode and returns either normalized Lancelot tool calls or a final answer. Model profiles from `config/models.yaml` (`openai-codex` section) configure fast/deep/cache lanes.
+
+**Governed tool execution:** Codex is the planner, not the executor. Tool requests returned by `CodexCLIProviderClient.generate_with_tools()` are fed into the orchestrator's standard agentic loop, which applies the same declared-tool validation, safety classification, approval/Sentry checks, receipt emission, and `SkillExecutor` runtime used by other providers. Codex never executes shell/filesystem/network actions directly in this integration.
+
+**Onboarding:** Option [6] in provider selection. Selecting Codex goes directly to browser OAuth (no API key step). Sets `LANCELOT_PROVIDER=openai-codex` and `LANCELOT_AUTH_MODE=OAUTH`.
+
 ### Google OAuth Manager (Gmail + Calendar)
 
 **v0.2.26** (`FEATURE_GOOGLE_OAUTH`, default disabled): `src/core/google_oauth_manager.py` provides OAuth 2.0 Authorization Code + PKCE flow for Google APIs, enabling Gmail and Calendar connectors to authenticate with properly scoped, vault-stored, auto-refreshing credentials.
@@ -575,7 +647,7 @@ A core architectural principle: **any subsystem can be disabled without breaking
 | Anthropic OAuth | Falls back to API key authentication for Anthropic; all other providers unaffected |
 | Google OAuth | Gmail and Calendar connectors unavailable; all other providers and subsystems unaffected |
 | Tool Fabric | No tool execution, conversation-only mode |
-| UAB | No desktop app control; all other tool capabilities still available |
+| UAB | No desktop app control (10 framework plugins, Composite Engine, Spatial Map, MCP Server, Agent SDK all unavailable); all other tool capabilities still available |
 | Hive | No sub-agent decomposition; single-agent execution still works |
 | Hive UAB | No UAB actions within Hive agents; standalone UAB and Hive still work independently |
 | Federation | No multi-instance coordination; standalone operation only |

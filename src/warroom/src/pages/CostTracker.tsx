@@ -6,6 +6,7 @@ import {
   fetchAvailableProviders, switchProvider, overrideLane, resetLanes,
   fetchProviderKeys, rotateProviderKey,
   initiateOAuth, fetchOAuthStatus, revokeOAuth,
+  initiateCodexOAuth, fetchCodexOAuthStatus, revokeCodexOAuth,
 } from '@/api'
 import type { DiscoveredModel, AvailableProvider, ProviderKeyInfo, OAuthStatusResponse } from '@/api'
 import { MetricCard } from '@/components'
@@ -48,9 +49,13 @@ export function CostTracker() {
   const [keyLoading, setKeyLoading] = useState(false)
   const [keyError, setKeyError] = useState<string | null>(null)
 
-  // V28: OAuth state
+  // V28: OAuth state (Anthropic)
   const [oauthStatus, setOauthStatus] = useState<OAuthStatusResponse | null>(null)
   const [oauthLoading, setOauthLoading] = useState(false)
+
+  // OpenAI Codex OAuth state
+  const [codexOauthStatus, setCodexOauthStatus] = useState<OAuthStatusResponse | null>(null)
+  const [codexOauthLoading, setCodexOauthLoading] = useState(false)
 
   // Fetch available providers on mount
   useEffect(() => {
@@ -63,6 +68,10 @@ export function CostTracker() {
     // V28: Fetch OAuth status
     fetchOAuthStatus()
       .then(res => setOauthStatus(res))
+      .catch(() => {})
+    // Fetch Codex OAuth status
+    fetchCodexOAuthStatus()
+      .then(res => setCodexOauthStatus(res))
       .catch(() => {})
   }, [])
 
@@ -209,6 +218,50 @@ export function CostTracker() {
       fetchProviderKeys().then(r => setProviderKeys(r.keys ?? [])).catch(() => {})
     } catch {
       showStatus('Failed to revoke OAuth')
+    }
+  }
+
+  // OpenAI Codex OAuth handlers
+  const handleCodexOAuthSetup = async () => {
+    setCodexOauthLoading(true)
+    try {
+      const res = await initiateCodexOAuth()
+      if (res.status === 'ok' && res.auth_url) {
+        window.open(res.auth_url, '_blank', 'noopener,noreferrer')
+        showStatus('Opened ChatGPT authorization in new tab…')
+        // Poll for completion
+        const pollId = setInterval(async () => {
+          try {
+            const status = await fetchCodexOAuthStatus()
+            setCodexOauthStatus(status)
+            if (status.configured) {
+              clearInterval(pollId)
+              showStatus('Codex OAuth authorized successfully!')
+              fetchProviderKeys().then(r => setProviderKeys(r.keys ?? [])).catch(() => {})
+              refreshProviders()
+              await refetchStack()
+            }
+          } catch { /* ignore */ }
+        }, 3000)
+        setTimeout(() => clearInterval(pollId), 300000)
+      } else {
+        showStatus(res.message || 'Failed to initiate Codex OAuth')
+      }
+    } catch {
+      showStatus('Codex OAuth initiation failed')
+    } finally {
+      setCodexOauthLoading(false)
+    }
+  }
+
+  const handleCodexOAuthRevoke = async () => {
+    try {
+      await revokeCodexOAuth()
+      setCodexOauthStatus({ configured: false, status: 'not_configured' })
+      showStatus('Codex OAuth tokens revoked')
+      fetchProviderKeys().then(r => setProviderKeys(r.keys ?? [])).catch(() => {})
+    } catch {
+      showStatus('Failed to revoke Codex OAuth')
     }
   }
 
@@ -421,7 +474,7 @@ export function CostTracker() {
           {providerKeys.length === 0 && (
             <p className="text-sm text-text-muted py-4 text-center">Loading provider keys...</p>
           )}
-          {providerKeys.map(k => (
+          {providerKeys.filter(k => !(k as any).oauth_only).map(k => (
             <div key={k.provider} className="flex items-center gap-3 p-3 bg-surface-card-elevated rounded-md">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
@@ -559,6 +612,76 @@ export function CostTracker() {
                            disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
               >
                 {oauthLoading ? 'Opening…' : 'Setup OAuth'}
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* ======= OpenAI Codex OAuth Section ======= */}
+      <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
+        <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+          OpenAI Codex OAuth
+        </h3>
+        <p className="text-xs text-text-muted mb-3">
+          Connect via your ChatGPT Plus/Pro subscription. Uses flat-rate billing — no per-token API costs.
+        </p>
+        <div className="flex items-center gap-3 p-3 bg-surface-card-elevated rounded-md">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-text-primary">OpenAI Codex</span>
+              {codexOauthStatus?.configured ? (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                  codexOauthStatus.status === 'active'
+                    ? 'bg-state-healthy/15 text-state-healthy'
+                    : codexOauthStatus.status === 'expiring'
+                    ? 'bg-yellow-500/15 text-yellow-400'
+                    : 'bg-state-error/15 text-state-error'
+                }`}>
+                  {codexOauthStatus.status === 'active' ? 'CONNECTED' :
+                   codexOauthStatus.status === 'expiring' ? 'EXPIRING' : 'EXPIRED'}
+                </span>
+              ) : (
+                <span className="text-[10px] px-1.5 py-0.5 bg-text-muted/15 text-text-muted rounded font-mono">
+                  NOT CONFIGURED
+                </span>
+              )}
+            </div>
+            {codexOauthStatus?.configured && codexOauthStatus.expires_in_seconds != null && (
+              <span className="text-xs text-text-muted mt-1 block">
+                Expires in {Math.round(codexOauthStatus.expires_in_seconds / 60)} min
+                {codexOauthStatus.status === 'active' && ' (auto-refresh enabled)'}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {codexOauthStatus?.configured ? (
+              <>
+                <button
+                  onClick={handleCodexOAuthSetup}
+                  disabled={codexOauthLoading}
+                  className="px-3 py-1.5 text-xs border border-border-default text-text-secondary rounded
+                             hover:bg-surface-card hover:text-text-primary transition-colors whitespace-nowrap"
+                >
+                  Re-authorize
+                </button>
+                <button
+                  onClick={handleCodexOAuthRevoke}
+                  className="px-3 py-1.5 text-xs border border-state-error/30 text-state-error rounded
+                             hover:bg-state-error/10 transition-colors whitespace-nowrap"
+                >
+                  Revoke
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={handleCodexOAuthSetup}
+                disabled={codexOauthLoading}
+                className="px-3 py-1.5 text-xs bg-accent-primary/15 text-accent-primary rounded
+                           hover:bg-accent-primary/25 transition-colors
+                           disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+              >
+                {codexOauthLoading ? 'Opening…' : 'Setup OAuth'}
               </button>
             )}
           </div>

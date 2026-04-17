@@ -41,6 +41,9 @@ class HiveReceiptManager:
         goal: str,
         quest_id: str,
         context: Optional[Dict[str, Any]] = None,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        operator_name: Optional[str] = None,
     ) -> str:
         """Record that a new task was received. Returns receipt ID."""
         receipt = emit_hive_receipt(
@@ -48,7 +51,10 @@ class HiveReceiptManager:
             action_name="task_received",
             inputs={"goal": goal, "context": context or {}},
             quest_id=quest_id,
+            metadata={"operator_name": operator_name} if operator_name else None,
             data_dir=self._data_dir,
+            operator_id=operator_id,
+            session_id=session_id,
         )
         return receipt.id
 
@@ -56,6 +62,9 @@ class HiveReceiptManager:
         self,
         decomposed: DecomposedTask,
         parent_receipt_id: Optional[str] = None,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        operator_name: Optional[str] = None,
     ) -> str:
         """Record task decomposition result."""
         receipt = emit_hive_receipt(
@@ -68,8 +77,13 @@ class HiveReceiptManager:
             },
             parent_id=parent_receipt_id,
             quest_id=decomposed.quest_id,
-            metadata={"subtask_ids": [s.task_id for s in decomposed.subtasks]},
+            metadata={
+                "subtask_ids": [s.task_id for s in decomposed.subtasks],
+                **({"operator_name": operator_name} if operator_name else {}),
+            },
             data_dir=self._data_dir,
+            operator_id=operator_id,
+            session_id=session_id,
         )
         return receipt.id
 
@@ -78,6 +92,9 @@ class HiveReceiptManager:
         quest_id: str,
         results: List[TaskResult],
         parent_receipt_id: Optional[str] = None,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        operator_name: Optional[str] = None,
     ) -> str:
         """Record task completion with aggregated results."""
         success_count = sum(1 for r in results if r.success)
@@ -91,7 +108,10 @@ class HiveReceiptManager:
             },
             parent_id=parent_receipt_id,
             quest_id=quest_id,
+            metadata={"operator_name": operator_name} if operator_name else None,
             data_dir=self._data_dir,
+            operator_id=operator_id,
+            session_id=session_id,
         )
         return receipt.id
 
@@ -100,6 +120,9 @@ class HiveReceiptManager:
         quest_id: str,
         error: str,
         parent_receipt_id: Optional[str] = None,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        operator_name: Optional[str] = None,
     ) -> str:
         """Record task failure."""
         receipt = emit_hive_receipt(
@@ -108,7 +131,10 @@ class HiveReceiptManager:
             inputs={"error": error},
             parent_id=parent_receipt_id,
             quest_id=quest_id,
+            metadata={"operator_name": operator_name} if operator_name else None,
             data_dir=self._data_dir,
+            operator_id=operator_id,
+            session_id=session_id,
         )
         return receipt.id
 
@@ -131,8 +157,13 @@ class HiveReceiptManager:
             },
             parent_id=parent_receipt_id,
             quest_id=record.quest_id,
-            metadata={"hive_agent_id": record.agent_id},
+            metadata={
+                "hive_agent_id": record.agent_id,
+                **({"operator_name": record.operator_name} if record.operator_name else {}),
+            },
             data_dir=self._data_dir,
+            operator_id=record.operator_id,
+            session_id=record.session_id,
         )
         return receipt.id
 
@@ -143,6 +174,9 @@ class HiveReceiptManager:
         to_state: AgentState,
         quest_id: Optional[str] = None,
         parent_receipt_id: Optional[str] = None,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        operator_name: Optional[str] = None,
     ) -> str:
         """Record agent state transition."""
         receipt = emit_hive_receipt(
@@ -155,8 +189,13 @@ class HiveReceiptManager:
             },
             parent_id=parent_receipt_id,
             quest_id=quest_id,
-            metadata={"hive_agent_id": agent_id},
+            metadata={
+                "hive_agent_id": agent_id,
+                **({"operator_name": operator_name} if operator_name else {}),
+            },
             data_dir=self._data_dir,
+            operator_id=operator_id,
+            session_id=session_id,
         )
         return receipt.id
 
@@ -168,6 +207,9 @@ class HiveReceiptManager:
         action_result: Optional[Dict[str, Any]] = None,
         quest_id: Optional[str] = None,
         parent_receipt_id: Optional[str] = None,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        operator_name: Optional[str] = None,
     ) -> str:
         """Record a single agent action (UAB call, LLM call, etc.)."""
         receipt = emit_hive_receipt(
@@ -181,8 +223,13 @@ class HiveReceiptManager:
             },
             parent_id=parent_receipt_id,
             quest_id=quest_id,
-            metadata={"hive_agent_id": agent_id},
+            metadata={
+                "hive_agent_id": agent_id,
+                **({"operator_name": operator_name} if operator_name else {}),
+            },
             data_dir=self._data_dir,
+            operator_id=operator_id,
+            session_id=session_id,
         )
         return receipt.id
 
@@ -192,6 +239,9 @@ class HiveReceiptManager:
         reason: str,
         quest_id: Optional[str] = None,
         parent_receipt_id: Optional[str] = None,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        operator_name: Optional[str] = None,
     ) -> str:
         """Record agent pause."""
         receipt = emit_hive_receipt(
@@ -200,8 +250,13 @@ class HiveReceiptManager:
             inputs={"agent_id": agent_id, "reason": reason},
             parent_id=parent_receipt_id,
             quest_id=quest_id,
-            metadata={"hive_agent_id": agent_id},
+            metadata={
+                "hive_agent_id": agent_id,
+                **({"operator_name": operator_name} if operator_name else {}),
+            },
             data_dir=self._data_dir,
+            operator_id=operator_id,
+            session_id=session_id,
         )
         return receipt.id
 
@@ -210,6 +265,9 @@ class HiveReceiptManager:
         agent_id: str,
         quest_id: Optional[str] = None,
         parent_receipt_id: Optional[str] = None,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        operator_name: Optional[str] = None,
     ) -> str:
         """Record agent resume."""
         receipt = emit_hive_receipt(
@@ -218,8 +276,13 @@ class HiveReceiptManager:
             inputs={"agent_id": agent_id},
             parent_id=parent_receipt_id,
             quest_id=quest_id,
-            metadata={"hive_agent_id": agent_id},
+            metadata={
+                "hive_agent_id": agent_id,
+                **({"operator_name": operator_name} if operator_name else {}),
+            },
             data_dir=self._data_dir,
+            operator_id=operator_id,
+            session_id=session_id,
         )
         return receipt.id
 
@@ -230,6 +293,9 @@ class HiveReceiptManager:
         message: Optional[str] = None,
         quest_id: Optional[str] = None,
         parent_receipt_id: Optional[str] = None,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        operator_name: Optional[str] = None,
     ) -> str:
         """Record agent collapse."""
         receipt = emit_hive_receipt(
@@ -242,8 +308,13 @@ class HiveReceiptManager:
             },
             parent_id=parent_receipt_id,
             quest_id=quest_id,
-            metadata={"hive_agent_id": agent_id},
+            metadata={
+                "hive_agent_id": agent_id,
+                **({"operator_name": operator_name} if operator_name else {}),
+            },
             data_dir=self._data_dir,
+            operator_id=operator_id,
+            session_id=session_id,
         )
         return receipt.id
 
@@ -309,6 +380,9 @@ class HiveReceiptManager:
         tier: Optional[str] = None,
         quest_id: Optional[str] = None,
         parent_receipt_id: Optional[str] = None,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        operator_name: Optional[str] = None,
     ) -> str:
         """Record a governance check result."""
         receipt = emit_hive_receipt(
@@ -322,8 +396,13 @@ class HiveReceiptManager:
             },
             parent_id=parent_receipt_id,
             quest_id=quest_id,
-            metadata={"hive_agent_id": agent_id},
+            metadata={
+                "hive_agent_id": agent_id,
+                **({"operator_name": operator_name} if operator_name else {}),
+            },
             data_dir=self._data_dir,
+            operator_id=operator_id,
+            session_id=session_id,
         )
         return receipt.id
 

@@ -232,6 +232,10 @@ class ProviderRouter:
                 alternatives_tried.append(f"{provider_id}:offline")
                 continue
 
+            if not self._health_supports_capability(health, capability):
+                alternatives_tried.append(f"{provider_id}:capability_unavailable")
+                continue
+
             if self.config.require_healthy and health.state != ProviderState.HEALTHY:
                 alternatives_tried.append(f"{provider_id}:degraded")
                 continue
@@ -258,7 +262,7 @@ class ProviderRouter:
 
             if provider and provider.supports(capability):
                 health = self.health_monitor.probe(fallback_id)
-                if health.state != ProviderState.OFFLINE:
+                if health.state != ProviderState.OFFLINE and self._health_supports_capability(health, capability):
                     logger.warning(
                         "Using fallback provider %s for %s",
                         fallback_id, capability.value,
@@ -286,6 +290,17 @@ class ProviderRouter:
             reason=f"No provider available for {capability.value}",
             alternatives_tried=alternatives_tried,
         )
+
+    def _health_supports_capability(
+        self,
+        health: ProviderHealth,
+        capability: Capability,
+    ) -> bool:
+        """Check capability-level availability from provider health metadata."""
+        available = health.metadata.get("available_capabilities")
+        if not available:
+            return True
+        return capability.value in available
 
     def select_for_intent(self, intent: ToolIntent) -> RouteDecision:
         """

@@ -22,12 +22,14 @@ export function ChatInterface() {
   const [files, setFiles] = useState<File[]>([])
   const [sending, setSending] = useState(false)
   const [historyLoaded, setHistoryLoaded] = useState(false)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { toolFlowState, pendingActionCards, resolveCard } = useLiveEvents()
 
   const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const container = messagesContainerRef.current
+    if (!container) return
+    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
   }, [])
 
   useEffect(scrollToBottom, [messages, scrollToBottom])
@@ -130,15 +132,18 @@ export function ChatInterface() {
   const visibleActionCards = pendingActionCards
 
   return (
-    <section className="bg-surface-card border border-border-default rounded-lg flex flex-col min-h-[400px] max-h-[600px]">
-      <div className="px-4 py-3 border-b border-border-default">
+    <section className="bg-surface-card border border-border-default rounded-lg flex flex-col h-[clamp(24rem,65vh,37.5rem)]">
+      <div className="px-4 py-3 border-b border-border-default shrink-0">
         <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">
           Command Interface
         </h3>
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-1">
+      <div
+        ref={messagesContainerRef}
+        className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 space-y-1"
+      >
         {messages.length === 0 && !sending && (
           <div className="flex items-center justify-center h-full text-text-muted text-sm">
             Issue a command to Lancelot
@@ -203,13 +208,11 @@ export function ChatInterface() {
             onAction={handleActionCardAction}
           />
         ))}
-
-        <div ref={messagesEndRef} />
       </div>
 
       {/* File chips */}
       {files.length > 0 && (
-        <div className="px-4 py-2 border-t border-border-default flex flex-wrap gap-2">
+        <div className="px-4 py-2 border-t border-border-default flex flex-wrap gap-2 shrink-0">
           {files.map((f, i) => (
             <span
               key={i}
@@ -228,7 +231,7 @@ export function ChatInterface() {
       )}
 
       {/* Input */}
-      <div className="p-3 border-t border-border-default flex gap-2">
+      <div className="p-3 border-t border-border-default flex gap-2 shrink-0">
         <input
           ref={fileInputRef}
           type="file"

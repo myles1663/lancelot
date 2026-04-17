@@ -15,12 +15,14 @@ Provides:
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -72,6 +74,25 @@ class AuditEntry:
             "related_entry_ids": self.related_entry_ids,
         }
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AuditEntry":
+        event_type = data.get("event_type", AuditEventType.HANDOFF_INITIATED.value)
+        try:
+            evt = AuditEventType(event_type)
+        except ValueError:
+            evt = AuditEventType.HANDOFF_INITIATED
+        return cls(
+            entry_id=data.get("entry_id", str(uuid.uuid4())),
+            event_type=evt,
+            instance_id=data.get("instance_id", ""),
+            federation_quest_id=data.get("federation_quest_id", ""),
+            timestamp=data.get("timestamp", datetime.now(timezone.utc).isoformat()),
+            soul_version_hash=data.get("soul_version_hash", ""),
+            risk_tier=data.get("risk_tier", ""),
+            details=data.get("details", {}) or {},
+            related_entry_ids=list(data.get("related_entry_ids", []) or []),
+        )
+
 
 @dataclass
 class ForensicTimeline:
@@ -105,10 +126,12 @@ class FederationAuditEngine:
     for compliance review and forensic analysis.
     """
 
-    def __init__(self, max_entries: int = 10000):
+    def __init__(self, max_entries: int = 10000, persistence_path: Optional[str] = None):
         self._entries: Dict[str, AuditEntry] = {}
         self._max_entries = max_entries
+        self._persistence_path = persistence_path
         self._lock = threading.Lock()
+        self._load_from_disk()
 
     def record(
         self,
@@ -158,6 +181,7 @@ class FederationAuditEngine:
                     key=lambda k: self._entries[k].timestamp,
                 )
                 del self._entries[oldest_id]
+            self._persist_to_disk_locked()
 
         return entry
 
@@ -273,3 +297,41 @@ class FederationAuditEngine:
             "unique_instances": len(instances),
             "event_type_counts": type_counts,
         }
+
+    def _persist_to_disk_locked(self) -> None:
+        """Persist audit entries to disk. Caller must hold _lock."""
+        if not self._persistence_path:
+            return
+        try:
+            path = Path(self._persistence_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "entries": [entry.to_dict() for entry in self._entries.values()],
+            }
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+        except Exception as exc:
+            logger.warning("Failed to persist federation audit log: %s", exc)
+
+    def _load_from_disk(self) -> None:
+        """Load persisted audit entries from disk if present."""
+        if not self._persistence_path:
+            return
+        path = Path(self._persistence_path)
+        if not path.exists():
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            entries = payload.get("entries", [])
+            self._entries = {}
+            for item in entries:
+                entry = AuditEntry.from_dict(item)
+                self._entries[entry.entry_id] = entry
+            if len(self._entries) > self._max_entries:
+                kept = sorted(self._entries.values(), key=lambda e: e.timestamp)[-self._max_entries :]
+                self._entries = {entry.entry_id: entry for entry in kept}
+            logger.info("Loaded federation audit log: %d entries", len(self._entries))
+        except Exception as exc:
+            logger.warning("Failed to load federation audit log: %s", exc)

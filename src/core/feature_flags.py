@@ -65,10 +65,19 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import logging
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Canonicalize the module under both import paths. The codebase still contains
+# a mix of `import feature_flags` and `import src.core.feature_flags`; without
+# this aliasing, Python can materialize two independent module objects and flag
+# toggles will mutate one while request-time gates read the other.
+_self_module = sys.modules[__name__]
+sys.modules.setdefault("feature_flags", _self_module)
+sys.modules.setdefault("src.core.feature_flags", _self_module)
 
 # Persistent flag state file — survives container restarts via Docker volume.
 # Uses .flag_state.json (dotfile) to avoid being picked up by the librarian.
@@ -217,8 +226,18 @@ FEATURE_A2A: bool = _env_bool("FEATURE_A2A", default=False)  # Master switch for
 FEATURE_INCIDENT_RESPONSE: bool = _env_bool("FEATURE_INCIDENT_RESPONSE", default=False)  # Master switch for incident response playbook engine
 
 
-# All flags are now hot-toggleable via SubsystemManager — no restart required.
-RESTART_REQUIRED_FLAGS = frozenset()
+# Boot-wired subsystems are route-gated when disabled, but enabling them from an
+# off-at-boot state still requires startup wiring that only happens during boot.
+RESTART_REQUIRED_FLAGS = frozenset({
+    "FEATURE_GOOGLE_OAUTH",
+    "FEATURE_TOOL_FLOW_STREAMING",
+    "FEATURE_ACTION_CARDS",
+    "FEATURE_MCP",
+    "FEATURE_OBSERVABILITY",
+    "FEATURE_TIME_TRAVEL",
+    "FEATURE_A2A",
+    "FEATURE_INCIDENT_RESPONSE",
+})
 
 
 def toggle_flag(name: str) -> bool:

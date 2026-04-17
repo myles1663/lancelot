@@ -27,6 +27,8 @@ Public API:
 from __future__ import annotations
 
 import logging
+import json
+import secrets
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -48,6 +50,8 @@ class CallerInfo:
     trust_tier: int = 2
     authenticated: bool = False
     auth_method: str = "none"
+    credential_value: str = ""
+    preregistered: bool = False
 
 
 @dataclass
@@ -61,6 +65,7 @@ class PipelineResult:
     quest_id: Optional[str] = None
     requires_approval: bool = False
     approval_receipt_id: Optional[str] = None
+    resolved_caller: Optional[CallerInfo] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -82,10 +87,23 @@ class InboundPipeline:
         registry: Any,
         receipt_service: Any,
         soul: Any,
+        vault: Any = None,
+        a2a_client: Any = None,
     ):
         self._registry = registry
         self._receipt_service = receipt_service
         self._soul = soul
+        self._vault = vault
+        self._a2a_client = a2a_client
+
+    def _get_soul(self) -> Any:
+        """Resolve the live Soul object."""
+        soul = self._soul
+        if soul is None:
+            return None
+        if hasattr(soul, "inbound_a2a_permissions") or hasattr(soul, "outbound_a2a_permissions"):
+            return soul
+        return soul() if callable(soul) else soul
 
     def evaluate(
         self,
@@ -105,6 +123,7 @@ class InboundPipeline:
         )
 
         # Stage 1: Authentication
+        caller = self.authenticate_caller(caller)
         if not caller.authenticated:
             return self._block(task, caller, "authentication", "AUTHENTICATION_FAILED",
                                "Task submission requires authentication.")
@@ -127,6 +146,15 @@ class InboundPipeline:
         # Stage 4: Soul Evaluation
         soul_result = self._soul_evaluation(caller)
         if not soul_result["allowed"]:
+            if soul_result.get("reason_code") == "LANCELOT_INSTANCE":
+                return self._block(
+                    task,
+                    caller,
+                    "caller_resolution",
+                    "LANCELOT_INSTANCE",
+                    "This agent is a Lancelot instance. Use the Federation "
+                    "Governance API for Lancelot-to-Lancelot communication.",
+                )
             return self._block(task, caller, "soul_evaluation", "SOUL_DENIED",
                                "Task not permitted by agent governance policy.")
 
@@ -138,11 +166,12 @@ class InboundPipeline:
             approval = self._t3_approval_gate(task, caller)
             if approval["requires_wait"]:
                 return PipelineResult(
-                    allowed=True,
-                    risk_tier=risk_tier,
-                    requires_approval=True,
-                    approval_receipt_id=approval.get("receipt_id"),
-                )
+                allowed=True,
+                risk_tier=risk_tier,
+                requires_approval=True,
+                approval_receipt_id=approval.get("receipt_id"),
+                resolved_caller=caller,
+            )
 
         # Stage 7: Governed Execution — create quest
         quest_id = str(uuid.uuid4())
@@ -158,7 +187,43 @@ class InboundPipeline:
             allowed=True,
             risk_tier=risk_tier,
             quest_id=quest_id,
+            resolved_caller=caller,
         )
+
+    def authenticate_caller(self, caller: CallerInfo) -> CallerInfo:
+        """Resolve and authenticate a preregistered inbound caller."""
+        caller.authenticated = False
+        caller.preregistered = False
+
+        if not caller.agent_id or not self._registry:
+            return caller
+
+        agent = self._registry.get(caller.agent_id)
+        if not agent or agent.status != "active":
+            return caller
+
+        caller.display_name = agent.display_name
+        caller.agent_framework = agent.agent_framework
+        caller.trust_tier = agent.inbound_trust_tier
+        caller.agent_card_url = agent.agent_card_url or caller.agent_card_url
+        caller.preregistered = not bool(getattr(agent, "auto_registered", False))
+
+        auth_type = (agent.auth_type or "").strip().lower()
+        if auth_type not in {"bearer_token", "api_key"}:
+            return caller
+
+        expected_secret = self._load_expected_secret(agent.credentials_ref, auth_type)
+        if not expected_secret:
+            return caller
+
+        presented = caller.credential_value or ""
+        if not presented:
+            return caller
+
+        caller.authenticated = secrets.compare_digest(expected_secret, presented)
+        if caller.authenticated:
+            caller.auth_method = auth_type
+        return caller
 
     def complete_task(
         self,
@@ -188,35 +253,9 @@ class InboundPipeline:
             caller.trust_tier = agent.inbound_trust_tier
             caller.display_name = agent.display_name
             caller.agent_framework = agent.agent_framework
+            caller.agent_card_url = agent.agent_card_url or caller.agent_card_url
+            caller.preregistered = not bool(getattr(agent, "auto_registered", False))
             return caller
-
-        # Auto-register if allowed
-        inbound_perms = getattr(self._soul, "inbound_a2a_permissions", None)
-        if inbound_perms and inbound_perms.require_preregistration:
-            # Pre-registration required but caller not found
-            return caller
-
-        # Auto-register at default trust tier
-        default_tier = 2
-        if inbound_perms:
-            tier_str = inbound_perms.default_trust_tier
-            default_tier = int(tier_str[1]) if len(tier_str) == 2 else 2
-
-        self._registry.auto_register(
-            agent_id=caller.agent_id,
-            display_name=caller.display_name or caller.agent_id,
-            framework=caller.agent_framework,
-            card_url=caller.agent_card_url,
-            default_tier=default_tier,
-        )
-        # Emit auto-registration receipt (SYSTEM, no identity required)
-        self._emit_receipt(
-            ActionType.A2A_AGENT_REGISTERED,
-            "a2a_agent_auto_registered",
-            {"agent_id": caller.agent_id, "framework": caller.agent_framework},
-            {"auto_registered": True, "default_tier": default_tier},
-        )
-        caller.trust_tier = default_tier
         return caller
 
     def _skill_security_check(self, task: A2ATask) -> Dict[str, Any]:
@@ -250,7 +289,8 @@ class InboundPipeline:
 
     def _soul_evaluation(self, caller: CallerInfo) -> Dict[str, Any]:
         """Stage 4: Evaluate caller against Soul inbound_a2a_permissions."""
-        inbound_perms = getattr(self._soul, "inbound_a2a_permissions", None)
+        soul = self._get_soul()
+        inbound_perms = getattr(soul, "inbound_a2a_permissions", None)
 
         if inbound_perms is None:
             return {"allowed": False, "reason": "No inbound A2A permissions in Soul"}
@@ -283,6 +323,19 @@ class InboundPipeline:
             agent = self._registry.get(caller.agent_id) if self._registry else None
             if not agent or agent.auto_registered:
                 return {"allowed": False, "reason": "Pre-registration required"}
+
+        if inbound_perms.require_agent_card:
+            agent = self._registry.get(caller.agent_id) if self._registry else None
+            if not agent or not agent.agent_card_url:
+                return {"allowed": False, "reason": "Verified Agent Card required"}
+            if self._a2a_client is None:
+                return {"allowed": False, "reason": "Agent Card verification unavailable"}
+            result = self._a2a_client.assess_agent_card(agent, allow_repin=False)
+            if not result["allowed"]:
+                if "lancelot" in result["reason"].lower():
+                    caller.agent_framework = AgentFramework.LANCELOT.value
+                    return {"allowed": False, "reason": result["reason"], "reason_code": "LANCELOT_INSTANCE"}
+                return {"allowed": False, "reason": result["reason"]}
 
         return {"allowed": True}
 
@@ -335,7 +388,34 @@ class InboundPipeline:
             stage_blocked=stage,
             block_reason=reason_code,
             external_reason=external_reason,
+            resolved_caller=caller,
         )
+
+    def _load_expected_secret(self, credentials_ref: str, auth_type: str) -> str:
+        """Resolve a preregistered peer secret from the vault."""
+        if not credentials_ref or self._vault is None:
+            return ""
+        try:
+            secret = self._vault.retrieve(credentials_ref)
+        except Exception as exc:
+            logger.warning("A2A inbound credential resolution failed for %s: %s", credentials_ref, exc)
+            return ""
+
+        if not secret:
+            return ""
+
+        try:
+            parsed = json.loads(secret)
+        except Exception:
+            parsed = None
+
+        if isinstance(parsed, dict):
+            if auth_type == "bearer_token":
+                return str(parsed.get("token") or parsed.get("bearer_token") or "")
+            if auth_type == "api_key":
+                return str(parsed.get("key") or parsed.get("api_key") or "")
+
+        return str(secret)
 
     def _emit_receipt(
         self,

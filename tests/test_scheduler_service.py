@@ -98,6 +98,43 @@ class TestJobRegistration:
         assert job.timeout_s == 30
         assert job.enabled is True
 
+    def test_ensure_job_specs_inserts_and_updates(self, service):
+        inserted, updated = service.ensure_job_specs([
+            {
+                "id": "memory_working_compaction",
+                "name": "Memory: Working Compaction",
+                "trigger": {"type": "interval", "seconds": 3600},
+                "enabled": True,
+                "requires_ready": True,
+                "timeout_s": 120,
+                "skill": "memory_working_compaction",
+                "description": "Built-in memory job",
+            }
+        ])
+        assert inserted == 1
+        assert updated == 0
+
+        inserted, updated = service.ensure_job_specs([
+            {
+                "id": "memory_working_compaction",
+                "name": "Memory: Working Compaction",
+                "trigger": {"type": "interval", "seconds": 1800},
+                "enabled": False,
+                "requires_ready": True,
+                "timeout_s": 240,
+                "skill": "memory_working_compaction",
+                "description": "Updated built-in memory job",
+            }
+        ])
+        assert inserted == 0
+        assert updated == 1
+
+        job = service.get_job("memory_working_compaction")
+        assert job is not None
+        assert job.trigger_value == "1800"
+        assert job.enabled is False
+        assert job.timeout_s == 240
+
 
 # ===================================================================
 # list_jobs / get_job

@@ -13,30 +13,25 @@ export function AuthGuard() {
   const [authState, setAuthState] = useState<AuthState>('checking')
   const [showExpiryModal, setShowExpiryModal] = useState(false)
   const [remainingSeconds, setRemainingSeconds] = useState(0)
+  const [suppressWarningUntil, setSuppressWarningUntil] = useState(0)
 
   const checkSession = useCallback(async () => {
-    const token = localStorage.getItem('lancelot_api_token')
-    if (!token) {
-      setAuthState('unauthenticated')
-      return
-    }
     try {
       const res = await validateSession()
       if (!res.valid) {
-        localStorage.removeItem('lancelot_api_token')
-        localStorage.removeItem('lancelot_session_expires')
         setAuthState('unauthenticated')
         return
       }
       setRemainingSeconds(res.remaining_seconds)
       setAuthState('authenticated')
-      if (res.remaining_seconds < WARNING_THRESHOLD_S) {
+      // Only show warning if not suppressed (prevents flash after "Stay Signed In")
+      if (res.remaining_seconds < WARNING_THRESHOLD_S && Date.now() > suppressWarningUntil) {
         setShowExpiryModal(true)
       }
     } catch {
       setAuthState('unauthenticated')
     }
-  }, [])
+  }, [suppressWarningUntil])
 
   // Initial check
   useEffect(() => {
@@ -52,6 +47,10 @@ export function AuthGuard() {
 
   const handleStaySignedIn = useCallback(async () => {
     setShowExpiryModal(false)
+    // Suppress the warning for 60s so the modal doesn't flash back
+    // (the validate call refreshes the session, but the next periodic
+    // check might fire before state fully updates)
+    setSuppressWarningUntil(Date.now() + 60_000)
     await checkSession()
   }, [checkSession])
 

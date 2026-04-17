@@ -8,12 +8,17 @@ Search, filter, and retrieve execution receipts.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
+from src.core.api_auth import require_authenticated_request
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/receipts", tags=["receipts"])
+router = APIRouter(
+    prefix="/api/receipts",
+    tags=["receipts"],
+    dependencies=[Depends(require_authenticated_request)],
+)
 
 _receipt_service = None
 

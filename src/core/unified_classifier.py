@@ -137,13 +137,15 @@ class UnifiedClassifier:
     Falls back to the keyword classifier on any failure.
     """
 
-    def __init__(self, provider):
+    def __init__(self, provider, model_router=None, local_model=None):
         """Initialize with a ProviderClient instance.
 
         Args:
             provider: A ProviderClient (Gemini, Anthropic, OpenAI, or xAI).
         """
         self._provider = provider
+        self._model_router = model_router
+        self._local_model = local_model
         self._provider_type = getattr(provider, "provider_name", "gemini")
         # Use env override if set, otherwise pick the right model for the provider
         self._model = os.getenv(
@@ -182,6 +184,9 @@ class UnifiedClassifier:
 
         try:
             context_msg = self._build_context(message, history)
+            local_result = self._classify_locally(context_msg, message)
+            if local_result is not None:
+                return local_result
             user_msg = self._provider.build_user_message(context_msg)
 
             # Gemini: use structured output (response_schema).
@@ -218,6 +223,52 @@ class UnifiedClassifier:
         except Exception as e:
             logger.warning("V23 unified classifier failed: %s — falling back to keywords", e)
             return self._keyword_fallback(message)
+
+    def _classify_locally(
+        self,
+        context_msg: str,
+        message: str,
+    ) -> Optional[ClassificationResult]:
+        """Use the local utility lane for obvious low-risk classifications."""
+        label = ""
+
+        try:
+            if self._model_router is not None:
+                routed = self._model_router.route("classify_intent", context_msg)
+                if getattr(routed, "executed", False):
+                    label = (getattr(routed, "output", "") or "").strip().lower()
+            elif self._local_model is not None and self._local_model.is_healthy():
+                label = (self._local_model.classify_intent(context_msg) or "").strip().lower()
+        except Exception as exc:
+            logger.debug("Unified classifier local path unavailable: %s", exc)
+            return None
+
+        if label in {"greeting", "feedback"}:
+            return ClassificationResult(
+                intent="conversational",
+                confidence=0.9,
+                is_continuation=False,
+                requires_tools=False,
+                reasoning=f"Local utility classifier mapped '{label}' to conversational",
+            )
+
+        if label in {"question", "information"}:
+            return ClassificationResult(
+                intent="question",
+                confidence=0.85,
+                is_continuation=False,
+                requires_tools=False,
+                reasoning=f"Local utility classifier mapped '{label}' to question",
+            )
+
+        if label in {"command", "unclear"}:
+            fallback = self._keyword_fallback(message)
+            fallback.reasoning = (
+                f"Local utility classifier returned '{label}', escalated to keyword fallback"
+            )
+            return fallback
+
+        return None
 
     def _build_context(self, message: str, history: Optional[List[dict]]) -> str:
         """Build the classifier input with optional conversation context.

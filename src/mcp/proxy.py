@@ -30,10 +30,10 @@ Constructor requirements:
     - MCPPermissionEvaluator (Soul gate)
     - MCPServerRegistry (server config + credential resolution)
     - MCPReceiptManager (MANDATORY — proxy refuses to construct without it)
-    - MCPArgumentScreener (optional — if None, Gate 5 uses basic InputSanitizer only)
-    - MCPResponseGuard (optional — if None, Gate 7b is skipped)
-    - NetworkInterceptor (optional — if None, Gate 4 is skipped)
-    - InputSanitizer (optional — if None and no screener, Gate 5 is skipped)
+    - MCPArgumentScreener (required)
+    - MCPResponseGuard (required)
+    - NetworkInterceptor (required)
+    - InputSanitizer (optional supplemental screening)
 """
 
 from __future__ import annotations
@@ -85,14 +85,11 @@ class GovernedMCPProxy:
                             construct without one.
             argument_screener: Deep argument screening (SQL, path traversal,
                               command injection, prompt injection, SSRF).
-                              If None, falls back to basic InputSanitizer.
             response_guard: Response scrubbing (credential leak prevention,
                            prompt injection removal, size limits).
-                           If None, Gate 7b is skipped.
             network_interceptor: NetworkInterceptor for domain allowlist
-                                checks. If None, Gate 4 is skipped.
-            input_sanitizer: InputSanitizer for basic argument screening.
-                            Used as fallback if no argument_screener.
+                                checks.
+            input_sanitizer: Supplemental InputSanitizer for string-level checks.
             default_timeout_s: Default request timeout for MCP calls.
         """
         if receipt_manager is None:
@@ -101,6 +98,12 @@ class GovernedMCPProxy:
                 "MCP cannot operate without an audit trail. "
                 "Build receipts.py before proxy.py."
             )
+        if argument_screener is None:
+            raise ValueError("GovernedMCPProxy requires an MCPArgumentScreener")
+        if response_guard is None:
+            raise ValueError("GovernedMCPProxy requires an MCPResponseGuard")
+        if network_interceptor is None:
+            raise ValueError("GovernedMCPProxy requires a network_interceptor")
         self._permissions = permission_evaluator
         self._registry = registry
         self._receipts = receipt_manager
@@ -117,6 +120,8 @@ class GovernedMCPProxy:
         arguments: Dict[str, Any],
         quest_id: str = "",
         parent_receipt_id: str = "",
+        operator_id: str = "",
+        session_id: str = "",
     ) -> MCPCallResult:
         """Invoke an MCP tool through the full governance pipeline.
 
@@ -148,6 +153,8 @@ class GovernedMCPProxy:
                 risk_tier=perm_result.risk_tier.value,
                 soul_version=soul_version,
                 quest_id=quest_id,
+                operator_id=operator_id,
+                session_id=session_id,
             )
             return MCPCallResult(
                 success=False,
@@ -173,6 +180,8 @@ class GovernedMCPProxy:
                 risk_tier=risk_tier,
                 soul_version=soul_version,
                 quest_id=quest_id,
+                operator_id=operator_id,
+                session_id=session_id,
             )
             return MCPCallResult(
                 success=False,
@@ -192,6 +201,8 @@ class GovernedMCPProxy:
                 risk_tier=risk_tier,
                 soul_version=soul_version,
                 quest_id=quest_id,
+                operator_id=operator_id,
+                session_id=session_id,
             )
             return MCPCallResult(
                 success=False,
@@ -212,6 +223,8 @@ class GovernedMCPProxy:
                 risk_tier=risk_tier,
                 soul_version=soul_version,
                 quest_id=quest_id,
+                operator_id=operator_id,
+                session_id=session_id,
             )
             return MCPCallResult(
                 success=False,
@@ -236,6 +249,8 @@ class GovernedMCPProxy:
                     risk_tier=risk_tier,
                     soul_version=soul_version,
                     quest_id=quest_id,
+                    operator_id=operator_id,
+                    session_id=session_id,
                 )
                 return MCPCallResult(
                     success=False,
@@ -272,6 +287,8 @@ class GovernedMCPProxy:
                     risk_tier=risk_tier,
                     soul_version=soul_version,
                     quest_id=quest_id,
+                    operator_id=operator_id,
+                    session_id=session_id,
                 )
                 return MCPCallResult(
                     success=False,
@@ -322,6 +339,8 @@ class GovernedMCPProxy:
                     soul_version=soul_version,
                     quest_id=quest_id,
                     parent_id=parent_receipt_id,
+                    operator_id=operator_id,
+                    session_id=session_id,
                 )
             except Exception as e:
                 # FOURTH FAIL-CLOSED GATE: Receipt write failed.
@@ -336,6 +355,8 @@ class GovernedMCPProxy:
                     tool_name=tool_name,
                     original_error=str(e),
                     soul_version=soul_version,
+                    operator_id=operator_id,
+                    session_id=session_id,
                 )
                 return MCPCallResult(
                     success=False,
@@ -355,6 +376,8 @@ class GovernedMCPProxy:
                 risk_tier=risk_tier,
                 soul_version=soul_version,
                 quest_id=quest_id,
+                operator_id=operator_id,
+                session_id=session_id,
             )
 
         return call_result

@@ -1,0 +1,102 @@
+{
+  "skill_name": "outlook_365_flow",
+  "app_name": "Outlook",
+  "executable": "olk.exe",
+  "app_framework": "WebView2 (Edge-based)",
+  "target_flow": "Read, compose, reply, search, navigate Outlook O365 desktop app",
+  "architecture_note": "Outlook O365 (olk.exe) is a WebView2 wrapper. The parent process (olk.exe) exposes only 8 elements — the outer chrome. The actual UI (inbox, compose, ribbon, folders) is rendered by a CHILD msedgewebview2.exe process. You MUST use FindAll(TrueCondition) or RawViewWalker from the parent window to cross the process boundary and see all 395+ inner elements.",
+  "pid_resolution": {
+    "parent_process": "olk.exe",
+    "child_renderer": "msedgewebview2.exe",
+    "strategy": "Connect to olk.exe PID. Use deep_query or spatial_map which walk from the parent window — they automatically cross into the WebView2 child process. Do NOT connect to msedgewebview2.exe directly — there are 50+ of those processes and most are not the Outlook renderer.",
+    "shallow_enumerate_warning": "The standard UI tree (desktop_ui_tree, desktop_find_elements) will only return 8 elements. You MUST use desktop_spatial_map or desktop_deep_query to see the full UI."
+  },
+  "navigation_plan": [
+    {"step": 1, "action": "connect", "params": {"target": "outlook"}, "note": "Connects to olk.exe parent process"},
+    {"step": 2, "action": "spatial_map", "params": {"pid": "{pid}"}, "note": "Returns 395+ elements including all inner WebView2 content"},
+    {"step": 3, "action": "identify_sections", "note": "Key UI sections: left-rail-appbar (Mail/Calendar/People), Navigation pane (folders), Ribbon (Home/View/Help), Message list, Reading pane, Copilot panel"}
+  ],
+  "key_elements": {
+    "compose": {
+      "button": "New mail",
+      "type": "Button",
+      "pattern": "InvokePattern",
+      "note": "Opens compose window. After clicking, spatial_map again to see the To/CC/Subject/Body fields."
+    },
+    "reply": {
+      "button": "Reply",
+      "type": "Button",
+      "pattern": "InvokePattern"
+    },
+    "reply_all": {
+      "button": "Reply all",
+      "type": "Button",
+      "pattern": "InvokePattern"
+    },
+    "forward": {
+      "button": "Forward",
+      "type": "Button",
+      "pattern": "InvokePattern"
+    },
+    "delete": {
+      "button": "Delete",
+      "type": "Button",
+      "pattern": "InvokePattern"
+    },
+    "search": {
+      "element": "Search for email, meetings, files and more.",
+      "type": "ComboBox",
+      "note": "Click to focus, then type search query"
+    },
+    "folders": {
+      "type": "TreeItem",
+      "pattern": "SelectionItemPattern",
+      "examples": ["Inbox selected 43746 unread", "Drafts 381 items", "Sent Items", "Deleted Items"],
+      "note": "Each folder is a TreeItem. Invoke to navigate to it."
+    },
+    "email_list": {
+      "type": "ListItem",
+      "note": "Each email is a ListItem with sender, subject, time. Has Mark as read, Select checkbox, Expand conversation buttons."
+    },
+    "tabs": {
+      "focused_other": ["Focused", "Other"],
+      "type": "TabItem",
+      "pattern": "SelectionItemPattern",
+      "note": "Switch between Focused and Other inbox tabs"
+    },
+    "app_switcher": {
+      "buttons": ["Mail", "Calendar", "Copilot", "People", "To Do", "Newsletters", "Org Explorer", "OneDrive"],
+      "type": "Button",
+      "pattern": "InvokePattern",
+      "note": "Left rail app buttons to switch between Outlook modules"
+    },
+    "copilot": {
+      "input": "Message Copilot",
+      "type": "Edit",
+      "note": "Copilot chat panel — can compose emails, summarize, etc."
+    }
+  },
+  "read_email": {
+    "method": "Click a ListItem in the message list. The reading pane updates. Use spatial_map to read the email content from the reading pane elements.",
+    "copy_method": "Select text in reading pane via Ctrl+A, Ctrl+C"
+  },
+  "compose_email": {
+    "steps": [
+      "Invoke 'New mail' button",
+      "spatial_map to find To, CC, Subject, Body fields",
+      "Click To field, type recipient",
+      "Click Subject field, type subject",
+      "Click Body area, type message",
+      "Invoke 'Send' button"
+    ]
+  },
+  "known_issues": [
+    "Parent olk.exe only exposes 8 elements — MUST use deep_query/spatial_map for full UI",
+    "50+ msedgewebview2 processes — do NOT try to connect to them individually",
+    "Calendar view is a separate module — invoke Calendar button in left rail to switch",
+    "Copilot panel may or may not be open — check spatial_map for 'Message Copilot' edit field"
+  ],
+  "risk_tier": "T1",
+  "version": "1.0",
+  "last_verified": "2026-03-25"
+}

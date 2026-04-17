@@ -40,7 +40,7 @@ from typing import List, Tuple
 # ---------------------------------------------------------------------------
 
 DEFAULT_PORT = 9111
-DEFAULT_TOKEN = "lancelot-host-agent"
+INSECURE_DEFAULT_TOKEN = "lancelot-host-agent"
 MAX_STDOUT_CHARS = 100_000
 MAX_STDERR_CHARS = 50_000
 DEFAULT_TIMEOUT_S = 300
@@ -89,6 +89,11 @@ def bound_output(output: str, max_chars: int) -> Tuple[str, bool]:
     if len(output) <= max_chars:
         return output, False
     return output[:max_chars] + "\n... (truncated)", True
+
+
+def is_token_configured(token: str | None) -> bool:
+    """Return True only for explicit, non-legacy host-agent tokens."""
+    return bool(token and token.strip() and token != INSECURE_DEFAULT_TOKEN)
 
 
 def execute_command(
@@ -182,7 +187,7 @@ class HostAgentHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the host agent."""
 
     server_version = "LancelotHostAgent/1.0"
-    auth_token = DEFAULT_TOKEN
+    auth_token = ""
 
     def log_message(self, format, *args):
         """Override to use our logger."""
@@ -319,8 +324,12 @@ class HostAgentHandler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 
-def run_server(port: int = DEFAULT_PORT, token: str = DEFAULT_TOKEN):
+def run_server(port: int = DEFAULT_PORT, token: str = ""):
     """Start the host agent HTTP server."""
+    if not is_token_configured(token):
+        raise ValueError(
+            "HOST_AGENT_TOKEN must be explicitly configured and may not use the legacy default token."
+        )
     HostAgentHandler.auth_token = token
 
     server = HTTPServer(("127.0.0.1", port), HostAgentHandler)
@@ -371,8 +380,8 @@ if __name__ == "__main__":
         help=f"Port to listen on (default: {DEFAULT_PORT})",
     )
     parser.add_argument(
-        "--token", type=str, default=os.environ.get("HOST_AGENT_TOKEN", DEFAULT_TOKEN),
-        help="Authentication token (default: from HOST_AGENT_TOKEN env var)",
+        "--token", type=str, default=os.environ.get("HOST_AGENT_TOKEN", ""),
+        help="Authentication token (required: set HOST_AGENT_TOKEN or pass --token)",
     )
     args = parser.parse_args()
 

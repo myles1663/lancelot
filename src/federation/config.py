@@ -75,9 +75,20 @@ class FederationConfig(BaseModel):
 
     # Cost reporting
     cost_report_interval_s: float = Field(default=30.0, ge=5.0, le=300.0)
+    daily_budget_ceiling_usd: float = Field(default=10.0, ge=0.01)
 
     # This instance's externally-reachable address (for peer registration)
     self_address: str = Field(default="")
+
+
+def get_federation_config_path(config_dir: Optional[str] = None) -> Path:
+    """Return the canonical federation config path."""
+    if config_dir is None:
+        config_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "config",
+        )
+    return Path(config_dir) / "federation.yaml"
 
 
 def load_federation_config(
@@ -87,13 +98,7 @@ def load_federation_config(
 
     Falls back to defaults if the config file doesn't exist.
     """
-    if config_dir is None:
-        config_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-            "config",
-        )
-
-    config_path = Path(config_dir) / "federation.yaml"
+    config_path = get_federation_config_path(config_dir)
 
     if not config_path.exists():
         logger.info("No federation.yaml found at %s, using defaults", config_path)
@@ -114,3 +119,21 @@ def load_federation_config(
     except Exception as exc:
         logger.warning("Failed to load federation.yaml: %s — using defaults", exc)
         return FederationConfig()
+
+
+def save_federation_config(
+    config: FederationConfig,
+    config_dir: Optional[str] = None,
+) -> Path:
+    """Persist federation configuration to YAML."""
+    config_path = get_federation_config_path(config_dir)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(
+            config.model_dump(mode="python"),
+            f,
+            sort_keys=False,
+            default_flow_style=False,
+        )
+    logger.info("Federation config saved to %s", config_path)
+    return config_path

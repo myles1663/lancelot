@@ -1,6 +1,6 @@
 
 # Lancelot vNext Upgrade — Implementation Blueprint & Prompt Pack
-**Mandatory Local Utility Model · Single Flagship Choice · Unbrickable Onboarding · War Room Control Plane**
+**Recommended Local Utility Model · Single Flagship Choice · Unbrickable Onboarding · War Room Control Plane**
 
 ---
 
@@ -37,7 +37,7 @@ Integration tests use **real services** and are skipped automatically if require
 ### User Experience
 - One unified onboarding provisions the **entire system**
 - User selects **one flagship provider**
-- Local utility model is **mandatory and installed during onboarding**
+- Local utility model is **the recommended privacy/cost boundary during onboarding**
 - No dead-end states or manual file deletion
 - War Room can recover, repair, and intervene at any time
 
@@ -63,7 +63,7 @@ War Room exposes:
 1. Unbrickable onboarding
 2. War Room recovery authority
 3. Local model package (productized)
-4. Mandatory local install during onboarding
+4. Recommended local install during onboarding
 5. Routing (local first)
 6. Provider lanes + escalation
 7. Cost telemetry + hardening
@@ -86,7 +86,7 @@ UI wired to backend recovery.
 ### Chunk D — Local Model Package
 Lockfile, prompts, fetch, smoke test.
 
-### Chunk E — Mandatory Local Install
+### Chunk E — Recommended Local Install
 LOCAL_UTILITY_SETUP onboarding state.
 
 ### Chunk F — local-llm Runtime + Client
@@ -182,9 +182,9 @@ Add local-llm service to docker-compose with healthcheck and volume mount.
 ```
 ---
 
-### Prompt 12 — Mandatory LOCAL_UTILITY_SETUP Onboarding State
+### Prompt 12 — LOCAL_UTILITY_SETUP Onboarding State
 ```text
-Add mandatory local utility install + verification during onboarding.
+Add recommended local utility install + verification during onboarding, with explicit operator acknowledgment if the install is skipped.
 ```
 ---
 
@@ -227,7 +227,7 @@ Fix health checks, error leakage, and add regression tests.
 ## 5. Definition of Done
 
 - Single flagship choice
-- Mandatory local utility brain installed during onboarding
+- Local utility brain installed in the recommended deployment, or explicit operator acknowledgment that the instance is running without the local privacy/cost boundary
 - No onboarding dead ends
 - War Room can fully recover and intervene
 - Routing decisions auditable

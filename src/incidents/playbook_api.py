@@ -11,7 +11,9 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability
 
 from src.incidents.playbooks import (
     get_playbook,
@@ -22,7 +24,11 @@ from src.incidents.playbooks import (
 
 logger = logging.getLogger("lancelot.incidents.playbook_api")
 
-router = APIRouter(prefix="/api/playbooks", tags=["playbooks"])
+router = APIRouter(
+    prefix="/api/playbooks",
+    tags=["playbooks"],
+    dependencies=[Depends(require_authenticated_request)],
+)
 
 _playbooks_dir: Optional[str] = None
 
@@ -79,8 +85,25 @@ def get_playbook_detail(name: str):
 
 
 @router.post("/reload")
-def reload_playbooks():
+def reload_playbooks(
+    request: Request,
+    _authz: None = Depends(require_operator_capability("incidents.admin")),
+):
     """Invalidate cache and reload all playbooks from disk."""
     invalidate_cache()
     playbooks = load_playbooks(_playbooks_dir)
+    try:
+        from src.core.governance_receipts import emit_governance_receipt
+        from src.shared.receipts import ActionType
+
+        emit_governance_receipt(
+            request,
+            ActionType.PLAYBOOK_UPDATED,
+            action_name="reload_playbooks",
+            inputs={"playbooks_dir": _playbooks_dir or "", "reload_action": "api"},
+            outputs={"playbook_count": len(playbooks)},
+            metadata={"subsystem": "incident_response"},
+        )
+    except Exception as exc:
+        logger.warning("Failed to emit playbook reload receipt: %s", exc)
     return {"status": "reloaded", "count": len(playbooks)}

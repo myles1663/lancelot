@@ -20,7 +20,7 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -82,6 +82,10 @@ class SchedulerService:
     def last_scheduler_tick_at(self) -> Optional[str]:
         return self._last_tick
 
+    def mark_scheduler_tick(self, when: Optional[str] = None) -> None:
+        """Record the last observed scheduler heartbeat tick."""
+        self._last_tick = when or datetime.now(timezone.utc).isoformat()
+
     def _get_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self._db_path))
         conn.row_factory = sqlite3.Row
@@ -136,13 +140,7 @@ class SchedulerService:
             logger.warning("Failed to load scheduler config: %s", exc)
             return 0
 
-        count = 0
-        for job_spec in config.jobs:
-            if self.get_job(job_spec.id) is None:
-                self._register_job(job_spec)
-                count += 1
-            else:
-                logger.debug("Job '%s' already registered, skipping", job_spec.id)
+        count, _updated = self.ensure_job_specs(config.jobs)
 
         self._last_tick = datetime.now(timezone.utc).isoformat()
         logger.info("Registered %d new jobs from config", count)
@@ -183,6 +181,90 @@ class SchedulerService:
             conn.commit()
         finally:
             conn.close()
+
+    def ensure_job_specs(self, specs: Sequence[JobSpec | Dict[str, Any]]) -> tuple[int, int]:
+        """Upsert job specs, inserting missing jobs and updating drifted definitions."""
+        inserted = 0
+        updated = 0
+        for spec_like in specs:
+            spec = spec_like if isinstance(spec_like, JobSpec) else JobSpec.model_validate(spec_like)
+            existing = self.get_job(spec.id)
+            if existing is None:
+                self._register_job(spec)
+                inserted += 1
+                continue
+            if self._update_job_definition_if_needed(existing, spec):
+                updated += 1
+        self._last_tick = datetime.now(timezone.utc).isoformat()
+        return inserted, updated
+
+    def _update_job_definition_if_needed(self, existing: JobRecord, spec: JobSpec) -> bool:
+        """Update mutable job definition fields when code/config changes drift from persistence."""
+        trigger_value = ""
+        if spec.trigger.seconds is not None:
+            trigger_value = str(spec.trigger.seconds)
+        elif spec.trigger.expression is not None:
+            trigger_value = spec.trigger.expression
+
+        existing_definition = {
+            "name": existing.name,
+            "skill": existing.skill,
+            "inputs": existing.inputs,
+            "timezone": existing.timezone,
+            "enabled": existing.enabled,
+            "trigger_type": existing.trigger_type,
+            "trigger_value": existing.trigger_value,
+            "requires_ready": existing.requires_ready,
+            "requires_approvals": existing.requires_approvals,
+            "timeout_s": existing.timeout_s,
+            "description": existing.description,
+        }
+        desired_definition = {
+            "name": spec.name,
+            "skill": spec.skill,
+            "inputs": spec.inputs,
+            "timezone": spec.timezone,
+            "enabled": spec.enabled,
+            "trigger_type": spec.trigger.type.value,
+            "trigger_value": trigger_value,
+            "requires_ready": spec.requires_ready,
+            "requires_approvals": spec.requires_approvals,
+            "timeout_s": spec.timeout_s,
+            "description": spec.description,
+        }
+
+        if existing_definition == desired_definition:
+            return False
+
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                """UPDATE jobs SET
+                   name = ?, skill = ?, inputs = ?, timezone = ?, enabled = ?,
+                   trigger_type = ?, trigger_value = ?, requires_ready = ?,
+                   requires_approvals = ?, timeout_s = ?, description = ?
+                   WHERE id = ?""",
+                (
+                    spec.name,
+                    spec.skill,
+                    json.dumps(spec.inputs),
+                    spec.timezone,
+                    1 if spec.enabled else 0,
+                    spec.trigger.type.value,
+                    trigger_value,
+                    1 if spec.requires_ready else 0,
+                    json.dumps(spec.requires_approvals),
+                    spec.timeout_s,
+                    spec.description,
+                    spec.id,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        logger.info("job_definition_updated: %s", spec.id)
+        return True
 
     def _row_to_record(self, row: sqlite3.Row) -> JobRecord:
         """Convert a database row to a JobRecord."""

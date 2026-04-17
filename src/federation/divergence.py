@@ -8,7 +8,7 @@ Federation Divergence — connectivity loss detection and reconciliation.
 
 When an instance detects that it has lost connectivity with federation peers
 (staleness exceeds the lost threshold), it enters divergence mode:
-- T3 operations are queued (not executed)
+- T3 operations are blocked until reconciliation completes
 - T0-T2 continue under local Soul
 - A Divergence Receipt is emitted
 
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 class DivergenceState(str, Enum):
     """Current divergence state of this instance."""
     CONNECTED = "connected"      # Normal federation connectivity
-    DIVERGED = "diverged"        # Lost connectivity, T3 queued
+    DIVERGED = "diverged"        # Lost connectivity, T3 blocked
     RECONNECTING = "reconnecting"  # Connectivity restored, reconciling
     RECONCILED = "reconciled"    # Reconciliation complete
 
@@ -79,6 +79,23 @@ class DivergenceSnapshot:
         }
 
 
+@dataclass
+class ReconciliationStatus:
+    """Last reconciliation result for the current/most recent divergence cycle."""
+    outcome: str = ""
+    conflicts: List[Dict[str, str]] = field(default_factory=list)
+    reconciled_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "outcome": self.outcome,
+            "conflicts": self.conflicts,
+            "reconciled_at": self.reconciled_at,
+        }
+
+
 class DivergenceDetector:
     """Monitors federation connectivity and manages divergence state.
 
@@ -96,6 +113,7 @@ class DivergenceDetector:
         self._state = DivergenceState.CONNECTED
         self._divergence_snapshot: Optional[DivergenceSnapshot] = None
         self._diverged_at: Optional[str] = None
+        self._last_reconciliation: Optional[ReconciliationStatus] = None
 
     @property
     def state(self) -> DivergenceState:
@@ -108,6 +126,10 @@ class DivergenceDetector:
     @property
     def divergence_snapshot(self) -> Optional[DivergenceSnapshot]:
         return self._divergence_snapshot
+
+    @property
+    def last_reconciliation(self) -> Optional[ReconciliationStatus]:
+        return self._last_reconciliation
 
     def check_connectivity(
         self,
@@ -154,6 +176,7 @@ class DivergenceDetector:
             # Transition to DIVERGED
             self._state = DivergenceState.DIVERGED
             self._diverged_at = datetime.now(timezone.utc).isoformat()
+            self._last_reconciliation = None
 
             # Find the most recent heartbeat for last_confirmed_contact_at
             last_contact = None
@@ -188,9 +211,26 @@ class DivergenceDetector:
 
         return self._state, None
 
-    def mark_reconciled(self) -> None:
-        """Mark this instance as reconciled after successful reconciliation."""
+    def mark_reconciled(
+        self,
+        outcome: Optional[ReconciliationOutcome] = None,
+        conflicts: Optional[List[ConflictRecord]] = None,
+    ) -> None:
+        """Mark this instance as reconciled and capture the reconciliation result."""
         self._state = DivergenceState.RECONCILED
+        if outcome is not None:
+            self._last_reconciliation = ReconciliationStatus(
+                outcome=outcome.value if hasattr(outcome, "value") else str(outcome),
+                conflicts=[
+                    {
+                        "conflict_type": c.conflict_type,
+                        "description": c.description,
+                        "resolution": c.resolution,
+                        "affected_component": c.affected_component,
+                    }
+                    for c in (conflicts or [])
+                ],
+            )
         logger.info("Federation reconciled: instance=%s", self._instance_id)
 
     def reset_to_connected(self) -> None:

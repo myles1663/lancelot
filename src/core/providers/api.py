@@ -21,12 +21,18 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/providers", tags=["providers"])
+router = APIRouter(
+    prefix="/api/v1/providers",
+    tags=["providers"],
+    dependencies=[Depends(require_authenticated_request)],
+)
 
 # Module-level references — set during gateway startup
 _discovery = None
@@ -185,6 +191,15 @@ def get_provider_stack():
                 has_key = True
         except Exception:
             pass
+    # Codex OAuth counts as having credentials
+    if not has_key and provider_name == "openai-codex":
+        try:
+            from openai_codex_oauth_manager import get_openai_codex_manager
+            mgr = get_openai_codex_manager()
+            if mgr and mgr.get_token_status().get("configured"):
+                has_key = True
+        except Exception:
+            pass
 
     if provider_name in _auth_errors:
         stack["status"] = "auth_error"
@@ -219,7 +234,7 @@ def get_available_models():
     }
 
 
-@router.post("/refresh")
+@router.post("/refresh", dependencies=[Depends(require_operator_capability("provider.admin"))])
 def refresh_models():
     """Re-run model discovery from the provider API."""
     if not _discovery:
@@ -264,12 +279,21 @@ def get_available_providers():
 
     providers = []
     for name, env_var in API_KEY_VARS.items():
-        has_key = bool(os.getenv(env_var, "").strip())
+        has_key = bool(os.getenv(env_var, "").strip()) if env_var else False
         # V28: Anthropic OAuth counts as having credentials
         if not has_key and name == "anthropic":
             try:
                 from oauth_token_manager import get_oauth_manager
                 mgr = get_oauth_manager()
+                if mgr and mgr.get_token_status().get("configured"):
+                    has_key = True
+            except Exception:
+                pass
+        # Codex OAuth counts as having credentials
+        if not has_key and name == "openai-codex":
+            try:
+                from openai_codex_oauth_manager import get_openai_codex_manager
+                mgr = get_openai_codex_manager()
                 if mgr and mgr.get_token_status().get("configured"):
                     has_key = True
             except Exception:
@@ -284,7 +308,7 @@ def get_available_providers():
     return {"providers": providers}
 
 
-@router.post("/switch")
+@router.post("/switch", dependencies=[Depends(require_operator_capability("provider.admin"))])
 def switch_provider(req: SwitchProviderRequest):
     """Hot-swap the active LLM provider (no restart required)."""
     from providers.factory import API_KEY_VARS, create_provider
@@ -298,25 +322,33 @@ def switch_provider(req: SwitchProviderRequest):
             "message": f"Unknown provider: '{provider_name}'. Available: {', '.join(API_KEY_VARS.keys())}",
         }
 
-    # Validate API key (or OAuth token for Anthropic) is configured
+    # Validate API key (or OAuth token) is configured
     env_var = API_KEY_VARS[provider_name]
-    api_key = os.getenv(env_var, "").strip()
+    api_key = os.getenv(env_var, "").strip() if env_var else ""
     if not api_key:
-        # V28: Check for OAuth token as alternative for Anthropic
         _has_oauth = False
+        # V28: Check for OAuth token as alternative for Anthropic
         if provider_name == "anthropic":
             try:
                 from oauth_token_manager import get_oauth_manager
                 mgr = get_oauth_manager()
                 if mgr:
-                    token = mgr.get_valid_token()
-                    _has_oauth = bool(token)
+                    _has_oauth = bool(mgr.get_valid_token())
+            except Exception:
+                pass
+        # Codex OAuth: ChatGPT Pro subscription
+        elif provider_name == "openai-codex":
+            try:
+                from openai_codex_oauth_manager import get_openai_codex_manager
+                mgr = get_openai_codex_manager()
+                if mgr:
+                    _has_oauth = bool(mgr.get_valid_token())
             except Exception:
                 pass
         if not _has_oauth:
             return {
                 "status": "error",
-                "message": f"No API key configured for {provider_name} (set {env_var})",
+                "message": f"No API key or OAuth token configured for {provider_name}",
             }
 
     try:
@@ -327,12 +359,21 @@ def switch_provider(req: SwitchProviderRequest):
             result_msg = f"Switched to {provider_name} (no orchestrator)"
 
         # Create a fresh provider for model discovery
-        # V28: pass OAuth token for Anthropic when no API key
         _auth_token = ""
+        # V28: pass OAuth token for Anthropic when no API key
         if not api_key and provider_name == "anthropic":
             try:
                 from oauth_token_manager import get_oauth_manager
                 mgr = get_oauth_manager()
+                if mgr:
+                    _auth_token = mgr.get_valid_token() or ""
+            except Exception:
+                pass
+        # Codex OAuth token
+        elif provider_name == "openai-codex":
+            try:
+                from openai_codex_oauth_manager import get_openai_codex_manager
+                mgr = get_openai_codex_manager()
                 if mgr:
                     _auth_token = mgr.get_valid_token() or ""
             except Exception:
@@ -343,9 +384,31 @@ def switch_provider(req: SwitchProviderRequest):
         config = _read_current_config()
         lane_overrides = config.get("lane_overrides", {})
 
+        # If no lane overrides, seed from models.yaml profile
+        if not lane_overrides:
+            try:
+                from provider_profile import ProfileRegistry
+                registry = ProfileRegistry()
+                if registry.has_provider(provider_name):
+                    profile = registry.get_profile(provider_name)
+                    lane_overrides = {
+                        "fast": profile.fast.model,
+                        "deep": profile.deep.model,
+                    }
+                    if profile.cache:
+                        lane_overrides["cache"] = profile.cache.model
+            except Exception:
+                pass
+
         # Replace provider in discovery and re-run
+        global _discovery
         if _discovery:
             _discovery.replace_provider(new_provider, lane_overrides=lane_overrides)
+        else:
+            # Discovery wasn't initialized at startup (no provider). Create it now.
+            from model_discovery import ModelDiscovery
+            _discovery = ModelDiscovery(new_provider, lane_overrides=lane_overrides)
+            _discovery.refresh()
 
         # Persist the switch
         config["active_provider"] = provider_name
@@ -365,7 +428,7 @@ def switch_provider(req: SwitchProviderRequest):
         return {"status": "error", "message": str(e)}
 
 
-@router.post("/lanes/override")
+@router.post("/lanes/override", dependencies=[Depends(require_operator_capability("provider.admin"))])
 def override_lane(req: LaneOverrideRequest):
     """Override a single lane's model assignment at runtime."""
     lane = req.lane.lower().strip()
@@ -419,7 +482,7 @@ def override_lane(req: LaneOverrideRequest):
         return {"status": "error", "message": str(e)}
 
 
-@router.post("/lanes/reset")
+@router.post("/lanes/reset", dependencies=[Depends(require_operator_capability("provider.admin"))])
 def reset_lanes():
     """Clear all lane overrides and re-run auto-assignment."""
     try:
@@ -489,7 +552,7 @@ def _update_env_file(env_var: str, new_value: str) -> bool:
         return False
 
 
-@router.get("/keys")
+@router.get("/keys", dependencies=[Depends(require_operator_capability("provider.admin"))])
 def get_provider_keys():
     """List all providers with key status (never returns full keys)."""
     from providers.factory import API_KEY_VARS
@@ -499,7 +562,33 @@ def get_provider_keys():
 
     keys = []
     for name, env_var in API_KEY_VARS.items():
-        raw = os.getenv(env_var, "").strip()
+        # OAuth-only providers (no API key env var) get OAuth status instead of key fields
+        if name == "openai-codex":
+            entry = {
+                "provider": name,
+                "display_name": display_names.get(name, "OpenAI (Codex/Pro)"),
+                "env_var": "",
+                "has_key": False,
+                "key_preview": "",
+                "active": name == current_provider,
+                "oauth_only": True,
+                "oauth_configured": False,
+                "oauth_status": None,
+            }
+            try:
+                from openai_codex_oauth_manager import get_openai_codex_manager
+                mgr = get_openai_codex_manager()
+                if mgr:
+                    status = mgr.get_token_status()
+                    entry["oauth_configured"] = status.get("configured", False)
+                    entry["oauth_status"] = status.get("status")
+                    entry["has_key"] = entry["oauth_configured"]  # treat OAuth as "has credentials"
+            except Exception:
+                pass
+            keys.append(entry)
+            continue
+
+        raw = os.getenv(env_var, "").strip() if env_var else ""
         entry = {
             "provider": name,
             "display_name": display_names.get(name, name.title()),
@@ -526,7 +615,7 @@ def get_provider_keys():
     return {"keys": keys}
 
 
-@router.post("/keys/rotate")
+@router.post("/keys/rotate", dependencies=[Depends(require_operator_capability("provider.admin"))])
 def rotate_provider_key(req: RotateKeyRequest):
     """Validate and rotate an API key for a provider.
 
@@ -608,7 +697,7 @@ def rotate_provider_key(req: RotateKeyRequest):
 # OAuth Management (V28 / v0.2.14) — Anthropic OAuth from the War Room
 # ---------------------------------------------------------------------------
 
-@router.post("/oauth/initiate")
+@router.post("/oauth/initiate", dependencies=[Depends(require_operator_capability("provider.admin"))])
 def oauth_initiate():
     """Generate Anthropic OAuth authorization URL with PKCE for browser flow."""
     try:
@@ -623,7 +712,7 @@ def oauth_initiate():
         return {"status": "error", "message": str(e)}
 
 
-@router.get("/oauth/status")
+@router.get("/oauth/status", dependencies=[Depends(require_operator_capability("provider.admin"))])
 def oauth_status():
     """Get current Anthropic OAuth token status for the War Room."""
     try:
@@ -636,7 +725,7 @@ def oauth_status():
         return {"configured": False, "status": "error", "error": str(e)}
 
 
-@router.post("/oauth/revoke")
+@router.post("/oauth/revoke", dependencies=[Depends(require_operator_capability("provider.admin"))])
 def oauth_revoke():
     """Revoke/clear stored Anthropic OAuth tokens."""
     try:
@@ -645,5 +734,50 @@ def oauth_revoke():
         if manager:
             manager.revoke()
         return {"status": "ok", "message": "OAuth tokens revoked"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# OpenAI Codex OAuth Management — ChatGPT Pro subscription access
+# ---------------------------------------------------------------------------
+
+@router.post("/oauth/openai-codex/initiate", dependencies=[Depends(require_operator_capability("provider.admin"))])
+def oauth_codex_initiate():
+    """Generate OpenAI Codex OAuth authorization URL with PKCE for browser flow."""
+    try:
+        from openai_codex_oauth_manager import get_openai_codex_manager
+        manager = get_openai_codex_manager()
+        if manager is None:
+            return {"status": "error", "message": "Codex OAuth manager not initialized"}
+        auth_url, state = manager.generate_auth_url()
+        return {"status": "ok", "auth_url": auth_url, "state": state, "provider": "openai-codex"}
+    except Exception as e:
+        logger.error("Codex OAuth initiate failed: %s", e)
+        return {"status": "error", "message": str(e)}
+
+
+@router.get("/oauth/openai-codex/status", dependencies=[Depends(require_operator_capability("provider.admin"))])
+def oauth_codex_status():
+    """Get current OpenAI Codex OAuth token status for the War Room."""
+    try:
+        from openai_codex_oauth_manager import get_openai_codex_manager
+        manager = get_openai_codex_manager()
+        if manager is None:
+            return {"configured": False, "status": "not_available", "provider": "openai-codex"}
+        return manager.get_token_status()
+    except Exception as e:
+        return {"configured": False, "status": "error", "provider": "openai-codex", "error": str(e)}
+
+
+@router.post("/oauth/openai-codex/revoke", dependencies=[Depends(require_operator_capability("provider.admin"))])
+def oauth_codex_revoke():
+    """Revoke/clear stored OpenAI Codex OAuth tokens."""
+    try:
+        from openai_codex_oauth_manager import get_openai_codex_manager
+        manager = get_openai_codex_manager()
+        if manager:
+            manager.revoke()
+        return {"status": "ok", "message": "Codex OAuth tokens revoked"}
     except Exception as e:
         return {"status": "error", "message": str(e)}

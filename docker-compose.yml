@@ -6,6 +6,7 @@ services:
       # Named volumes — managed by Docker, writable on all platforms
       - lancelot_data:/home/lancelot/data
       - lancelot_workspace:/home/lancelot/workspace
+      - ${USERPROFILE}/.codex:/home/lancelot/.codex
       # Mount Google OAuth credentials (ADC) from host (uncomment if using Google OAuth)
       # - ${APPDATA}/gcloud/application_default_credentials.json:/home/lancelot/.config/gcloud/application_default_credentials.json:ro
     extra_hosts:
@@ -30,6 +31,7 @@ services:
         condition: service_started
     ports:
       - "8000:8000"
+      - "1455:8000"   # OpenAI Codex OAuth callback (redirect_uri: localhost:1455/auth/callback)
     command: uvicorn gateway:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

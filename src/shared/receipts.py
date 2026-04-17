@@ -99,6 +99,7 @@ class ActionType(str, Enum):
     # Scheduler CRUD
     SCHEDULER_TASK_CREATED = "scheduler_task_created"
     SCHEDULER_TASK_DELETED = "scheduler_task_deleted"
+    SCHEDULER_TASK_TRIGGERED = "scheduler_task_triggered"
     # Tool store
     TOOL_ENABLED = "tool_enabled"
     TOOL_DISABLED = "tool_disabled"

@@ -13,7 +13,9 @@ import { runAllChecks } from './prereqs.mjs';
 import {
   promptInstallDir, promptOwnerName, promptProvider, promptAuthMethod, promptApiKey,
   promptCommsChannel, promptTelegramToken, promptTelegramChatId,
-  promptGoogleChatSpace, promptWarRoomUsername, promptWarRoomPassword, promptConfirm,
+  promptGoogleChatSpace, promptWarRoomAuthModel, promptWarRoomUsername, promptWarRoomPassword,
+  promptOidcIssuerUrl, promptOidcClientId, promptOidcClientSecret, promptOidcBaseUrl,
+  promptOidcAllowedGroups, promptConfirm,
 } from './prompts.mjs';
 import { writeEnvFile, patchDockerCompose } from './config.mjs';
 import { downloadModel } from './model.mjs';
@@ -54,6 +56,13 @@ export async function run(opts) {
     hasGpu: false,
     gpuLayers: 0,
     gpuName: null,
+    warRoomAuthModel: null,
+    warRoomPasswordResetCode: null,
+    oidcIssuerUrl: null,
+    oidcClientId: null,
+    oidcClientSecret: null,
+    oidcBaseUrl: null,
+    oidcAllowedGroups: null,
   };
 
   if (opts.resume) {
@@ -150,12 +159,23 @@ export async function run(opts) {
     }
 
     // ── Step 5: War Room credentials ──
-    if (!isStepComplete(completed, 'warroom_creds')) {
-      showStep(5, TOTAL_STEPS, 'War Room Login');
+    if (!isStepComplete(completed, 'warroom_auth')) {
+      showStep(5, TOTAL_STEPS, 'War Room Authentication');
       console.log(chalk.gray('  The War Room is your command center for monitoring and controlling Lancelot.'));
-      config.warRoomUser = await promptWarRoomUsername();
-      config.warRoomPassword = await promptWarRoomPassword();
-      completed.push('warroom_creds');
+      config.warRoomAuthModel = await promptWarRoomAuthModel();
+
+      if (config.warRoomAuthModel === 'oidc') {
+        config.oidcIssuerUrl = await promptOidcIssuerUrl();
+        config.oidcClientId = await promptOidcClientId();
+        config.oidcClientSecret = await promptOidcClientSecret();
+        config.oidcBaseUrl = await promptOidcBaseUrl();
+        config.oidcAllowedGroups = await promptOidcAllowedGroups();
+      } else {
+        config.warRoomUser = await promptWarRoomUsername();
+        config.warRoomPassword = await promptWarRoomPassword();
+      }
+
+      completed.push('warroom_auth');
       await saveState(completed, config);
     }
 
@@ -167,11 +187,16 @@ export async function run(opts) {
       process.exit(0);
     }
 
-    // Re-prompt for War Room credentials on resume (never stored in state file)
-    if (isStepComplete(completed, 'warroom_creds') && !config.warRoomPassword) {
-      showStep(5, TOTAL_STEPS, 'War Room Login (re-enter credentials)');
-      config.warRoomUser = await promptWarRoomUsername();
-      config.warRoomPassword = await promptWarRoomPassword();
+    // Re-prompt for secrets on resume (never stored in state file)
+    if (isStepComplete(completed, 'warroom_auth')) {
+      if (config.warRoomAuthModel === 'oidc' && !config.oidcClientSecret) {
+        showStep(5, TOTAL_STEPS, 'War Room Enterprise Authentication (re-enter secret)');
+        config.oidcClientSecret = await promptOidcClientSecret();
+      } else if (config.warRoomAuthModel !== 'oidc' && !config.warRoomPassword) {
+        showStep(5, TOTAL_STEPS, 'War Room Login (re-enter credentials)');
+        config.warRoomUser = await promptWarRoomUsername();
+        config.warRoomPassword = await promptWarRoomPassword();
+      }
     }
 
     // ── Step 6: Clone + Configure ──
@@ -266,8 +291,11 @@ export async function run(opts) {
       directory: config.installDir,
       providerName: PROVIDERS[config.provider]?.name || config.provider,
       commsName: config.commsType === 'skip' ? 'Not configured' : (COMMS[config.commsType]?.name || config.commsType),
+      warRoomAuthModel: config.warRoomAuthModel || 'local',
       warRoomUser: config.warRoomUser || 'admin',
       warRoomPassword: config.warRoomPassword,
+      warRoomPasswordResetCode: config.warRoomPasswordResetCode,
+      oidcIssuerUrl: config.oidcIssuerUrl,
     });
 
     // Auto-open War Room in the default browser

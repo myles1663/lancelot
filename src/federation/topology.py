@@ -183,6 +183,7 @@ class TopologyRegistry:
             peer.last_heartbeat_at = timestamp or datetime.now(timezone.utc).isoformat()
             if soul_version_hash:
                 peer.soul_version_hash = soul_version_hash
+            self._persist_to_disk()
             return True
 
     def get_peer(self, instance_id: str) -> Optional[PeerRecord]:

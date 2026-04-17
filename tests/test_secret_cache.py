@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import bcrypt
 import pytest
 
 import secret_cache
@@ -99,9 +100,10 @@ class TestPasswordHashing:
 
         secret_cache.bootstrap(vault)
 
-        expected_hash = hashlib.sha256(b"my_secret_pw").hexdigest()
-        assert secret_cache.get("WARROOM_PASSWORD") == expected_hash
-        assert vault._data["system.warroom_password_hash"] == expected_hash
+        stored = secret_cache.get("WARROOM_PASSWORD")
+        assert stored.startswith("$2")
+        assert bcrypt.checkpw(b"my_secret_pw", stored.encode("utf-8"))
+        assert vault._data["system.warroom_password_hash"] == stored
 
     def test_warroom_password_not_rehashed_from_vault(self):
         """When loading from vault, the stored hash is used as-is."""
@@ -113,6 +115,16 @@ class TestPasswordHashing:
 
         assert secret_cache.get("WARROOM_PASSWORD") == stored_hash
 
+    def test_warroom_password_bcrypt_env_is_preserved(self):
+        vault = FakeVault()
+        stored_hash = bcrypt.hashpw(b"original", bcrypt.gensalt()).decode("utf-8")
+        os.environ["WARROOM_PASSWORD"] = stored_hash
+
+        secret_cache.bootstrap(vault)
+
+        assert secret_cache.get("WARROOM_PASSWORD") == stored_hash
+        assert vault._data["system.warroom_password_hash"] == stored_hash
+
     def test_other_secrets_not_hashed(self):
         vault = FakeVault()
         os.environ["LANCELOT_TELEGRAM_TOKEN"] = "bot123:xyz"
@@ -121,6 +133,17 @@ class TestPasswordHashing:
 
         assert secret_cache.get("LANCELOT_TELEGRAM_TOKEN") == "bot123:xyz"
         assert vault._data["system.telegram_token"] == "bot123:xyz"
+
+    def test_warroom_password_reset_code_hashed_on_migration(self):
+        vault = FakeVault()
+        os.environ["WARROOM_PASSWORD_RESET_CODE"] = "reset-secret"
+
+        secret_cache.bootstrap(vault)
+
+        stored = secret_cache.get("WARROOM_PASSWORD_RESET_CODE")
+        assert stored.startswith("$2")
+        assert bcrypt.checkpw(b"reset-secret", stored.encode("utf-8"))
+        assert vault._data["system.warroom_password_reset_code_hash"] == stored
 
 
 # ── Environ scrubbing ────────────────────────────────────────────
@@ -272,7 +295,10 @@ class TestAllKeysMapped:
         assert secret_cache.get("LANCELOT_API_TOKEN") == "at"
         assert secret_cache.get("LANCELOT_OWNER_TOKEN") == "ot"
         assert secret_cache.get("WARROOM_USERNAME") == "admin"
-        assert secret_cache.get("WARROOM_PASSWORD") == hashlib.sha256(b"pw").hexdigest()
+        assert bcrypt.checkpw(
+            b"pw",
+            secret_cache.get("WARROOM_PASSWORD").encode("utf-8"),
+        )
         assert secret_cache.get("LANCELOT_TELEGRAM_TOKEN") == "tt"
         assert secret_cache.get("LANCELOT_TELEGRAM_CHAT_ID") == "cid"
 

@@ -348,8 +348,8 @@ class TestGitCommit:
         if not result.startswith("Error"):
             assert len(result) >= 7  # Short hash
 
-    def test_commit_all_changes(self, sandbox, git_workspace):
-        """Commit all changes with -A."""
+    def test_commit_requires_explicit_files(self, sandbox, git_workspace):
+        """Commit fails safely when no file list is provided."""
         # Modify existing file
         main_file = os.path.join(git_workspace, "main.py")
         with open(main_file, "a") as f:
@@ -360,7 +360,7 @@ class TestGitCommit:
             message="Modify main.py",
         )
 
-        assert isinstance(result, str)
+        assert result == "Error: local_sandbox.commit requires an explicit file list"
 
 
 # =============================================================================

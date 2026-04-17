@@ -9,13 +9,22 @@ owner approval via these endpoints before installation.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability, resolve_authenticated_identity
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/skills", tags=["skills"])
+router = APIRouter(
+    prefix="/api/skills",
+    tags=["skills"],
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("skills.admin")),
+    ],
+)
 
 # Set by init_skills_api() at startup
 _skill_factory = None
@@ -25,7 +34,7 @@ _actioncard_factory = None
 
 
 class ApproveRequest(BaseModel):
-    approved_by: str = "owner"
+    pass
 
 
 class RejectRequest(BaseModel):
@@ -96,13 +105,19 @@ async def get_proposal(proposal_id: str):
 
 
 @router.post("/proposals/{proposal_id}/approve")
-async def approve_proposal(proposal_id: str, body: ApproveRequest = ApproveRequest()):
+async def approve_proposal(
+    proposal_id: str,
+    request: Request,
+    body: ApproveRequest = ApproveRequest(),
+):
     """Approve a pending proposal (owner action)."""
     if _skill_factory is None:
         raise HTTPException(status_code=503, detail="SkillFactory not initialized")
 
     try:
-        proposal = _skill_factory.approve_proposal(proposal_id, approved_by=body.approved_by)
+        identity = resolve_authenticated_identity(request)
+        approved_by = identity.display_name or identity.operator_id or "operator"
+        proposal = _skill_factory.approve_proposal(proposal_id, approved_by=approved_by)
         return {
             "status": "approved",
             "proposal_id": proposal.id,

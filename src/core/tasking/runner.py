@@ -14,8 +14,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from src.core.tasking.authority import resolve_step_authority
 from src.core.tasking.schema import RunStatus, StepType, TaskGraph, TaskRun, TaskStep
 from src.core.tasking.store import TaskStore
+from src.core.runtime_pause import get_runtime_pause_status, is_runtime_paused
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,7 @@ class TaskRunner:
         receipt_service=None,
         skill_executor=None,
         verifier=None,
+        connector_runtime=None,
     ):
         self.task_store = task_store
         self.token_store = token_store
@@ -68,6 +71,7 @@ class TaskRunner:
         self.receipt_service = receipt_service
         self.skill_executor = skill_executor
         self.verifier = verifier
+        self.connector_runtime = connector_runtime
 
     def run(self, task_run_id: str) -> TaskRunResult:
         """Execute all steps in a TaskRun, respecting dependencies.
@@ -96,6 +100,16 @@ class TaskRunner:
                                           error="TaskGraph not found")
             return TaskRunResult(run_id=run.id, status=RunStatus.FAILED.value)
 
+        if is_runtime_paused():
+            pause_state = get_runtime_pause_status()
+            reason = pause_state.get("reason") or "Runtime paused by operator"
+            self.task_store.update_status(run.id, RunStatus.FAILED.value, error=reason)
+            return TaskRunResult(
+                run_id=run.id,
+                status=RunStatus.FAILED.value,
+                step_results=[StepResult(step_id="", success=False, error=reason)],
+            )
+
         # Look up token
         token = None
         if run.execution_token_id and self.token_store:
@@ -107,6 +121,9 @@ class TaskRunner:
         step_results: List[StepResult] = []
         receipt_ids: List[str] = []
         execution_order = self._resolve_execution_order(graph.steps)
+        quest_id = run.quest_id or graph.id or run.id
+        operator_id = run.operator_id or getattr(token, "operator_id", "") or ""
+        root_parent_id = getattr(token, "parent_receipt_id", None)
 
         for step in execution_order:
             # Update current step
@@ -122,7 +139,15 @@ class TaskRunner:
                         error=f"Authority denied: {auth.reason}",
                     )
                     step_results.append(result)
-                    self._emit_step_failed(run.id, step, auth.reason, receipt_ids)
+                    self._emit_step_failed(
+                        run,
+                        step,
+                        auth.reason,
+                        receipt_ids,
+                        operator_id=operator_id,
+                        quest_id=quest_id,
+                        parent_id=root_parent_id,
+                    )
                     self.task_store.update_status(
                         run.id, RunStatus.FAILED.value,
                         current_step=step.step_id,
@@ -150,12 +175,25 @@ class TaskRunner:
                 )
 
             # 3. Emit STEP_STARTED receipt
-            started_receipt_id = self._emit_step_started(run.id, step, receipt_ids)
+            started_receipt_id = self._emit_step_started(
+                run,
+                step,
+                receipt_ids,
+                operator_id=operator_id,
+                quest_id=quest_id,
+                parent_id=root_parent_id,
+            )
 
             # 4. Execute step
             start_time = time.monotonic()
             try:
-                outputs = self._execute_step(step)
+                outputs = self._execute_step(
+                    step,
+                    operator_id=operator_id,
+                    session_id=run.session_id,
+                    quest_id=quest_id,
+                    parent_receipt_id=started_receipt_id,
+                )
                 duration_ms = (time.monotonic() - start_time) * 1000
                 result = StepResult(
                     step_id=step.step_id, success=True,
@@ -173,9 +211,25 @@ class TaskRunner:
 
             # 5. Emit STEP_COMPLETED or STEP_FAILED receipt
             if result.success:
-                self._emit_step_completed(run.id, step, result, receipt_ids)
+                completed_receipt_id = self._emit_step_completed(
+                    run,
+                    step,
+                    result,
+                    receipt_ids,
+                    operator_id=operator_id,
+                    quest_id=quest_id,
+                    parent_id=started_receipt_id,
+                )
             else:
-                self._emit_step_failed(run.id, step, result.error, receipt_ids)
+                self._emit_step_failed(
+                    run,
+                    step,
+                    result.error,
+                    receipt_ids,
+                    operator_id=operator_id,
+                    quest_id=quest_id,
+                    parent_id=started_receipt_id,
+                )
                 # Step failed → run fails
                 self.task_store.update_status(
                     run.id, RunStatus.FAILED.value,
@@ -191,7 +245,14 @@ class TaskRunner:
             if token and getattr(token, 'requires_verifier', False) and step.acceptance_check:
                 verify_ok = self._run_verifier(step, result)
                 if not verify_ok:
-                    self._emit_verify_failed(run.id, step, receipt_ids)
+                    self._emit_verify_failed(
+                        run,
+                        step,
+                        receipt_ids,
+                        operator_id=operator_id,
+                        quest_id=quest_id,
+                        parent_id=completed_receipt_id if result.success else started_receipt_id,
+                    )
                     self.task_store.update_status(
                         run.id, RunStatus.FAILED.value,
                         current_step=step.step_id,
@@ -201,7 +262,14 @@ class TaskRunner:
                         run_id=run.id, status=RunStatus.FAILED.value,
                         step_results=step_results, receipts=receipt_ids,
                     )
-                self._emit_verify_passed(run.id, step, receipt_ids)
+                self._emit_verify_passed(
+                    run,
+                    step,
+                    receipt_ids,
+                    operator_id=operator_id,
+                    quest_id=quest_id,
+                    parent_id=completed_receipt_id if result.success else started_receipt_id,
+                )
 
             # 7. Increment token actions
             if token and self.token_store:
@@ -242,10 +310,23 @@ class TaskRunner:
 
     def _check_step_authority(self, token, step: TaskStep):
         """Check token authority for a step."""
-        tool_name = step.type  # Map step type to tool
-        return self.minter.check_authority(token, tool=tool_name)
+        authority = resolve_step_authority(step)
+        return self.minter.check_authority(
+            token,
+            tool=authority.get("tool"),
+            skill=authority.get("skill"),
+            path=authority.get("path"),
+        )
 
-    def _execute_step(self, step: TaskStep) -> Dict[str, Any]:
+    def _execute_step(
+        self,
+        step: TaskStep,
+        *,
+        operator_id: str = "",
+        session_id: str = "",
+        quest_id: str = "",
+        parent_receipt_id: str = "",
+    ) -> Dict[str, Any]:
         """Execute a step based on its type.
 
         Dispatches to the appropriate skill or tool executor.
@@ -259,7 +340,7 @@ class TaskRunner:
                 context = str(step.inputs)
                 vr = self.verifier.verify_step(goal, context)
                 return {"verified": vr.success, "reason": vr.reason}
-            return {"verified": True, "reason": "No verifier available, assuming pass"}
+            raise RuntimeError("Verifier unavailable for VERIFY step")
 
         if step_type in (StepType.SKILL_CALL.value,):
             # Delegate to skill executor
@@ -269,16 +350,39 @@ class TaskRunner:
                 if not skill_result.success:
                     raise RuntimeError(f"Skill '{skill_name}' failed: {skill_result.error}")
                 return skill_result.outputs
-            return {"note": "No skill executor, step skipped"}
+            raise RuntimeError("Skill executor unavailable for SKILL_CALL step")
 
         if step_type in (StepType.FILE_EDIT.value, StepType.COMMAND.value,
                          StepType.TOOL_CALL.value):
+            authority = resolve_step_authority(step)
+            tool_name = authority.get("tool") or "echo"
+            if tool_name.startswith("connector.") and self.connector_runtime:
+                response = self.connector_runtime.execute_capability(
+                    tool_name,
+                    dict(step.inputs),
+                    operator_id=operator_id,
+                    session_id=session_id,
+                    quest_id=quest_id,
+                    parent_receipt_id=parent_receipt_id,
+                )
+                if not response.success:
+                    raise RuntimeError(
+                        f"Connector '{tool_name}' failed: {response.error or response.status_code}"
+                    )
+                return {
+                    "connector_id": response.connector_id,
+                    "operation_id": response.operation_id,
+                    "status_code": response.status_code,
+                    "body": response.body,
+                    "headers": response.headers,
+                    "receipt_id": response.receipt_id,
+                }
             if self.skill_executor:
                 # Map step type to skill name
                 skill_map = {
                     StepType.FILE_EDIT.value: "repo_writer",
                     StepType.COMMAND.value: "command_runner",
-                    StepType.TOOL_CALL.value: step.inputs.get("tool_name", "echo"),
+                    StepType.TOOL_CALL.value: tool_name,
                 }
                 skill_name = skill_map.get(step_type, "echo")
 
@@ -300,14 +404,18 @@ class TaskRunner:
                 if not skill_result.success:
                     raise RuntimeError(f"Skill '{skill_name}' failed: {skill_result.error}")
                 return skill_result.outputs
-            return {"note": f"Step type {step_type} executed (placeholder)"}
+            raise RuntimeError(f"No executor available for step type {step_type}")
 
-        return {"note": f"Unknown step type: {step_type}"}
+        raise RuntimeError(f"Unsupported step type: {step_type}")
 
     def _run_verifier(self, step: TaskStep, result: StepResult) -> bool:
         """Run the verifier on step results."""
         if not self.verifier:
-            return True
+            logger.warning(
+                "Verification required for step %s but no verifier is configured",
+                step.step_id,
+            )
+            return False
         try:
             vr = self.verifier.verify_step(
                 step.acceptance_check,
@@ -316,12 +424,21 @@ class TaskRunner:
             return vr.success
         except Exception as exc:
             logger.warning("Verifier error for step %s: %s", step.step_id, exc)
-            return True  # Don't fail on verifier error
+            return False
 
     # --- Receipt emission helpers ---
 
-    def _emit_receipt(self, run_id: str, action_type: str, inputs: dict,
-                      receipt_ids: List[str]) -> str:
+    def _emit_receipt(
+        self,
+        run: TaskRun,
+        action_type: str,
+        inputs: dict,
+        receipt_ids: List[str],
+        *,
+        operator_id: str = "",
+        quest_id: str = "",
+        parent_id: Optional[str] = None,
+    ) -> str:
         """Emit a receipt and track it."""
         receipt_id = str(uuid.uuid4())
         if self.receipt_service:
@@ -332,6 +449,10 @@ class TaskRunner:
                     action, "task_runner",
                     inputs=inputs,
                     tier=CognitionTier.DETERMINISTIC,
+                    parent_id=parent_id,
+                    quest_id=quest_id or None,
+                    operator_id=operator_id or None,
+                    session_id=run.session_id or None,
                 )
                 self.receipt_service.create(receipt)
                 receipt_id = receipt.id
@@ -339,49 +460,81 @@ class TaskRunner:
                 logger.warning("Receipt emission failed: %s", exc)
 
         receipt_ids.append(receipt_id)
-        self.task_store.add_receipt(run_id, receipt_id)
+        self.task_store.add_receipt(run.id, receipt_id)
         return receipt_id
 
-    def _emit_step_started(self, run_id: str, step: TaskStep,
-                           receipt_ids: List[str]) -> str:
+    def _emit_step_started(
+        self,
+        run: TaskRun,
+        step: TaskStep,
+        receipt_ids: List[str],
+        **kwargs,
+    ) -> str:
         return self._emit_receipt(
-            run_id, "STEP_STARTED",
+            run, "STEP_STARTED",
             {"step_id": step.step_id, "type": step.type,
              "inputs": step.inputs},
             receipt_ids,
+            **kwargs,
         )
 
-    def _emit_step_completed(self, run_id: str, step: TaskStep,
-                             result: StepResult, receipt_ids: List[str]) -> str:
+    def _emit_step_completed(
+        self,
+        run: TaskRun,
+        step: TaskStep,
+        result: StepResult,
+        receipt_ids: List[str],
+        **kwargs,
+    ) -> str:
         return self._emit_receipt(
-            run_id, "STEP_COMPLETED",
+            run, "STEP_COMPLETED",
             {"step_id": step.step_id, "type": step.type,
              "outputs": result.outputs, "duration_ms": result.duration_ms},
             receipt_ids,
+            **kwargs,
         )
 
-    def _emit_step_failed(self, run_id: str, step: TaskStep,
-                          error: str, receipt_ids: List[str]) -> str:
+    def _emit_step_failed(
+        self,
+        run: TaskRun,
+        step: TaskStep,
+        error: str,
+        receipt_ids: List[str],
+        **kwargs,
+    ) -> str:
         return self._emit_receipt(
-            run_id, "STEP_FAILED",
+            run, "STEP_FAILED",
             {"step_id": step.step_id, "type": step.type,
              "error": error,
              "rollback_hint": step.rollback_hint},
             receipt_ids,
+            **kwargs,
         )
 
-    def _emit_verify_passed(self, run_id: str, step: TaskStep,
-                            receipt_ids: List[str]) -> str:
+    def _emit_verify_passed(
+        self,
+        run: TaskRun,
+        step: TaskStep,
+        receipt_ids: List[str],
+        **kwargs,
+    ) -> str:
         return self._emit_receipt(
-            run_id, "VERIFY_PASSED",
+            run, "VERIFY_PASSED",
             {"step_id": step.step_id, "acceptance_check": step.acceptance_check},
             receipt_ids,
+            **kwargs,
         )
 
-    def _emit_verify_failed(self, run_id: str, step: TaskStep,
-                            receipt_ids: List[str]) -> str:
+    def _emit_verify_failed(
+        self,
+        run: TaskRun,
+        step: TaskStep,
+        receipt_ids: List[str],
+        **kwargs,
+    ) -> str:
         return self._emit_receipt(
-            run_id, "VERIFY_FAILED",
+            run, "VERIFY_FAILED",
             {"step_id": step.step_id, "acceptance_check": step.acceptance_check},
             receipt_ids,
+            **kwargs,
         )

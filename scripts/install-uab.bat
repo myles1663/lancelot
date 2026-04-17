@@ -1,37 +1,40 @@
 @echo off
-title Lancelot UAB Daemon — Installer
+setlocal
+title Lancelot UAB Daemon - Installer
+
 echo.
 echo  ========================================
-echo   Lancelot UAB Daemon — Install Service
+echo   Lancelot UAB Daemon - Install Service
 echo  ========================================
 echo.
 
-:: Check for Node.js
 where node >nul 2>&1
 if errorlevel 1 (
     echo  ERROR: node.exe not found in PATH.
-    echo  Please install Node.js 18+ and ensure it's in your PATH.
+    echo  Please install Node.js 18+ and ensure it is in your PATH.
     echo.
     pause
     exit /b 1
 )
 
-:: Check Node.js version >= 18
-for /f "tokens=1 delims=v." %%v in ('node -v') do set NODE_MAJOR=%%v
-:: node -v returns "v18.x.y" — strip the 'v' prefix
-for /f "tokens=1 delims=." %%v in ('node -v') do set NODE_VER_RAW=%%v
-set NODE_MAJOR=%NODE_VER_RAW:v=%
+for /f "usebackq delims=" %%v in (`node -p "process.versions.node.split('.')[0]"`) do set "NODE_MAJOR=%%v"
+if not defined NODE_MAJOR (
+    echo  ERROR: Unable to determine Node.js version.
+    echo.
+    pause
+    exit /b 1
+)
 if %NODE_MAJOR% LSS 18 (
-    echo  ERROR: Node.js 18+ required. Found: v%NODE_MAJOR%
+    echo  ERROR: Node.js 18+ required. Found major version: %NODE_MAJOR%
     echo  Please upgrade Node.js from https://nodejs.org/
     echo.
     pause
     exit /b 1
 )
 
-:: Get the UAB package directory (relative to this script)
-set UAB_DIR=%~dp0..\packages\uab
-cd /d "%UAB_DIR%"
+set "ROOT_DIR=%~dp0.."
+set "UAB_DIR=%ROOT_DIR%\packages\uab"
+pushd "%UAB_DIR%" >nul 2>&1
 if errorlevel 1 (
     echo  ERROR: packages\uab directory not found.
     echo  Expected at: %UAB_DIR%
@@ -39,16 +42,14 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+set "UAB_DIR=%CD%"
 
-:: Resolve to absolute path
-set UAB_DIR=%CD%
-
-:: Build if dist\daemon.js is missing
 if not exist "dist\daemon.js" (
-    echo  dist\daemon.js not found — building UAB...
+    echo  dist\daemon.js not found - building UAB...
     call npm install
     if errorlevel 1 (
         echo  ERROR: npm install failed.
+        popd >nul
         echo.
         pause
         exit /b 1
@@ -56,6 +57,7 @@ if not exist "dist\daemon.js" (
     call npm run build
     if errorlevel 1 (
         echo  ERROR: npm run build failed.
+        popd >nul
         echo.
         pause
         exit /b 1
@@ -63,24 +65,28 @@ if not exist "dist\daemon.js" (
     echo  Build complete.
     echo.
 ) else (
-    echo  dist\daemon.js found — skipping build.
+    echo  dist\daemon.js found - skipping build.
+)
+popd >nul
+
+set "RUN_SCRIPT=%ROOT_DIR%\scripts\run-uab-daemon.bat"
+if not exist "%RUN_SCRIPT%" (
+    echo  ERROR: launcher script not found.
+    echo  Expected at: %RUN_SCRIPT%
+    echo.
+    pause
+    exit /b 1
 )
 
-:: Find node.exe full path
-for /f "tokens=*" %%i in ('where node') do set NODE_PATH=%%i
-
 echo  UAB directory:  %UAB_DIR%
-echo  Node.js:        %NODE_PATH%
+echo  Launcher:       %RUN_SCRIPT%
 echo  Port:           7900
 echo.
 
-:: Remove existing scheduled task if it exists (ignore errors)
 schtasks /Delete /TN "LancelotUABDaemon" /F >nul 2>&1
 
-:: Create scheduled task that runs at user logon
 echo  Creating scheduled task "LancelotUABDaemon"...
-schtasks /Create /TN "LancelotUABDaemon" /TR "cmd /c cd /d \"%UAB_DIR%\" && \"%NODE_PATH%\" dist\daemon.js --port 7900" /SC ONLOGON /RL HIGHEST /F >nul 2>&1
-
+schtasks /Create /TN "LancelotUABDaemon" /TR "\"%RUN_SCRIPT%\"" /SC ONLOGON /RL HIGHEST /F >nul 2>&1
 if errorlevel 1 (
     echo.
     echo  ERROR: Failed to create scheduled task.
@@ -93,20 +99,17 @@ if errorlevel 1 (
 echo  Scheduled task created successfully.
 echo.
 
-:: Kill any existing UAB daemon processes
 echo  Stopping any existing UAB daemon...
 for /f "tokens=2" %%a in ('tasklist /FI "IMAGENAME eq node.exe" /FO LIST ^| findstr "PID:"') do (
     wmic process where "ProcessId=%%a" get CommandLine 2>nul | findstr /C:"daemon.js" | findstr /C:"7900" >nul 2>&1
     if not errorlevel 1 taskkill /PID %%a /F >nul 2>&1
 )
 
-:: Start the daemon immediately
 echo  Starting UAB daemon...
-start "" /B "%NODE_PATH%" dist\daemon.js --port 7900
+start "" /B "%RUN_SCRIPT%"
 
-:: Wait and verify
 timeout /t 3 /nobreak >nul
-curl -s http://127.0.0.1:7900 >nul 2>&1
+curl -s -X POST -H "Content-Type: application/json" -d "{\"jsonrpc\":\"2.0\",\"method\":\"getStatus\",\"params\":{},\"id\":1}" http://127.0.0.1:7900 >nul 2>&1
 if errorlevel 1 (
     echo  WARNING: UAB daemon may not have started. Check if port 7900 is available.
 ) else (

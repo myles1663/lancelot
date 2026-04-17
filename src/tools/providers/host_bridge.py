@@ -55,6 +55,18 @@ from src.tools.contracts import (
 
 logger = logging.getLogger(__name__)
 
+INSECURE_DEFAULT_TOKEN = "lancelot-host-agent"
+
+
+def _normalize_agent_token(token: Optional[str]) -> str:
+    """Reject missing and legacy default host-agent tokens."""
+    if not token:
+        return ""
+    token = token.strip()
+    if not token or token == INSECURE_DEFAULT_TOKEN:
+        return ""
+    return token
+
 
 # =============================================================================
 # Configuration
@@ -94,9 +106,8 @@ class HostBridgeConfig:
                 "HOST_AGENT_URL", "http://host.docker.internal:9111"
             )
         if not self.agent_token:
-            self.agent_token = os.environ.get(
-                "HOST_AGENT_TOKEN", "lancelot-host-agent"
-            )
+            self.agent_token = os.environ.get("HOST_AGENT_TOKEN", "")
+        self.agent_token = _normalize_agent_token(self.agent_token)
 
 
 # =============================================================================
@@ -145,6 +156,10 @@ class HostBridgeProvider(BaseProvider):
         timeout: Optional[int] = None,
     ) -> dict:
         """Make an HTTP request to the host agent."""
+        if not self.config.agent_token:
+            raise ConnectionError(
+                "HOST_AGENT_TOKEN is not configured for host_bridge."
+            )
         url = f"{self.config.agent_url}{path}"
         headers = {
             "Authorization": f"Bearer {self.config.agent_token}",
@@ -186,6 +201,21 @@ class HostBridgeProvider(BaseProvider):
 
     def health_check(self) -> ProviderHealth:
         """Check if the host agent is reachable."""
+        if not self.config.agent_token:
+            return ProviderHealth(
+                provider_id=self.provider_id,
+                state=ProviderState.OFFLINE,
+                version="host_bridge",
+                last_check=datetime.now(timezone.utc).isoformat(),
+                capabilities=[c.value for c in self.capabilities],
+                degraded_reasons=["HOST_AGENT_TOKEN is not configured."],
+                error_message="Host bridge misconfigured: missing HOST_AGENT_TOKEN",
+                metadata={
+                    "mode": "host_bridge",
+                    "agent_url": self.config.agent_url,
+                    "auth_configured": False,
+                },
+            )
         try:
             info = self._request("GET", "/health", timeout=self.config.connect_timeout_s)
             return ProviderHealth(
@@ -198,6 +228,7 @@ class HostBridgeProvider(BaseProvider):
                 error_message=None,
                 metadata={
                     "mode": "host_bridge",
+                    "auth_configured": True,
                     "host_platform": info.get("platform", "unknown"),
                     "host_hostname": info.get("hostname", "unknown"),
                     "agent_version": info.get("agent_version", "unknown"),
@@ -212,7 +243,11 @@ class HostBridgeProvider(BaseProvider):
                 capabilities=[c.value for c in self.capabilities],
                 degraded_reasons=[f"Host agent unreachable: {str(e)[:100]}"],
                 error_message=str(e)[:200],
-                metadata={"mode": "host_bridge", "agent_url": self.config.agent_url},
+                metadata={
+                    "mode": "host_bridge",
+                    "agent_url": self.config.agent_url,
+                    "auth_configured": True,
+                },
             )
 
     # =========================================================================
@@ -372,11 +407,11 @@ class HostBridgeProvider(BaseProvider):
         files: Optional[List[str]] = None,
     ) -> str:
         """Create a commit on host."""
-        if files:
-            for f in files:
-                self.run(f"git add {shlex.quote(f)}", workspace)
-        else:
-            self.run("git add -A", workspace)
+        if not files:
+            return "Error: host_bridge.commit requires an explicit file list"
+
+        for f in files:
+            self.run(f"git add {shlex.quote(f)}", workspace)
 
         safe_message = shlex.quote(message)
         result = self.run(f"git commit -m {safe_message}", workspace)

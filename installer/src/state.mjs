@@ -31,9 +31,14 @@ export async function saveState(completedSteps, config) {
       ownerName: config.ownerName,
       authMode: config.authMode,
       commsType: config.commsType,
+      warRoomAuthModel: config.warRoomAuthModel,
       telegramChatId: config.telegramChatId,
       hasGpu: config.hasGpu,
       gpuLayers: config.gpuLayers,
+      oidcIssuerUrl: config.oidcIssuerUrl,
+      oidcClientId: config.oidcClientId,
+      oidcBaseUrl: config.oidcBaseUrl,
+      oidcAllowedGroups: config.oidcAllowedGroups,
     },
   };
   // Note: API keys and tokens are NEVER stored in state

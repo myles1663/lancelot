@@ -473,6 +473,41 @@ class TestSoulMerge:
         assert merged.scheduling_boundaries.max_job_duration_seconds == base.scheduling_boundaries.max_job_duration_seconds
         assert merged.scheduling_boundaries.no_autonomous_irreversible == base.scheduling_boundaries.no_autonomous_irreversible
 
+    def test_merge_preserves_non_overlay_governance_fields(self):
+        from src.core.soul.store import Soul
+        from src.core.soul.layers import SoulOverlay, merge_soul
+
+        d = _minimal_soul_dict()
+        d["fork_permissions"] = {
+            "allow_fork": True,
+            "require_approval_tier": 0,
+            "modifiable_fields": ["inputs"],
+            "prohibited_modifications": ["operator_id", "session_id", "quest_id", "timestamp", "id"],
+        }
+        d["mcp_permissions"] = [{"server_id": "mcp-1", "allowed_tools": ["*"], "risk_tier": 2}]
+        d["inbound_a2a_permissions"] = {
+            "allow_inbound": True,
+            "allowed_callers": [{"agent_id": "peer-1", "max_risk_tier": "T2"}],
+            "require_agent_card": True,
+            "require_preregistration": True,
+        }
+        d["outbound_a2a_permissions"] = {
+            "allow_outbound": True,
+            "allowed_targets": [{"agent_id": "peer-1", "allowed_task_types": ["research"], "risk_tier": "T2"}],
+            "require_agent_card_verification": True,
+            "max_delegation_depth": 2,
+        }
+        base = Soul(**d)
+        overlay = SoulOverlay(**_bal_overlay_dict())
+
+        merged = merge_soul(base, [overlay])
+
+        assert merged.fork_permissions.allow_fork is True
+        assert merged.fork_permissions.require_approval_tier == 0
+        assert len(merged.mcp_permissions) == 1
+        assert merged.inbound_a2a_permissions.allowed_callers[0]["agent_id"] == "peer-1"
+        assert merged.outbound_a2a_permissions.allowed_targets[0]["agent_id"] == "peer-1"
+
 
 # ===================================================================
 # BAL-Specific Linter Checks

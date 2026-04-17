@@ -128,6 +128,13 @@ class TestExecutionTokenStore:
         assert retrieved is not None
         assert retrieved.scope == "test scope"
 
+    def test_operator_id_persisted(self, store):
+        token = ExecutionToken(scope="test scope", operator_id="op-123")
+        store.create(token)
+        retrieved = store.get(token.id)
+        assert retrieved is not None
+        assert retrieved.operator_id == "op-123"
+
     def test_get_nonexistent(self, store):
         assert store.get("nonexistent-id") is None
 
@@ -231,6 +238,17 @@ class TestPermissionMinter:
         assert retrieved is not None
         assert retrieved.scope == "Persist test"
 
+    def test_mint_persists_operator_identity(self, minter):
+        token = minter.mint_from_approval(
+            scope="Persist test",
+            operator_id="op-123",
+            operator_name="Operator",
+        )
+        retrieved = minter.store.get(token.id)
+        assert retrieved is not None
+        assert retrieved.operator_id == "op-123"
+        assert retrieved.created_by == "Operator"
+
     def test_check_authority_allowed(self, minter):
         token = minter.mint_from_approval(
             scope="test",
@@ -280,3 +298,36 @@ class TestPermissionMinter:
         # Should have created a receipt
         receipts = receipt_svc.list(action_type="token_minted")
         assert len(receipts) >= 1
+
+    def test_mint_tracks_approving_operator(self, minter):
+        token = minter.mint_from_approval(
+            scope="Approve deploy",
+            operator_id="op-arthur",
+            operator_name="Arthur",
+            session_id="sess-1",
+        )
+        assert token.created_by == "Arthur"
+        persisted = minter.store.get(token.id)
+        assert persisted is not None
+        assert persisted.created_by == "Arthur"
+
+    def test_token_minted_receipt_carries_operator_identity(self, tmp_path):
+        from src.shared.receipts import ReceiptService
+
+        receipt_svc = ReceiptService(str(tmp_path / "receipts"))
+        store = ExecutionTokenStore(tmp_path / "tokens.db")
+        minter = PermissionMinter(store=store, receipt_service=receipt_svc)
+
+        minter.mint_from_approval(
+            scope="with operator receipts",
+            operator_id="op-arthur",
+            operator_name="Arthur",
+            session_id="sess-1",
+        )
+
+        receipts = receipt_svc.list(action_type="token_minted")
+        assert len(receipts) >= 1
+        latest = receipts[0]
+        assert latest.operator_id == "op-arthur"
+        assert latest.session_id == "sess-1"
+        assert latest.inputs["created_by"] == "Arthur"

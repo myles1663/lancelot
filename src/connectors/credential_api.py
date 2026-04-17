@@ -15,12 +15,21 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/connectors", tags=["connectors"])
+router = APIRouter(
+    prefix="/connectors",
+    tags=["connectors"],
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("connectors.admin")),
+    ],
+)
 
 # Module-level references, set during app startup
 _registry = None
@@ -32,6 +41,52 @@ def init_credential_api(registry, vault) -> None:
     global _registry, _vault
     _registry = registry
     _vault = vault
+
+
+def _resolve_connector_entry(connector_id: str):
+    """Resolve a connector entry from runtime registry or config-backed lazy load.
+
+    Credential onboarding must work before a connector is enabled in the live
+    runtime. If the connector is absent from the runtime registry, lazily
+    instantiate it from connectors.yaml so its manifest can drive credential
+    onboarding and validation.
+    """
+    if _registry is None:
+        raise HTTPException(status_code=500, detail="Credential API not initialized")
+
+    entry = _registry.get(connector_id)
+    if entry is not None:
+        return entry
+
+    config = getattr(_registry, "_config", {}) or {}
+    connector_cfg = config.get("connectors", {}).get(connector_id)
+    if connector_cfg is None:
+        raise HTTPException(status_code=404, detail=f"Connector '{connector_id}' not found")
+
+    try:
+        from src.core.connectors_api import register_connector_with_vault_access
+
+        connector = register_connector_with_vault_access(
+            _registry,
+            _vault,
+            connector_id,
+            connector_cfg,
+        )
+        if connector is None:
+            raise HTTPException(status_code=404, detail=f"Connector '{connector_id}' not found")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Credential API lazy connector registration failed for %s: %s", connector_id, exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Connector '{connector_id}' could not be initialized for credential onboarding",
+        )
+
+    entry = _registry.get(connector_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Connector '{connector_id}' not found")
+    return entry
 
 
 # ── Request/Response Models ───────────────────────────────────────
@@ -80,10 +135,7 @@ def store_credential(connector_id: str, body: StoreCredentialRequest, request: R
     if _registry is None or _vault is None:
         raise HTTPException(status_code=500, detail="Credential API not initialized")
 
-    # Check connector exists
-    entry = _registry.get(connector_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"Connector '{connector_id}' not found")
+    entry = _resolve_connector_entry(connector_id)
 
     # Check vault_key is declared in manifest
     manifest = entry.manifest
@@ -127,10 +179,7 @@ def credential_status(connector_id: str):
     if _registry is None or _vault is None:
         raise HTTPException(status_code=500, detail="Credential API not initialized")
 
-    entry = _registry.get(connector_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"Connector '{connector_id}' not found")
-
+    entry = _resolve_connector_entry(connector_id)
     manifest = entry.manifest
     items = []
     for spec in manifest.required_credentials:
@@ -153,9 +202,7 @@ def delete_credential(connector_id: str, vault_key: str, request: Request):
     if _registry is None or _vault is None:
         raise HTTPException(status_code=500, detail="Credential API not initialized")
 
-    entry = _registry.get(connector_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"Connector '{connector_id}' not found")
+    entry = _resolve_connector_entry(connector_id)
 
     _vault.delete(vault_key)
     _vault.access_policy.revoke(connector_id, vault_key)
@@ -182,9 +229,7 @@ def validate_credentials(connector_id: str):
     if _registry is None or _vault is None:
         raise HTTPException(status_code=500, detail="Credential API not initialized")
 
-    entry = _registry.get(connector_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"Connector '{connector_id}' not found")
+    entry = _resolve_connector_entry(connector_id)
 
     manifest = entry.manifest
     missing = [

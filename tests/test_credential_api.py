@@ -16,6 +16,8 @@ from src.connectors.credential_api import router, init_credential_api
 from src.connectors.models import ConnectorOperation, ConnectorResult, HTTPMethod
 from src.connectors.registry import ConnectorRegistry
 from src.connectors.vault import CredentialVault
+from src.core.api_auth import init_api_auth
+import src.core.connectors_api as connectors_api
 from src.core import feature_flags
 
 
@@ -84,6 +86,7 @@ def setup(tmp_path):
     registry.register(connector)
 
     init_credential_api(registry, vault)
+    init_api_auth(lambda request: True)
 
     app = FastAPI()
     app.include_router(router)
@@ -93,6 +96,7 @@ def setup(tmp_path):
 
     os.environ.pop("LANCELOT_VAULT_KEY", None)
     init_credential_api(None, None)
+    init_api_auth(None)
 
 
 # ── Tests ─────────────────────────────────────────────────────────
@@ -184,3 +188,66 @@ class TestCredentialAPI:
         resp = client.get("/connectors/apitest/credentials/status")
         # The response should NOT contain the actual value
         assert "SUPER_SECRET_VALUE" not in resp.text
+
+    def test_disabled_connector_can_onboard_credentials_via_config_lazy_load(self, tmp_path):
+        import yaml
+
+        key = Fernet.generate_key().decode()
+        os.environ["LANCELOT_VAULT_KEY"] = key
+
+        vault_cfg = {
+            "version": "1.0",
+            "storage": {"path": str(tmp_path / "cred.enc"), "backup_path": str(tmp_path / "cred.bak")},
+            "encryption": {"key_env_var": "LANCELOT_VAULT_KEY"},
+            "audit": {"log_access": False},
+        }
+        vault_cfg_path = tmp_path / "vault.yaml"
+        with open(vault_cfg_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(vault_cfg, f)
+        vault = CredentialVault(config_path=str(vault_cfg_path))
+
+        connector_cfg = {
+            "version": "1.0",
+            "connectors": {
+                "generic_rest": {
+                    "enabled": False,
+                    "base_url": "https://api.example.com",
+                    "endpoints": [{"path": "/v1/users", "method": "GET", "name": "List Users"}],
+                    "auth_vault_key": "generic_rest.token",
+                    "auth_type": "bearer",
+                },
+            },
+        }
+        connector_cfg_path = tmp_path / "connectors.yaml"
+        with open(connector_cfg_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(connector_cfg, f)
+
+        registry = ConnectorRegistry(str(connector_cfg_path))
+        init_credential_api(registry, vault)
+        init_api_auth(lambda request: True)
+
+        old_connectors_api_config = connectors_api._config_path
+        connectors_api._config_path = str(connector_cfg_path)
+        try:
+            app = FastAPI()
+            app.include_router(router)
+            client = TestClient(app)
+
+            resp = client.get("/connectors/generic_rest/credentials/status")
+            assert resp.status_code == 200
+            creds = resp.json()["credentials"]
+            assert len(creds) == 1
+            assert creds[0]["vault_key"] == "generic_rest.token"
+
+            resp = client.post("/connectors/generic_rest/credentials", json={
+                "vault_key": "generic_rest.token",
+                "value": "secret-token",
+                "type": "api_key",
+            })
+            assert resp.status_code == 200
+            assert vault.retrieve("generic_rest.token", accessor_id="generic_rest") == "secret-token"
+        finally:
+            connectors_api._config_path = old_connectors_api_config
+            os.environ.pop("LANCELOT_VAULT_KEY", None)
+            init_credential_api(None, None)
+            init_api_auth(None)

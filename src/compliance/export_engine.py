@@ -29,6 +29,7 @@ import logging
 import os
 import time
 import uuid
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -198,6 +199,12 @@ def _export_filename(
     ext = "json"
     if export_format == ExportFormat.PDF:
         ext = "pdf"
+    elif export_format in {
+        ExportFormat.SOC2_JSON,
+        ExportFormat.ISO27001_JSON,
+        ExportFormat.GDPR_JSON,
+    }:
+        ext = "zip"
 
     fmt_key = export_format.lower()
     return f"{fmt_key}_{start_safe}_{end_safe}_{short_id}.{ext}"
@@ -254,6 +261,7 @@ def run_export(
     period_end: str,
     data_dir: str,
     operator_id: str,
+    operator_display_name: str = "",
     session_id: str = "",
     quest_id: Optional[str] = None,
     anomaly_threshold: int = 5,
@@ -316,28 +324,28 @@ def run_export(
         receipt_service, period_start, period_end, quest_id
     )
 
-    # Stage 4: Identity Resolution (display names already in receipts
-    # via operator_id; the export formats resolve names from the
-    # operator registry or include operator_id directly)
+    # Stage 4: Identity Resolution
+    # Receipt-level operator attribution comes from receipt metadata.
+    # Export-level generator identity is passed in explicitly here.
 
     # Stage 5: Format Transform
     if export_format == ExportFormat.SOC2_JSON:
         from src.compliance.soc2_mapper import transform_soc2
         output_data = transform_soc2(
             receipts, chain_result, period_start, period_end,
-            operator_id, generated_at, export_id,
+            operator_id, generated_at, export_id, operator_display_name,
         )
     elif export_format == ExportFormat.ISO27001_JSON:
         from src.compliance.iso27001_mapper import transform_iso27001
         output_data = transform_iso27001(
             receipts, chain_result, period_start, period_end,
-            operator_id, generated_at, export_id,
+            operator_id, generated_at, export_id, operator_display_name,
         )
     elif export_format == ExportFormat.GDPR_JSON:
         from src.compliance.gdpr_mapper import transform_gdpr
         output_data = transform_gdpr(
             receipts, chain_result, period_start, period_end,
-            operator_id, generated_at, export_id,
+            operator_id, generated_at, export_id, operator_display_name,
         )
     elif export_format == ExportFormat.PDF:
         from src.compliance.pdf_export import generate_forensic_timeline_pdf
@@ -362,7 +370,16 @@ def run_export(
     if export_format == ExportFormat.PDF:
         output_bytes = pdf_bytes  # type: ignore[possibly-undefined]
     else:
-        output_bytes = json.dumps(output_data, indent=2).encode("utf-8")
+        from src.compliance.audit_bundle import build_audit_bundle
+
+        artifact_basename = (
+            f"{export_format.lower()}_{period_start[:10]}_{period_end[:10]}_{export_id[:8]}"
+        )
+        output_bytes, _manifest = build_audit_bundle(
+            export_format,
+            output_data,
+            artifact_basename=artifact_basename,
+        )
 
     # Write to disk
     with open(output_path, "wb") as f:

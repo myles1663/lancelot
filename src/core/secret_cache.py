@@ -18,11 +18,13 @@ Public API:
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import threading
+import string
 from typing import Dict, Optional
+
+import bcrypt
 
 logger = logging.getLogger("lancelot.secret_cache")
 
@@ -34,12 +36,12 @@ _KEY_MAP: Dict[str, str] = {
     "LANCELOT_OWNER_TOKEN": "system.owner_token",
     "WARROOM_USERNAME": "system.warroom_username",
     "WARROOM_PASSWORD": "system.warroom_password_hash",
+    "WARROOM_PASSWORD_RESET_CODE": "system.warroom_password_reset_code_hash",
     "LANCELOT_TELEGRAM_TOKEN": "system.telegram_token",
     "LANCELOT_TELEGRAM_CHAT_ID": "system.telegram_chat_id",
 }
 
 # Keys whose values are SHA-256 hashed on migration (not on vault read).
-_HASH_ON_MIGRATE = {"WARROOM_PASSWORD"}
 
 # ── Module state ─────────────────────────────────────────────────
 
@@ -48,9 +50,30 @@ _cache: Dict[str, str] = {}
 _bootstrapped = False
 
 
-def _hash_value(value: str) -> str:
-    """SHA-256 hex digest of a plaintext value."""
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+def _hash_password_value(value: str) -> str:
+    """bcrypt hash of a plaintext password value."""
+    rounds = int(os.getenv("WARROOM_PASSWORD_BCRYPT_ROUNDS", "12"))
+    return bcrypt.hashpw(
+        value.encode("utf-8"),
+        bcrypt.gensalt(rounds=rounds),
+    ).decode("utf-8")
+
+
+def _is_bcrypt_hash(value: str) -> bool:
+    return value.startswith("$2a$") or value.startswith("$2b$") or value.startswith("$2y$")
+
+
+def _is_sha256_hex(value: str) -> bool:
+    return len(value) == 64 and all(ch in string.hexdigits for ch in value)
+
+
+def _normalize_for_storage(env_key: str, raw: str) -> str:
+    """Normalize migrated env secrets into their canonical stored form."""
+    if env_key not in {"WARROOM_PASSWORD", "WARROOM_PASSWORD_RESET_CODE"}:
+        return raw
+    if _is_bcrypt_hash(raw) or _is_sha256_hex(raw):
+        return raw
+    return _hash_password_value(raw)
 
 
 def bootstrap(vault) -> None:
@@ -58,7 +81,7 @@ def bootstrap(vault) -> None:
 
     For each mapped secret:
     1. Try vault first.
-    2. If not in vault but in os.environ, migrate into vault (hash password).
+    2. If not in vault but in os.environ, migrate into vault.
     3. Cache the value for fast lookups.
 
     Args:
@@ -75,10 +98,7 @@ def bootstrap(vault) -> None:
                 elif os.environ.get(env_key):
                     # First-run migration: env → vault.
                     raw = os.environ[env_key]
-                    if env_key in _HASH_ON_MIGRATE:
-                        store_val = _hash_value(raw)
-                    else:
-                        store_val = raw
+                    store_val = _normalize_for_storage(env_key, raw)
                     vault.store(vault_key, store_val, type="system_secret")
                     _cache[env_key] = store_val
                     migrated.append(env_key)

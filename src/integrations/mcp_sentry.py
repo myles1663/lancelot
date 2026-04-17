@@ -13,6 +13,7 @@ class MCPSentry:
     def __init__(self, data_dir="/home/lancelot/data"):
         self.data_dir = data_dir
         self.configs_dir = os.path.join(data_dir, "mcp_configs")
+        self.pending_requests_file = os.path.join(data_dir, "mcp_pending_requests.json")
         self.pending_requests = {}  # Map request_id -> status
         self.audit_file = os.path.join(data_dir, "MEMORY_SUMMARY.md")
         self._rate_tracker = {}  # Map tool_name -> list of timestamps
@@ -22,6 +23,27 @@ class MCPSentry:
             os.makedirs(self.configs_dir)
 
         self.tools = self.discover_tools()
+        self._load_pending_requests()
+
+    def _load_pending_requests(self):
+        """Restore pending/approved MCP requests from disk."""
+        if not os.path.exists(self.pending_requests_file):
+            self.pending_requests = {}
+            return
+        try:
+            with open(self.pending_requests_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                self.pending_requests = data if isinstance(data, dict) else {}
+        except Exception:
+            self.pending_requests = {}
+
+    def _save_pending_requests(self):
+        """Persist pending/approved MCP requests to disk."""
+        try:
+            with open(self.pending_requests_file, "w", encoding="utf-8") as f:
+                json.dump(self.pending_requests, f)
+        except Exception:
+            pass
 
     def discover_tools(self):
         """Scans mcp_configs for available tools."""
@@ -53,6 +75,8 @@ class MCPSentry:
         ]
         for rid in expired:
             del self.pending_requests[rid]
+        if expired:
+            self._save_pending_requests()
 
     def _check_rate_limit(self, tool_name: str) -> bool:
         """Returns True if rate limit is exceeded for the given tool."""
@@ -114,6 +138,7 @@ class MCPSentry:
                 "timestamp": datetime.datetime.utcnow().isoformat(),
                 "_created_at": time.time(),
             }
+            self._save_pending_requests()
 
             # Log permission check
             self._log_permission_check(tool_name, params, "PENDING")
@@ -133,6 +158,7 @@ class MCPSentry:
         """Callback to approve a pending request."""
         if request_id in self.pending_requests:
             self.pending_requests[request_id]["status"] = "APPROVED"
+            self._save_pending_requests()
             return True
         return False
 
@@ -140,6 +166,7 @@ class MCPSentry:
         """Explicitly denies a pending request."""
         if request_id in self.pending_requests:
             self.pending_requests[request_id]["status"] = "DENIED"
+            self._save_pending_requests()
             return True
         return False
 

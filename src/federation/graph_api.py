@@ -17,8 +17,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability, resolve_authenticated_identity
 
 from src.federation.graph_models import (
     GraphEdge,
@@ -36,7 +38,14 @@ from src.federation.graph_validator import (
 
 logger = logging.getLogger(__name__)
 
-graph_router = APIRouter(prefix="/api/federation/graph", tags=["graph-builder"])
+graph_router = APIRouter(
+    prefix="/api/federation/graph",
+    tags=["graph-builder"],
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("federation.admin")),
+    ],
+)
 
 # Module-level store — initialized by init_graph_api()
 _store: Optional[TopologyStore] = None
@@ -62,7 +71,6 @@ def _get_store() -> TopologyStore:
 
 class CreateTopologyRequest(BaseModel):
     topology_name: str = "New Topology"
-    created_by: str = ""
 
 
 class AddNodeRequest(BaseModel):
@@ -93,7 +101,6 @@ class AddEdgeRequest(BaseModel):
 
 
 class AcknowledgeYellowRequest(BaseModel):
-    operator: str
     condition: str = ""
     note: str = ""
 
@@ -110,13 +117,15 @@ class UpdateContractRequest(BaseModel):
 # ═══════════════════════════════════════════════════════════════
 
 @graph_router.post("/topologies")
-async def create_topology(req: CreateTopologyRequest):
+async def create_topology(req: CreateTopologyRequest, request: Request):
     """Create a new empty topology document."""
     store = _get_store()
+    identity = resolve_authenticated_identity(request)
+    created_by = identity.display_name or identity.operator_id or "operator"
     topo = TopologyDocument(
         topology_id=str(uuid.uuid4()),
         topology_name=req.topology_name,
-        created_by=req.created_by,
+        created_by=created_by,
     )
     saved = store.save(topo)
     return {"topology_id": saved.topology_id, "version": saved.version}
@@ -416,7 +425,7 @@ async def validate_single_edge(edge_id: str):
 
 
 @graph_router.post("/edges/{edge_id}/acknowledge")
-async def acknowledge_yellow(edge_id: str, req: AcknowledgeYellowRequest):
+async def acknowledge_yellow(edge_id: str, req: AcknowledgeYellowRequest, request: Request):
     """Acknowledge a YELLOW edge condition (operator sign-off)."""
     store = _get_store()
     topo = store.load()
@@ -427,8 +436,10 @@ async def acknowledge_yellow(edge_id: str, req: AcknowledgeYellowRequest):
     if not edge:
         raise HTTPException(status_code=404, detail=f"Edge '{edge_id}' not found")
 
+    identity = resolve_authenticated_identity(request)
+    operator = identity.display_name or identity.operator_id or "operator"
     ack = YellowAcknowledgment(
-        operator=req.operator,
+        operator=operator,
         condition=req.condition,
         note=req.note,
     )

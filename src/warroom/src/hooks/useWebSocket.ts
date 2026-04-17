@@ -38,9 +38,8 @@ export function useWebSocket({
     wsRef.current = ws
 
     ws.onopen = () => {
-      // F-003: Send auth message as first frame
-      const token = localStorage.getItem('lancelot_api_token') || ''
-      ws.send(JSON.stringify({ type: 'auth', token }))
+      // Browser auth is carried by the HttpOnly session cookie.
+      ws.send(JSON.stringify({ type: 'auth' }))
       setStatus('connected')
     }
 

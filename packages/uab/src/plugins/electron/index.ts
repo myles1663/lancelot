@@ -29,35 +29,86 @@ export class ElectronPlugin implements FrameworkPlugin {
   }
 
   async connect(app: DetectedApp): Promise<PluginConnection> {
-    const port = (app.connectionInfo?.debugPort as number) || 9222;
+    // Try finding a debug port on the given PID or its children.
+    // Electron apps: main process often doesn't have the debug port,
+    // but a child process (or a sibling launched with --remote-debugging-port) might.
+    const portsToTry = this.findDebugPorts(app);
 
-    let actualPort = port;
-    if (!app.connectionInfo?.debugPort) {
-      const discovered = CDPConnection.findDebugPort(app.pid);
-      if (discovered) {
-        actualPort = discovered;
-      } else {
-        throw new Error(
-          `Cannot find CDP debug port for ${app.name} (PID: ${app.pid}).\n` +
-          `Relaunch with: ${CDPConnection.getEnableCommand(app.path, 9222)}\n` +
-          `Or set ELECTRON_ENABLE_REMOTE_DEBUGGING=1 environment variable.`
-        );
+    for (const actualPort of portsToTry) {
+      try {
+        const targets = await CDPConnection.discoverTargets('127.0.0.1', actualPort);
+        const pageTarget = targets.find(t => t.type === 'page');
+        if (!pageTarget) continue;
+
+        const cdp = new CDPConnection('127.0.0.1', actualPort);
+        await cdp.connect(pageTarget.webSocketDebuggerUrl);
+        await cdp.enableDOM();
+        await cdp.enableRuntime();
+        await cdp.enablePage();
+        return new ElectronConnection(app, cdp);
+      } catch {
+        // This port didn't work, try the next one
       }
     }
 
-    const cdp = new CDPConnection('127.0.0.1', actualPort);
-    const targets = await CDPConnection.discoverTargets('127.0.0.1', actualPort);
-    const pageTarget = targets.find(t => t.type === 'page');
-    if (!pageTarget) {
-      throw new Error(`No page targets found on CDP port ${actualPort}. Found: ${targets.map(t => t.type).join(', ')}`);
+    throw new Error(
+      `Cannot find CDP debug port for ${app.name} (PID: ${app.pid}).\n` +
+      `Relaunch with: ${CDPConnection.getEnableCommand(app.path, 9222)}\n` +
+      `Or set ELECTRON_ENABLE_REMOTE_DEBUGGING=1 environment variable.`
+    );
+  }
+
+  /**
+   * Find all potential CDP debug ports for an Electron app.
+   * Checks the main process AND all child processes (renderer, GPU, utility).
+   */
+  private findDebugPorts(app: DetectedApp): number[] {
+    const ports: number[] = [];
+
+    // Explicit port from detection
+    if (app.connectionInfo?.debugPort) {
+      ports.push(app.connectionInfo.debugPort as number);
     }
 
-    await cdp.connect(pageTarget.webSocketDebuggerUrl);
-    await cdp.enableDOM();
-    await cdp.enableRuntime();
-    await cdp.enablePage();
+    // Check the main PID's command line
+    const mainPort = CDPConnection.findDebugPort(app.pid);
+    if (mainPort && !ports.includes(mainPort)) {
+      ports.push(mainPort);
+    }
 
-    return new ElectronConnection(app, cdp);
+    // Check child processes — Electron's main process spawns renderer/GPU
+    // children that may have the debug port
+    try {
+      const { execSync } = require('child_process');
+      const cmd = process.platform === 'win32'
+        ? `wmic process where "ParentProcessId=${app.pid}" get ProcessId,CommandLine /format:csv`
+        : `pgrep -P ${app.pid}`;
+      const output = execSync(cmd, { encoding: 'utf-8', timeout: 5000 });
+
+      if (process.platform === 'win32') {
+        const portMatches = output.matchAll(/--remote-debugging-port=(\d+)/g);
+        for (const m of portMatches) {
+          const p = parseInt(m[1], 10);
+          if (!ports.includes(p)) ports.push(p);
+        }
+      } else {
+        // On macOS/Linux, check each child's command line
+        const childPids = output.trim().split('\n').filter(Boolean);
+        for (const cpid of childPids) {
+          const childPort = CDPConnection.findDebugPort(parseInt(cpid.trim(), 10));
+          if (childPort && !ports.includes(childPort)) ports.push(childPort);
+        }
+      }
+    } catch {
+      // Can't enumerate children — proceed with what we have
+    }
+
+    // Common fallback ports
+    for (const p of [9222, 9229, 9223, 9224, 9225]) {
+      if (!ports.includes(p)) ports.push(p);
+    }
+
+    return ports;
   }
 }
 

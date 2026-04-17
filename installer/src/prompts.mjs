@@ -160,6 +160,22 @@ export async function promptGoogleChatSpace() {
   });
 }
 
+export async function promptWarRoomAuthModel() {
+  return await select({
+    message: 'Choose the War Room authentication model:',
+    choices: [
+      {
+        name: `Local account ${chalk.green('(recommended for personal and small-team deployments)')}`,
+        value: 'local',
+      },
+      {
+        name: `Enterprise SSO (OIDC) ${chalk.gray('Entra, Okta, Keycloak, Auth0, etc.')}`,
+        value: 'oidc',
+      },
+    ],
+  });
+}
+
 export async function promptWarRoomUsername() {
   return await input({
     message: 'Choose a War Room username:',
@@ -203,6 +219,63 @@ export async function promptWarRoomPassword() {
   }
 }
 
+export async function promptOidcIssuerUrl() {
+  return await input({
+    message: 'Enter your OIDC issuer URL:',
+    validate: (val) => {
+      if (!val || (!val.startsWith('https://') && !val.startsWith('http://'))) {
+        return 'Issuer URL must start with http:// or https://';
+      }
+      return true;
+    },
+  });
+}
+
+export async function promptOidcClientId() {
+  return await input({
+    message: 'Enter your OIDC client ID:',
+    validate: (val) => {
+      if (!val || val.trim().length < 2) {
+        return 'Client ID is required';
+      }
+      return true;
+    },
+  });
+}
+
+export async function promptOidcClientSecret() {
+  return await password({
+    message: 'Enter your OIDC client secret:',
+    mask: '*',
+    validate: (val) => {
+      if (!val || val.trim().length < 2) {
+        return 'Client secret is required';
+      }
+      return true;
+    },
+  });
+}
+
+export async function promptOidcBaseUrl() {
+  return await input({
+    message: 'Enter the base URL users will use to reach Lancelot:',
+    default: 'http://localhost:8000',
+    validate: (val) => {
+      if (!val || (!val.startsWith('https://') && !val.startsWith('http://'))) {
+        return 'Base URL must start with http:// or https://';
+      }
+      return true;
+    },
+  });
+}
+
+export async function promptOidcAllowedGroups() {
+  return await input({
+    message: 'Enter allowed OIDC groups (comma-separated), or leave blank to allow any authenticated user:',
+    default: '',
+  });
+}
+
 export async function promptConfirm(config) {
   const providerInfo = PROVIDERS[config.provider];
   const commsInfo = COMMS[config.commsType];
@@ -216,7 +289,10 @@ export async function promptConfirm(config) {
     : `${providerInfo?.name || config.provider} (API key)`;
   console.log(chalk.gray(`    Provider:   ${authLabel}`));
   console.log(chalk.gray(`    Comms:      ${commsInfo?.name || config.commsType}`));
-  console.log(chalk.gray(`    War Room:   ${config.warRoomUser || 'admin'} / ${'*'.repeat((config.warRoomPassword || '').length)}`));
+  const warRoomLabel = config.warRoomAuthModel === 'oidc'
+    ? `Enterprise SSO via ${config.oidcIssuerUrl || 'OIDC'}`
+    : `${config.warRoomUser || 'admin'} / ${'*'.repeat((config.warRoomPassword || '').length)}`;
+  console.log(chalk.gray(`    War Room:   ${warRoomLabel}`));
   if (config.hasGpu) {
     console.log(chalk.gray(`    GPU:        ${config.gpuName} (${config.gpuLayers} layers)`));
   } else {

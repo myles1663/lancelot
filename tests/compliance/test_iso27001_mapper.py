@@ -86,6 +86,7 @@ class TestReceiptToEvidence:
         assert ev["receipt_id"] == "r1"
         assert ev["receipt_type"] == "soul_updated"
         assert ev["operator_id"] == "op-001"
+        assert ev["operator_attribution"] == "human"
 
     def test_pre_identity_migration_defaults_false(self):
         ev = _receipt_to_evidence({"metadata": {}})
@@ -106,6 +107,10 @@ class TestTransformIso27001:
         assert "controls" in result
         assert "excluded_controls" in result
         assert result["export_metadata"]["format"] == "ISO27001_2022"
+        assert result["export_metadata"]["format_version"] == "2.0"
+        assert "statement_of_applicability" in result
+        assert "integrity" in result
+        assert "legacy_attribution_summary" in result
 
     def test_annex_a_control_mapping(self):
         receipts = [
@@ -119,6 +124,7 @@ class TestTransformIso27001:
         a5_1 = result["controls"]["A.5.1"]
         assert a5_1["evidence_count"] == 2
         assert "Information Security Policies" in a5_1["description"]
+        assert a5_1["control_status"] == "observed"
 
     def test_access_control_mapping(self):
         receipts = [
@@ -149,6 +155,7 @@ class TestTransformIso27001:
         for control_id, control in result["controls"].items():
             assert "notes" in control
             assert isinstance(control["notes"], str)
+            assert "evidence_summary" in control
 
     def test_empty_receipts_handling(self):
         result = transform_iso27001(
@@ -158,6 +165,7 @@ class TestTransformIso27001:
         assert result["export_metadata"]["receipt_count"] == 0
         for control in result["controls"].values():
             assert control["evidence_count"] == 0
+            assert control["control_status"] == "not_observed_in_period"
 
     def test_chain_integrity_metadata(self):
         result = transform_iso27001(
@@ -166,6 +174,7 @@ class TestTransformIso27001:
         )
         assert result["export_metadata"]["chain_integrity"] == "CHAIN_INTACT"
         assert result["export_metadata"]["chain_anomaly_detail"] is None
+        assert result["integrity"]["chain_intact"] is True
 
     def test_chain_anomaly_detail(self):
         result = transform_iso27001(
@@ -184,6 +193,7 @@ class TestTransformIso27001:
         assert meta["period_start"] == "2026-03-01"
         assert meta["period_end"] == "2026-03-31"
         assert meta["generated_by"]["operator_id"] == "op-xyz"
+        assert meta["generated_by"]["display_name"] == "op-xyz"
         assert meta["export_id"] == "exp-abc"
 
     def test_all_control_ids_present(self):
@@ -207,10 +217,33 @@ class TestTransformIso27001:
     def test_t3_maps_to_a8_2(self):
         receipts = [
             _make_receipt(action_type=ActionType.T3_APPROVED.value, id="r1"),
-            _make_receipt(action_type=ActionType.MCP_T3_REJECTED.value, id="r2"),
+            _make_receipt(
+                action_type=ActionType.MCP_T3_REJECTED.value,
+                id="r2",
+                status="failure",
+            ),
         ]
         result = transform_iso27001(
             receipts, _intact_chain(),
             "2026-01-01", "2026-01-31", "op-001", "2026-01-31T00:00:00Z", "e-001",
         )
         assert result["controls"]["A.8.2"]["evidence_count"] == 2
+        assert result["controls"]["A.8.2"]["exception_count"] == 1
+
+    def test_exception_summary_and_scope_present(self):
+        receipts = [
+            _make_receipt(
+                action_type=ActionType.KILL_SWITCH_ISSUED.value,
+                id="r1",
+                status="failure",
+                operator_id=None,
+            ),
+        ]
+        result = transform_iso27001(
+            receipts, _anomaly_chain(),
+            "2026-01-01", "2026-01-31", "op-001", "2026-01-31T00:00:00Z", "e-001",
+            operator_display_name="Arthur",
+        )
+        assert result["exception_summary"]["total_exception_receipts"] >= 1
+        assert result["export_scope"]["receipt_count"] == 1
+        assert result["system_context"]["generated_by"]["display_name"] == "Arthur"

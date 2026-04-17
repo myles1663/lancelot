@@ -1,0 +1,31 @@
+{
+  "skill_name": "excel_data_flow",
+  "app_name": "Excel",
+  "executable": "excel.exe",
+  "app_framework": "Office",
+  "target_flow": "Read and write data in Microsoft Excel",
+  "input_method": "com_api",
+  "focus_method": "focus_endpoint",
+  "read_method": "com_api",
+  "navigation_plan": [
+    {"step": 1, "action": "connect", "params": {"target": "excel"}, "note": "Returns pid — connects via COM automation"},
+    {"step": 2, "action": "act", "params": {"pid": "{pid}", "elementId": "_", "action": "readRange", "params": {"range": "A1:D10"}}, "note": "Read cell range via COM"},
+    {"step": 3, "action": "act", "params": {"pid": "{pid}", "elementId": "_", "action": "writeRange", "params": {"range": "A1", "text": "{value}"}}, "note": "Write to cell via COM"},
+    {"step": 4, "action": "act", "params": {"pid": "{pid}", "elementId": "_", "action": "getSheets"}, "note": "List all sheets"}
+  ],
+  "common_actions": {
+    "read_cell": {"action": "readRange", "params": {"range": "{cell}"}},
+    "write_cell": {"action": "writeRange", "params": {"range": "{cell}", "text": "{value}"}},
+    "read_formula": {"action": "readFormula", "params": {"range": "{cell}"}},
+    "list_sheets": {"action": "getSheets"},
+    "create_pivot": "Not yet supported via COM — use UIA fallback"
+  },
+  "known_issues": [
+    "COM requires Excel to be running with a workbook open",
+    "Large ranges can be slow — limit to 1000 cells per read",
+    "Formula writes use the formula param, not text"
+  ],
+  "risk_tier": "T1",
+  "version": "1.0",
+  "last_verified": "2026-03-21"
+}

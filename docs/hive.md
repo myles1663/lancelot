@@ -14,6 +14,7 @@ Each sub-agent:
 - Gets a **scoped Soul** that is always more restrictive than the parent
 - Runs in its own thread with independent timeout and action limits
 - Produces receipts for every action
+- Preserves the initiating operator/session identity on child-agent receipts
 - Can be paused, resumed, killed, or modified by the operator at any time
 - Is automatically collapsed (destroyed) when done — no persistent state
 
@@ -243,6 +244,15 @@ Checks:
 - Scheduling boundaries not loosened
 - `no_autonomous_irreversible` maintained if parent has it
 
+### Enforcement
+
+The live startup path now enforces scoped-Soul guarantees at runtime rather than treating them as documentation-only intent.
+
+- **Spawn time**: `AgentLifecycleManager.spawn()` rejects a generated scoped Soul if it is not provably more restrictive than the parent.
+- **Per action**: `SubAgentRuntime` checks the task's allowed apps and scoped categories before governance and execution.
+- **Desktop actions**: `HiveUABExecutor` validates the target app boundary and governed UAB capability (`uab_click`, `uab_type`, and similar mutating steps) before calling the UAB provider.
+- **Failure mode**: Any scoped-boundary breach collapses the agent with `SOUL_VIOLATION` instead of letting execution continue out of scope.
+
 ### Hashing
 
 Each scoped Soul is hashed (`SHA256[:16]`) and stored on the `SubAgentRecord` for audit linkage.
@@ -379,6 +389,7 @@ All Hive events are receipt-traced via the shared receipt system.
 
 - **quest_id** — groups all receipts for a single high-level task
 - **parent_id** — links receipts to their parent (e.g., agent spawn links to task decomposition)
+- **operator_id / session_id** — inherited from the initiating operator so the full child-agent lifecycle remains attributable in audit trails
 - **metadata** — contains `hive_subsystem`, `hive_agent_id`, intervention details
 
 ### HiveReceiptManager Methods
@@ -438,6 +449,27 @@ All endpoints are under `/api/hive` and gated by `FEATURE_HIVE`.
 | POST | `/api/hive/agents/{id}/kill` | `{"reason": str}` | Kill an agent (reason required) |
 | POST | `/api/hive/agents/{id}/modify` | `{"reason": str, "feedback": str}` | Kill + replan with feedback |
 | POST | `/api/hive/kill-all` | `{"reason": str}` | Emergency: collapse all agents |
+
+### Runtime Status Contract
+
+`GET /api/hive/status` now reports both mesh state and dependency readiness.
+
+Key fields:
+
+- `enabled`
+- `status`
+- `active_agents`
+- `max_agents`
+- `architect_ready`
+- `lifecycle_ready`
+- `registry_ready`
+- `receipt_manager_ready`
+- `config_ready`
+- `runtime_degraded`
+- `degraded_reasons`
+- `runtime_errors`
+
+This prevents HIVE from presenting a success-shaped idle/not-initialized response when a live runtime dependency is actually failing.
 
 ### Interventions
 

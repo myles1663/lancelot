@@ -23,6 +23,7 @@ import os
 import threading
 import time
 import uuid
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
@@ -54,6 +55,17 @@ class WebhookDelivery:
     last_status: Optional[int] = None
     last_error: Optional[str] = None
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "webhook_id": self.webhook_id,
+            "endpoint_id": self.endpoint.id,
+            "payload_envelope": self.payload_envelope,
+            "attempt": self.attempt,
+            "created_at": self.created_at,
+            "last_status": self.last_status,
+            "last_error": self.last_error,
+        }
+
 
 class WebhookEngine:
     """Manages webhook delivery with retry and HMAC signing.
@@ -68,6 +80,7 @@ class WebhookEngine:
         deployment_id: str = "",
         delivery_timeout_s: int = 10,
         max_retries: int = MAX_ATTEMPTS,
+        data_dir: str = "/home/lancelot/data",
     ):
         self._endpoints = {ep.id: ep for ep in endpoints if ep.enabled}
         self._deployment_id = deployment_id or os.getenv("LANCELOT_DEPLOYMENT_ID", "")
@@ -78,6 +91,14 @@ class WebhookEngine:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._client = httpx.Client(timeout=delivery_timeout_s, verify=True)
+        pending_file_override = os.getenv("LANCELOT_WEBHOOK_PENDING_FILE", "").strip()
+        if pending_file_override:
+            self._pending_file = Path(pending_file_override)
+            self._pending_file.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            self._data_dir = Path(data_dir)
+            self._data_dir.mkdir(parents=True, exist_ok=True)
+            self._pending_file = self._data_dir / "webhook_pending_deliveries.json"
 
         # Stats
         self._stats: Dict[str, Dict[str, int]] = {}
@@ -88,6 +109,7 @@ class WebhookEngine:
                 "pending_retries": 0,
                 "last_delivery_ts": 0,
             }
+        self._load_pending()
 
     def start(self) -> None:
         """Start the retry background thread."""
@@ -117,6 +139,12 @@ class WebhookEngine:
                         "delivered": 0, "failed": 0,
                         "pending_retries": 0, "last_delivery_ts": 0,
                     }
+            self._pending = [
+                delivery for delivery in self._pending
+                if delivery.endpoint.id in self._endpoints
+            ]
+            self._update_pending_stats_locked()
+            self._save_pending_locked()
 
     def on_receipt(self, receipt_dict: Dict[str, Any]) -> None:
         """Process a receipt and deliver to matching webhook endpoints.
@@ -143,10 +171,14 @@ class WebhookEngine:
             if not success:
                 with self._lock:
                     self._pending.append(delivery)
+                    self._update_pending_stats_locked()
+                    self._save_pending_locked()
 
     def get_stats(self) -> Dict[str, Any]:
         """Return delivery stats per endpoint."""
-        return dict(self._stats)
+        with self._lock:
+            self._update_pending_stats_locked()
+            return dict(self._stats)
 
     # ── Internal ──────────────────────────────────────────────────
 
@@ -295,6 +327,58 @@ class WebhookEngine:
         except Exception as exc:
             logger.error("Failed to write WEBHOOK_DELIVERY_FAILED receipt: %s", exc)
 
+    def _load_pending(self) -> None:
+        if not self._pending_file.exists():
+            return
+        try:
+            raw = self._pending_file.read_text(encoding="utf-8").strip()
+            if not raw:
+                return
+            data = json.loads(raw)
+            pending: List[WebhookDelivery] = []
+            for item in data if isinstance(data, list) else []:
+                endpoint_id = item.get("endpoint_id", "")
+                endpoint = self._endpoints.get(endpoint_id)
+                if endpoint is None:
+                    continue
+                pending.append(
+                    WebhookDelivery(
+                        webhook_id=item.get("webhook_id", str(uuid.uuid4())),
+                        endpoint=endpoint,
+                        payload_envelope=dict(item.get("payload_envelope", {})),
+                        attempt=int(item.get("attempt", 1)),
+                        created_at=float(item.get("created_at", time.time())),
+                        last_status=item.get("last_status"),
+                        last_error=item.get("last_error"),
+                    )
+                )
+            with self._lock:
+                self._pending = pending
+                self._update_pending_stats_locked()
+        except Exception as exc:
+            logger.warning("Failed to load pending webhook deliveries: %s", exc)
+            with self._lock:
+                self._pending = []
+                self._update_pending_stats_locked()
+
+    def _save_pending_locked(self) -> None:
+        try:
+            payload = [delivery.to_dict() for delivery in self._pending]
+            self._pending_file.write_text(
+                json.dumps(payload, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning("Failed to persist pending webhook deliveries: %s", exc)
+
+    def _update_pending_stats_locked(self) -> None:
+        pending_counts = {ep_id: 0 for ep_id in self._stats}
+        for delivery in self._pending:
+            endpoint_id = delivery.endpoint.id
+            pending_counts[endpoint_id] = pending_counts.get(endpoint_id, 0) + 1
+        for ep_id, stats in self._stats.items():
+            stats["pending_retries"] = pending_counts.get(ep_id, 0)
+
     def _retry_loop(self) -> None:
         """Background thread that processes pending retries."""
         while self._running:
@@ -320,6 +404,8 @@ class WebhookEngine:
                         remaining.append(d)
 
                 self._pending = remaining
+                self._update_pending_stats_locked()
+                self._save_pending_locked()
 
             # Execute retries outside the lock
             for d in to_retry:
@@ -327,6 +413,8 @@ class WebhookEngine:
                 if not success:
                     with self._lock:
                         self._pending.append(d)
+                        self._update_pending_stats_locked()
+                        self._save_pending_locked()
 
 
 # Module-level singleton
@@ -343,6 +431,7 @@ def init_webhook_engine(
     deployment_id: str = "",
     delivery_timeout_s: int = 10,
     max_retries: int = MAX_ATTEMPTS,
+    data_dir: str = "/home/lancelot/data",
 ) -> WebhookEngine:
     """Initialize and start the webhook engine singleton."""
     global _engine
@@ -353,6 +442,7 @@ def init_webhook_engine(
         deployment_id=deployment_id,
         delivery_timeout_s=delivery_timeout_s,
         max_retries=max_retries,
+        data_dir=data_dir,
     )
     _engine.start()
     return _engine

@@ -48,6 +48,10 @@ class AgentRegistry:
         task_spec: TaskSpec,
         quest_id: Optional[str] = None,
         scoped_soul_hash: Optional[str] = None,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        operator_name: Optional[str] = None,
+        parent_receipt_id: Optional[str] = None,
     ) -> SubAgentRecord:
         """Register a new sub-agent in SPAWNING state.
 
@@ -62,6 +66,10 @@ class AgentRegistry:
                 state=AgentState.SPAWNING,
                 quest_id=quest_id,
                 scoped_soul_hash=scoped_soul_hash,
+                operator_id=operator_id,
+                session_id=session_id,
+                operator_name=operator_name,
+                parent_receipt_id=parent_receipt_id,
             )
             record.state_history.append({
                 "from": None,

@@ -123,7 +123,7 @@ def _load_proposals_raw(soul_dir: Optional[str] = None) -> List[dict]:
         return data if isinstance(data, list) else []
     except json.JSONDecodeError as exc:
         logger.error("Corrupted proposals file %s: %s", path, exc)
-        raise SoulStoreError(f"Corrupted proposals file: {exc}") from exc
+        return []
     except OSError as exc:
         logger.error("Failed to read proposals file %s: %s", path, exc)
         raise SoulStoreError(f"Failed to read proposals: {exc}") from exc

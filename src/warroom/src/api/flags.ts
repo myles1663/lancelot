@@ -71,6 +71,9 @@ export interface UABStatus {
   connected_apps: number
   supported_frameworks: string[]
   uptime_seconds: number
+  transport?: string
+  standalone_features?: string[]
+  connections?: UABConnectedApp[]
 }
 
 export interface UABConnectedApp {
@@ -79,6 +82,7 @@ export interface UABConnectedApp {
   framework: string
   connectionMethod: string
   windowTitle: string
+  elementCount?: number
 }
 
 export const fetchUABStatus = () => apiGet<UABStatus>('/api/flags/uab-status')

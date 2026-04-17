@@ -71,6 +71,8 @@ class MCPReceiptManager:
         soul_version: str = "",
         quest_id: str = "",
         parent_id: str = "",
+        operator_id: str = "",
+        session_id: str = "",
         metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Record a successful MCP tool invocation.
@@ -102,6 +104,8 @@ class MCPReceiptManager:
             tier=0,  # DETERMINISTIC — MCP proxy is pure routing
             quest_id=quest_id or None,
             parent_id=parent_id or None,
+            operator_id=operator_id or None,
+            session_id=session_id or None,
             metadata={
                 "soul_version": soul_version,
                 "mcp_server_id": server_id,
@@ -126,6 +130,8 @@ class MCPReceiptManager:
         risk_tier: str = "T2",
         soul_version: str = "",
         quest_id: str = "",
+        operator_id: str = "",
+        session_id: str = "",
         metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Record a blocked MCP tool invocation.
@@ -168,6 +174,8 @@ class MCPReceiptManager:
                 duration_ms=0,
                 tier=0,  # DETERMINISTIC
                 quest_id=quest_id or None,
+                operator_id=operator_id or None,
+                session_id=session_id or None,
                 metadata={
                     "soul_version": soul_version,
                     "mcp_server_id": server_id,
@@ -196,6 +204,8 @@ class MCPReceiptManager:
         tool_name: str,
         original_error: str,
         soul_version: str = "",
+        operator_id: str = "",
+        session_id: str = "",
     ) -> str:
         """Record that a receipt write failed — the fourth fail-closed gate.
 
@@ -211,6 +221,8 @@ class MCPReceiptManager:
             block_reason=f"Receipt persistence failed: {original_error}",
             block_gate="receipt_failure",
             soul_version=soul_version,
+            operator_id=operator_id,
+            session_id=session_id,
         )
 
 

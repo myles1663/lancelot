@@ -31,10 +31,21 @@ export function showSuccess(config) {
   console.log(chalk.green.bold('  ╚══════════════════════════════════════════╝'));
   console.log('');
 
-  if (config.warRoomPassword) {
+  if (config.warRoomAuthModel === 'oidc') {
+    console.log(chalk.yellow.bold('  War Room Authentication:'));
+    console.log(chalk.white(`    Mode: ${chalk.bold('Enterprise SSO (OIDC)')}`));
+    console.log(chalk.white(`    Issuer: ${chalk.bold(config.oidcIssuerUrl || 'configured')}`));
+    console.log(chalk.yellow('    Users will sign in through your identity provider.'));
+    console.log('');
+  }
+
+  if (config.warRoomAuthModel !== 'oidc' && config.warRoomPassword) {
     console.log(chalk.yellow.bold('  War Room Login Credentials:'));
     console.log(chalk.white(`    Username: ${chalk.bold(config.warRoomUser || 'admin')}`));
     console.log(chalk.white(`    Password: ${chalk.bold(config.warRoomPassword)}`));
+    if (config.warRoomPasswordResetCode) {
+      console.log(chalk.white(`    Reset code: ${chalk.bold(config.warRoomPasswordResetCode)}`));
+    }
     console.log(chalk.yellow('    Save these — you need them to access the War Room.'));
     console.log('');
   }

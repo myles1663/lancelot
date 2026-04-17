@@ -16,6 +16,81 @@ import unittest
 from unittest.mock import patch, MagicMock
 
 from fastapi.testclient import TestClient
+from src.core.operator_identity import OperatorIdentity
+
+# Stub heavy external dependencies that gateway.py imports
+sys.modules.setdefault("google.generativeai", type(sys)("google.generativeai"))
+sys.modules.setdefault("chromadb", type(sys)("chromadb"))
+
+
+def _prepare_data_dir(data_dir: str):
+    """Create minimal memory files so orchestrator init succeeds."""
+    os.makedirs(data_dir, exist_ok=True)
+    for fn in ("USER.md", "RULES.md", "MEMORY_SUMMARY.md"):
+        path = os.path.join(data_dir, fn)
+        if not os.path.exists(path):
+            with open(path, "w") as f:
+                if fn == "USER.md":
+                    f.write("# User Profile\n- Name: Arthur\n- Role: Commander\n- Bonded: True\n- OnboardingComplete: True")
+                else:
+                    f.write("")
+
+
+def _load_gateway(data_dir: str):
+    """Import (or reload) gateway with a patched data directory.
+
+    Patches the hardcoded '/home/lancelot/data' to a temp directory so
+    the orchestrator, onboarding, and receipt service init correctly
+    outside Docker.
+    """
+    _prepare_data_dir(data_dir)
+
+    # Patch at the orchestrator and onboarding level
+    import orchestrator as _orch_mod
+    import onboarding as _onb_mod
+
+    orig_orch_init = _orch_mod.LancelotOrchestrator.__init__
+    orig_onb_init = _onb_mod.OnboardingOrchestrator.__init__
+
+    def patched_orch_init(self, data_dir_arg="/home/lancelot/data", **kw):
+        kw.pop("data_dir", None)
+        orig_orch_init(self, data_dir=data_dir, **kw)
+
+    def patched_onb_init(self, data_dir_arg="/home/lancelot/data", **kw):
+        kw.pop("data_dir", None)
+        orig_onb_init(self, data_dir=data_dir, **kw)
+
+    _orch_mod.LancelotOrchestrator.__init__ = patched_orch_init
+    _onb_mod.OnboardingOrchestrator.__init__ = patched_onb_init
+
+    try:
+        import gateway
+        importlib.reload(gateway)
+    finally:
+        _orch_mod.LancelotOrchestrator.__init__ = orig_orch_init
+        _onb_mod.OnboardingOrchestrator.__init__ = orig_onb_init
+
+    return gateway
+
+
+def _insert_session(token: str, capabilities: set[str]):
+    from src.core import auth_api
+
+    identity = OperatorIdentity(
+        operator_id="op-123",
+        display_name="Arthur",
+        session_id="session-1",
+        session_started_at="2026-04-10T00:00:00Z",
+        auth_method="local",
+        ip_address="127.0.0.1",
+    )
+    auth_api._sessions[token] = {
+        "expires_at": 9999999999,
+        "username": "Arthur",
+        "operator_identity": identity,
+        "capabilities": sorted(capabilities),
+        "groups": [],
+    }
 
 # Stub heavy external dependencies that gateway.py imports
 sys.modules.setdefault("google.generativeai", type(sys)("google.generativeai"))
@@ -133,7 +208,15 @@ class TestGatewayAuth(unittest.TestCase):
             json={"request_id": "abc", "action": "APPROVE"},
             headers=self.valid_headers,
         )
-        self.assertNotEqual(response.status_code, 401)
+        self.assertIn(response.status_code, (200, 400))
+
+    def test_mcp_callback_webhook_bearer_succeeds_without_session_capability(self):
+        response = self.client.post(
+            "/mcp_callback",
+            json={"request_id": "abc", "action": "APPROVE"},
+            headers={"Authorization": "Bearer test-secret-token-12345"},
+        )
+        self.assertIn(response.status_code, (200, 400))
 
     def test_forge_discover_no_token_returns_401(self):
         response = self.client.post("/forge/discover", json={"url": "test docs"})
@@ -197,6 +280,55 @@ class TestCrusaderStatusAuth(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn("crusader_mode", response.json())
+
+
+class TestGatewayCapabilityHardening(unittest.TestCase):
+    """Tests that legacy gateway control routes require coarse admin capabilities."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmpdir = tempfile.mkdtemp(prefix="lancelot_s1_caps_")
+        os.environ["LANCELOT_API_TOKEN"] = "test-secret-token-12345"
+        gw = _load_gateway(cls._tmpdir)
+        cls.gateway = gw
+        cls.app = gw.app
+
+    def setUp(self):
+        from src.core import auth_api
+
+        auth_api._sessions.clear()
+        self.client = TestClient(self.app)
+
+    def test_crusader_activate_requires_platform_admin(self):
+        limited = "limited-session"
+        _insert_session(limited, {"warroom.login"})
+
+        response = self.client.post(
+            "/api/crusader/activate",
+            cookies={"lancelot_session": limited},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("Missing capability: platform.admin", response.json()["error"])
+
+        admin = "admin-session"
+        _insert_session(admin, {"warroom.login", "platform.admin"})
+        response = self.client.post(
+            "/api/crusader/activate",
+            cookies={"lancelot_session": admin},
+        )
+        self.assertNotIn(response.status_code, (401, 403))
+
+    def test_google_oauth_start_requires_connectors_admin(self):
+        limited = "limited-connectors-session"
+        _insert_session(limited, {"warroom.login"})
+
+        response = self.client.post(
+            "/api/google-oauth/start",
+            cookies={"lancelot_session": limited},
+            json={"client_id": "cid", "client_secret": "csecret"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("Missing capability: connectors.admin", response.json()["error"])
 
 
 class TestDevModeNoToken(unittest.TestCase):

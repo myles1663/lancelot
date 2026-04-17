@@ -28,8 +28,21 @@ if not exist "%AGENT_SCRIPT%" (
     exit /b 1
 )
 
-:: Set token (from env or default)
-if not defined HOST_AGENT_TOKEN set HOST_AGENT_TOKEN=lancelot-host-agent
+if not defined HOST_AGENT_TOKEN (
+    echo  ERROR: HOST_AGENT_TOKEN is not set.
+    echo  Set a strong shared token before installing the host agent service.
+    echo.
+    pause
+    exit /b 1
+)
+
+if "%HOST_AGENT_TOKEN%"=="lancelot-host-agent" (
+    echo  ERROR: HOST_AGENT_TOKEN is still using the legacy default value.
+    echo  Set a unique token on both the host agent and Lancelot container first.
+    echo.
+    pause
+    exit /b 1
+)
 
 :: Find pythonw.exe full path
 for /f "tokens=*" %%i in ('where pythonw') do set PYTHONW_PATH=%%i

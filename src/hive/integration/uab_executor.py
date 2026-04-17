@@ -118,9 +118,11 @@ class HiveUABExecutor:
         self,
         uab_provider,
         llm_router=None,
+        governance_bridge=None,
     ):
         self._uab = uab_provider
         self._llm = llm_router  # _OrchestratorRouterAdapter or ModelRouter
+        self._governance = governance_bridge
 
     def __call__(self, action: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a subtask action via real UAB calls.
@@ -138,9 +140,14 @@ class HiveUABExecutor:
         context = action.get("context", {})
         pid = context.get("target_pid")
         app_name = context.get("target_app", "unknown")
+        agent_id = action.get("agent_id", "")
+        scoped_soul = action.get("scoped_soul")
+        allowed_apps = action.get("allowed_apps") or []
 
         if not pid:
             return {"success": False, "error": "No target_pid in context", "steps": []}
+
+        self._validate_app_access(app_name, allowed_apps, scoped_soul)
 
         start_time = time.monotonic()
         step_results = []
@@ -177,6 +184,7 @@ class HiveUABExecutor:
 
             # Step 4: Execute each UAB step
             for i, step in enumerate(uab_steps):
+                self._validate_step(step, app_name, agent_id)
                 step_result = self._execute_step(step, pid)
                 step_results.append(step_result)
 
@@ -205,6 +213,8 @@ class HiveUABExecutor:
             }
 
         except Exception as exc:
+            if isinstance(exc, ScopedSoulViolationError):
+                raise
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
             logger.error("UAB executor error for PID %d: %s", pid or 0, exc)
             return {
@@ -312,6 +322,50 @@ class HiveUABExecutor:
             steps.append({"method": "state"})
 
         return steps
+
+    def _validate_app_access(
+        self,
+        app_name: str,
+        allowed_apps: List[str],
+        scoped_soul=None,
+    ) -> None:
+        allowed = {a.lower() for a in allowed_apps if a}
+        if allowed and app_name.lower() not in allowed:
+            raise ScopedSoulViolationError(
+                agent_id="hive-uab",
+                action=app_name,
+                reason=f"Scoped Soul forbids desktop app '{app_name}'",
+            )
+
+    def _validate_step(self, step: Dict[str, Any], app_name: str, agent_id: str) -> None:
+        method = str(step.get("method", "")).strip().lower()
+        if method in {"state", "query"}:
+            return
+
+        capability = None
+        if method == "act":
+            action_name = str(step.get("action", "")).strip().lower()
+            if action_name:
+                capability = f"uab_{action_name}"
+        elif method in {"keypress", "hotkey", "maximize", "restore"}:
+            capability = f"uab_{method}"
+
+        if capability and self._governance is not None:
+            gov_result = self._governance.validate_action(
+                capability=capability,
+                scope=app_name,
+                target=method,
+                agent_id=agent_id,
+            )
+            if not gov_result.approved:
+                raise ScopedSoulViolationError(
+                    agent_id=agent_id or "hive-uab",
+                    action=capability,
+                    reason=(
+                        f"Governance denied UAB capability '{capability}': "
+                        f"{gov_result.reason}"
+                    ),
+                )
 
     def _find_editor_element(self, elements: list) -> Optional[str]:
         """Find the main text editor element from a UI tree (recursive)."""

@@ -7,13 +7,19 @@ POST /api/updates/dismiss  — Dismiss the update banner
 """
 
 import logging
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from update_checker import UpdateChecker
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability
 
 logger = logging.getLogger("lancelot.update_api")
 
-router = APIRouter(prefix="/api/updates", tags=["updates"])
+router = APIRouter(
+    prefix="/api/updates",
+    tags=["updates"],
+    dependencies=[Depends(require_authenticated_request)],
+)
 
 # Module-level reference; set by init_update_api()
 _checker: UpdateChecker | None = None
@@ -41,7 +47,9 @@ async def update_status():
 
 
 @router.post("/check")
-async def update_check():
+async def update_check(
+    _authz: None = Depends(require_operator_capability("platform.admin")),
+):
     """Force an immediate version check."""
     if not _checker:
         return _safe_error(503, "Update checker not initialized")
@@ -50,7 +58,9 @@ async def update_check():
 
 
 @router.post("/dismiss")
-async def update_dismiss():
+async def update_dismiss(
+    _authz: None = Depends(require_operator_capability("platform.admin")),
+):
     """Dismiss the update banner (info/recommended only)."""
     if not _checker:
         return _safe_error(503, "Update checker not initialized")

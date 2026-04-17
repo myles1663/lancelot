@@ -17,11 +17,13 @@ SYNCHRONIZED → PROPAGATING → STALE → DIVERGED
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -74,6 +76,32 @@ class InstancePropagation:
     updated_at: Optional[str] = None
     reject_reason: str = ""
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "instance_id": self.instance_id,
+            "state": self.state.value,
+            "previous_version_hash": self.previous_version_hash,
+            "new_version_hash": self.new_version_hash,
+            "updated_at": self.updated_at,
+            "reject_reason": self.reject_reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "InstancePropagation":
+        state = data.get("state", InstancePropState.PENDING.value)
+        try:
+            inst_state = InstancePropState(state)
+        except ValueError:
+            inst_state = InstancePropState.PENDING
+        return cls(
+            instance_id=data.get("instance_id", ""),
+            state=inst_state,
+            previous_version_hash=data.get("previous_version_hash", ""),
+            new_version_hash=data.get("new_version_hash", ""),
+            updated_at=data.get("updated_at"),
+            reject_reason=data.get("reject_reason", ""),
+        )
+
 
 @dataclass
 class SoulPropagationEvent:
@@ -106,15 +134,43 @@ class SoulPropagationEvent:
             "target_version_hash": self.target_version_hash,
             "initiated_at": self.initiated_at,
             "completed_at": self.completed_at,
+            "timeout_seconds": self.timeout_seconds,
             "instances": [
-                {
-                    "instance_id": i.instance_id,
-                    "state": i.state.value,
-                    "updated_at": i.updated_at,
-                }
+                i.to_dict()
                 for i in self.instances
             ],
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SoulPropagationEvent":
+        tier = data.get("tier", PropagationTier.T1_MINOR.value)
+        state = data.get("state", PropagationState.INITIATED.value)
+        try:
+            propagation_tier = PropagationTier(tier)
+        except ValueError:
+            propagation_tier = PropagationTier.T1_MINOR
+        try:
+            propagation_state = PropagationState(state)
+        except ValueError:
+            propagation_state = PropagationState.INITIATED
+        return cls(
+            event_id=data.get("event_id", ""),
+            tier=propagation_tier,
+            state=propagation_state,
+            issuer_id=data.get("issuer_id", ""),
+            reason=data.get("reason", ""),
+            source_version=data.get("source_version", ""),
+            source_version_hash=data.get("source_version_hash", ""),
+            target_version=data.get("target_version", ""),
+            target_version_hash=data.get("target_version_hash", ""),
+            initiated_at=data.get("initiated_at", datetime.now(timezone.utc).isoformat()),
+            completed_at=data.get("completed_at"),
+            instances=[
+                InstancePropagation.from_dict(item)
+                for item in data.get("instances", []) or []
+            ],
+            timeout_seconds=float(data.get("timeout_seconds", 60.0) or 60.0),
+        )
 
 
 def classify_change_tier(
@@ -157,16 +213,20 @@ class SoulPropagationEngine:
         self,
         self_instance_id: str,
         peer_ids: Optional[List[str]] = None,
+        persistence_path: Optional[str] = None,
     ):
         self._self_id = self_instance_id
         self._peer_ids = list(peer_ids or [])
         self._events: Dict[str, SoulPropagationEvent] = {}
         self._consistency_state = ConsistencyState.SYNCHRONIZED
+        self._persistence_path = Path(persistence_path) if persistence_path else None
         self._lock = threading.Lock()
+        self._load_from_disk()
 
     def update_peers(self, peer_ids: List[str]) -> None:
         with self._lock:
             self._peer_ids = list(peer_ids)
+            self._persist_to_disk_locked()
 
     @property
     def consistency_state(self) -> ConsistencyState:
@@ -227,6 +287,7 @@ class SoulPropagationEngine:
 
             self._events[event_id] = event
             self._consistency_state = ConsistencyState.PROPAGATING
+            self._persist_to_disk_locked()
             return event
 
     def record_pause_ack(self, event_id: str, instance_id: str) -> bool:
@@ -250,6 +311,7 @@ class SoulPropagationEngine:
             if all_paused:
                 event.state = PropagationState.PAUSED
 
+            self._persist_to_disk_locked()
             return True
 
     def advance_to_activation(self, event_id: str) -> bool:
@@ -263,6 +325,7 @@ class SoulPropagationEngine:
             if not event or event.state != PropagationState.PAUSED:
                 return False
             event.state = PropagationState.ACTIVATING
+            self._persist_to_disk_locked()
             return True
 
     def record_activation(self, event_id: str, instance_id: str) -> bool:
@@ -279,9 +342,19 @@ class SoulPropagationEngine:
             inst.state = InstancePropState.ACTIVATED
             inst.updated_at = datetime.now(timezone.utc).isoformat()
 
-            # For T3, need confirmation step
+            # For T3, move to confirmation only after every instance has
+            # reached activation (or already confirmed itself locally).
             if event.tier == PropagationTier.T3_CRITICAL:
-                event.state = PropagationState.CONFIRMING
+                all_activated = all(
+                    i.state in {
+                        InstancePropState.ACTIVATED,
+                        InstancePropState.CONFIRMED,
+                    }
+                    for i in event.instances
+                )
+                if all_activated:
+                    event.state = PropagationState.CONFIRMING
+                self._persist_to_disk_locked()
             else:
                 # T1/T2: check if all activated
                 all_activated = all(
@@ -289,6 +362,8 @@ class SoulPropagationEngine:
                 )
                 if all_activated:
                     self._complete_event(event)
+                else:
+                    self._persist_to_disk_locked()
 
             return True
 
@@ -310,12 +385,23 @@ class SoulPropagationEngine:
             inst.state = InstancePropState.CONFIRMED
             inst.updated_at = datetime.now(timezone.utc).isoformat()
 
+            self._persist_to_disk_locked()
+            return True
+
+    def complete_confirmed_event(self, event_id: str) -> bool:
+        """Complete a T3 event once resume is allowed after confirmations."""
+        with self._lock:
+            event = self._events.get(event_id)
+            if not event or event.tier != PropagationTier.T3_CRITICAL:
+                return False
+            if event.state == PropagationState.FAILED:
+                return False
             all_confirmed = all(
                 i.state == InstancePropState.CONFIRMED for i in event.instances
             )
-            if all_confirmed:
-                self._complete_event(event)
-
+            if not all_confirmed:
+                return False
+            self._complete_event(event)
             return True
 
     def record_rejection(
@@ -342,6 +428,7 @@ class SoulPropagationEngine:
             event.state = PropagationState.FAILED
             event.completed_at = datetime.now(timezone.utc).isoformat()
             self._consistency_state = ConsistencyState.DIVERGED
+            self._persist_to_disk_locked()
             return True
 
     def rollback(self, event_id: str) -> bool:
@@ -356,6 +443,7 @@ class SoulPropagationEngine:
             event.state = PropagationState.ROLLED_BACK
             event.completed_at = datetime.now(timezone.utc).isoformat()
             self._consistency_state = ConsistencyState.STALE
+            self._persist_to_disk_locked()
             return True
 
     def get_event(self, event_id: str) -> Optional[SoulPropagationEvent]:
@@ -387,3 +475,46 @@ class SoulPropagationEngine:
         event.state = PropagationState.COMPLETED
         event.completed_at = datetime.now(timezone.utc).isoformat()
         self._consistency_state = ConsistencyState.SYNCHRONIZED
+        self._persist_to_disk_locked()
+
+    def _persist_to_disk_locked(self) -> None:
+        if self._persistence_path is None:
+            return
+        payload = {
+            "self_instance_id": self._self_id,
+            "peer_ids": self._peer_ids,
+            "consistency_state": self._consistency_state.value,
+            "events": [event.to_dict() for event in self._events.values()],
+        }
+        self._persistence_path.parent.mkdir(parents=True, exist_ok=True)
+        self._persistence_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def _load_from_disk(self) -> None:
+        if self._persistence_path is None or not self._persistence_path.exists():
+            return
+        try:
+            payload = json.loads(self._persistence_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("Failed to load soul propagation state: %s", exc)
+            return
+
+        try:
+            consistency = ConsistencyState(
+                payload.get("consistency_state", ConsistencyState.SYNCHRONIZED.value)
+            )
+        except ValueError:
+            consistency = ConsistencyState.SYNCHRONIZED
+
+        events = {}
+        for item in payload.get("events", []) or []:
+            try:
+                event = SoulPropagationEvent.from_dict(item)
+            except Exception as exc:
+                logger.warning("Skipping invalid soul propagation event during load: %s", exc)
+                continue
+            if event.event_id:
+                events[event.event_id] = event
+
+        self._peer_ids = list(payload.get("peer_ids", self._peer_ids) or [])
+        self._consistency_state = consistency
+        self._events = events

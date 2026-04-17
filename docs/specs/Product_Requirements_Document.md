@@ -1,7 +1,7 @@
 # Product Requirements Document: Project Lancelot v7.0
 
 **Document Version:** 7.0
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-04-17
 **Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening
 
 ---
@@ -16,7 +16,7 @@ Lancelot is a self-hosted autonomous AI agent designed to operate as a secure, h
 - **Autonomy requires Verification:** Agents that guess are dangerous. Agents that plan, execute, and verify are useful. Every autonomous action passes through a Planner/Verifier pipeline.
 - **Receipts are Truth:** Every action produces a durable, auditable receipt. If there is no receipt, it did not happen.
 - **Single-Owner Allegiance:** Lancelot serves one owner. Constitutional governance (Soul) ensures behavioral boundaries are immutable unless the owner explicitly amends them.
-- **Cost-Optimized Intelligence:** A local GGUF model handles routine tasks (classification, summarization, redaction) while flagship providers handle complex reasoning, reducing costs by 75-90%.
+- **Cost-Optimized Intelligence:** In the recommended deployment, a local GGUF model handles routine tasks (classification, summarization, redaction) while flagship providers handle complex reasoning, reducing costs by 75-90%. The runtime can still operate without the local model, but loses the local privacy and cost-saving boundary.
 
 ---
 
@@ -272,10 +272,10 @@ Provide a capability-based tool execution layer with provider routing, Docker sa
 | US-03 | Manager | Review Lancelot's actions | I can inspect receipts to see exactly what it did, which models it used, and why |
 | US-04 | Developer | Add a new capability | I create a skill manifest and the factory generates a complete skeleton for approval |
 | US-05 | Ops Engineer | Monitor system health | The health dashboard shows real-time status of all subsystems with degraded reasons |
-| US-06 | Security Admin | Ensure PII is redacted | All sensitive data routes through the local redaction lane before reaching external APIs |
+| US-06 | Security Admin | Ensure PII is redacted | In the recommended deployment, sensitive data routes through the local redaction lane before reaching frontier APIs; if the local model is intentionally skipped, that privacy boundary no longer exists |
 | US-07 | Owner | Modify agent behavior | I propose a soul amendment, review the diff, and activate it through the approval workflow |
 | US-08 | DevOps Engineer | Automate recurring tasks | I define jobs in scheduler.yaml with cron expressions and approval requirements |
-| US-09 | Developer | Reduce LLM costs | Routine tasks (classification, summarization) route to the local model, saving 75-90% on tokens |
+| US-09 | Developer | Reduce LLM costs | When the local model is enabled, routine tasks (classification, summarization, redaction) route locally and reduce frontier-token usage by 75-90% |
 | US-10 | Owner | Disable a subsystem | I set a feature flag to false and the system boots cleanly without that subsystem |
 | US-11 | Developer | Switch LLM providers | I update models.yaml and the router uses the new provider without code changes |
 | US-12 | Ops Engineer | Debug a failed scheduled job | I check the job receipt for skip_reason and gate details to identify the root cause |
@@ -340,7 +340,7 @@ Provide a capability-based tool execution layer with provider routing, Docker sa
 | ID | Requirement |
 |----|-------------|
 | NFR-23 | All data stays local (Docker volume) or is sent only to configured LLM endpoints |
-| NFR-24 | PII redaction via local model before data reaches external providers |
+| NFR-24 | When the local model is enabled, PII redaction occurs locally before data reaches external providers; installs that skip the local model must surface that privacy reduction explicitly |
 | NFR-25 | Soul memory ethics enforce PII consent, data redaction, and soul exclusion from recursive memory |
 
 ---
@@ -353,7 +353,7 @@ Provide a capability-based tool execution layer with provider routing, Docker sa
 | Docker Required | Production deployment requires Docker and Docker Compose. |
 | Python 3.11+ | Runtime requires Python 3.11 or later. |
 | Context Window | Maximum context budget is 128k tokens (configurable). |
-| Local Model | Local GGUF model required for redaction and utility tasks. Flagship providers alone are insufficient. |
+| Local Model | Local GGUF model is the recommended privacy and cost boundary for redaction and utility tasks. The runtime can operate without it, but frontier calls then carry the full prompt/tool payload and low-risk work no longer stays local. |
 | Soul Immutability | Soul document cannot be modified without the full proposal/approval/activation workflow. |
 
 ---

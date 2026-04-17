@@ -10,6 +10,7 @@ import {
   ReceiptExplorer,
   ToolFabric,
   MemoryPanel,
+  MemoryManagerPage,
   SchedulerPanel,
   SetupRecovery,
   CostTracker,
@@ -20,6 +21,7 @@ import {
   SkillsPanel,
   HiveAgentMesh,
   LoginPage,
+  LoginCallbackPage,
   FederationOverview,
   GraphBuilder,
   FederationAudit,
@@ -33,6 +35,7 @@ function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/login/callback" element={<LoginCallbackPage />} />
       <Route element={<AuthGuard />}>
         <Route element={<WarRoomShell />}>
           {/* COMMAND */}
@@ -49,6 +52,7 @@ function App() {
           <Route path="/receipts" element={<ReceiptExplorer />} />
           <Route path="/tools" element={<ToolFabric />} />
           <Route path="/memory" element={<MemoryPanel />} />
+          <Route path="/memory/manage" element={<MemoryManagerPage />} />
           <Route path="/skills" element={<SkillsPanel />} />
           <Route path="/a2a" element={<A2AManagement />} />
           <Route path="/scheduler" element={<SchedulerPanel />} />

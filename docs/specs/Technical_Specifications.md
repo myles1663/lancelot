@@ -1,7 +1,7 @@
 # Technical Specifications: Project Lancelot v7.0
 
 **Document Version:** 7.6
-**Last Updated:** 2026-02-19
+**Last Updated:** 2026-04-17
 **Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2 + V26 Output Formatting + V27 Provider SDK Upgrade + V28 Anthropic OAuth + V29 Launcher Pre-flight
 
 ---
@@ -146,6 +146,8 @@ gateway.py
 
 The central nervous system. Routes messages, manages state, and coordinates all specialized modules.
 
+**Live runtime note:** Frontier-bound prompts and tool-result payloads are scrubbed through the local redaction path before `ProviderClient.generate()` / `generate_with_tools()` calls when the local model is available. If the instance is installed without the local model, the orchestrator degrades to direct frontier calls and loses that local privacy boundary.
+
 **Key Method:** `chat(user_message, crusader_mode=False)`
 
 1. Check governance (token/tool limits)
@@ -233,6 +235,8 @@ class ModelRouter:
 feature support (streaming, extended thinking, native tool calling). Lanes
 configured with `mode: api` (or no mode specified) continue to use the existing
 `FlagshipClient` HTTP path.
+
+**Live runtime note:** The router is now mounted into the gateway and orchestrator as the authoritative usage/routing path. The older detached usage-tracker path is no longer the live behavior.
 
 ### 3.3 Provider Profile Registry
 
@@ -2069,7 +2073,7 @@ All API endpoints follow these rules:
 - Sensitive data encrypted at rest via `vault.py` (cryptography library)
 - OAuth tokens (access, refresh, expiry) encrypted in connector vault under `anthropic.oauth.*` keys (V28)
 - No secrets exposed through API responses
-- PII redacted via local model before external API calls
+- When the local model is enabled, PII is redacted locally before frontier API calls; reduced-footprint installs that skip the local model send prompts/tool payloads directly to the configured provider
 
 ---
 

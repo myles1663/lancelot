@@ -11,11 +11,22 @@ requirements evolve without changing the core export engine.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from src.shared.receipts import ActionType, Receipt
 from src.compliance.chain_integrity import ChainIntegrityResult
 from src.compliance.redaction import redact_receipts
+from src.compliance.audit_report import (
+    build_attribution_summary,
+    build_evidence_entry,
+    build_exception_summary,
+    build_export_scope,
+    build_integrity_block,
+    build_legacy_attribution_summary,
+    build_system_context,
+    collect_soul_versions,
+    summarize_evidence_entries,
+)
 
 
 # ── SOC 2 Control Mapping ────────────────────────────────────────────
@@ -139,21 +150,8 @@ SOC2_CONTROL_MAP: Dict[str, Dict[str, Any]] = {
 
 
 def _receipt_to_evidence(receipt_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """Convert a redacted receipt dict to a SOC 2 evidence entry."""
-    return {
-        "receipt_id": receipt_dict.get("id", ""),
-        "receipt_type": receipt_dict.get("action_type", ""),
-        "timestamp": receipt_dict.get("timestamp", ""),
-        "operator_id": receipt_dict.get("operator_id"),
-        "display_name": receipt_dict.get("metadata", {}).get(
-            "operator_display_name", ""
-        ),
-        "action_name": receipt_dict.get("action_name", ""),
-        "status": receipt_dict.get("status", ""),
-        "pre_identity_migration": receipt_dict.get(
-            "pre_identity_migration", False
-        ),
-    }
+    """Convert a redacted receipt dict to an auditor-facing evidence entry."""
+    return build_evidence_entry(receipt_dict)
 
 
 def transform_soc2(
@@ -164,6 +162,7 @@ def transform_soc2(
     operator_id: str,
     generated_at: str,
     export_id: str,
+    operator_display_name: str = "",
 ) -> Dict[str, Any]:
     """Transform receipts into SOC 2 Type II JSON export format."""
 
@@ -184,38 +183,89 @@ def transform_soc2(
             for rd in by_type.get(rtype, []):
                 evidence.append(_receipt_to_evidence(rd))
 
+        evidence_summary = summarize_evidence_entries(evidence)
+        exceptions = build_exception_summary(evidence)
+        if not evidence:
+            control_status = "no_evidence_observed"
+        elif exceptions["total_exception_receipts"] > 0:
+            control_status = "evidence_with_exceptions"
+        else:
+            control_status = "evidence_observed"
+
         controls[control_id] = {
             "description": control_def["description"],
+            "control_status": control_status,
             "evidence_count": len(evidence),
+            "evidence_summary": evidence_summary,
+            "exception_count": exceptions["total_exception_receipts"],
+            "exceptions": exceptions["sample_receipts"],
             "evidence": evidence,
         }
 
-    # Collect active Soul versions from receipts
-    soul_versions = set()
-    for rd in redacted:
-        if rd.get("action_type") in (
-            ActionType.SOUL_UPDATED.value,
-            ActionType.SOUL_VERSION_PINNED.value,
-        ):
-            sv = rd.get("inputs", {}).get("soul_version_hash", "")
-            if sv:
-                soul_versions.add(sv)
+    soul_versions = collect_soul_versions(redacted)
+    evidence_entries = [build_evidence_entry(rd) for rd in redacted]
+    population_summary = summarize_evidence_entries(evidence_entries)
+    attribution_summary = build_attribution_summary(redacted)
+    exception_summary = build_exception_summary(
+        evidence_entries, include_legacy_attribution=False
+    )
+    quest_ids = {
+        rd.get("quest_id")
+        for rd in redacted
+        if rd.get("quest_id")
+    }
+    controls_with_evidence = sum(
+        1 for control in controls.values() if control["evidence_count"] > 0
+    )
+    controls_with_exceptions = sum(
+        1 for control in controls.values() if control["exception_count"] > 0
+    )
 
     return {
         "export_metadata": {
             "format": "SOC2_TYPE_II",
-            "format_version": "1.0",
+            "export_id": export_id,
+            "format_version": "2.0",
             "generated_at": generated_at,
-            "generated_by": {"operator_id": operator_id},
+            "generated_by": {
+                "operator_id": operator_id,
+                "display_name": operator_display_name or operator_id,
+            },
             "period_start": period_start,
             "period_end": period_end,
-            "export_id": export_id,
-            "soul_versions_active": sorted(soul_versions),
+            "soul_versions_active": soul_versions,
             "receipt_count": len(receipts),
             "chain_integrity": chain_result.status,
-            "chain_anomaly_detail": (
-                chain_result.to_dict() if not chain_result.is_intact else None
-            ),
+            "chain_anomaly_detail": build_integrity_block(
+                chain_result, export_id
+            )["chain_anomaly_detail"],
+        },
+        "system_context": build_system_context(
+            generated_at=generated_at,
+            operator_id=operator_id,
+            operator_display_name=operator_display_name,
+            format_name="SOC2_TYPE_II",
+            format_version="2.0",
+            active_soul_versions=soul_versions,
+        ),
+        "export_scope": build_export_scope(
+            period_start,
+            period_end,
+            receipt_count=len(receipts),
+            quest_count=len(quest_ids),
+        ),
+        "integrity": build_integrity_block(chain_result, export_id),
+        "evidence_population_summary": population_summary,
+        "operator_attribution_summary": attribution_summary,
+        "exception_summary": exception_summary,
+        "legacy_attribution_summary": build_legacy_attribution_summary(
+            evidence_entries
+        ),
+        "control_summary": {
+            "total_controls": len(controls),
+            "controls_with_evidence": controls_with_evidence,
+            "controls_without_evidence": len(controls) - controls_with_evidence,
+            "controls_with_exceptions": controls_with_exceptions,
         },
         "controls": controls,
     }

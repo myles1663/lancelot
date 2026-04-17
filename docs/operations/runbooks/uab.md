@@ -21,10 +21,12 @@ Expected response when healthy:
 ```json
 {
   "reachable": true,
-  "version": "0.5.0",
+  "version": "1.3.0",
   "connected_apps": 2,
   "supported_frameworks": ["electron","qt5","qt6","gtk3","gtk4","wpf","flutter","java-swing","javafx","office"],
-  "uptime_seconds": 3600
+  "uptime_seconds": 3600,
+  "transport": "json-rpc-compat",
+  "standalone_features": ["scan","apps","find","focused","findByPath","watchChanges","atomicChain","smartInvoke"]
 }
 ```
 
@@ -36,15 +38,17 @@ curl http://localhost:8000/api/flags/uab-apps
 
 Returns connected applications with PID, name, framework, and connection method.
 
+The live status payload now also includes `transport` and `standalone_features`. `transport: "json-rpc-compat"` means the host daemon is fronting the standalone UAB core while preserving the legacy JSON-RPC surface that Lancelot already governs.
+
 ## Starting the Daemon
 
-**Windows (auto-start — recommended):**
+**Windows (auto-start - recommended):**
 ```batch
 scripts\install-uab.bat
 ```
-Installs as a Windows Scheduled Task (`LancelotUABDaemon`) that auto-starts on login, starts the daemon immediately, and verifies the health check. Idempotent — safe to re-run.
+Installs as a Windows Scheduled Task (`LancelotUABDaemon`) that auto-starts on login, starts the daemon immediately, and verifies the health check. The task launches `scripts\run-uab-daemon.bat`, which keeps the startup command stable even when the repo path contains spaces. Idempotent - safe to re-run.
 
-**Windows (foreground — for debugging):**
+**Windows (foreground - for debugging):**
 ```batch
 scripts\start-uab.bat
 ```
@@ -55,7 +59,7 @@ cd packages/uab
 node dist/daemon.js --port 7900
 ```
 
-**With install (first time — Linux/macOS):**
+**With install (first time - Linux/macOS):**
 ```bash
 ./scripts/install-uab.sh --start
 ```
@@ -116,57 +120,15 @@ schtasks /Query /TN "LancelotUABDaemon"
 **Check:**
 1. App still running? PID may have changed (app restarted).
 2. Health summary: `curl -d '{"jsonrpc":"2.0","method":"health","params":{},"id":1}' http://localhost:7900`
-3. Check failure count — auto-reconnect uses exponential backoff (1s → 2s → 4s → 8s)
+3. Check failure count - auto-reconnect uses exponential backoff (1s -> 2s -> 4s -> 8s)
 4. Stale connections are cleaned up after 5 minutes of continuous failure.
 
----
+### Windows install fails
 
-## Monitoring
+**Symptom:** `scripts\install-uab.bat` fails before creating the Scheduled Task
 
-### Health Checks
-
-The daemon runs internal health checks every 30 seconds. View the summary:
-
-```bash
-curl -d '{"jsonrpc":"2.0","method":"health","params":{},"id":1}' http://localhost:7900
-```
-
-### Cache Stats
-
-```bash
-curl -d '{"jsonrpc":"2.0","method":"cacheStats","params":{},"id":1}' http://localhost:7900
-```
-
-Returns: tree cache size, query cache size, state cache size, hit/miss counts, invalidation count.
-
-### Audit Log
-
-```bash
-curl -d '{"jsonrpc":"2.0","method":"auditLog","params":{"limit":20},"id":1}' http://localhost:7900
-```
-
-Returns recent permission checks with action, app name, risk level, and allowed/denied status.
-
----
-
-## Security
-
-### Risk Levels
-
-| Level | Actions | Description |
-|-------|---------|-------------|
-| LOW | detect, enumerate, query, state, screenshot, read operations | Read-only, no side effects |
-| MEDIUM | click, type, select, scroll, keypress, hotkey, write operations | Mutating but reversible |
-| HIGH | close, invoke, move, resize, sendEmail | Destructive or irreversible |
-
-### Sensitive App Patterns
-
-Actions on these apps are auto-escalated: `1password`, `bitwarden`, `keepass`, `lastpass`, banking apps, financial apps (`venmo`, `paypal`, `stripe`), email clients (`outlook`, `thunderbird`), shells (`terminal`, `powershell`, `cmd`).
-
-### Key Security Properties
-
-- Daemon runs on host (outside container) — has host-level access
-- Bridge communication is HTTP on localhost only
-- All actions produce audit receipts
-- Risk classification runs before every action
-- Sensitive app detection is pattern-based and not bypassable
+**Check:**
+1. Confirm Node.js 18+: `node -p "process.versions.node"`
+2. Confirm the build exists: `dir packages\uab\dist\daemon.js`
+3. Run the launcher directly: `scripts\run-uab-daemon.bat`
+4. Verify the task: `schtasks /Query /TN "LancelotUABDaemon"`

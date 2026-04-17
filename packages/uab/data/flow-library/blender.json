@@ -1,0 +1,84 @@
+{
+  "skill_name": "blender_3d_flow",
+  "app_name": "Blender",
+  "executable": "blender.exe",
+  "app_framework": "OpenGL",
+  "target_flow": "Create and manipulate 3D objects in Blender",
+  "input_method": "keyboard_shortcuts_only",
+  "focus_method": "hover_viewport",
+  "read_method": "screenshot",
+  "critical_note": "Blender renders its ENTIRE UI in OpenGL. UIA sees only the window (childCount: 0). No buttons, menus, or panels are accessible through the accessibility tree. ALL interaction must be through keyboard shortcuts. The mouse cursor MUST be over the 3D viewport for shortcuts to work (Blender is context-sensitive).",
+  "navigation_plan": [
+    {"step": 1, "action": "connect", "params": {"target": "blender"}, "note": "Returns pid"},
+    {"step": 2, "action": "focus", "params": {"pid": "{pid}"}, "note": "Bring window to front"},
+    {"step": 3, "action": "hover_viewport", "method": "hover at center of window", "note": "CRITICAL: mouse must be over 3D viewport for shortcuts to work. Hover at roughly 40% x, 50% y of window."},
+    {"step": 4, "action": "keyboard_command", "note": "All actions via keyboard. See shortcut reference below."}
+  ],
+  "shortcut_reference": {
+    "search": "F3 — opens command search. Type command name, Enter to execute. This is the universal way to run any Blender command.",
+    "add_objects": {
+      "add_menu": "Shift+A (may need hover over viewport)",
+      "add_via_search": "F3 → type 'Add UV Sphere' / 'Add Cube' / 'Add Cylinder' / 'Add Cone' / 'Add Torus' → Enter"
+    },
+    "selection": {
+      "select_all": "A",
+      "deselect_all": "Alt+A",
+      "box_select": "B"
+    },
+    "transform": {
+      "grab_move": "G (then optionally X/Y/Z to constrain axis, type number for distance, Enter to confirm)",
+      "scale": "S (then type number for scale factor, Enter to confirm)",
+      "rotate": "R (then type number for degrees, Enter to confirm)",
+      "constrain_to_axis": "After G/S/R, press X, Y, or Z to constrain"
+    },
+    "delete": "X then Enter (or Delete key)",
+    "undo": "Ctrl+Z",
+    "redo": "Ctrl+Shift+Z",
+    "modes": {
+      "object_mode": "Tab (toggles between Object and Edit mode)",
+      "edit_mode": "Tab"
+    },
+    "view": {
+      "numpad_1": "Front view",
+      "numpad_3": "Right view",
+      "numpad_7": "Top view",
+      "numpad_5": "Toggle perspective/orthographic",
+      "numpad_0": "Camera view",
+      "home": "View all objects"
+    },
+    "file": {
+      "save": "Ctrl+S",
+      "save_as": "Ctrl+Shift+S",
+      "open": "Ctrl+O",
+      "new": "Ctrl+N"
+    },
+    "render": {
+      "render_image": "F12",
+      "render_animation": "Ctrl+F12"
+    }
+  },
+  "example_workflows": {
+    "create_snowman": [
+      "F3 → 'Add UV Sphere' → Enter",
+      "S → 2 → Enter (scale body)",
+      "F3 → 'Add UV Sphere' → Enter",
+      "G → Z → 3 → Enter (move middle up)",
+      "S → 1.5 → Enter (scale middle)",
+      "F3 → 'Add UV Sphere' → Enter",
+      "G → Z → 5.5 → Enter (move head up)"
+    ]
+  },
+  "known_issues": [
+    "UIA returns childCount: 0 — entire UI is OpenGL rendered with zero accessibility",
+    "ALL interaction must be keyboard-based — no element clicking possible",
+    "Mouse cursor position determines which panel receives keyboard shortcuts",
+    "Shift+A may not work via SendKeys — use F3 search as reliable alternative",
+    "Screenshots are the ONLY way to see what Blender is displaying",
+    "No text can be copied from the viewport — only screenshots for reading state",
+    "Blender 5.x may have different shortcuts than 4.x/3.x"
+  ],
+  "risk_tier": "T2",
+  "version": "1.0",
+  "last_verified": "2026-03-23",
+  "achievement": "First known AI agent to create 3D objects in Blender through desktop automation. Zero accessibility tree, pure keyboard control."
+}

@@ -12,13 +12,22 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability, resolve_authenticated_identity
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/scheduler", tags=["scheduler"])
+router = APIRouter(
+    prefix="/api/scheduler",
+    tags=["scheduler"],
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("scheduler.admin")),
+    ],
+)
 
 # Module-level references, set during app startup
 _service = None  # SchedulerService
@@ -238,7 +247,7 @@ def delete_job(job_id: str, request: Request):
 
 
 @router.post("/jobs/{job_id}/trigger", response_model=JobTriggerResponse)
-def trigger_job(job_id: str):
+def trigger_job(job_id: str, request: Request):
     """Manually trigger a scheduled job."""
     if _service is None:
         return JSONResponse(
@@ -251,38 +260,52 @@ def trigger_job(job_id: str):
     if record is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
-    # Use executor if available (runs through gates + receipts)
-    if _executor:
-        try:
-            result = _executor.execute_job(job_id)
-            return JobTriggerResponse(
-                id=job_id,
-                executed=result.executed,
-                success=result.success,
-                skip_reason=result.skip_reason,
-                error=result.error,
-                duration_ms=round(result.duration_ms, 2),
-            )
-        except Exception as exc:
-            logger.exception("Failed to execute job %s", job_id)
-            return JSONResponse(status_code=500, content={"error": str(exc)})
+    if _executor is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Job executor not initialized"},
+        )
 
-    # Fallback: mark as triggered via service
+    identity = resolve_authenticated_identity(request)
     try:
-        _service.run_now(job_id)
+        result = _executor.execute_job_with_identity(
+            job_id,
+            operator_id=identity.operator_id,
+            session_id=identity.session_id,
+            actor=identity.display_name or identity.operator_id,
+        )
+
+        from src.core.governance_receipts import emit_governance_receipt_for_identity
+        from src.shared.receipts import ActionType
+        emit_governance_receipt_for_identity(
+            identity,
+            ActionType.SCHEDULER_TASK_TRIGGERED,
+            action_name="trigger_job",
+            inputs={"job_id": job_id, "job_name": record.name},
+            outputs={
+                "executed": result.executed,
+                "success": result.success,
+                "skip_reason": result.skip_reason,
+                "error": result.error,
+                "duration_ms": round(result.duration_ms, 2),
+            },
+        )
+
         return JobTriggerResponse(
             id=job_id,
-            executed=True,
-            success=True,
-            duration_ms=0.0,
+            executed=result.executed,
+            success=result.success,
+            skip_reason=result.skip_reason,
+            error=result.error,
+            duration_ms=round(result.duration_ms, 2),
         )
     except Exception as exc:
-        logger.exception("Failed to trigger job %s", job_id)
+        logger.exception("Failed to execute job %s", job_id)
         return JSONResponse(status_code=500, content={"error": str(exc)})
 
 
 @router.post("/jobs/{job_id}/approve", response_model=JobApprovalResponse)
-def approve_job(job_id: str):
+def approve_job(job_id: str, request: Request):
     """Approve a scheduled job that requires owner approval (F-008)."""
     if _executor is None:
         return JSONResponse(
@@ -293,7 +316,13 @@ def approve_job(job_id: str):
     if record is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
-    approved = _executor.approve_job(job_id)
+    identity = resolve_authenticated_identity(request)
+    approved = _executor.approve_job(
+        job_id,
+        operator_id=identity.operator_id,
+        session_id=identity.session_id,
+        actor=identity.display_name or identity.operator_id,
+    )
     if approved:
         return JobApprovalResponse(
             id=job_id, approved=True,

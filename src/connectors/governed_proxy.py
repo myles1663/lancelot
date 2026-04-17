@@ -21,6 +21,7 @@ from src.connectors.models import ConnectorResponse, ConnectorResult
 from src.connectors.proxy import ConnectorProxy
 from src.connectors.registry import ConnectorRegistry
 from src.core.governance.models import RiskTier
+from src.shared.receipts import ActionType, CognitionTier, create_receipt
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class GovernedConnectorProxy:
         policy_engine: Any = None,
         receipt_store: Optional[List] = None,
         batch_buffer: Optional[List] = None,
+        receipt_service: Any = None,
         trust_ledger: Any = None,
     ) -> None:
         self._proxy = proxy
@@ -48,6 +50,7 @@ class GovernedConnectorProxy:
         self._policy_engine = policy_engine
         self._receipt_store = receipt_store if receipt_store is not None else []
         self._batch_buffer = batch_buffer if batch_buffer is not None else []
+        self._receipt_service = receipt_service
         self._trust_ledger = trust_ledger
 
     def register_connector_tiers(self, connector_id: str) -> None:
@@ -74,6 +77,11 @@ class GovernedConnectorProxy:
         connector_id: str,
         operation_id: str,
         params: Dict[str, Any],
+        *,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        quest_id: Optional[str] = None,
+        parent_receipt_id: Optional[str] = None,
     ) -> ConnectorResponse:
         """Execute a connector operation with full governance.
 
@@ -145,7 +153,16 @@ class GovernedConnectorProxy:
 
         # 4. Execute
         connector = entry.connector
-        result = connector.execute(operation_id, params)
+        try:
+            result = connector.execute(operation_id, params)
+        except Exception as e:
+            return ConnectorResponse(
+                operation_id=operation_id,
+                connector_id=connector_id,
+                status_code=0,
+                success=False,
+                error=str(e),
+            )
 
         if isinstance(result, ConnectorResult):
             response = self._proxy.execute(result)
@@ -195,6 +212,38 @@ class GovernedConnectorProxy:
             self._batch_buffer.append(receipt)
         else:
             self._receipt_store.append(receipt)
+
+        if self._receipt_service is not None:
+            try:
+                persisted = create_receipt(
+                    ActionType.TOOL_CALL,
+                    f"connector_{connector_id}_{operation_id}",
+                    inputs={
+                        "connector_id": connector_id,
+                        "operation_id": operation_id,
+                        "params": params,
+                        "capability": cap_id,
+                    },
+                    tier=CognitionTier.DETERMINISTIC,
+                    parent_id=parent_receipt_id,
+                    quest_id=quest_id,
+                    metadata={
+                        "subsystem": "connectors",
+                        "risk_tier": risk_profile.tier.name,
+                        "status_code": response.status_code,
+                    },
+                    operator_id=operator_id,
+                    session_id=session_id,
+                ).complete(
+                    outputs={
+                        "success": response.success,
+                        "status_code": response.status_code,
+                    },
+                    duration_ms=0,
+                )
+                self._receipt_service.create(persisted)
+            except Exception as exc:
+                logger.warning("Connector receipt persistence failed: %s", exc)
 
         return response
 

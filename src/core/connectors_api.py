@@ -16,12 +16,25 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from src.connectors.google_feature_gate import (
+    google_connector_disabled_reason,
+    is_google_connector_enabled,
+)
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/connectors", tags=["connectors-management"])
+router = APIRouter(
+    prefix="/api/connectors",
+    tags=["connectors-management"],
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("connectors.admin")),
+    ],
+)
 
 # Module-level references, set during app startup
 _registry = None
@@ -69,6 +82,17 @@ def _instantiate_connector(connector_id: str, config: dict):
         import importlib
         mod = importlib.import_module(module_path)
         cls = getattr(mod, class_name)
+        if connector_id == "generic_rest":
+            if not config.get("base_url"):
+                return None
+            rest_config = dict(config)
+            rest_config.setdefault("id", "generic_rest")
+            rest_config.setdefault("name", "Generic REST Integration")
+            rest_config.setdefault(
+                "description",
+                "User-configurable REST API integration",
+            )
+            return cls(rest_config)
         kwargs = dict(defaults)
         # Apply backend setting if applicable
         if connector_id in _BACKEND_OPTIONS and "backend" in config:
@@ -87,6 +111,37 @@ def _instantiate_connector(connector_id: str, config: dict):
     except Exception as e:
         logger.warning("Failed to instantiate connector %s: %s", connector_id, e)
         return None
+
+
+def register_connector_with_vault_access(registry, vault, connector_id: str, config: dict):
+    """Instantiate, register, and reapply vault grants for a connector."""
+    connector = _instantiate_connector(connector_id, config)
+    if connector is None:
+        return None
+
+    if hasattr(connector, "_vault") and connector._vault is None:
+        connector._vault = vault
+
+    registry.register(connector)
+    if vault is not None:
+        vault.grant_connector_access(connector_id, connector.manifest)
+
+    try:
+        from connectors.base import ConnectorStatus
+    except ImportError:
+        from src.connectors.base import ConnectorStatus
+
+    try:
+        if connector.validate_credentials():
+            connector.set_status(ConnectorStatus.CONFIGURED)
+    except Exception as exc:
+        logger.warning(
+            "Connector registered but credential check failed for %s: %s",
+            connector_id,
+            exc,
+        )
+
+    return connector
 
 
 def _load_config() -> dict:
@@ -134,6 +189,8 @@ class ConnectorInfoResponse(BaseModel):
     does_not_access: List[str]
     credentials: List[CredentialInfoResponse]
     operation_count: int
+    available: bool = True
+    availability_reason: Optional[str] = None
 
 
 class ConnectorsListResponse(BaseModel):
@@ -178,6 +235,26 @@ def list_connectors():
         # Instantiate to get manifest
         connector = _instantiate_connector(cid, ccfg)
         if connector is None:
+            if cid == "generic_rest":
+                items.append(ConnectorInfoResponse(
+                    id=cid,
+                    name="Generic REST Integration",
+                    description="User-configurable REST API integration",
+                    version="1.0.0",
+                    author="user",
+                    source="user",
+                    enabled=enabled,
+                    backend=None,
+                    available_backends=None,
+                    target_domains=[],
+                    data_reads=[],
+                    data_writes=[],
+                    does_not_access=[],
+                    credentials=[],
+                    operation_count=0,
+                    available=False,
+                    availability_reason="Generic REST connector requires base_url configuration.",
+                ))
             continue
 
         manifest = connector.manifest
@@ -201,12 +278,14 @@ def list_connectors():
                 scopes=list(spec.scopes) if spec.scopes else [],
             ))
 
-        if all_present and len(cred_items) > 0:
-            configured_count += 1
-
         # Backend info
         backend = ccfg.get("backend") if cid in _BACKEND_OPTIONS else None
         available_backends = _BACKEND_OPTIONS.get(cid)
+        available = is_google_connector_enabled(cid, backend)
+        availability_reason = None if available else google_connector_disabled_reason(cid, backend)
+
+        if all_present and len(cred_items) > 0 and available:
+            configured_count += 1
 
         items.append(ConnectorInfoResponse(
             id=cid,
@@ -224,6 +303,8 @@ def list_connectors():
             does_not_access=list(manifest.does_not_access),
             credentials=cred_items,
             operation_count=len(connector.get_operations()),
+            available=available,
+            availability_reason=availability_reason,
         ))
 
     return ConnectorsListResponse(
@@ -249,9 +330,10 @@ def enable_connector(connector_id: str, request: Request):
     # Register in registry if not already
     if _registry and _registry.get(connector_id) is None:
         try:
-            connector = _instantiate_connector(connector_id, ccfg)
+            connector = register_connector_with_vault_access(
+                _registry, _vault, connector_id, ccfg,
+            )
             if connector:
-                _registry.register(connector)
                 logger.info("Connector enabled and registered: %s", connector_id)
         except Exception as e:
             logger.warning("Failed to register connector %s: %s", connector_id, e)
@@ -284,6 +366,8 @@ def disable_connector(connector_id: str, request: Request):
     # Unregister from registry
     if _registry:
         _registry.unregister(connector_id)
+    if _vault:
+        _vault.revoke_connector_access(connector_id)
         logger.info("Connector disabled and unregistered: %s", connector_id)
 
     # Governance receipt
@@ -323,9 +407,10 @@ def set_backend(connector_id: str, body: BackendSetRequest):
     if _registry and _registry.get(connector_id) is not None:
         _registry.unregister(connector_id)
         try:
-            connector = _instantiate_connector(connector_id, ccfg)
+            connector = register_connector_with_vault_access(
+                _registry, _vault, connector_id, ccfg,
+            )
             if connector:
-                _registry.register(connector)
                 logger.info("Connector %s re-registered with backend: %s", connector_id, body.backend)
         except Exception as e:
             logger.warning("Failed to re-register connector %s: %s", connector_id, e)

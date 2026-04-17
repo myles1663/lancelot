@@ -83,6 +83,21 @@ class TestExecutionLoop:
         assert result.error_message == "Boom!"
         assert result.collapse_reason == CollapseReason.ERROR
 
+    def test_action_receipt_uses_parent_chain(self, registry, receipt_mgr):
+        def executor(action):
+            return {"done": True}
+
+        runtime, record = _make_runtime(registry, receipt_mgr, executor)
+        record.quest_id = "quest-parent-chain"
+        record.latest_receipt_id = "parent-receipt-1"
+        result = runtime.run([{"action": "step1"}])
+        assert result.success is True
+
+        receipts = receipt_mgr.get_task_receipt_tree(record.quest_id)
+        action_receipts = [r for r in receipts if r.action_name == "agent_action:step1"]
+        assert len(action_receipts) == 1
+        assert action_receipts[0].parent_id == "parent-receipt-1"
+
 
 class TestPauseResume:
     def test_pause_blocks_execution(self, registry, receipt_mgr):

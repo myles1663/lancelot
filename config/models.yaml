@@ -43,16 +43,32 @@ providers:
     display_name: "OpenAI"
     mode: "sdk"
     fast:
-      model: "gpt-4o-mini"
-      max_tokens: 4096
+      model: "gpt-5.4-mini"
+      max_tokens: 16384
       temperature: 0.3
     deep:
-      model: "gpt-4o"
-      max_tokens: 8192
+      model: "gpt-5.4"
+      max_tokens: 128000
       temperature: 0.7
     cache:
-      model: "gpt-4o-mini"
-      max_tokens: 2048
+      model: "gpt-5.4-nano"
+      max_tokens: 4096
+      temperature: 0.1
+
+  openai-codex:
+    display_name: "OpenAI (Codex/Pro)"
+    mode: "sdk"
+    fast:
+      model: "gpt-5.4-mini"
+      max_tokens: 16384
+      temperature: 0.3
+    deep:
+      model: "gpt-5.4"
+      max_tokens: 128000
+      temperature: 0.7
+    cache:
+      model: "gpt-5.4-nano"
+      max_tokens: 4096
       temperature: 0.1
 
   anthropic:

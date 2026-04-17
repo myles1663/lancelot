@@ -1,7 +1,7 @@
 # Functional Specifications: Project Lancelot v7.0
 
 **Document Version:** 7.4
-**Last Updated:** 2026-02-19
+**Last Updated:** 2026-04-17
 **Status:** Current — reflects v4 Multi-Provider + vNext2 Soul/Skills/Heartbeat/Scheduler + vNext3 Memory + Tool Fabric + Security Hardening + V24 Competitive Intelligence + V25 Autonomy Loop v2 + V26 Output Formatting + v0.2.13 Provider SDK Upgrade + v0.2.14 Anthropic OAuth (V28)
 
 ---
@@ -16,7 +16,7 @@ Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as
 - **Autonomy requires Verification:** Every autonomous action passes through a Planner/Verifier pipeline with receipt-based auditing.
 - **Single-Owner Allegiance:** All decisions, actions, and communications serve one owner exclusively.
 - **Constitutional Governance:** An immutable Soul document defines behavioral boundaries, risk tolerances, and ethical constraints.
-- **Lane-Based Routing:** Tasks route through cost-optimized lanes (local LLM first, flagship providers for complex reasoning).
+- **Lane-Based Routing:** Tasks route through cost-optimized lanes with local-first handling when the local model is available, and explicit frontier fallback when that local lane is intentionally not installed.
 
 ---
 
@@ -58,7 +58,7 @@ Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as
   - **Failure:** Verifier suggests correction; Executor retries (max 3 attempts per step).
 - **F-02.4 Receipt Chain:** Every step generates a Receipt linking parent/child actions for full traceability.
 - **F-02.5 Structured Output (V23):** When `FEATURE_STRUCTURED_OUTPUT` is enabled, the agentic loop's text responses are constrained to a JSON schema with explicit `response_to_user`, `actions_taken`, and `next_action` fields. A presentation layer (`ResponsePresenter`) converts the verified JSON back to readable chat text after cross-referencing `actions_taken` against tool receipts. A claim verifier (`ClaimVerifier`, controlled by `FEATURE_CLAIM_VERIFICATION`) additionally scans the free-text `response_to_user` for unverified action claims.
-- **F-02.6 Unified Classification (V23):** When `FEATURE_UNIFIED_CLASSIFICATION` is enabled, a single Gemini Flash call with structured output replaces the 7-function keyword heuristic chain for intent classification. Returns intent, confidence, is_continuation, and requires_tools. Falls back to the keyword classifier on failure.
+- **F-02.6 Unified Classification (V23):** Intent classification is now local-first for obvious low-risk cases. The local utility lane handles greetings, simple questions, and other low-grade routing decisions before cloud escalation. Ambiguous or complex cases still fall back to the frontier structured-classification path when needed.
 - **F-02.7 Deep Reasoning Pass (V25):** When `FEATURE_DEEP_REASONING_LOOP` is enabled, Lancelot performs a dedicated reasoning pass before entering the agentic loop on complex requests. The deep reasoning pass uses a deep model with an elevated thinking budget to analyze the request, identify capability gaps, anticipate risks, and form a strategy. The resulting `ReasoningArtifact` is injected as context into the agentic loop, giving the execution phase a strategic foundation. From the user's perspective, Lancelot now thinks deeply before acting on complex requests — responses to multi-step or tool-heavy tasks are more deliberate and better informed.
 - **F-02.8 Governed Negotiation (V25):** When governance blocks an action during the agentic loop, the system now provides structured feedback (via `GovernanceFeedback`) instead of a generic `BLOCKED` message. The feedback includes the blocked action, the specific policy rule that triggered the block, and a set of alternative approaches. The model receives this feedback in-context and can adapt — choosing a lower-risk path, requesting owner approval, or decomposing the action into smaller steps. The user-visible effect is that Lancelot no longer stalls when blocked; it explains what was blocked and proposes alternatives.
 - **F-02.9 Task Experience Memory (V25):** After completing a task, the orchestrator records a `TaskExperience` in episodic memory under the `task_experience` namespace. Each record captures the original request, the reasoning artifact, capability gaps encountered, actions taken, the outcome, and duration. On future requests, the context compiler retrieves relevant past experiences during the deep reasoning pass, enabling Lancelot to learn from previous task outcomes. The user-visible effect is that repeated or similar requests benefit from accumulated knowledge — Lancelot avoids strategies that failed before and reuses approaches that succeeded.
@@ -72,8 +72,8 @@ Lancelot v7.0 is a self-hosted, high-context autonomous AI agent. It operates as
 
   | Lane | Priority | Purpose | Provider |
   |------|----------|---------|----------|
-  | `local_redaction` | 1 | PII redaction | Local GGUF model |
-  | `local_utility` | 2 | Classification, intent verification, summarization, JSON extraction | Local GGUF model |
+  | `local_redaction` | 1 | PII redaction | Local GGUF model when enabled; otherwise routed directly to the configured frontier provider |
+  | `local_utility` | 2 | Classification, intent verification, summarization, JSON extraction | Local GGUF model when enabled; otherwise routed directly to the configured frontier provider |
   | `flagship_fast` | 3 | Orchestration, tool calls, standard reasoning | Gemini Flash / GPT-4o-mini / Claude Haiku |
   | `flagship_deep` | 4 | Planning, high-risk decisions, complex reasoning | Gemini Pro / GPT-4o / Claude Sonnet |
 

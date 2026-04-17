@@ -20,6 +20,7 @@ from src.federation.auth import (
     _canonical_string,
     _body_hash,
 )
+from src.federation.peer_registry import PeerRegistryStore
 
 
 @pytest.fixture
@@ -47,6 +48,11 @@ def receiver_auth(receiver_identity, sender_identity):
 
     auth = FederationAuth(identity=receiver_identity, peer_key_resolver=resolver)
     return auth
+
+
+@pytest.fixture
+def persistent_nonce_store(tmp_path):
+    return PeerRegistryStore(str(tmp_path / "federation_nonce_test.sqlite"))
 
 
 # ── Canonical String ──────────────────────────────────────────
@@ -276,3 +282,51 @@ class TestNonceReplay:
         # Exactly one thread should succeed
         assert results.count(True) == 1
         assert results.count(False) == 9
+
+    def test_replay_rejected_across_fresh_auth_instance(
+        self, sender_auth, receiver_identity, sender_identity, persistent_nonce_store
+    ):
+        def resolver(instance_id):
+            if instance_id == sender_identity.instance_id:
+                return sender_identity.public_key_bytes
+            return None
+
+        body = b'{"test": true}'
+        headers = sender_auth.sign_request("POST", "/api/test", body)
+
+        auth1 = FederationAuth(
+            identity=receiver_identity,
+            peer_key_resolver=resolver,
+            nonce_store=persistent_nonce_store,
+        )
+        result1 = auth1.verify_request("POST", "/api/test", body, headers)
+        assert result1.valid
+
+        auth2 = FederationAuth(
+            identity=receiver_identity,
+            peer_key_resolver=resolver,
+            nonce_store=persistent_nonce_store,
+        )
+        result2 = auth2.verify_request("POST", "/api/test", body, headers)
+        assert not result2.valid
+        assert "replay" in result2.reason.lower()
+
+    def test_verify_request_persists_nonce_to_store(
+        self, sender_auth, receiver_identity, sender_identity, persistent_nonce_store
+    ):
+        def resolver(instance_id):
+            if instance_id == sender_identity.instance_id:
+                return sender_identity.public_key_bytes
+            return None
+
+        body = b'{"test": true}'
+        headers = sender_auth.sign_request("POST", "/api/test", body)
+        auth = FederationAuth(
+            identity=receiver_identity,
+            peer_key_resolver=resolver,
+            nonce_store=persistent_nonce_store,
+        )
+
+        result = auth.verify_request("POST", "/api/test", body, headers)
+        assert result.valid
+        assert persistent_nonce_store.nonce_count() == 1

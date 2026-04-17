@@ -17,7 +17,9 @@ import logging
 import os
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability, resolve_authenticated_identity
 
 from src.core.soul.templates import (
     get_template,
@@ -29,7 +31,11 @@ from src.core.soul.store import SoulStoreError
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/soul/templates", tags=["soul-templates"])
+router = APIRouter(
+    prefix="/soul/templates",
+    tags=["soul-templates"],
+    dependencies=[Depends(require_authenticated_request)],
+)
 
 _TEMPLATES_DIR: Optional[str] = os.environ.get("TEMPLATES_DIR", None)
 _SOUL_DIR: Optional[str] = os.environ.get("SOUL_DIR", None)
@@ -80,10 +86,14 @@ async def get_template_detail(name: str):
 # ---------------------------------------------------------------------------
 
 @router.post("/{name}/apply")
-async def apply_template_endpoint(name: str, request: Request):
+async def apply_template_endpoint(
+    name: str,
+    request: Request,
+    _authz: None = Depends(require_operator_capability("soul.admin")),
+):
     """Apply a Soul template as a new Soul Amendment Proposal.
 
-    Body (optional): {"customizations": {...}, "operator_id": "...", "session_id": "..."}
+    Body (optional): {"customizations": {...}}
 
     The template creates a proposal with author="template:{name}".
     The proposal must then be approved and activated via the standard
@@ -95,14 +105,9 @@ async def apply_template_endpoint(name: str, request: Request):
         body = {}
 
     customizations = body.get("customizations")
-    operator_id = body.get("operator_id")
-    session_id = body.get("session_id")
-
-    if not operator_id:
-        raise HTTPException(
-            status_code=400,
-            detail="operator_id is required to apply a template",
-        )
+    identity = resolve_authenticated_identity(request)
+    operator_id = identity.operator_id
+    session_id = identity.session_id or ""
 
     try:
         result = apply_template(
@@ -130,7 +135,9 @@ async def apply_template_endpoint(name: str, request: Request):
 # ---------------------------------------------------------------------------
 
 @router.post("/reload")
-async def reload_templates():
+async def reload_templates(
+    _authz: None = Depends(require_operator_capability("soul.admin")),
+):
     """Invalidate template cache, forcing reload on next list/get."""
     invalidate_cache()
     return {"status": "cache_invalidated"}

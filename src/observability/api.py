@@ -14,9 +14,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability
 
 from src.observability.config import (
     ObservabilityConfig,
@@ -29,7 +31,14 @@ from src.observability.config import (
 
 logger = logging.getLogger("lancelot.observability.api")
 
-router = APIRouter(prefix="/api/observability", tags=["observability"])
+router = APIRouter(
+    prefix="/api/observability",
+    tags=["observability"],
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("observability.admin")),
+    ],
+)
 
 
 # ── Request / Response Models ─────────────────────────────────────

@@ -5,6 +5,8 @@
 
 """Tests for Federated Kill Switch Engine."""
 
+from pathlib import Path
+
 import pytest
 from src.federation.kill_switch import (
     FederatedKillSwitch,
@@ -164,6 +166,38 @@ class TestPropagation:
         timed_out = engine.check_timeouts("cmd-1")
         assert len(timed_out) == 3  # All targets
 
+    def test_get_command_sweeps_timeouts(self, engine):
+        engine.issue_command(
+            "cmd-sweep", KillCommandType.FEDERATION_KILL,
+            KillAuthority.L1_FEDERATION_ROOT,
+            "self-001", "test",
+            timeout_seconds=0,
+        )
+        cmd = engine.get_command("cmd-sweep")
+        assert cmd.state == KillCommandState.FAILED
+        assert all(target.ack_state != PropagationAck.PENDING for target in cmd.targets)
+
+    def test_local_kill_failure_rejects_local_target(self):
+        engine = FederatedKillSwitch(
+            self_instance_id="self-001",
+            peer_ids=["peer-a"],
+            local_kill_handler=lambda reason: (_ for _ in ()).throw(RuntimeError("kill failed")),
+        )
+        engine.issue_command(
+            "cmd-fail", KillCommandType.FEDERATION_KILL,
+            KillAuthority.L1_FEDERATION_ROOT,
+            "self-001", "test",
+        )
+
+        killed = engine.propagate_local("cmd-fail")
+
+        assert killed == 0
+        cmd = engine.get_command("cmd-fail")
+        local = next(t for t in cmd.targets if t.instance_id == "self-001")
+        assert local.ack_state == PropagationAck.REJECTED
+        assert "kill failed" in local.reject_reason
+        assert cmd.state == KillCommandState.PROPAGATING
+
 
 class TestLift:
     def test_lift_completed(self, engine):
@@ -212,3 +246,61 @@ class TestQueries:
         d = cmd.to_dict()
         assert d["command_id"] == "cmd-1"
         assert d["command_type"] == "local_kill"
+
+
+class TestPersistence:
+    def test_commands_survive_restart(self, tmp_path: Path):
+        persistence_path = tmp_path / "kill_commands.json"
+        engine = FederatedKillSwitch(
+            self_instance_id="self-001",
+            peer_ids=["peer-a", "peer-b"],
+            local_kill_handler=lambda reason: 3,
+            persistence_path=str(persistence_path),
+        )
+        engine.issue_command(
+            "cmd-1", KillCommandType.FEDERATION_KILL,
+            KillAuthority.L1_FEDERATION_ROOT,
+            "root-001", "test",
+        )
+        engine.propagate_local("cmd-1")
+        engine.record_ack("cmd-1", "peer-a", 2)
+
+        reloaded = FederatedKillSwitch(
+            self_instance_id="self-001",
+            peer_ids=["peer-a", "peer-b"],
+            local_kill_handler=lambda reason: 3,
+            persistence_path=str(persistence_path),
+        )
+
+        cmd = reloaded.get_command("cmd-1")
+        assert cmd is not None
+        assert cmd.state == KillCommandState.PROPAGATING
+        assert any(t.instance_id == "peer-a" and t.ack_state == PropagationAck.ACKNOWLEDGED for t in cmd.targets)
+        assert any(t.instance_id == "peer-b" and t.ack_state == PropagationAck.PENDING for t in cmd.targets)
+
+    def test_lifted_state_persists(self, tmp_path: Path):
+        persistence_path = tmp_path / "kill_commands.json"
+        engine = FederatedKillSwitch(
+            self_instance_id="self-001",
+            peer_ids=[],
+            local_kill_handler=lambda reason: 1,
+            persistence_path=str(persistence_path),
+        )
+        engine.issue_command(
+            "cmd-2", KillCommandType.LOCAL_KILL,
+            KillAuthority.L1_FEDERATION_ROOT,
+            "root-001", "test",
+        )
+        engine.propagate_local("cmd-2")
+        assert engine.lift_kill("cmd-2", "admin", "reviewed")
+
+        reloaded = FederatedKillSwitch(
+            self_instance_id="self-001",
+            peer_ids=[],
+            local_kill_handler=lambda reason: 1,
+            persistence_path=str(persistence_path),
+        )
+
+        cmd = reloaded.get_command("cmd-2")
+        assert cmd is not None
+        assert cmd.state == KillCommandState.LIFTED

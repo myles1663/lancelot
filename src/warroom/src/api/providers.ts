@@ -146,6 +146,7 @@ export interface OAuthRevokeResponse {
   message?: string
 }
 
+// Anthropic OAuth
 export const initiateOAuth = () =>
   apiPost<OAuthInitiateResponse>('/api/v1/providers/oauth/initiate')
 
@@ -154,3 +155,13 @@ export const fetchOAuthStatus = () =>
 
 export const revokeOAuth = () =>
   apiPost<OAuthRevokeResponse>('/api/v1/providers/oauth/revoke')
+
+// OpenAI Codex OAuth (ChatGPT Pro subscription)
+export const initiateCodexOAuth = () =>
+  apiPost<OAuthInitiateResponse>('/api/v1/providers/oauth/openai-codex/initiate')
+
+export const fetchCodexOAuthStatus = () =>
+  apiGet<OAuthStatusResponse>('/api/v1/providers/oauth/openai-codex/status')
+
+export const revokeCodexOAuth = () =>
+  apiPost<OAuthRevokeResponse>('/api/v1/providers/oauth/openai-codex/revoke')

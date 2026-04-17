@@ -105,21 +105,18 @@ export async function fetchIncidentStats(): Promise<IncidentStats> {
 
 export async function acknowledgeIncident(
   id: string,
-  operatorId: string
+  _operatorId: string
 ): Promise<{ status: string }> {
-  return apiPost(`/api/incidents/${id}/acknowledge`, {
-    operator_id: operatorId,
-  })
+  return apiPost(`/api/incidents/${id}/acknowledge`, {})
 }
 
 export async function updateIncidentStatus(
   id: string,
-  operatorId: string,
+  _operatorId: string,
   status: string,
   note?: string
 ): Promise<{ status: string }> {
   return apiPost(`/api/incidents/${id}/status`, {
-    operator_id: operatorId,
     status,
     note: note || '',
   })
@@ -127,34 +124,31 @@ export async function updateIncidentStatus(
 
 export async function addTimelineEntry(
   id: string,
-  operatorId: string,
+  _operatorId: string,
   entryText: string
 ): Promise<{ status: string }> {
   return apiPost(`/api/incidents/${id}/timeline`, {
-    operator_id: operatorId,
     entry_text: entryText,
   })
 }
 
 export async function linkReceipt(
   id: string,
-  operatorId: string,
+  _operatorId: string,
   receiptId: string
 ): Promise<{ status: string }> {
   return apiPost(`/api/incidents/${id}/link-receipt`, {
-    operator_id: operatorId,
     receipt_id: receiptId,
   })
 }
 
 export async function escalateIncident(
   id: string,
-  operatorId: string,
+  _operatorId: string,
   newSeverity: string,
   reason: string
 ): Promise<{ status: string }> {
   return apiPost(`/api/incidents/${id}/escalate`, {
-    operator_id: operatorId,
     new_severity: newSeverity,
     reason,
   })
@@ -162,14 +156,13 @@ export async function escalateIncident(
 
 export async function closeIncident(
   id: string,
-  operatorId: string,
+  _operatorId: string,
   rootCause?: string,
   falsePositive?: boolean,
   falsePositiveReason?: string,
   generateReport?: boolean
 ): Promise<{ status: string; board_report_generated: boolean }> {
   return apiPost(`/api/incidents/${id}/close`, {
-    operator_id: operatorId,
     root_cause: rootCause,
     false_positive: falsePositive || false,
     false_positive_reason: falsePositiveReason,

@@ -32,6 +32,13 @@ import {
   ElementType,
 } from '../../types.js';
 import { runPSJsonInteractive, runPSRawInteractive } from '../../ps-exec.js';
+import {
+  sendKeypress as visionSendKeypress,
+  sendHotkey as visionSendHotkey,
+  typeText as visionTypeText,
+  clickAt as visionClickAt,
+  windowAction as visionWindowAction,
+} from '../vision/input.js';
 import { randomUUID } from 'crypto';
 
 // ─── UIA Condition Types ─────────────────────────────────────
@@ -203,18 +210,22 @@ function runRawPSScript(script: string, timeoutMs: number = 15000): string {
   return runPSRawInteractive(script, timeoutMs);
 }
 
-function enumerateViaUIA(pid: number, maxDepth: number = 8): UIElement[] {
+function enumerateViaUIA(pid: number, maxDepth: number = 12): UIElement[] {
+  // Uses RawViewWalker — exposes ALL UIA elements including ones hidden
+  // by Content/Control view filters. Critical for Electron, CEF, UWP apps
+  // where the filtered views only show 10-15 elements but raw shows 200+.
   const script = `
 $ErrorActionPreference = 'SilentlyContinue'
-function Get-UIAElements {
+$walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+
+function Get-UIARawElements {
   param([System.Windows.Automation.AutomationElement]$element, [int]$depth, [int]$maxDepth)
   if ($depth -gt $maxDepth) { return @() }
 
   $result = @()
-  $cond = [System.Windows.Automation.Condition]::TrueCondition
-  $children = $element.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)
+  $child = $walker.GetFirstChild($element)
 
-  foreach ($child in $children) {
+  while ($child -ne $null) {
     try {
       $rect = $child.Current.BoundingRectangle
       $obj = @{
@@ -229,10 +240,11 @@ function Get-UIAElements {
         y = [math]::Round($rect.Y)
         width = [math]::Round($rect.Width)
         height = [math]::Round($rect.Height)
-        children = @(Get-UIAElements -element $child -depth ($depth + 1) -maxDepth $maxDepth)
+        children = @(Get-UIARawElements -element $child -depth ($depth + 1) -maxDepth $maxDepth)
       }
       $result += $obj
     } catch { }
+    $child = $walker.GetNextSibling($child)
   }
   return $result
 }
@@ -258,12 +270,12 @@ foreach ($win in $appWindows) {
     y = [math]::Round($rect.Y)
     width = [math]::Round($rect.Width)
     height = [math]::Round($rect.Height)
-    children = @(Get-UIAElements -element $win -depth 1 -maxDepth ${maxDepth})
+    children = @(Get-UIARawElements -element $win -depth 1 -maxDepth ${maxDepth})
   }
   $allElements += $winObj
 }
 
-$allElements | ConvertTo-Json -Depth 20 -Compress
+$allElements | ConvertTo-Json -Depth 25 -Compress
 `;
 
   try {
@@ -326,13 +338,17 @@ $procCond = New-Object System.Windows.Automation.PropertyCondition(
   [System.Windows.Automation.AutomationElement]::ProcessIdProperty, ${pid}
 )
 
+$walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
 function Find-Element {
-  param([System.Windows.Automation.AutomationElement]$parent, [string]$targetId)
-  $cond = [System.Windows.Automation.Condition]::TrueCondition
-  $all = $parent.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
-  foreach ($el in $all) {
-    $elId = "uia-$($el.Current.AutomationId)-$($el.GetHashCode())"
-    if ($elId -eq $targetId) { return $el }
+  param([System.Windows.Automation.AutomationElement]$parent, [string]$targetId, [int]$depth = 0)
+  if ($depth -gt 15) { return $null }
+  $child = $walker.GetFirstChild($parent)
+  while ($child -ne $null) {
+    $elId = "uia-$($child.Current.AutomationId)-$($child.GetHashCode())"
+    if ($elId -eq $targetId) { return $child }
+    $found = Find-Element -parent $child -targetId $targetId -depth ($depth + 1)
+    if ($found) { return $found }
+    $child = $walker.GetNextSibling($child)
   }
   return $null
 }
@@ -366,6 +382,7 @@ Add-Type -TypeDefinition '
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint f, int dx, int dy, uint d, IntPtr e);
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte sc, uint f, IntPtr e);
@@ -378,7 +395,8 @@ Add-Type -TypeDefinition '
       keybd_event(0x12, 0, 0, IntPtr.Zero);
       keybd_event(0x12, 0, 0x02, IntPtr.Zero);
       if (fgT != curT) AttachThreadInput(curT, fgT, true);
-      ShowWindow(target, 9);
+      // Only restore if minimized — preserves snap layouts and split-screen
+      if (IsIconic(target)) ShowWindow(target, 9);
       SetForegroundWindow(target);
       BringWindowToTop(target);
       if (fgT != curT) AttachThreadInput(curT, fgT, false);
@@ -574,6 +592,7 @@ Add-Type -TypeDefinition '
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int n);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint f, int dx, int dy, uint d, IntPtr e);
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte sc, uint f, IntPtr e);
@@ -586,7 +605,7 @@ Add-Type -TypeDefinition '
       keybd_event(0x12, 0, 0, IntPtr.Zero);
       keybd_event(0x12, 0, 0x02, IntPtr.Zero);
       if (fgT != curT) AttachThreadInput(curT, fgT, true);
-      ShowWindow(target, 9);
+      if (IsIconic(target)) ShowWindow(target, 9);
       SetForegroundWindow(target);
       BringWindowToTop(target);
       if (fgT != curT) AttachThreadInput(curT, fgT, false);
@@ -607,12 +626,17 @@ $procCond = New-Object System.Windows.Automation.PropertyCondition(
   [System.Windows.Automation.AutomationElement]::ProcessIdProperty, ${pid}
 )
 
+$walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
 function Find-El {
-  param([System.Windows.Automation.AutomationElement]$parent, [string]$targetId)
-  $all = $parent.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-  foreach ($el in $all) {
-    $elId = "uia-$($el.Current.AutomationId)-$($el.GetHashCode())"
-    if ($elId -eq $targetId) { return $el }
+  param([System.Windows.Automation.AutomationElement]$parent, [string]$targetId, [int]$depth = 0)
+  if ($depth -gt 15) { return $null }
+  $child = $walker.GetFirstChild($parent)
+  while ($child -ne $null) {
+    $elId = "uia-$($child.Current.AutomationId)-$($child.GetHashCode())"
+    if ($elId -eq $targetId) { return $child }
+    $found = Find-El -parent $child -targetId $targetId -depth ($depth + 1)
+    if ($found) { return $found }
+    $child = $walker.GetNextSibling($child)
   }
   return $null
 }
@@ -643,12 +667,23 @@ $cy = [int]($rect.Y + $rect.Height / 2)
 [CtxMenu]::RightClick($cx, $cy)
 Start-Sleep -Milliseconds 600
 
-# Now enumerate the context menu items (still in same process, no focus loss)
+# Now enumerate the context menu items via RawViewWalker (still in same process, no focus loss)
 $menuItems = @()
-$allEls = @()
-foreach ($win in $appWindows) {
-  $allEls += $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+$script:allEls = @()
+function Collect-All {
+  param([System.Windows.Automation.AutomationElement]$el, [int]$depth = 0)
+  if ($depth -gt 8) { return }
+  $ch = $walker.GetFirstChild($el)
+  while ($ch -ne $null) {
+    $script:allEls += $ch
+    Collect-All -el $ch -depth ($depth + 1)
+    $ch = $walker.GetNextSibling($ch)
+  }
 }
+foreach ($win in $appWindows) {
+  Collect-All -el $win
+}
+$allEls = $script:allEls
 foreach ($el in $allEls) {
   $ct = $el.Current.ControlType.ProgrammaticName -replace 'ControlType\\.', ''
   if ($ct -eq 'MenuItem' -or ($ct -eq 'Button' -and $el.Current.Name -match 'Cut|Copy|Paste|Select|Delete|Undo|Redo')) {
@@ -766,10 +801,26 @@ Add-Type -TypeDefinition '
     }
   }
 '
-$proc = Get-Process -Id ${pid} -ErrorAction SilentlyContinue
-if ($proc -and $proc.MainWindowHandle -ne 0) {
-  [WinFocus]::Focus($proc.MainWindowHandle) | Out-Null
-  Start-Sleep -Milliseconds 100
+# Find the window handle via UIA (more reliable than Get-Process.MainWindowHandle for Electron apps)
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$rootEl = [System.Windows.Automation.AutomationElement]::RootElement
+$procCond = New-Object System.Windows.Automation.PropertyCondition(
+  [System.Windows.Automation.AutomationElement]::ProcessIdProperty, ${pid}
+)
+$win = $rootEl.FindFirst([System.Windows.Automation.TreeScope]::Children, $procCond)
+
+# Fallback to Get-Process.MainWindowHandle
+$hwnd = if ($win) {
+  $win.Current.NativeWindowHandle
+} else {
+  $proc = Get-Process -Id ${pid} -ErrorAction SilentlyContinue
+  if ($proc) { $proc.MainWindowHandle } else { 0 }
+}
+
+if ($hwnd -and $hwnd -ne 0) {
+  [WinFocus]::Focus([IntPtr]$hwnd) | Out-Null
+  Start-Sleep -Milliseconds 150
   [System.Windows.Forms.SendKeys]::SendWait('${escapedKey}')
   @{ success = $true } | ConvertTo-Json -Compress
 } else {
@@ -1144,13 +1195,17 @@ $procCond = New-Object System.Windows.Automation.PropertyCondition(
   [System.Windows.Automation.AutomationElement]::ProcessIdProperty, ${pid}
 )
 
+$walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
 function Find-Element {
-  param([System.Windows.Automation.AutomationElement]$parent, [string]$targetId)
-  $cond = [System.Windows.Automation.Condition]::TrueCondition
-  $all = $parent.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
-  foreach ($el in $all) {
-    $elId = "uia-$($el.Current.AutomationId)-$($el.GetHashCode())"
-    if ($elId -eq $targetId) { return $el }
+  param([System.Windows.Automation.AutomationElement]$parent, [string]$targetId, [int]$depth = 0)
+  if ($depth -gt 15) { return $null }
+  $child = $walker.GetFirstChild($parent)
+  while ($child -ne $null) {
+    $elId = "uia-$($child.Current.AutomationId)-$($child.GetHashCode())"
+    if ($elId -eq $targetId) { return $child }
+    $found = Find-Element -parent $child -targetId $targetId -depth ($depth + 1)
+    if ($found) { return $found }
+    $child = $walker.GetNextSibling($child)
   }
   return $null
 }
@@ -1204,13 +1259,17 @@ $procCond = New-Object System.Windows.Automation.PropertyCondition(
   [System.Windows.Automation.AutomationElement]::ProcessIdProperty, ${pid}
 )
 
+$walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
 function Find-Element {
-  param([System.Windows.Automation.AutomationElement]$parent, [string]$targetId)
-  $cond = [System.Windows.Automation.Condition]::TrueCondition
-  $all = $parent.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
-  foreach ($el in $all) {
-    $elId = "uia-$($el.Current.AutomationId)-$($el.GetHashCode())"
-    if ($elId -eq $targetId) { return $el }
+  param([System.Windows.Automation.AutomationElement]$parent, [string]$targetId, [int]$depth = 0)
+  if ($depth -gt 15) { return $null }
+  $child = $walker.GetFirstChild($parent)
+  while ($child -ne $null) {
+    $elId = "uia-$($child.Current.AutomationId)-$($child.GetHashCode())"
+    if ($elId -eq $targetId) { return $child }
+    $found = Find-Element -parent $child -targetId $targetId -depth ($depth + 1)
+    if ($found) { return $found }
+    $child = $walker.GetNextSibling($child)
   }
   return $null
 }
@@ -1307,6 +1366,60 @@ if ($win) {
   }
 }
 
+/**
+ * Find a child process of the given PID that has a visible window.
+ *
+ * Electron and other multi-process apps (Chrome, ChatGPT, VS Code, Slack, etc.)
+ * use a broker/main process that has NO window. The actual GUI lives in a
+ * renderer or GPU child process. This function finds the right child.
+ *
+ * Strategy:
+ * 1. Get all child processes of the parent PID via WMI
+ * 2. For each child, check if it has a visible UIA window
+ * 3. Return the first child PID with a window, preferring ones with actual titles
+ */
+function findChildWithWindow(parentPid: number): number | null {
+  try {
+    const script = `
+$rootEl = [System.Windows.Automation.AutomationElement]::RootElement
+
+# Get all child processes
+$children = Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq ${parentPid} } | Select-Object ProcessId, Name, CommandLine
+
+$results = @()
+foreach ($child in $children) {
+  $pid = $child.ProcessId
+  $procCond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $pid
+  )
+  $win = $rootEl.FindFirst([System.Windows.Automation.TreeScope]::Children, $procCond)
+  if ($win -and $win.Current.BoundingRectangle.Width -gt 0) {
+    $results += @{
+      pid = $pid
+      name = $child.Name
+      title = $win.Current.Name
+      width = [math]::Round($win.Current.BoundingRectangle.Width)
+      isRenderer = ($child.CommandLine -match '--type=renderer' -or $child.CommandLine -match '--type=gpu')
+    }
+  }
+}
+
+# Prefer child with a title, then renderer type, then largest window
+$sorted = $results | Sort-Object -Property @{Expression={if($_.title){'a'}else{'z'}}}, @{Expression={if($_.isRenderer){'a'}else{'z'}}}, @{Expression={$_.width}; Ascending=$false}
+if ($sorted.Count -gt 0) {
+  $sorted[0] | ConvertTo-Json -Compress
+} else {
+  '{"pid":0}'
+}
+`;
+    const result = runUIAScript(script) as Record<string, unknown>;
+    const childPid = result.pid as number;
+    return childPid > 0 ? childPid : null;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Plugin ─────────────────────────────────────────────────
 
 export class WinUIAPlugin implements FrameworkPlugin {
@@ -1317,12 +1430,23 @@ export class WinUIAPlugin implements FrameworkPlugin {
     // Accept all Windows GUI apps — UIA works as universal fallback
     // including Electron apps when CDP is unavailable
     return ['wpf', 'winui', 'dotnet', 'qt5', 'qt6', 'gtk3', 'gtk4',
-            'java-swing', 'javafx', 'flutter', 'electron', 'unknown'].includes(app.framework);
+            'java-swing', 'javafx', 'flutter', 'electron', 'browser', 'unknown'].includes(app.framework);
   }
 
   async connect(app: DetectedApp): Promise<PluginConnection> {
     const state = getAppStateViaUIA(app.pid);
     if (!state.window.title && state.window.size.width === 0) {
+      // The given PID has no visible window. For Electron/multi-process apps,
+      // the main process is a broker — the actual window lives in a child process.
+      // Find child processes and try each one until we find a visible window.
+      const childPid = findChildWithWindow(app.pid);
+      if (childPid) {
+        const childApp = { ...app, pid: childPid, connectionInfo: { ...app.connectionInfo, resolvedFromParent: app.pid } };
+        const childState = getAppStateViaUIA(childPid);
+        if (childState.window.title || childState.window.size.width > 0) {
+          return new WinUIAConnection(childApp);
+        }
+      }
       throw new Error(`No accessible UI found for PID ${app.pid}. The app may not have a visible window.`);
     }
     return new WinUIAConnection(app);
@@ -1362,19 +1486,30 @@ class WinUIAConnection implements PluginConnection {
   }
 
   async act(elementId: string, action: ActionType, params?: ActionParams): Promise<ActionResult> {
-    // Phase 3: Handle new action types
+    // Use Vision plugin's Win32 input injection — works reliably with Electron/UWP
     switch (action) {
       case 'keypress':
-        return sendKeypress(this.app.pid, params?.key || params?.text || '');
+        return visionSendKeypress(this.app.pid, params?.key || params?.text || '');
 
       case 'hotkey':
-        return sendHotkey(this.app.pid, params?.keys || []);
+        return visionSendHotkey(this.app.pid, params?.keys || []);
+
+      case 'type':
+        // Fast bulk text input — sends entire string in one call
+        if (params?.text) {
+          return visionTypeText(this.app.pid, params.text);
+        }
+        // Fall through to UIA handler if no text
+        return performUIAAction(this.app.pid, elementId, action, {
+          text: params?.text,
+          value: params?.value,
+        });
 
       case 'minimize':
       case 'maximize':
       case 'restore':
       case 'close':
-        return windowAction(this.app.pid, action);
+        return visionWindowAction(this.app.pid, action);
 
       case 'move':
         return windowAction(this.app.pid, 'move', { x: params?.x, y: params?.y });

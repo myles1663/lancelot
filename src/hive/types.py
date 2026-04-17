@@ -140,6 +140,11 @@ class SubAgentRecord:
     collapsed_at: Optional[str] = None
     scoped_soul_hash: Optional[str] = None
     quest_id: Optional[str] = None
+    operator_id: Optional[str] = None
+    session_id: Optional[str] = None
+    operator_name: Optional[str] = None
+    parent_receipt_id: Optional[str] = None
+    latest_receipt_id: Optional[str] = None
     state_history: List[Dict[str, Any]] = field(default_factory=list)
     interventions: List[Dict[str, Any]] = field(default_factory=list)
 

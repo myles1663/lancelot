@@ -5,6 +5,9 @@
 
 """Tests for Federation Audit Engine."""
 
+import os
+import tempfile
+
 import pytest
 from src.federation.audit import (
     AuditEntry,
@@ -171,6 +174,20 @@ class TestSummary:
         assert s["unique_quests"] == 2
         assert s["event_type_counts"]["handoff_initiated"] == 2
         assert s["event_type_counts"]["kill_issued"] == 1
+
+
+class TestPersistence:
+    def test_entries_survive_reopen(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "audit_log.json")
+
+            engine1 = FederationAuditEngine(persistence_path=path)
+            engine1.record(_entry("e1", quest_id="q1"))
+
+            engine2 = FederationAuditEngine(persistence_path=path)
+            results = engine2.query(federation_quest_id="q1")
+            assert len(results) == 1
+            assert results[0].entry_id == "e1"
 
 
 class TestSerialization:

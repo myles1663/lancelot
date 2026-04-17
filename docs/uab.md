@@ -39,21 +39,29 @@ Host Machine                           Docker Container (lancelot-core)
 │  ├── ConnectionMgr   │                │                          │
 │  ├── ElementCache    │                │  Tool Fabric              │
 │  ├── PermissionMgr   │                │  ├── PolicyEngine         │
-│  └── ChainExecutor   │                │  ├── ProviderRouter       │
-│                      │                │  └── ToolReceipt          │
-│  Framework Plugins:  │                └──────────────────────────┘
+│  ├── ChainExecutor   │                │  ├── ProviderRouter       │
+│  ├── CompositeEngine │                │  └── ToolReceipt          │
+│  ├── SpatialIndex    │                └──────────────────────────┘
+│  └── AppRegistry     │
+│                      │
+│  Framework Plugins:  │
 │  ├── Electron (CDP)  │
+│  ├── Browser (CDP)   │  ← Chrome, Edge, Brave, Vivaldi, Opera
+│  ├── ChromeExt (WS)  │  ← No browser relaunch needed
 │  ├── Qt (UIA)        │
 │  ├── GTK (UIA)       │
 │  ├── WPF (UIA)       │
 │  ├── Flutter (UIA)   │
 │  ├── Java (JAB→UIA)  │
 │  ├── Office (COM)    │
-│  └── Win32 (UIA)     │
+│  ├── Win32 (UIA)     │
+│  └── Vision (AI)     │  ← Claude Vision fallback
 └─────────────────────┘
 ```
 
 **Why two layers?** The UAB daemon must run on the host machine (outside Docker) because it needs direct access to the desktop's UI frameworks, process list, and accessibility APIs. The Python bridge inside the container communicates with the daemon via JSON-RPC 2.0 over HTTP.
+
+**Current runtime shape:** Lancelot now embeds the standalone UAB 1.3.0 core inside `packages/uab`, but keeps the host contract stable through a JSON-RPC compatibility daemon on `:7900`. That lets the newer standalone connector and server internals evolve without breaking the existing Python governance bridge.
 
 ### JSON-RPC 2.0 Protocol
 
@@ -97,11 +105,13 @@ Host Machine                           Docker Container (lancelot-core)
 
 ---
 
-## Supported Frameworks
+## Supported Frameworks (10 Plugins)
 
 | Framework | Plugin | Connection Method | Detection |
 |-----------|--------|-------------------|-----------|
 | **Electron** | ElectronPlugin | Chrome DevTools Protocol (CDP) | Process binary inspection, `--remote-debugging-port` |
+| **Browser** | BrowserPlugin | Chrome DevTools Protocol (CDP) | Chrome, Edge, Brave, Vivaldi, Opera process detection |
+| **Chrome Extension** | ChromeExtPlugin | WebSocket bridge | No browser relaunch needed — extension connects via WS |
 | **Qt 5/6** | QtPlugin | Windows UI Automation (MOC bridge) | Process binary/DLL inspection |
 | **GTK 3/4** | GtkPlugin | Windows UI Automation (GIR bridge) | Process binary/DLL inspection |
 | **WPF/.NET** | WinUIAPlugin | Native Windows UI Automation | .NET runtime detection |
@@ -109,8 +119,50 @@ Host Machine                           Docker Container (lancelot-core)
 | **Java Swing/FX** | JavaPlugin | Java Accessibility Bridge → UIA | JVM process detection |
 | **Office** | OfficePlugin | COM Automation | Process name matching (WINWORD, EXCEL, etc.) |
 | **Win32** | WinUIAPlugin | Universal UIA fallback | Fallback for all unmatched processes |
+| **Vision** | VisionPlugin | Screenshot + Claude Vision API | Universal fallback — works with any application |
 
 Each plugin implements the same `PluginConnection` interface: `enumerate()`, `query()`, `act()`, `state()`, `subscribe()`, `disconnect()`.
+
+### Browser Plugin (v0.6.0)
+
+The `BrowserPlugin` (`packages/uab/src/plugins/browser/index.ts`) enables native CDP control of standard web browsers — Chrome, Edge, Brave, Vivaldi, and Opera — without requiring Electron. It auto-detects browser processes and attaches via their remote debugging port.
+
+**Supported browsers:** Chrome, Edge, Brave, Vivaldi, Opera (any Chromium-based browser).
+
+**Connection method:** CDP over HTTP. The plugin discovers the browser's debug port via process inspection and connects to the DevTools WebSocket endpoint.
+
+### Chrome Extension Plugin (v0.6.0)
+
+The `ChromeExtPlugin` (`packages/uab/src/plugins/chrome-ext/index.ts`) provides zero-relaunch browser control via a companion Chrome extension. Unlike the Browser plugin, it does not require the browser to be launched with `--remote-debugging-port` — the extension acts as a bridge.
+
+**Components:**
+- `index.ts` — Plugin entry point, WebSocket client
+- `ws-server.ts` — `ExtensionWSServer`, WebSocket server that the extension connects to
+- `installer.ts` — Automated extension installation helper
+
+**How it works:** The Chrome extension connects to UAB's `ExtensionWSServer` via WebSocket. UAB sends commands through this channel and receives DOM/accessibility data back.
+
+### Vision Plugin (v0.6.0)
+
+The `VisionPlugin` (`packages/uab/src/plugins/vision/`) is a universal fallback that works with any application — no accessibility API, no framework hooks, no special setup. It operates like Anthropic's computer use tool:
+
+1. Capture screenshot of target window
+2. Send to Claude Vision API (`claude-sonnet-4-20250514`) for element detection
+3. Map detected elements to `UIElement[]` with bounding boxes
+4. Execute actions via coordinate-based input injection (`packages/uab/src/plugins/vision/input.ts`)
+
+**Trade-offs:**
+- Expensive (API call per enumerate/query)
+- Slower (screenshot + API round-trip + input injection)
+- Less precise than native accessibility APIs
+- But **universal** — works when nothing else does
+
+**Priority:** Last resort (priority 4) in the `ControlRouter`. Only used when no native framework plugin can handle the application.
+
+**Components:**
+- `index.ts` — VisionPlugin, implements `FrameworkPlugin` interface
+- `analyzer.ts` — `VisionAnalyzer`, sends screenshots to Claude Vision
+- `input.ts` — Coordinate-based click, type, and key injection
 
 ---
 
@@ -195,15 +247,25 @@ class ConnectionResult:
 
 `window`, `button`, `textfield`, `textarea`, `checkbox`, `radio`, `select`, `menu`, `menuitem`, `list`, `listitem`, `table`, `tablerow`, `tablecell`, `tab`, `tabpanel`, `tree`, `treeitem`, `slider`, `progressbar`, `scrollbar`, `toolbar`, `statusbar`, `dialog`, `tooltip`, `image`, `link`, `label`, `heading`, `separator`, `container`, `unknown`
 
-### Action Types (29+)
+### Action Types (61)
 
-**Basic:** `click`, `doubleclick`, `rightclick`, `type`, `clear`, `select`, `scroll`, `focus`, `hover`, `expand`, `collapse`, `invoke`, `check`, `uncheck`, `toggle`
+**Basic (15):** `click`, `doubleclick`, `rightclick`, `type`, `clear`, `select`, `scroll`, `focus`, `hover`, `expand`, `collapse`, `invoke`, `check`, `uncheck`, `toggle`
 
-**Keyboard:** `keypress`, `hotkey`
+**Keyboard (2):** `keypress`, `hotkey`
 
-**Window:** `minimize`, `maximize`, `restore`, `close`, `move`, `resize`, `screenshot`, `contextmenu`
+**Window (6):** `minimize`, `maximize`, `restore`, `close`, `move`, `resize`, `screenshot`, `contextmenu`
 
-**Office:** `readDocument`, `readCell`, `writeCell`, `readRange`, `writeRange`, `getSheets`, `readFormula`, `readSlides`, `readSlideText`, `readEmails`, `composeEmail`, `sendEmail`
+**Office (12):** `readDocument`, `readCell`, `writeCell`, `readRange`, `writeRange`, `getSheets`, `readFormula`, `readSlides`, `readSlideText`, `readEmails`, `composeEmail`, `sendEmail`
+
+**Browser Session/Cookies (4):** `getCookies`, `setCookie`, `deleteCookie`, `clearCookies`
+
+**Browser Storage (8):** `getLocalStorage`, `setLocalStorage`, `deleteLocalStorage`, `clearLocalStorage`, `getSessionStorage`, `setSessionStorage`, `deleteSessionStorage`, `clearSessionStorage`
+
+**Browser Navigation (4):** `navigate`, `goBack`, `goForward`, `reload`
+
+**Browser Tab Management (4):** `getTabs`, `switchTab`, `closeTab`, `newTab`
+
+**Browser Script (1):** `executeScript`
 
 ---
 
@@ -215,9 +277,9 @@ Every UAB action is classified into one of three risk levels. The classification
 
 | Level | Actions | Governance |
 |-------|---------|------------|
-| **LOW** | `detect`, `enumerate`, `query`, `state`, `screenshot`, all read operations (`readDocument`, `readCell`, `readRange`, `getSheets`, `readFormula`, `readSlides`, `readSlideText`, `readEmails`) | Autonomous — no approval needed |
-| **MEDIUM** | `click`, `doubleclick`, `rightclick`, `type`, `clear`, `select`, `scroll`, `focus`, `hover`, `expand`, `collapse`, `check`, `uncheck`, `toggle`, `keypress`, `hotkey`, `contextmenu`, `writeCell`, `writeRange`, `composeEmail` | May require governance approval |
-| **HIGH** | `close`, `invoke`, `minimize`, `maximize`, `restore`, `move`, `resize`, `sendEmail` | Always requires approval |
+| **LOW** | `detect`, `enumerate`, `query`, `state`, `screenshot`, all read operations (`readDocument`, `readCell`, `readRange`, `getSheets`, `readFormula`, `readSlides`, `readSlideText`, `readEmails`), browser reads (`getCookies`, `getLocalStorage`, `getSessionStorage`, `getTabs`) | Autonomous — no approval needed |
+| **MEDIUM** | `click`, `doubleclick`, `rightclick`, `type`, `clear`, `select`, `scroll`, `focus`, `hover`, `expand`, `collapse`, `check`, `uncheck`, `toggle`, `keypress`, `hotkey`, `contextmenu`, `writeCell`, `writeRange`, `composeEmail`, `navigate`, `goBack`, `goForward`, `reload`, `switchTab`, `newTab`, `setCookie`, `setLocalStorage`, `setSessionStorage`, `executeScript` | May require governance approval |
+| **HIGH** | `close`, `invoke`, `minimize`, `maximize`, `restore`, `move`, `resize`, `sendEmail`, `deleteCookie`, `clearCookies`, `deleteLocalStorage`, `clearLocalStorage`, `deleteSessionStorage`, `clearSessionStorage`, `closeTab` | Always requires approval |
 
 ### Sensitive App Auto-Escalation
 
@@ -490,6 +552,21 @@ class UABProvider(BaseProvider):
     def compose_email(pid: int, to: str, subject: str, body: str, cc: str = "") -> AppActionResult
     def send_email(pid: int, to: str, subject: str, body: str, cc: str = "") -> AppActionResult
 
+    # Spatial Map / Composite Engine (v0.6.0)
+    def spatial_map(pid: int, format: str = "detailed") -> Dict[str, Any]
+    def text_map(pid: int, format: str = "detailed") -> Dict[str, Any]
+    def find_by_description(pid: int, description: str) -> List[Dict[str, Any]]
+
+    # Browser Operations (v0.6.0)
+    def navigate(pid: int, url: str) -> AppActionResult
+    def get_tabs(pid: int) -> AppActionResult
+    def switch_tab(pid: int, tab_id: str) -> AppActionResult
+    def execute_script(pid: int, script: str) -> AppActionResult
+    def get_cookies(pid: int, url: str = "", domain: str = "") -> AppActionResult
+    def set_cookie(pid: int, name: str, value: str, domain: str = "", url: str = "") -> AppActionResult
+    def get_local_storage(pid: int, key: str = "") -> AppActionResult
+    def set_local_storage(pid: int, key: str, value: str) -> AppActionResult
+
     # Diagnostics
     def health_check() -> ProviderHealth
     def get_health_summary() -> List[Dict]
@@ -529,7 +606,7 @@ UAB status is exposed through the Gateway flags API:
 
 | Flag | Default | Dependencies | Description |
 |------|---------|--------------|-------------|
-| `FEATURE_TOOLS_UAB` | `false` | `FEATURE_TOOLS_FABRIC` | Enable UAB bridge provider |
+| `FEATURE_TOOLS_UAB` | `false` | `FEATURE_TOOLS_FABRIC` + `FEATURE_TOOLS_HOST_BRIDGE` | Enable UAB bridge provider |
 | `FEATURE_HIVE_UAB` | `false` | `FEATURE_HIVE`, `FEATURE_TOOLS_UAB` | Enable UAB for Hive sub-agents |
 
 ---
@@ -573,6 +650,8 @@ npm run build
 node dist/daemon.js --port 7900
 ```
 
+On Windows, the persistent install now launches `scripts\run-uab-daemon.bat` from the `LancelotUABDaemon` Scheduled Task. That avoids brittle `schtasks /TR` quoting and keeps the startup path stable even when the repo lives under a spaced directory.
+
 ### Environment Variables
 
 | Variable | Default | Description |
@@ -601,6 +680,8 @@ The UAB status panel appears on the **Kill Switches** page when `FEATURE_TOOLS_U
 **UABPanel displays:**
 - Daemon status (running/offline with green pulse animation)
 - Daemon version and uptime
+- Bridge transport (`json-rpc-compat` when backed by the standalone 1.3.0 core)
+- Exposed standalone feature set
 - Connected application count
 - Supported framework list
 - Connected apps table: name, PID, framework, connection method
@@ -610,23 +691,303 @@ The panel polls every 5 seconds for live status updates.
 
 ---
 
+## Spatial Map Engine (v0.6.0)
+
+The Spatial Map (`packages/uab/src/spatial.ts`) converts flat `UIElement[]` with bounding rects into a spatial index that enables fast positional queries, row/column detection, and compact text-based maps for AI consumption.
+
+**This is UAB's core speed advantage over vision-only approaches:**
+- Data is faster than screenshots for AI to process
+- Bounding rects are free from UIA (no extra API calls)
+- The spatial map eliminates the need for screenshots in most cases
+- Vision becomes complementary, not primary
+
+### Key Types
+
+- **`SpatialElement`** — element with `id`, `type`, `label`, `bounds`, `center`, `row`, `col`, optional `text`/`value`
+- **`SpatialRow`** — detected visual row band with `index`, `y`, `height`
+- **`SpatialMap`** — full spatial index with elements, rows, window bounds
+
+### Output Formats
+
+| Format | Method | Description |
+|--------|--------|-------------|
+| `detailed` | `renderTextMap()` | Human/AI-readable text layout with positions |
+| `compact` | `renderTextMap()` | Condensed version for smaller context windows |
+| `json` | `renderJsonMap()` | JSON-serializable spatial index |
+
+### RPC Methods
+
+| Method | Params | Returns |
+|--------|--------|---------|
+| `spatialMap` | `{pid, options: {mapFormat}}` | `CompositeResult` with spatial map, timing, text content |
+| `textMap` | `{pid, format}` | `{text, timing}` |
+| `findByDescription` | `{pid, description}` | `SpatialElement[]` matching natural language description |
+
+---
+
+## Composite Engine (v0.6.0)
+
+The `CompositeEngine` (`packages/uab/src/composite.ts`) is UAB's fastest query mode. It combines all available data sources in speed-priority order:
+
+1. **UIA Tree** (instant) — element IDs, types, states, structure
+2. **Bounding Rects** (instant) — spatial positions, sizes, builds spatial map
+3. **Text Reading** (fast) — `TextPattern`/`ValuePattern` content extraction
+4. **Vision** (slow) — screenshot + Claude Vision (ONLY when needed)
+
+The engine accepts a `UABLike` interface (implemented by both `UABService` and `UABConnector`), making it usable in both daemon and standalone modes.
+
+### CompositeResult
+
+```typescript
+interface CompositeResult {
+  spatialMap: SpatialMap;       // Full spatial index
+  textMap: string;              // Text-based UI map for AI
+  timing: { total: number };    // Performance metrics
+  textContent: string[];        // Extracted text values
+}
+```
+
+---
+
+## UABConnector (v0.6.0)
+
+The `UABConnector` (`packages/uab/src/connector.ts`) is a framework-independent, instantiable (non-singleton) desktop control API designed for use by ANY agent framework:
+
+- Claude Code (via Bash or MCP)
+- Codex CLI (via Bash)
+- Custom agents (import as library)
+- MD-only agents (via CLI JSON output)
+
+**Design principles:** Zero dependencies on any agent framework, in-memory registry for fast lookups, JSON profiles for persistence, returns plain JSON-serializable objects.
+
+```typescript
+const uab = new UABConnector();
+await uab.start();
+const apps = await uab.scan();
+await uab.connect(apps[0].pid);
+const buttons = await uab.query(apps[0].pid, { type: 'button' });
+await uab.act(apps[0].pid, buttons[0].id, 'click');
+await uab.stop();
+```
+
+### ConnectorOptions
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `profileDir` | `data/uab-profiles` | JSON profile persistence directory |
+| `persistent` | auto-detected | Enable persistent connections with health monitoring |
+| `extensionBridge` | auto-detected | Enable Chrome extension WebSocket bridge |
+| `rateLimit` | auto-detected | Max actions per minute per PID |
+| `mode` | auto-detected | Force `desktop`, `server`, or `container` mode |
+
+---
+
+## App Registry (v0.6.0)
+
+The `AppRegistry` (`packages/uab/src/registry.ts`) is an in-memory knowledge base with optional JSON profile persistence. It remembers apps across sessions without requiring a database.
+
+**Design principles:** Zero dependencies, O(1) in-memory Map lookups, git-friendly single JSON file with readable diffs, scales to 1000+ apps.
+
+### AppProfile
+
+Each registered app has an `AppProfile` with:
+- `executable` — stable key (lowercase executable name)
+- `name` — human-readable app name
+- `framework` — detected UI framework
+- `confidence` — detection confidence (0.0-1.0)
+- `preferredMethod` — best control method found
+- `connectionInfo` — framework-specific connection params
+
+---
+
+## MCP Server (v0.6.0)
+
+The UAB MCP Server (`packages/uab/src/mcp-server.ts`) exposes UAB as Model Context Protocol tools over stdio. When an MCP-compatible AI agent connects, it discovers UAB tools natively — no need to decide to use UAB over screenshots.
+
+**Configuration (for `claude_desktop_config.json` or any MCP agent):**
+
+```json
+{
+  "mcpServers": {
+    "desktop-control": {
+      "command": "node",
+      "args": ["dist/uab/mcp-server.js"]
+    }
+  }
+}
+```
+
+The server implements JSON-RPC over stdio with no external dependencies. It includes raw UIA tree walking via PowerShell for low-level element inspection.
+
+---
+
+## Agent SDK (v0.6.0)
+
+The `AgentSDK` (`packages/uab/src/sdk.ts`) provides a dead-simple wrapper that makes UAB easier to use than screenshots, so agents naturally prefer structured control.
+
+```typescript
+import { desktop } from './sdk.js';
+
+// One-liner: click a button in any app
+await desktop.click('Notepad', 'File');
+
+// Type into a field
+await desktop.type('Notepad', 'Edit area', 'Hello world');
+
+// Get what's on screen (no screenshot needed)
+const layout = await desktop.look('Notepad');
+
+// Full workflow
+await desktop.do('Notepad', [
+  { click: 'File' },
+  { click: 'Save As...' },
+  { type: { field: 'File name', text: 'document.txt' } },
+  { click: 'Save' },
+]);
+```
+
+### Workflow Steps
+
+| Step Type | Example | Description |
+|-----------|---------|-------------|
+| `click` | `{ click: 'Save' }` | Click an element by label |
+| `type` | `{ type: { field: 'Name', text: 'hello' } }` | Type text into a field |
+| `hotkey` | `{ hotkey: 'ctrl+s' }` | Send a keyboard shortcut |
+| `key` | `{ key: 'Enter' }` | Send a single keypress |
+| `wait` | `{ wait: 1000 }` | Wait N milliseconds |
+
+---
+
+## Agent Prompts (v0.6.0)
+
+The `agent-prompt.ts` module (`packages/uab/src/agent-prompt.ts`) provides drop-in system prompt templates that teach ANY AI agent to prefer UAB's structured APIs over screenshots.
+
+**Available modes:**
+- `mcp` — for Claude Code / MCP agents
+- `cli` — for CLI-based agents (Codex, custom agents)
+- `http` — for HTTP API agents
+
+```typescript
+import { getAgentPrompt } from './agent-prompt.js';
+const prompt = getAgentPrompt('mcp');
+```
+
+The prompts override agents' default screenshot-taking behavior by explaining that structured UI queries are faster (~50-200ms), more reliable, cheaper, and provide element IDs directly.
+
+---
+
+## Environment Detection (v0.6.0)
+
+The `environment.ts` module (`packages/uab/src/environment.ts`) auto-detects the runtime context and adapts UAB behavior accordingly.
+
+### Runtime Modes
+
+| Mode | Description | UIA Access | Example |
+|------|-------------|------------|---------|
+| `desktop` | Interactive Windows session (Session 1+) | Full | Developer workstation |
+| `server` | Non-interactive (SSH, service) | Via Session Bridge | Remote server |
+| `container` | Docker, WSL, Hyper-V | Limited/none | CI/CD pipeline |
+
+### EnvironmentInfo
+
+```typescript
+interface EnvironmentInfo {
+  mode: RuntimeMode;        // 'desktop' | 'server' | 'container'
+  hasDesktop: boolean;      // Whether a desktop session is reachable
+  sessionId: number;        // Windows session ID (0 = non-interactive)
+  isContainer: boolean;     // Docker, WSL, etc.
+  needsBridge: boolean;     // Session 0→1 bridge needed
+  platform: NodeJS.Platform;
+  arch: string;
+  nodeVersion: string;
+}
+```
+
+---
+
+## JSON-RPC Methods (Complete)
+
+All methods available on the daemon's JSON-RPC 2.0 endpoint (`http://host.docker.internal:7900`):
+
+| Method | Category | Description |
+|--------|----------|-------------|
+| `ping` | Status | Liveness check |
+| `version` | Status | Daemon version |
+| `status` | Status | Basic status |
+| `getStatus` | Status | Full status with frameworks, connected apps |
+| `detect` / `detect.all` | Discovery | Scan for all controllable apps |
+| `detect.electron` | Discovery | Scan for Electron apps only |
+| `detect.byPid` | Discovery | Detect framework for a specific PID |
+| `detect.byName` | Discovery | Detect framework by app name |
+| `connect` | Connection | Connect to an app by PID |
+| `disconnect` | Connection | Disconnect from an app |
+| `disconnectAll` | Connection | Disconnect all apps |
+| `connections` | Connection | List active connections |
+| `enumerate` | Query | Get full UI element tree |
+| `query` | Query | Search for elements by selector |
+| `act` | Action | Execute a UI action on an element |
+| `state` | Query | Get current app state |
+| `keypress` | Action | Send a keypress |
+| `hotkey` | Action | Send a key combination |
+| `minimize` / `maximize` / `restore` | Window | Window management |
+| `closeWindow` | Window | Close a window |
+| `moveWindow` / `resizeWindow` | Window | Reposition/resize |
+| `screenshot` | Capture | Capture window screenshot |
+| `chain` | Workflow | Execute an action chain |
+| `health` | Diagnostics | Connection health summary |
+| `cacheStats` | Diagnostics | Cache statistics |
+| `auditLog` | Diagnostics | Recent audit entries |
+| `checkHealth` | Diagnostics | Force health check cycle |
+| `spatialMap` | Composite (v0.6.0) | Get spatial map of an app's UI |
+| `textMap` | Composite (v0.6.0) | Get text-based UI map |
+| `findByDescription` | Composite (v0.6.0) | Find elements by natural language |
+| `scan` | Connector | Connector-backed app discovery alias |
+| `apps` | Connector | List active connector-managed applications |
+| `find` | Connector | High-level element lookup helper |
+| `focused` | Connector | Return the currently focused element |
+| `findByPath` | Connector | Find elements by path or parent context |
+| `watchChanges` | Connector | Watch focused window changes over a short interval |
+| `atomicChain` | Connector | Execute an atomic multi-step input chain |
+| `smartInvoke` | Connector | Best-effort resolve and invoke a control |
+
+---
+
 ## Key Files
 
 | Path | Purpose |
 |------|---------|
 | `packages/uab/` | Host daemon (TypeScript/Node.js) |
-| `packages/uab/src/types.ts` | Unified type definitions |
+| `packages/uab/src/types.ts` | Unified type definitions (61 action types) |
 | `packages/uab/src/service.ts` | UABService singleton |
 | `packages/uab/src/detector.ts` | Framework detection |
-| `packages/uab/src/plugins/` | 8 framework plugin implementations |
+| `packages/uab/src/plugins/` | 10 framework plugin implementations |
+| `packages/uab/src/plugins/browser/` | Browser plugin (CDP for Chrome, Edge, Brave, etc.) |
+| `packages/uab/src/plugins/chrome-ext/` | Chrome Extension plugin (WebSocket bridge, installer) |
+| `packages/uab/src/plugins/vision/` | Vision plugin (Claude AI screenshot analysis + input injection) |
 | `packages/uab/src/cache.ts` | Smart element caching |
 | `packages/uab/src/permissions.ts` | Risk-based access control |
 | `packages/uab/src/chains.ts` | Multi-step action workflows |
 | `packages/uab/src/connection-manager.ts` | Health monitoring and auto-reconnect |
-| `src/tools/providers/uab_bridge.py` | Python JSON-RPC 2.0 bridge |
+| `packages/uab/src/composite.ts` | CompositeEngine — multi-source query (v0.6.0) |
+| `packages/uab/src/spatial.ts` | SpatialMap/SpatialIndex — positional queries (v0.6.0) |
+| `packages/uab/src/connector.ts` | UABConnector — framework-independent public API (v0.6.0) |
+| `packages/uab/src/registry.ts` | AppRegistry — in-memory app knowledge base (v0.6.0) |
+| `packages/uab/src/mcp-server.ts` | MCP Server — UAB as MCP tools over stdio (v0.6.0) |
+| `packages/uab/src/sdk.ts` | AgentSDK — dead-simple wrapper for agents (v0.6.0) |
+| `packages/uab/src/agent-prompt.ts` | Agent Prompts — system prompts for AI agents (v0.6.0) |
+| `packages/uab/src/environment.ts` | Environment Detection — desktop/server/container (v0.6.0) |
+| `packages/uab/src/router.ts` | ControlRouter — plugin selection and priority |
+| `packages/uab/src/cli.ts` | CLI interface for any agent framework |
+| `packages/uab/src/commands.ts` | Telegram bot commands for UAB |
+| `src/tools/providers/uab_bridge.py` | Python JSON-RPC 2.0 bridge (extended in v0.6.0) |
 | `src/tools/receipts_uab.py` | Receipt types and storage |
 | `src/tools/contracts.py` | AppControlCapability protocol and data types |
 | `scripts/install-uab.sh` | Linux/macOS install script |
 | `scripts/install-uab.bat` | Windows installer (auto-start via Scheduled Task) |
 | `scripts/uninstall-uab.bat` | Windows uninstaller (removes task + stops daemon) |
 | `scripts/start-uab.bat` | Windows manual foreground startup (debugging) |
+
+Standalone-core merge files of interest:
+- `packages/uab/src/server.ts`
+- `packages/uab/src/cowork-bridge/`
+- `packages/uab/src/daemon.ts`

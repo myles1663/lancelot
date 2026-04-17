@@ -26,6 +26,7 @@ from typing import Dict, Optional
 
 import httpx
 
+from src.federation.auth import FederationAuth
 from src.federation.topology import TopologyRegistry
 
 logger = logging.getLogger(__name__)
@@ -41,17 +42,40 @@ class HeartbeatMesh:
         self,
         topology: TopologyRegistry,
         divergence_detector=None,
+        auth: Optional[FederationAuth] = None,
         connect_timeout_s: float = 5.0,
         read_timeout_s: float = 120.0,
+        current_soul_hash_provider=None,
+        active_task_count_provider=None,
+        hive_spawn_count_provider=None,
+        hive_spawn_states_provider=None,
+        pending_handoffs_provider=None,
+        budget_utilization_provider=None,
+        on_diverged=None,
+        on_reconnecting=None,
     ):
         self._topology = topology
         self._divergence = divergence_detector
+        self._auth = auth
         self._connect_timeout = connect_timeout_s
         self._read_timeout = read_timeout_s
+        self._current_soul_hash_provider = current_soul_hash_provider
+        self._active_task_count_provider = active_task_count_provider
+        self._hive_spawn_count_provider = hive_spawn_count_provider
+        self._hive_spawn_states_provider = hive_spawn_states_provider
+        self._pending_handoffs_provider = pending_handoffs_provider
+        self._budget_utilization_provider = budget_utilization_provider
+        self._on_diverged = on_diverged
+        self._on_reconnecting = on_reconnecting
 
         self._tasks: Dict[str, asyncio.Task] = {}
+        self._subscription_status: Dict[str, str] = {}
+        self._stream_outcome_status: Dict[str, str] = {}
+        self._stream_errors: Dict[str, str] = {}
         self._running = False
         self._client: Optional[httpx.AsyncClient] = None
+        self._divergence_evaluation_failed = False
+        self._divergence_status_error: Optional[str] = None
 
     async def start(self) -> None:
         """Start heartbeat subscriptions for all known peers."""
@@ -74,6 +98,8 @@ class HeartbeatMesh:
             if peer.address:
                 self._start_subscription(peer.instance_id, peer.address)
 
+        self._evaluate_divergence()
+
         logger.info(
             "Heartbeat mesh started: %d subscriptions", len(self._tasks)
         )
@@ -93,6 +119,9 @@ class HeartbeatMesh:
             )
 
         self._tasks.clear()
+        self._subscription_status.clear()
+        self._stream_outcome_status.clear()
+        self._stream_errors.clear()
 
         if self._client:
             await self._client.aclose()
@@ -107,6 +136,7 @@ class HeartbeatMesh:
         if instance_id in self._tasks:
             return
         self._start_subscription(instance_id, address)
+        self._evaluate_divergence()
 
     def on_peer_removed(self, instance_id: str) -> None:
         """Cancel the heartbeat subscription for a removed peer."""
@@ -114,6 +144,10 @@ class HeartbeatMesh:
         if task:
             task.cancel()
             logger.info("Heartbeat subscription cancelled for %s", instance_id)
+        self._subscription_status.pop(instance_id, None)
+        self._stream_outcome_status.pop(instance_id, None)
+        self._stream_errors.pop(instance_id, None)
+        self._evaluate_divergence()
 
     def _start_subscription(self, instance_id: str, address: str) -> None:
         """Start an async task to subscribe to a peer's heartbeat stream."""
@@ -122,6 +156,9 @@ class HeartbeatMesh:
             name=f"hb-mesh-{instance_id[:8]}",
         )
         self._tasks[instance_id] = task
+        self._subscription_status[instance_id] = "connecting"
+        self._stream_outcome_status[instance_id] = "unknown"
+        self._stream_errors.pop(instance_id, None)
 
     async def _subscribe_loop(self, instance_id: str, address: str) -> None:
         """Long-running SSE subscription with reconnect logic."""
@@ -133,16 +170,27 @@ class HeartbeatMesh:
                 await self._consume_stream(instance_id, url)
                 # Stream ended cleanly — reconnect immediately
                 backoff = 1.0
+                self._subscription_status[instance_id] = "reconnecting"
             except httpx.ConnectError:
                 logger.debug("Heartbeat connection failed for %s", instance_id)
+                self._subscription_status[instance_id] = "reconnecting"
+                self._stream_outcome_status[instance_id] = "failed"
+                self._stream_errors[instance_id] = "connect failed"
             except httpx.TimeoutException:
                 logger.debug("Heartbeat stream timeout for %s", instance_id)
+                self._subscription_status[instance_id] = "reconnecting"
+                self._stream_outcome_status[instance_id] = "failed"
+                self._stream_errors[instance_id] = "timeout"
             except asyncio.CancelledError:
+                self._subscription_status[instance_id] = "disconnected"
                 return
             except Exception as exc:
                 logger.warning(
                     "Heartbeat subscription error for %s: %s", instance_id, exc
                 )
+                self._subscription_status[instance_id] = "reconnecting"
+                self._stream_outcome_status[instance_id] = "failed"
+                self._stream_errors[instance_id] = str(exc)
 
             if not self._running:
                 return
@@ -162,14 +210,23 @@ class HeartbeatMesh:
         if not self._client:
             return
 
-        async with self._client.stream("GET", url) as response:
+        path = "/api/federation/stream"
+        headers = self._auth.sign_request("GET", path, b"") if self._auth else {}
+
+        async with self._client.stream("GET", url, headers=headers) as response:
             if response.status_code != 200:
                 logger.warning(
                     "Heartbeat stream %s returned HTTP %d",
                     instance_id, response.status_code,
                 )
+                self._subscription_status[instance_id] = "failed"
+                self._stream_outcome_status[instance_id] = "failed"
+                self._stream_errors[instance_id] = f"HTTP {response.status_code}"
                 return
 
+            self._subscription_status[instance_id] = "connected"
+            self._stream_outcome_status[instance_id] = "ok"
+            self._stream_errors.pop(instance_id, None)
             buffer = ""
             async for chunk in response.aiter_text():
                 if not self._running:
@@ -207,19 +264,19 @@ class HeartbeatMesh:
         )
 
         # Feed to divergence detector
-        if self._divergence:
-            try:
-                peer_heartbeats = self._topology.get_peer_heartbeats()
-                self._divergence.check_connectivity(peer_heartbeats)
-            except Exception:
-                pass
+        self._evaluate_divergence(instance_id)
 
     def get_subscription_status(self) -> Dict[str, str]:
         """Return status of all heartbeat subscriptions."""
-        return {
-            pid: "active" if not task.done() else "disconnected"
-            for pid, task in self._tasks.items()
-        }
+        return dict(self._subscription_status)
+
+    def get_stream_outcome_status(self) -> Dict[str, str]:
+        """Return the last observed stream outcome for each peer."""
+        return dict(self._stream_outcome_status)
+
+    def get_stream_errors(self) -> Dict[str, str]:
+        """Return last stream error detail for peers with a failed outcome."""
+        return dict(self._stream_errors)
 
     @property
     def running(self) -> bool:
@@ -228,3 +285,54 @@ class HeartbeatMesh:
     @property
     def subscription_count(self) -> int:
         return len(self._tasks)
+
+    @property
+    def divergence_evaluation_failed(self) -> bool:
+        return self._divergence_evaluation_failed
+
+    @property
+    def divergence_status_error(self) -> Optional[str]:
+        return self._divergence_status_error
+
+    def _safe_provider(self, provider, default):
+        if not callable(provider):
+            return default
+        try:
+            return provider()
+        except Exception:
+            return default
+
+    def _evaluate_divergence(self, instance_id: str = "") -> None:
+        if not self._divergence:
+            return
+        try:
+            previous_state = getattr(self._divergence, "state", None)
+            peer_heartbeats = self._topology.get_peer_heartbeats()
+            state, snapshot = self._divergence.check_connectivity(
+                peer_heartbeats,
+                current_soul_hash=self._safe_provider(self._current_soul_hash_provider, ""),
+                active_task_count=self._safe_provider(self._active_task_count_provider, 0),
+                hive_spawn_count=self._safe_provider(self._hive_spawn_count_provider, 0),
+                hive_spawn_states=self._safe_provider(self._hive_spawn_states_provider, {}),
+                pending_handoffs=self._safe_provider(self._pending_handoffs_provider, []),
+                budget_utilization_pct=self._safe_provider(self._budget_utilization_provider, 0.0),
+            )
+            if (
+                getattr(state, "value", "") == "diverged"
+                and previous_state != state
+                and snapshot is not None
+                and callable(self._on_diverged)
+            ):
+                self._on_diverged(instance_id, snapshot)
+            elif (
+                getattr(state, "value", "") == "reconnecting"
+                and previous_state != state
+                and callable(self._on_reconnecting)
+            ):
+                self._on_reconnecting(instance_id, self._divergence)
+            self._divergence_evaluation_failed = False
+            self._divergence_status_error = None
+        except Exception as exc:
+            self._divergence_evaluation_failed = True
+            self._divergence_status_error = str(exc)
+            logger.exception("Federation divergence evaluation failed")

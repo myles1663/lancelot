@@ -37,6 +37,7 @@ class HealthCheck:
     name: str
     check_fn: Callable[[], bool]
     degraded_reason: str = ""
+    snapshot_details_fn: Optional[Callable[[], Dict[str, Any]]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -92,11 +93,16 @@ class HealthMonitor:
         """
         degraded_reasons: List[str] = []
         results: Dict[str, bool] = {}
+        snapshot_details: Dict[str, Any] = {}
 
         for check in self._checks:
             try:
                 ok = check.check_fn()
                 results[check.name] = ok
+                if check.snapshot_details_fn is not None:
+                    details = check.snapshot_details_fn() or {}
+                    if isinstance(details, dict):
+                        snapshot_details.update(details)
                 if not ok:
                     reason = check.degraded_reason or f"{check.name} check failed"
                     degraded_reasons.append(reason)
@@ -116,6 +122,7 @@ class HealthMonitor:
             local_llm_ready=results.get("local_llm", False),
             scheduler_running=results.get("scheduler", False),
             last_health_tick_at=datetime.now(timezone.utc).isoformat(),
+            last_scheduler_tick_at=snapshot_details.get("last_scheduler_tick_at"),
             degraded_reasons=degraded_reasons,
         )
 

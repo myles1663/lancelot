@@ -157,6 +157,10 @@ IDENTITY_REQUIRED_TYPES: Set[str] = {
     ActionType.T3_A2A_INBOUND_REJECTED.value,
     ActionType.T3_A2A_OUTBOUND_APPROVED.value,
     ActionType.T3_A2A_OUTBOUND_REJECTED.value,
+    ActionType.A2A_DELEGATION_SENT.value,
+    ActionType.A2A_DELEGATION_COMPLETED.value,
+    ActionType.A2A_DELEGATION_FAILED.value,
+    ActionType.A2A_OUTBOUND_BLOCKED.value,
     ActionType.A2A_AGENT_CARD_UPDATED.value,
     # Time-Travel Debugging — human-initiated actions
     ActionType.QUEST_FORKED.value,

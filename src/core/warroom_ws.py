@@ -4,9 +4,9 @@ War Room WebSocket endpoint — /ws/warroom
 Broadcasts events from the EventBus to all connected War Room clients.
 Supports JSON message protocol for bidirectional communication.
 
-Security (F-003): Connections require authentication via first message.
-The client must send {"type": "auth", "token": "<bearer_token>"} as the
-first message after connecting. Unauthenticated connections are closed.
+Security (F-003): Browser clients authenticate via the HttpOnly War Room
+session cookie. Programmatic clients can still authenticate via the first
+message: {"type": "auth", "token": "<bearer_token>"}.
 """
 
 import hmac
@@ -81,16 +81,47 @@ event_bus.subscribe_all(_on_event)
 
 
 def _verify_ws_token(token: str) -> bool:
-    """Validate a WebSocket auth token against LANCELOT_API_TOKEN."""
+    """Validate a WebSocket auth token.
+
+    Accepts either the LANCELOT_API_TOKEN (for programmatic clients)
+    or a valid War Room session token (for browser-based War Room UI).
+    """
+    if not token:
+        dev_mode = os.getenv("LANCELOT_DEV_MODE", "").lower() in ("true", "1", "yes")
+        return dev_mode
+
+    # Check against LANCELOT_API_TOKEN
     try:
         import secret_cache
         api_token = secret_cache.get("LANCELOT_API_TOKEN", "")
     except Exception:
         api_token = os.getenv("LANCELOT_API_TOKEN")
-    if not api_token:
-        dev_mode = os.getenv("LANCELOT_DEV_MODE", "").lower() in ("true", "1", "yes")
-        return dev_mode  # Only allow in explicit dev mode
-    return hmac.compare_digest(token, api_token)
+    if api_token and hmac.compare_digest(token, api_token):
+        return True
+
+    # Check against active War Room session tokens
+    try:
+        from src.core.auth_api import verify_warroom_session_token
+        if verify_warroom_session_token(token):
+            return True
+    except ImportError:
+        pass
+
+    return False
+
+
+def _verify_ws_cookie(websocket: WebSocket) -> bool:
+    try:
+        from src.core.auth_api import (
+            get_warroom_session_cookie_name,
+            verify_warroom_session_token,
+        )
+
+        cookie_name = get_warroom_session_cookie_name()
+        token = websocket.cookies.get(cookie_name, "")
+        return verify_warroom_session_token(token)
+    except ImportError:
+        return False
 
 
 async def warroom_websocket(websocket: WebSocket) -> None:
@@ -99,25 +130,12 @@ async def warroom_websocket(websocket: WebSocket) -> None:
     Security (F-003): Requires authentication via first message.
     Client must send: {"type": "auth", "token": "<bearer_token>"}
     Server responds: {"type": "auth_ok"} or closes the connection.
-    Legacy: Also accepts ?token= query param for backward compatibility
-    (logged as deprecated).
     """
     await websocket.accept()
 
     # --- Authentication gate ---
-    authenticated = False
+    authenticated = _verify_ws_cookie(websocket)
 
-    # Legacy: check query param (deprecated but supported for transition)
-    query_token = websocket.query_params.get("token", "")
-    if query_token:
-        logger.warning(
-            "SECURITY: War Room WS auth via URL query parameter is deprecated. "
-            "Use first-message auth: {\"type\": \"auth\", \"token\": \"...\"}"
-        )
-        if _verify_ws_token(query_token):
-            authenticated = True
-
-    # First-message auth (preferred)
     if not authenticated:
         try:
             data = await asyncio.wait_for(
@@ -136,7 +154,7 @@ async def warroom_websocket(websocket: WebSocket) -> None:
     if not authenticated:
         await websocket.send_text(json.dumps({
             "type": "auth_error",
-            "error": "Authentication required. Send: {\"type\": \"auth\", \"token\": \"<token>\"}",
+            "error": "Authentication required. Browser clients use the session cookie; programmatic clients send {\"type\": \"auth\", \"token\": \"<token>\"}.",
         }))
         await websocket.close(code=4401, reason="Authentication required")
         logger.warning("War Room WS: rejected unauthenticated connection")

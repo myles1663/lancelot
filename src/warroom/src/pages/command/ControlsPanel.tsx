@@ -1,10 +1,23 @@
 import { useState } from 'react'
 import { usePolling } from '@/hooks'
-import { sendMessage, fetchCrusaderStatus, activateCrusader, deactivateCrusader } from '@/api'
+import {
+  fetchCrusaderStatus,
+  activateCrusader,
+  deactivateCrusader,
+  fetchRuntimePauseStatus,
+  pauseRuntime,
+  resumeRuntime,
+  emergencyStopRuntime,
+} from '@/api'
 import { ConfirmDialog } from '@/components'
-import type { CrusaderStatusResponse, CrusaderActionResponse } from '@/types/api'
+import type {
+  CrusaderStatusResponse,
+  CrusaderActionResponse,
+  RuntimePauseStatusResponse,
+  RuntimeEmergencyStopResponse,
+} from '@/types/api'
 
-type ConfirmAction = 'crusader_on' | 'crusader_off' | 'pause' | 'emergency_stop' | null
+type ConfirmAction = 'crusader_on' | 'crusader_off' | 'pause' | 'resume' | 'emergency_stop' | null
 
 const ACTION_DESCRIPTIONS: Record<NonNullable<ConfirmAction>, { title: string; description: string; variant: 'default' | 'destructive' }> = {
   crusader_on: {
@@ -19,8 +32,13 @@ const ACTION_DESCRIPTIONS: Record<NonNullable<ConfirmAction>, { title: string; d
     variant: 'default',
   },
   pause: {
-    title: 'Pause Agent',
-    description: 'Lancelot will stop processing new tasks until resumed. Active tasks will complete.',
+    title: 'Pause Runtime',
+    description: 'Lancelot will stop accepting new work until resumed. Active tasks will complete.',
+    variant: 'default',
+  },
+  resume: {
+    title: 'Resume Runtime',
+    description: 'Lancelot will resume accepting new work across chat, scheduler, HIVE, and A2A.',
     variant: 'default',
   },
   emergency_stop: {
@@ -35,18 +53,27 @@ export function ControlsPanel() {
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null)
   const [executing, setExecuting] = useState(false)
   const [lastResult, setLastResult] = useState<CrusaderActionResponse | null>(null)
+  const [lastPauseResult, setLastPauseResult] = useState<RuntimePauseStatusResponse | null>(null)
+  const [lastEmergencyResult, setLastEmergencyResult] = useState<RuntimeEmergencyStopResponse | null>(null)
 
   const { data: crusaderStatus } = usePolling<CrusaderStatusResponse>({
     fetcher: fetchCrusaderStatus,
     interval: 5000,
   })
+  const { data: runtimePause } = usePolling<RuntimePauseStatusResponse>({
+    fetcher: fetchRuntimePauseStatus,
+    interval: 5000,
+  })
 
   const crusaderActive = crusaderStatus?.crusader_mode ?? false
+  const runtimePaused = runtimePause?.paused ?? false
 
   const handleConfirm = async () => {
     if (!confirmAction) return
     setExecuting(true)
     setLastResult(null)
+    setLastPauseResult(null)
+    setLastEmergencyResult(null)
     try {
       if (confirmAction === 'crusader_on') {
         const res = await activateCrusader()
@@ -55,9 +82,14 @@ export function ControlsPanel() {
         const res = await deactivateCrusader()
         setLastResult(res)
       } else if (confirmAction === 'pause') {
-        await sendMessage('PAUSE')
+        const res = await pauseRuntime('Paused from Command Center')
+        setLastPauseResult(res)
+      } else if (confirmAction === 'resume') {
+        const res = await resumeRuntime()
+        setLastPauseResult(res)
       } else if (confirmAction === 'emergency_stop') {
-        await sendMessage('EMERGENCY STOP')
+        const res = await emergencyStopRuntime('Emergency stop from Command Center')
+        setLastEmergencyResult(res)
       }
     } finally {
       setExecuting(false)
@@ -82,10 +114,10 @@ export function ControlsPanel() {
           Crusader Mode — {crusaderActive ? 'Active' : 'Off'}
         </button>
         <button
-          onClick={() => setConfirmAction('pause')}
+          onClick={() => setConfirmAction(runtimePaused ? 'resume' : 'pause')}
           className="w-full px-3 py-2 text-sm text-left bg-surface-input border border-border-default rounded-md text-text-secondary hover:text-text-primary hover:bg-surface-card-elevated transition-colors"
         >
-          Pause Agent
+          {runtimePaused ? 'Resume Runtime' : 'Pause Runtime'}
         </button>
         <button
           onClick={() => setConfirmAction('emergency_stop')}
@@ -111,6 +143,21 @@ export function ControlsPanel() {
         </div>
       )}
 
+      {runtimePause?.paused && (
+        <div className="mt-3 p-2.5 bg-state-degraded/10 border border-state-degraded/30 rounded-md">
+          <p className="text-[11px] font-medium text-state-degraded mb-1">Runtime Paused</p>
+          <div className="space-y-1 text-[10px] text-text-secondary">
+            {runtimePause.reason && <p>{runtimePause.reason}</p>}
+            {runtimePause.paused_by_display_name && (
+              <p>By {runtimePause.paused_by_display_name}</p>
+            )}
+            {runtimePause.paused_at && (
+              <p>Since {new Date(runtimePause.paused_at).toLocaleTimeString()}</p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Action Result Toast */}
       {lastResult && (
         <div className={`mt-3 p-2.5 rounded-md border text-[11px] ${
@@ -131,6 +178,40 @@ export function ControlsPanel() {
               )}
             </div>
             <button onClick={() => setLastResult(null)} className="text-text-muted hover:text-text-primary ml-2">&times;</button>
+          </div>
+        </div>
+      )}
+
+      {lastPauseResult && (
+        <div className={`mt-3 p-2.5 rounded-md border text-[11px] ${
+          lastPauseResult.paused
+            ? 'bg-state-degraded/10 border-state-degraded/30 text-state-degraded'
+            : 'bg-state-healthy/10 border-state-healthy/30 text-state-healthy'
+        }`}>
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="font-medium">
+                {lastPauseResult.paused ? 'Runtime Paused' : 'Runtime Resumed'}
+              </p>
+              {lastPauseResult.reason && lastPauseResult.paused && (
+                <p className="mt-0.5">{lastPauseResult.reason}</p>
+              )}
+            </div>
+            <button onClick={() => setLastPauseResult(null)} className="text-text-muted hover:text-text-primary ml-2">&times;</button>
+          </div>
+        </div>
+      )}
+
+      {lastEmergencyResult && (
+        <div className="mt-3 p-2.5 rounded-md border text-[11px] bg-state-error/10 border-state-error/30 text-state-error">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="font-medium">Emergency Stop Issued</p>
+              <p className="mt-0.5">
+                Stopped {lastEmergencyResult.stopped_hive_agents} HIVE agent{lastEmergencyResult.stopped_hive_agents !== 1 ? 's' : ''}
+              </p>
+            </div>
+            <button onClick={() => setLastEmergencyResult(null)} className="text-text-muted hover:text-text-primary ml-2">&times;</button>
           </div>
         </div>
       )}

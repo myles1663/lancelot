@@ -95,6 +95,51 @@ class TestExplicitDeny(unittest.TestCase):
         self.assertFalse(self.sentry.deny_request("nonexistent-id"))
 
 
+class TestPersistence(unittest.TestCase):
+
+    def setUp(self):
+        self.data_dir = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.data_dir, "mcp_configs"), exist_ok=True)
+        with open(os.path.join(self.data_dir, "MEMORY_SUMMARY.md"), "w") as f:
+            f.write("")
+
+    def test_pending_request_survives_restart(self):
+        sentry = MCPSentry(data_dir=self.data_dir)
+        result = sentry.check_permission("unknown_tool", {"x": 1})
+        req_id = result["request_id"]
+
+        reloaded = MCPSentry(data_dir=self.data_dir)
+
+        self.assertIn(req_id, reloaded.pending_requests)
+        self.assertEqual(reloaded.pending_requests[req_id]["status"], "PENDING")
+
+    def test_approved_request_survives_restart(self):
+        sentry = MCPSentry(data_dir=self.data_dir)
+        result = sentry.check_permission("unknown_tool", {"x": 1})
+        req_id = result["request_id"]
+        self.assertTrue(sentry.approve_request(req_id))
+
+        reloaded = MCPSentry(data_dir=self.data_dir)
+
+        self.assertEqual(reloaded.pending_requests[req_id]["status"], "APPROVED")
+
+    def test_cleanup_persists_expired_entry_removal(self):
+        sentry = MCPSentry(data_dir=self.data_dir)
+        sentry.pending_requests["expired-id"] = {
+            "tool": "unknown_tool",
+            "params": {"x": 1},
+            "status": "PENDING",
+            "_created_at": time.time() - APPROVAL_TTL - 100,
+        }
+        sentry._save_pending_requests()
+
+        reloaded = MCPSentry(data_dir=self.data_dir)
+        reloaded._cleanup_expired()
+
+        final = MCPSentry(data_dir=self.data_dir)
+        self.assertNotIn("expired-id", final.pending_requests)
+
+
 class TestCleanup(unittest.TestCase):
 
     def setUp(self):

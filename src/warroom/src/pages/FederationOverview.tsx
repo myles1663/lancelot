@@ -1,16 +1,23 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { usePolling } from '@/hooks/usePolling'
 import {
   fetchFederationStatus,
   fetchFederationHealth,
   fetchActiveTopology,
+  fetchFederationSettings,
+  updateFederationSettings,
   type FederationStatus,
   type FederationHealthSummary,
+  type FederationSettings,
   type TopologyDocument,
 } from '@/api/federation'
 import { PageLoader } from '@/components/PageLoader'
 import { MetricCard } from '@/components/MetricCard'
 import { StatusDot } from '@/components/StatusDot'
+
+function boolStateLabel(value?: boolean): string {
+  return value ? 'running' : 'degraded'
+}
 
 function edgeStateColor(state: string): string {
   switch (state) {
@@ -157,9 +164,21 @@ function EdgeRow({ edge, nodes }: {
 // ── Main Page ────────────────────────────────────────────────
 
 export function FederationOverview() {
+  const [selfAddressDraft, setSelfAddressDraft] = useState('')
+  const [settingsDirty, setSettingsDirty] = useState(false)
+  const [settingsSaving, setSettingsSaving] = useState(false)
+  const [settingsError, setSettingsError] = useState('')
+  const [settingsMessage, setSettingsMessage] = useState('')
+
   const { data: status, loading: statusLoading } = usePolling<FederationStatus>({
     fetcher: fetchFederationStatus,
     interval: 10000,
+  })
+
+  const { data: settings, refetch: refetchSettings } = usePolling<FederationSettings>({
+    fetcher: fetchFederationSettings,
+    interval: 15000,
+    enabled: Boolean(status?.enabled),
   })
 
   const { data: health } = usePolling<FederationHealthSummary>({
@@ -172,9 +191,30 @@ export function FederationOverview() {
     interval: 15000,
   })
 
+  useEffect(() => {
+    if (settings && !settingsDirty) {
+      setSelfAddressDraft(settings.self_address)
+    }
+  }, [settings, settingsDirty])
+
   if (statusLoading) return <PageLoader />
 
   const notEnabled = status && !status.enabled
+
+  const handleSaveSettings = async () => {
+    try {
+      setSettingsSaving(true)
+      setSettingsError('')
+      const result = await updateFederationSettings(selfAddressDraft)
+      setSettingsMessage(result.message)
+      setSettingsDirty(false)
+      await refetchSettings()
+    } catch (e: any) {
+      setSettingsError(e.message || 'Failed to save federation settings')
+    } finally {
+      setSettingsSaving(false)
+    }
+  }
 
   return (
     <div className="p-6 space-y-6 max-w-7xl">
@@ -206,6 +246,24 @@ export function FederationOverview() {
 
       {status?.enabled && (
         <>
+          {status.runtime_degraded && (
+            <div className="bg-state-error/10 border border-state-error/40 rounded-lg p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <StatusDot state="error" />
+                <h2 className="text-sm font-semibold text-text-primary">Federation Runtime Degraded</h2>
+              </div>
+              {status.degraded_reasons && status.degraded_reasons.length > 0 && (
+                <div className="space-y-1">
+                  {status.degraded_reasons.map((reason) => (
+                    <div key={reason} className="text-xs text-text-secondary">
+                      {reason}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Summary Strip */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             <MetricCard label="Instances" value={String((health?.total_peers ?? 0) + 1)} />
@@ -215,6 +273,134 @@ export function FederationOverview() {
             <MetricCard label="Deployment" value={status.deployment_mode} />
             <MetricCard label="Topology" value={topology ? `v${topology.version}` : 'none'} />
           </div>
+
+          <div className="bg-surface-card border border-border-default rounded-lg p-4 space-y-4">
+            <div>
+              <h2 className="text-sm font-semibold text-text-primary">Runtime Signals</h2>
+              <p className="text-xs text-text-secondary mt-1">
+                Live federation control-plane and transport state.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+              <MetricCard label="Transport" value={boolStateLabel(status.transport_started)} />
+              <MetricCard label="Heartbeat Mesh" value={boolStateLabel(status.heartbeat_mesh_running)} />
+              <MetricCard label="Cost Reporter" value={boolStateLabel(status.cost_reporter_running)} />
+              <MetricCard label="Transport Ready" value={status.transport_ready ? 'ready' : 'degraded'} />
+              <MetricCard label="Open Circuits" value={String(status.circuit_breaker_summary?.open ?? 0)} />
+              <MetricCard label="Stale Cost Peers" value={String(status.stale_instance_ids?.length ?? 0)} />
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 text-xs">
+              <div className="space-y-2">
+                <div className="text-[10px] font-semibold tracking-widest uppercase text-text-muted">Circuit Breakers</div>
+                <div className="flex gap-4 text-text-secondary">
+                  <span>Closed: {status.circuit_breaker_summary?.closed ?? 0}</span>
+                  <span>Half Open: {status.circuit_breaker_summary?.half_open ?? 0}</span>
+                  <span>Open: {status.circuit_breaker_summary?.open ?? 0}</span>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <div className="text-[10px] font-semibold tracking-widest uppercase text-text-muted">Subscriptions</div>
+                <div className="flex flex-wrap gap-2">
+                  {status.subscription_status && Object.keys(status.subscription_status).length > 0 ? (
+                    Object.entries(status.subscription_status).map(([peerId, subscriptionState]) => (
+                      <span
+                        key={peerId}
+                        className="px-2 py-1 rounded bg-surface-input text-text-secondary font-mono"
+                      >
+                        {peerId}: {subscriptionState}
+                        {status.subscription_stream_outcome?.[peerId]
+                          ? ` (${status.subscription_stream_outcome[peerId]})`
+                          : ''}
+                        {status.subscription_stream_errors?.[peerId]
+                          ? ` - ${status.subscription_stream_errors[peerId]}`
+                          : ''}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-text-muted">No active subscriptions</span>
+                  )}
+                </div>
+              </div>
+            </div>
+            {status.stale_instance_ids && status.stale_instance_ids.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-[10px] font-semibold tracking-widest uppercase text-text-muted">Stale Budget Peers</div>
+                <div className="flex flex-wrap gap-2">
+                  {status.stale_instance_ids.map((peerId) => (
+                    <span key={peerId} className="px-2 py-1 rounded bg-state-warning/15 text-state-warning font-mono">
+                      {peerId}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* This Instance */}
+          {settings && (
+            <div className="bg-surface-card border border-border-default rounded-lg p-4 space-y-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-sm font-semibold text-text-primary">This Instance</h2>
+                  <p className="text-xs text-text-secondary mt-1">
+                    Local federation identity and advertised address for peer bootstrap and graph deployment.
+                  </p>
+                </div>
+                <div className="text-right text-xs text-text-muted">
+                  <div>{settings.deployment_mode.toUpperCase()}</div>
+                  <div>{settings.restart_required ? 'Restart required after save' : 'Live update'}</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <div>
+                    <div className="text-[10px] font-semibold tracking-widest uppercase text-text-muted">Self Address</div>
+                    <input
+                      value={selfAddressDraft}
+                      onChange={(e) => {
+                        setSelfAddressDraft(e.target.value)
+                        setSettingsDirty(true)
+                        setSettingsMessage('')
+                        setSettingsError('')
+                      }}
+                      placeholder="https://lancelot.example.internal:8000"
+                      className="mt-1 w-full px-3 py-2 text-sm bg-surface-input border border-border-default rounded text-text-primary"
+                    />
+                    <p className="mt-1 text-xs text-text-muted">
+                      This is the externally reachable address other federation peers call during registration.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleSaveSettings}
+                      disabled={settingsSaving || !settingsDirty}
+                      className="px-4 py-2 text-sm font-medium bg-accent-primary text-white rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-accent-primary/80"
+                    >
+                      {settingsSaving ? 'Saving...' : 'Save Address'}
+                    </button>
+                    {settingsMessage && <span className="text-xs text-state-healthy">{settingsMessage}</span>}
+                    {settingsError && <span className="text-xs text-state-error">{settingsError}</span>}
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <div className="text-[10px] font-semibold tracking-widest uppercase text-text-muted">Instance ID</div>
+                    <div className="mt-1 text-sm font-mono text-text-primary break-all">{settings.instance_id}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-semibold tracking-widest uppercase text-text-muted">Fingerprint</div>
+                    <div className="mt-1 text-sm font-mono text-text-primary break-all">{settings.fingerprint}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-semibold tracking-widest uppercase text-text-muted">Public Key</div>
+                    <div className="mt-1 text-xs font-mono text-text-secondary break-all">{settings.public_key}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Peer Health */}
           {health && (health.total_peers > 0) && (

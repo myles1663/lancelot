@@ -50,6 +50,7 @@ Contents:
 - Auto-expiring by TTL (hours to days)
 - Namespaced by quest/task ID
 - The agent can freely write to working memory (T1 governance)
+- The orchestrator records the active objective into quest-scoped working memory before context compilation so every live quest has a scratchpad entry
 - Lowest priority in context compilation — evicted first when budget is tight
 
 ### Tier C — Episodic Memory (Conversation Timeline)
@@ -64,6 +65,7 @@ Contents:
 **Properties:**
 - Append-only within a session — cannot be retroactively modified
 - Periodic summarization compresses old sessions
+- Scheduler-generated summaries are content-based deterministic rollups of the underlying episodic items; they are no longer title-only placeholders
 - Summaries are searchable via the context compiler
 
 ### Tier D — Archival Memory (Long-term Store)
@@ -239,7 +241,7 @@ Before any commit is finalized, write gates enforce:
 ### Memory Exclusions
 
 - The **Soul is never stored in memory** — memory references Soul version numbers, never Soul content. This prevents memory poisoning from corrupting governance.
-- **PII is redacted** before storage via the local model
+- **PII is redacted** before storage via the local model when that lane is enabled; installs that skip the local model lose that local scrub boundary
 - **Secrets are never persisted** in any memory tier
 
 ### Poisoning Defense
@@ -259,9 +261,9 @@ The scheduler runs automated memory maintenance:
 
 | Job | Schedule | Description |
 |-----|----------|-------------|
-| `memory_compact_working` | Hourly | Remove expired items, summarize long threads |
-| `memory_decay_archival` | Daily (3 AM) | Reduce confidence over time unless reinforced |
-| `memory_summarize_episodic` | Daily | Write session summaries, extract notable events |
+| `memory_working_compaction` | Hourly | Remove expired items and compact stale working-memory entries |
+| `memory_archival_decay` | Daily | Reduce confidence over time unless reinforced |
+| `memory_episodic_summarization` | Daily | Promote episodic summaries into archival memory and deprecate the summarized episodic items |
 | `memory_integrity_audit` | Daily | Verify commits have receipts, blocks within budget |
 
 Each job emits receipts: `memory_job_run`, `memory_job_failed`, or `memory_job_skipped`.

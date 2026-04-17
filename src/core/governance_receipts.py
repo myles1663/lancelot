@@ -29,6 +29,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import Request
 
+from src.core.operator_identity import OperatorIdentity
 from src.shared.receipts import (
     ActionType,
     Receipt,
@@ -95,15 +96,52 @@ def emit_governance_receipt(
             inputs=inputs or {},
             outputs=outputs or {},
             status=ReceiptStatus.SUCCESS.value,
+            operator_id=identity.operator_id if identity else None,
+            session_id=identity.session_id if identity else None,
+            metadata=metadata or {},
+            quest_id=quest_id,
+        )
+        return _receipt_service.create(receipt)
+    except Exception as exc:
+        logger.error(
+            "Failed to emit governance receipt %s/%s: %s",
+            action_type.value,
+            action_name,
+            exc,
+        )
+        return None
+
+
+def emit_governance_receipt_for_identity(
+    identity: OperatorIdentity,
+    action_type: ActionType,
+    action_name: str,
+    inputs: Optional[Dict[str, Any]] = None,
+    outputs: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    quest_id: Optional[str] = None,
+) -> Optional[Receipt]:
+    """Emit a governance receipt using an already-resolved operator identity."""
+    if _receipt_service is None:
+        logger.warning(
+            "Receipt service not initialised — governance receipt skipped: %s",
+            action_type.value,
+        )
+        return None
+    try:
+        receipt = Receipt(
+            action_type=action_type.value,
+            action_name=action_name,
+            inputs=inputs or {},
+            outputs=outputs or {},
+            status=ReceiptStatus.SUCCESS.value,
             operator_id=identity.operator_id,
             session_id=identity.session_id,
             metadata=metadata or {},
             quest_id=quest_id,
         )
-
         return _receipt_service.create(receipt)
     except Exception as exc:
-        # Log but don't block the governance action
         logger.error(
             "Failed to emit governance receipt %s/%s: %s",
             action_type.value,

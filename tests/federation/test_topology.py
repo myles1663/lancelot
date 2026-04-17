@@ -214,3 +214,23 @@ class TestTopologyPersistence:
         reg.register_peer(instance_id="peer-a")
         # Should not raise
         assert reg.peer_count() == 1
+
+    def test_heartbeat_updates_survive_reopen(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "topology.json")
+            reg1 = TopologyRegistry(
+                self_instance_id="self-001",
+                persistence_path=path,
+            )
+            reg1.register_peer(instance_id="peer-a", soul_version_hash="oldhash")
+            now = datetime.now(timezone.utc).isoformat()
+            reg1.update_heartbeat("peer-a", timestamp=now, soul_version_hash="newhash")
+
+            reg2 = TopologyRegistry(
+                self_instance_id="self-001",
+                persistence_path=path,
+            )
+            peer = reg2.get_peer("peer-a")
+            assert peer is not None
+            assert peer.last_heartbeat_at == now
+            assert peer.soul_version_hash == "newhash"

@@ -218,7 +218,11 @@ class TestCreateReplay:
         mock_tier.return_value = 3
         soul = _make_soul(require_approval_tier=3)
         svc = _make_receipt_service(quest_receipts=[_make_receipt()])
-        engine = ResumeEngine(svc, soul)
+        engine = ResumeEngine(
+            svc,
+            soul,
+            quest_executor=lambda **kwargs: {"run_id": "run-approved", "status": "SUCCEEDED"},
+        )
 
         result = engine.create_replay("q-001", operator_id="op-1")
         assert result.success is True
@@ -241,7 +245,11 @@ class TestCreateReplay:
         mock_tier.return_value = 3
         soul = _make_soul(require_approval_tier=0)
         svc = _make_receipt_service(quest_receipts=[_make_receipt()])
-        engine = ResumeEngine(svc, soul)
+        engine = ResumeEngine(
+            svc,
+            soul,
+            quest_executor=lambda **kwargs: {"run_id": "run-mint", "status": "SUCCEEDED"},
+        )
 
         result = engine.create_replay("q-001")
         assert result.success is True
@@ -253,7 +261,11 @@ class TestCreateReplay:
         mock_tier.return_value = 3
         soul = _make_soul()
         svc = _make_receipt_service(quest_receipts=[_make_receipt()])
-        engine = ResumeEngine(svc, soul)
+        engine = ResumeEngine(
+            svc,
+            soul,
+            quest_executor=lambda **kwargs: {"run_id": "run-receipt", "status": "SUCCEEDED"},
+        )
 
         result = engine.create_replay("q-001")
         assert result.success is True
@@ -263,6 +275,38 @@ class TestCreateReplay:
             if c[0][0].action_type == "quest_replayed"
         ]
         assert len(replay_receipts) >= 1
+
+    @patch("src.timetravel.resume_engine.ResumeEngine._get_current_trust_tier")
+    def test_replay_executes_via_injected_callback(self, mock_tier):
+        mock_tier.return_value = 3
+        soul = _make_soul()
+        svc = _make_receipt_service(quest_receipts=[_make_receipt()])
+        executor = MagicMock(return_value={"run_id": "run-1", "status": "SUCCEEDED"})
+        engine = ResumeEngine(svc, soul, quest_executor=executor)
+
+        result = engine.create_replay("q-001", operator_id="op-1", session_id="sess-1")
+
+        assert result.success is True
+        executor.assert_called_once_with(
+            mode="replay",
+            source_quest_id="q-001",
+            new_quest_id=result.replay_quest_id,
+            modifications={},
+            operator_id="op-1",
+            session_id="sess-1",
+        )
+
+    @patch("src.timetravel.resume_engine.ResumeEngine._get_current_trust_tier")
+    def test_replay_fails_closed_without_executor(self, mock_tier):
+        mock_tier.return_value = 3
+        soul = _make_soul()
+        svc = _make_receipt_service(quest_receipts=[_make_receipt()])
+        engine = ResumeEngine(svc, soul)
+
+        result = engine.create_replay("q-001")
+
+        assert result.success is False
+        assert "executor" in (result.error or "").lower()
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +319,11 @@ class TestCreateFork:
         mock_tier.return_value = 3
         soul = _make_soul(modifiable_fields=["inputs"])
         svc = _make_receipt_service(quest_receipts=[_make_receipt()])
-        engine = ResumeEngine(svc, soul)
+        engine = ResumeEngine(
+            svc,
+            soul,
+            quest_executor=lambda **kwargs: {"run_id": "fork-success", "status": "SUCCEEDED"},
+        )
 
         result = engine.create_fork(
             "q-001", {"inputs.query": "new prompt"}, operator_id="op-1"
@@ -320,7 +368,11 @@ class TestCreateFork:
         mock_tier.return_value = 3
         soul = _make_soul(modifiable_fields=["inputs"])
         svc = _make_receipt_service(quest_receipts=[_make_receipt()])
-        engine = ResumeEngine(svc, soul)
+        engine = ResumeEngine(
+            svc,
+            soul,
+            quest_executor=lambda **kwargs: {"run_id": "fork-receipt", "status": "SUCCEEDED"},
+        )
 
         result = engine.create_fork("q-001", {"inputs.q": "new"})
         assert result.success is True
@@ -338,7 +390,11 @@ class TestCreateFork:
         r2 = _make_receipt(tier=2)
         r3 = _make_receipt(tier=0)
         svc = _make_receipt_service(quest_receipts=[r1, r2, r3])
-        engine = ResumeEngine(svc, soul)
+        engine = ResumeEngine(
+            svc,
+            soul,
+            quest_executor=lambda **kwargs: {"run_id": "fork-tier", "status": "SUCCEEDED"},
+        )
 
         result = engine.create_fork("q-001", {"inputs.q": "new"})
         assert result.success is True
@@ -348,6 +404,43 @@ class TestCreateFork:
             if c[0][0].action_type == "quest_forked"
         ][0]
         assert forked_receipt.metadata["risk_reclassification_tier"] == 2
+
+    @patch("src.timetravel.resume_engine.ResumeEngine._get_current_trust_tier")
+    def test_fork_executes_via_injected_callback(self, mock_tier):
+        mock_tier.return_value = 3
+        soul = _make_soul(modifiable_fields=["inputs"])
+        svc = _make_receipt_service(quest_receipts=[_make_receipt()])
+        executor = MagicMock(return_value={"run_id": "run-2", "status": "SUCCEEDED"})
+        engine = ResumeEngine(svc, soul, quest_executor=executor)
+
+        result = engine.create_fork(
+            "q-001",
+            {"inputs.query": "new"},
+            operator_id="op-1",
+            session_id="sess-1",
+        )
+
+        assert result.success is True
+        executor.assert_called_once_with(
+            mode="fork",
+            source_quest_id="q-001",
+            new_quest_id=result.fork_quest_id,
+            modifications={"inputs.query": "new"},
+            operator_id="op-1",
+            session_id="sess-1",
+        )
+
+    @patch("src.timetravel.resume_engine.ResumeEngine._get_current_trust_tier")
+    def test_fork_fails_closed_without_executor(self, mock_tier):
+        mock_tier.return_value = 3
+        soul = _make_soul(modifiable_fields=["inputs"])
+        svc = _make_receipt_service(quest_receipts=[_make_receipt()])
+        engine = ResumeEngine(svc, soul)
+
+        result = engine.create_fork("q-001", {"inputs.query": "new"})
+
+        assert result.success is False
+        assert "executor" in (result.error or "").lower()
 
 
 # ---------------------------------------------------------------------------

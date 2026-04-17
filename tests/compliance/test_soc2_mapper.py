@@ -89,17 +89,21 @@ class TestReceiptToEvidence:
         assert ev["operator_id"] == "op-001"
         assert ev["display_name"] == "Alice"
         assert ev["pre_identity_migration"] is False
+        assert ev["operator_attribution"] == "human"
+        assert ev["exception_flags"] == []
 
     def test_missing_fields_default_to_empty(self):
         ev = _receipt_to_evidence({})
         assert ev["receipt_id"] == ""
         assert ev["receipt_type"] == ""
         assert ev["display_name"] == ""
+        assert ev["operator_attribution"] == "unattributed"
 
     def test_pre_identity_migration_flag(self):
         rd = {"pre_identity_migration": True, "metadata": {}}
         ev = _receipt_to_evidence(rd)
         assert ev["pre_identity_migration"] is True
+        assert "pre_identity_migration" in ev["exception_flags"]
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +120,12 @@ class TestTransformSoc2:
         assert "export_metadata" in result
         assert "controls" in result
         assert result["export_metadata"]["format"] == "SOC2_TYPE_II"
-        assert result["export_metadata"]["format_version"] == "1.0"
+        assert result["export_metadata"]["format_version"] == "2.0"
+        assert "system_context" in result
+        assert "integrity" in result
+        assert "evidence_population_summary" in result
+        assert "legacy_attribution_summary" in result
+        assert "control_summary" in result
 
     def test_kill_switch_maps_to_cc2_2(self):
         receipts = [_make_receipt(action_type=ActionType.KILL_SWITCH_ISSUED.value)]
@@ -126,6 +135,7 @@ class TestTransformSoc2:
         )
         cc2_2 = result["controls"]["CC2_2"]
         assert cc2_2["evidence_count"] >= 1
+        assert cc2_2["control_status"] == "evidence_observed"
 
     def test_governance_receipt_maps_to_cc6_1(self):
         receipts = [
@@ -140,6 +150,7 @@ class TestTransformSoc2:
         cc6_1 = result["controls"]["CC6_1"]
         # All three types are in CC6_1
         assert cc6_1["evidence_count"] >= 3
+        assert cc6_1["evidence_summary"]["total_evidence"] >= 3
 
     def test_credential_maps_to_cc6_2(self):
         receipts = [_make_receipt(
@@ -183,6 +194,7 @@ class TestTransformSoc2:
         meta = result["export_metadata"]
         assert meta["period_start"] == "2026-03-01"
         assert meta["period_end"] == "2026-03-31"
+        assert result["export_scope"]["period_start"] == "2026-03-01"
 
     def test_chain_integrity_included_when_intact(self):
         result = transform_soc2(
@@ -191,6 +203,7 @@ class TestTransformSoc2:
         )
         assert result["export_metadata"]["chain_integrity"] == "CHAIN_INTACT"
         assert result["export_metadata"]["chain_anomaly_detail"] is None
+        assert result["integrity"]["chain_intact"] is True
 
     def test_chain_anomaly_detail_included(self):
         result = transform_soc2(
@@ -199,6 +212,7 @@ class TestTransformSoc2:
         )
         assert result["export_metadata"]["chain_integrity"] == "CHAIN_ANOMALY"
         assert result["export_metadata"]["chain_anomaly_detail"] is not None
+        assert result["integrity"]["chain_intact"] is False
 
     def test_empty_receipts_produces_valid_structure(self):
         result = transform_soc2(
@@ -209,6 +223,7 @@ class TestTransformSoc2:
         for control in result["controls"].values():
             assert control["evidence_count"] == 0
             assert control["evidence"] == []
+            assert control["control_status"] == "no_evidence_observed"
 
     def test_multiple_receipt_types_to_same_control(self):
         receipts = [
@@ -230,6 +245,7 @@ class TestTransformSoc2:
         )
         meta = result["export_metadata"]
         assert meta["generated_by"]["operator_id"] == "op-xyz"
+        assert meta["generated_by"]["display_name"] == "op-xyz"
         assert meta["generated_at"] == "2026-01-31T12:00:00Z"
         assert meta["export_id"] == "exp-abc"
 
@@ -254,6 +270,7 @@ class TestTransformSoc2:
             "2026-01-01", "2026-01-31", "op-001", "2026-01-31T00:00:00Z", "e-001",
         )
         assert "abc123" in result["export_metadata"]["soul_versions_active"]
+        assert "abc123" in result["system_context"]["active_soul_versions"]
 
     def test_all_control_ids_present(self):
         result = transform_soc2(
@@ -271,3 +288,33 @@ class TestTransformSoc2:
         for control_id, control in result["controls"].items():
             assert "description" in control
             assert len(control["description"]) > 0
+
+    def test_exception_and_legacy_summaries_are_split(self):
+        receipts = [
+            _make_receipt(
+                id="r-legacy",
+                action_type=ActionType.GOVERNANCE_WRITE_ERROR.value,
+                operator_id=None,
+                status="failure",
+            ),
+            _make_receipt(
+                id="r-pending",
+                action_type=ActionType.HIVE_INTERVENTION_EVENT.value,
+                status="pending",
+            ),
+        ]
+        result = transform_soc2(
+            receipts, _anomaly_chain(),
+            "2026-01-01", "2026-01-31", "op-001", "2026-01-31T00:00:00Z", "e-001",
+        )
+        assert result["exception_summary"]["total_exception_receipts"] >= 1
+        assert "status_failure" in result["exception_summary"]["by_flag"]
+        assert result["legacy_attribution_summary"]["total_legacy_receipts"] >= 1
+
+    def test_generated_by_display_name_can_be_passed(self):
+        result = transform_soc2(
+            [], _intact_chain(),
+            "2026-01-01", "2026-01-31", "op-001", "2026-01-31T00:00:00Z", "e-001",
+            operator_display_name="Arthur",
+        )
+        assert result["export_metadata"]["generated_by"]["display_name"] == "Arthur"

@@ -11,6 +11,10 @@ from typing import Any, Dict, List
 from urllib.parse import urlencode
 
 from src.connectors.base import ConnectorBase, ConnectorManifest, CredentialSpec
+from src.connectors.google_feature_gate import (
+    google_connector_disabled_reason,
+    is_google_connector_enabled,
+)
 from src.connectors.models import (
     ConnectorOperation,
     ConnectorResult,
@@ -151,6 +155,8 @@ class CalendarConnector(ConnectorBase):
         ]
 
     def execute(self, operation_id: str, params: dict) -> ConnectorResult:
+        if not is_google_connector_enabled("calendar"):
+            raise RuntimeError(google_connector_disabled_reason("calendar"))
         base = self.GCAL_API_BASE
         cred_key = "calendar.google_token"
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
@@ -263,5 +269,7 @@ class CalendarConnector(ConnectorBase):
 
     def validate_credentials(self) -> bool:
         if self._vault is None:
+            return False
+        if not is_google_connector_enabled("calendar"):
             return False
         return self._vault.exists("calendar.google_token")

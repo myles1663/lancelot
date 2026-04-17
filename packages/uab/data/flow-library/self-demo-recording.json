@@ -1,0 +1,121 @@
+{
+  "skill_name": "self_demo_recording",
+  "app_name": "Self-Recording Demo Pipeline",
+  "executable": null,
+  "app_framework": "Multi-app workflow (UAB + Screen Recorder + CapCut)",
+  "target_flow": "AI agent records itself performing a task, then edits the footage into a polished demo video using its own action log as the edit decision list",
+  "architecture_note": "The agent has perfect knowledge of its own action timeline — every UAB call is timestamped. This log serves as the timecode/EDL for editing. No vision is needed to understand what is in the video because the agent authored every frame.",
+
+  "phase_1_prepare": {
+    "description": "Set up screen recording before performing the demo task",
+    "steps": [
+      {"step": 1, "action": "Start a screen recorder. Options: OBS (hotkey Ctrl+F9 to start), Xbox Game Bar (Win+Alt+R), or PowerShell Start-Process with ffmpeg."},
+      {"step": 2, "action": "Note the recording start timestamp as T0. All action timestamps will be relative to T0."},
+      {"step": 3, "action": "Optionally set the target app window to a clean size/position for a good frame."}
+    ]
+  },
+
+  "phase_2_perform": {
+    "description": "Execute the demo task. Every UAB action is logged with a timestamp.",
+    "steps": [
+      {"step": 1, "action": "Perform the task (control Outlook, build Excel dashboard, chat with Grok, etc.)"},
+      {"step": 2, "action": "For each action, record: {timestamp, action, target, result, duration_ms}"},
+      {"step": 3, "action": "Deliberately pause 1-2 seconds between major steps — gives clean cut points"},
+      {"step": 4, "action": "If an error occurs, note the timestamp — this is a cut point for editing"}
+    ],
+    "action_log_format": {
+      "example": [
+        {"t": 0.0, "action": "connect", "target": "Outlook", "note": "demo start"},
+        {"t": 2.1, "action": "spatial_map", "target": "PID 12852", "note": "395 elements found"},
+        {"t": 3.5, "action": "invoke", "target": "New mail", "note": "compose window opened"},
+        {"t": 5.2, "action": "type", "target": "To field", "value": "team@company.com"},
+        {"t": 8.0, "action": "invoke", "target": "Send", "note": "email sent"},
+        {"t": 8.5, "action": "spatial_map", "target": "PID 12852", "note": "verify sent — compose closed"}
+      ]
+    }
+  },
+
+  "phase_3_stop_recording": {
+    "description": "Stop the screen recorder and note the final timestamp",
+    "steps": [
+      {"step": 1, "action": "Stop the screen recorder (OBS: Ctrl+F9, Game Bar: Win+Alt+R)"},
+      {"step": 2, "action": "Note the recording file path and total duration"},
+      {"step": 3, "action": "Calculate duration: T_end - T0"}
+    ]
+  },
+
+  "phase_4_generate_edl": {
+    "description": "Use the action log to create an edit decision list — which segments to keep, cut, or trim",
+    "steps": [
+      {"step": 1, "action": "Review the action log for errors, long pauses, or retries — mark as CUT"},
+      {"step": 2, "action": "Identify the clean action sequences — mark as KEEP"},
+      {"step": 3, "action": "Add 0.5s padding before and after each KEEP segment for smooth transitions"},
+      {"step": 4, "action": "Note any moments worth highlighting (first successful action, impressive speed, etc.)"}
+    ],
+    "edl_format": {
+      "example": [
+        {"type": "KEEP", "start": 0.0, "end": 2.0, "label": "App connection"},
+        {"type": "CUT", "start": 2.0, "end": 3.5, "label": "Spatial map loading — boring wait"},
+        {"type": "KEEP", "start": 3.5, "end": 8.5, "label": "Compose and send email — hero sequence"},
+        {"type": "CUT", "start": 8.5, "end": 10.0, "label": "Post-send verification — technical"}
+      ]
+    }
+  },
+
+  "phase_5_edit_in_capcut": {
+    "description": "Open the recording in CapCut and apply the EDL using keyboard shortcuts",
+    "prerequisite": "Load the capcut flow library for full shortcut reference",
+    "steps": [
+      {"step": 1, "action": "hotkey", "keys": "ctrl+i", "note": "Import the recording file"},
+      {"step": 2, "action": "Drag clip to timeline or double-click to add"},
+      {"step": 3, "action": "keypress", "key": "Home", "note": "Go to start of timeline"},
+      {"step": 4, "action": "For each CUT segment in the EDL:", "sub_steps": [
+        "Navigate to the cut start time using Right arrow (frame by frame) or L key (shuttle forward)",
+        "Ctrl+B to split at the start of the cut",
+        "Navigate to the cut end time",
+        "Ctrl+B to split at the end of the cut",
+        "Click the cut segment, press Delete to remove it"
+      ]},
+      {"step": 5, "action": "keypress", "key": "Shift+Z", "note": "Zoom to fit timeline — verify the edit"},
+      {"step": 6, "action": "keypress", "key": "Home", "note": "Go to start"},
+      {"step": 7, "action": "keypress", "key": "Space", "note": "Play through to verify"},
+      {"step": 8, "action": "hotkey", "keys": "ctrl+e", "note": "Export final video"}
+    ],
+    "time_navigation_tip": "At 30fps, each Right arrow press = 1 frame = 33ms. To navigate to a specific second, calculate: frames = seconds * 30. Use Shift+Right for larger jumps. Use J/K/L shuttle for fast scrubbing.",
+    "frame_math": {
+      "24fps": "1 second = 24 frames",
+      "30fps": "1 second = 30 frames",
+      "60fps": "1 second = 60 frames",
+      "example": "To reach 3.5 seconds at 30fps: press Right arrow 105 times, or use L to shuttle forward and K to stop near the target"
+    }
+  },
+
+  "phase_6_output": {
+    "description": "The final exported video is a polished demo created entirely by the AI agent",
+    "deliverables": [
+      "Edited demo video (MP4)",
+      "Action log (JSON) — complete record of what was demonstrated",
+      "EDL (JSON) — the edit decisions made and why"
+    ]
+  },
+
+  "apps_involved": {
+    "screen_recorder": "OBS, Xbox Game Bar, or ffmpeg",
+    "demo_target": "Any app UAB can control (Outlook, Excel, Grok, etc.)",
+    "video_editor": "CapCut (see capcut.json flow library)",
+    "uab": "Provides action timestamps as the edit decision source"
+  },
+
+  "why_this_works": "The agent does not need to 'watch' the video to edit it. It authored every action in the recording and has timestamped logs of exactly what happened when. The action log IS the timecode. The agent is simultaneously the performer, the cinematographer, and the editor — with perfect memory of the performance.",
+
+  "known_issues": [
+    "Frame-accurate navigation requires knowing the recording FPS",
+    "CapCut elements are unnamed — all editing is keyboard-shortcut based",
+    "Screen recorder must be started/stopped cleanly — agent should verify recording file exists",
+    "Long recordings may need J/K/L shuttle instead of frame-by-frame arrow navigation",
+    "If the demo involves multiple monitors, the recording region must cover the right screen"
+  ],
+  "risk_tier": "T2",
+  "version": "1.0",
+  "last_verified": "2026-03-25"
+}

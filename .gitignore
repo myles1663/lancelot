@@ -22,6 +22,16 @@ logs/
 *.log
 tmp/
 temp/
+!packages/uab/data/
+!packages/uab/data/chrome-extension/
+!packages/uab/data/chrome-extension/**
+!packages/uab/data/flow-library/
+!packages/uab/data/flow-library/**
+!packages/uab/data/extension-id.txt
+!packages/uab/data/uab-bridge.crx
+packages/uab/data/uab-extension.pem
+packages/uab/data/uab-profiles/
+packages/uab/data/screenshots/
 
 # Python
 __pycache__/

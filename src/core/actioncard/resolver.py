@@ -47,13 +47,24 @@ class ActionCardResolver:
     def register_handler(self, source_system: str, handler: Callable) -> None:
         """Register a handler for a source_system.
 
-        Handler signature: handler(source_item_id: str, button_id: str) -> dict
+        Handler signature:
+            handler(source_item_id: str, button_id: str, **context) -> dict
+
+        Context kwargs may include operator_id, session_id, actor, and card.
         Must return: {"status": "approved"|"denied"|"error", "message": str}
         """
         self._handlers[source_system] = handler
         logger.info("ActionCard resolver: registered handler for '%s'", source_system)
 
-    def resolve(self, card_id: str, button_id: str, channel: str) -> Dict[str, Any]:
+    def resolve(
+        self,
+        card_id: str,
+        button_id: str,
+        channel: str,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        actor: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Resolve an ActionCard button click.
 
         Args:
@@ -90,6 +101,16 @@ class ActionCardResolver:
             }
 
         try:
+            result = handler(
+                card.source_item_id,
+                button_id,
+                operator_id=operator_id,
+                session_id=session_id,
+                actor=actor,
+                card=card,
+            )
+        except TypeError:
+            # Backward-compatible fallback for older two-argument handlers.
             result = handler(card.source_item_id, button_id)
         except Exception as exc:
             logger.error("ActionCard handler error for %s: %s", card.source_system, exc)
@@ -102,7 +123,7 @@ class ActionCardResolver:
         self._emit_resolution_event(card, button_id, channel, result)
 
         # Create audit receipt
-        self._create_receipt(card, button_id, channel, result)
+        self._create_receipt(card, button_id, channel, result, operator_id, session_id, actor)
 
         logger.info(
             "ActionCard resolved: card=%s button=%s channel=%s system=%s item=%s",
@@ -135,7 +156,14 @@ class ActionCardResolver:
             logger.warning("Failed to emit actioncard_resolved event: %s", exc)
 
     def _create_receipt(
-        self, card, button_id: str, channel: str, result: Dict[str, Any]
+        self,
+        card,
+        button_id: str,
+        channel: str,
+        result: Dict[str, Any],
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        actor: Optional[str] = None,
     ) -> None:
         """Create an audit receipt for the resolution."""
         if not self._receipt_service:
@@ -155,7 +183,12 @@ class ActionCardResolver:
                 outputs=result,
                 status=ReceiptStatus.SUCCESS.value,
                 quest_id=card.quest_id,
-                metadata={"card_type": card.card_type},
+                metadata={
+                    "card_type": card.card_type,
+                    "actor": actor or "",
+                },
+                operator_id=operator_id,
+                session_id=session_id,
             )
             self._receipt_service.create(receipt)
         except Exception as exc:

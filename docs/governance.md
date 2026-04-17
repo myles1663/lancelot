@@ -283,7 +283,7 @@ Mapping common AI agent failure modes to the specific Lancelot mechanism that bl
 
 **Defense:**
 - Secrets are stored in `.env` and sealed references, never in general memory
-- PII redaction runs via the local model before any external API call
+- When the local model is enabled, PII redaction runs locally before frontier API calls; installs that skip the local model trade away that privacy boundary
 - Receipts sanitize inputs and outputs
 - Credential access is logged (enforced by Soul risk rule)
 

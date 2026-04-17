@@ -347,11 +347,11 @@ class HostExecutionProvider(BaseProvider):
         files: Optional[List[str]] = None,
     ) -> str:
         """Create a commit. Returns commit hash."""
-        if files:
-            for f in files:
-                self.run(f"git add {shlex.quote(f)}", workspace)
-        else:
-            self.run("git add -A", workspace)
+        if not files:
+            return "Error: host_execution.commit requires an explicit file list"
+
+        for f in files:
+            self.run(f"git add {shlex.quote(f)}", workspace)
 
         safe_message = shlex.quote(message)
         result = self.run(f"git commit -m {safe_message}", workspace)

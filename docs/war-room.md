@@ -29,6 +29,24 @@ The persistent header displays real-time system vitals:
 
 The **Notification Tray** in the header shows pending items that need your attention: approval requests, graduation proposals, APL rule suggestions, quarantined memory edits.
 
+### Status Surfaces
+
+War Room now distinguishes three different subsystem conditions:
+
+| State | Meaning |
+|------|---------|
+| **Disabled** | Feature intentionally off |
+| **Not initialized** | Feature expected, but runtime dependencies are not wired |
+| **Runtime degraded** | Feature mounted, but one or more live runtime checks failed |
+
+Where supported by the backend, subsystem pages now surface:
+
+- `runtime_degraded`
+- `degraded_reasons`
+- `runtime_errors`
+
+This is deliberate. A blank table or a default status should no longer be treated as proof that the subsystem is healthy.
+
 ---
 
 ## Command Panel
@@ -43,11 +61,17 @@ The primary interaction interface — send messages to Lancelot and see governed
 - Intent classification badge showing how the message was routed
 - Model lane indicator showing which LLM handled the request
 - Crusader mode toggle for high-agency execution
+- Runtime pause/resume control for stopping new work across chat, scheduler, HIVE, A2A, and TaskRun ingress
+- Emergency stop control for forcing the runtime into paused state and collapsing live HIVE agents through the control plane
 
 **What to watch for:**
 - The intent badge tells you how Lancelot classified your request (PLAN_REQUEST, EXEC_REQUEST, KNOWLEDGE_REQUEST, CONVERSATIONAL)
 - The lane indicator shows cost efficiency — local model calls cost nothing, flagship calls use API tokens
 - Receipt IDs in responses are clickable — use them to audit the full governance trace
+- Runtime pause blocks new work but does not cancel work already in flight; active tasks finish unless you use a stronger stop or kill control
+- Emergency stop is the stronger control: it pauses new work and issues a live local stop across the HIVE execution mesh
+- The pause button is a real control-plane action now. It reflects the persisted backend state and switches to **Resume Runtime** when the runtime is paused.
+- Emergency stop is also a real control-plane action now. It no longer relies on chat interpretation, and its source is preserved in runtime pause state and receipts.
 
 ---
 
@@ -410,6 +434,25 @@ Switch to the history tab to view archived (collapsed) agents with:
 
 **Polling:** The page polls every 3 seconds for live status updates.
 
+### HIVE Status Contract
+
+`GET /api/hive/status` now exposes both mesh state and runtime readiness:
+
+- `enabled`
+- `status`
+- `active_agents`
+- `max_agents`
+- `architect_ready`
+- `lifecycle_ready`
+- `registry_ready`
+- `receipt_manager_ready`
+- `config_ready`
+- `runtime_degraded`
+- `degraded_reasons`
+- `runtime_errors`
+
+This prevents the old failure mode where HIVE could look merely "idle" or "not initialized" even though a live dependency was failing internally.
+
 ---
 
 ## UAB Status Panel
@@ -434,6 +477,40 @@ When the daemon is offline:
 The UAB panel appears automatically when the `FEATURE_TOOLS_UAB` flag is enabled and the flag metadata includes `has_editor: "uab_panel"`. No additional configuration is needed.
 
 **Polling:** The panel polls every 5 seconds for live daemon status.
+
+---
+
+## Federation Overview
+
+The Federation Overview page is now the operator-facing mesh health dashboard, not just a topology viewer.
+
+### This Instance Card
+
+Federation Overview owns the local instance identity settings:
+
+- `self_address`
+- instance ID
+- fingerprint
+- public key
+- deployment mode
+
+Graph Builder should reuse this configured `self_address` for the local node instead of inventing a second endpoint source of truth.
+
+### Runtime Degradation Panel
+
+Federation Overview now surfaces runtime degradation directly from `/api/federation/status`, including:
+
+- transport started state
+- heartbeat mesh running state
+- cost reporter running state
+- circuit breaker summary
+- subscription lifecycle state
+- last stream outcome and stream errors
+- stale budget peers
+- active Soul propagation state
+- divergence state and reconciliation data
+
+That means the page can now reflect real federation control-plane degradation instead of only showing peer freshness and topology counts.
 
 ---
 

@@ -230,6 +230,10 @@ class TestTransformGdpr:
         assert "processing_activities" in result
         assert "pii_category_note" in result
         assert result["export_metadata"]["format"] == "GDPR_ARTICLE_30"
+        assert result["export_metadata"]["format_version"] == "2.0"
+        assert "processing_summary" in result
+        assert "integrity" in result
+        assert "legacy_attribution_summary" in result
 
     def test_processing_activities_from_receipts(self):
         receipts = [
@@ -243,6 +247,7 @@ class TestTransformGdpr:
         pa = result["processing_activities"]
         assert pa["total_quests"] == 2
         assert len(pa["records"]) == 2
+        assert result["export_scope"]["quest_count"] == 2
 
     def test_pii_quest_vs_non_pii_counts(self):
         receipts = [
@@ -275,6 +280,7 @@ class TestTransformGdpr:
         pii_record = [r for r in records if r["personal_data_processed"]]
         assert len(pii_record) == 1
         assert "email" in pii_record[0]["categories_of_personal_data"]
+        assert pii_record[0]["evidence_summary"]["total_evidence"] >= 1
 
     def test_data_subject_categories_with_pii(self):
         receipts = [
@@ -326,6 +332,7 @@ class TestTransformGdpr:
             "2026-01-01", "2026-01-31", "op-001", "2026-01-31T00:00:00Z", "e-001",
         )
         assert result["export_metadata"]["chain_integrity"] == "CHAIN_INTACT"
+        assert result["integrity"]["chain_intact"] is True
 
     def test_no_quest_id_grouped_under_placeholder(self):
         receipts = [_make_receipt(quest_id=None, id="r1")]
@@ -364,6 +371,7 @@ class TestTransformGdpr:
         assert meta["period_start"] == "2026-03-01"
         assert meta["period_end"] == "2026-03-31"
         assert meta["generated_by"]["operator_id"] == "op-xyz"
+        assert meta["generated_by"]["display_name"] == "op-xyz"
 
     def test_legal_basis_via_purpose(self):
         """The purpose field serves as the legal basis justification."""
@@ -375,3 +383,23 @@ class TestTransformGdpr:
         record = result["processing_activities"]["records"][0]
         assert record["processing_activity"] is True
         assert len(record["purpose"]) > 0
+
+    def test_processing_summary_and_exception_summary_present(self):
+        receipts = [
+            _make_receipt(
+                quest_id="q1",
+                metadata={"pii_detected": True},
+                status="failure",
+                operator_id=None,
+                action_type=ActionType.MCP_TOOL_CALL.value,
+                inputs={"server_id": "external-api"},
+            ),
+        ]
+        result = transform_gdpr(
+            receipts, _intact_chain(),
+            "2026-01-01", "2026-01-31", "op-001", "2026-01-31T00:00:00Z", "e-001",
+            operator_display_name="Arthur",
+        )
+        assert "external-api" in result["processing_summary"]["unique_recipients"]
+        assert result["exception_summary"]["total_exception_receipts"] >= 1
+        assert result["system_context"]["generated_by"]["display_name"] == "Arthur"

@@ -15,7 +15,6 @@ export function fetchSkillProposal(proposalId: string) {
 export function approveSkillProposal(proposalId: string) {
   return apiPost<{ status: string; proposal_id: string; name: string; approved_by: string }>(
     `/api/skills/proposals/${proposalId}/approve`,
-    { approved_by: 'owner' },
   )
 }
 

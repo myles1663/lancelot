@@ -5,7 +5,7 @@
  * giving agents a single consistent interface to any desktop app.
  *
  * This module is framework-agnostic — it can be imported by
- * ClaudeClaw, Lancelot, or any other AI agent runtime.
+ * Kai, Lancelot, or any other AI agent runtime.
  */
 
 // ─── Core UI Element ────────────────────────────────────────────
@@ -41,7 +41,7 @@ export type ElementType =
   | 'separator' | 'container' | 'unknown';
 
 export type ActionType =
-  | 'click' | 'doubleclick' | 'rightclick'
+  | 'click' | 'doubleclick' | 'rightclick' | 'drag'
   | 'type' | 'clear' | 'select' | 'scroll'
   | 'focus' | 'hover' | 'expand' | 'collapse'
   | 'invoke' | 'check' | 'uncheck' | 'toggle'
@@ -51,7 +51,14 @@ export type ActionType =
   | 'readDocument' | 'readCell' | 'writeCell'
   | 'readRange' | 'writeRange' | 'getSheets' | 'readFormula'
   | 'readSlides' | 'readSlideText'
-  | 'readEmails' | 'composeEmail' | 'sendEmail';
+  | 'readEmails' | 'composeEmail' | 'sendEmail'
+  // Browser session/cookie actions
+  | 'getCookies' | 'setCookie' | 'deleteCookie' | 'clearCookies'
+  | 'getLocalStorage' | 'setLocalStorage' | 'deleteLocalStorage' | 'clearLocalStorage'
+  | 'getSessionStorage' | 'setSessionStorage' | 'deleteSessionStorage' | 'clearSessionStorage'
+  | 'navigate' | 'goBack' | 'goForward' | 'reload'
+  | 'getTabs' | 'switchTab' | 'closeTab' | 'newTab'
+  | 'executeScript';
 
 // ─── Query / Selector ───────────────────────────────────────────
 
@@ -104,6 +111,26 @@ export interface ActionParams {
   count?: number;         // Number of items to return
   // PowerPoint COM params
   slideIndex?: number;    // Slide number (1-based)
+  // Browser session/cookie params
+  url?: string;           // URL for navigation / cookie scope
+  domain?: string;        // Cookie domain
+  path?: string;          // Cookie path
+  cookieName?: string;    // Cookie name for get/set/delete
+  cookieValue?: string;   // Cookie value for set
+  secure?: boolean;       // Cookie secure flag
+  httpOnly?: boolean;     // Cookie httpOnly flag
+  sameSite?: 'Strict' | 'Lax' | 'None';  // Cookie SameSite
+  expires?: number;       // Cookie expiry (unix timestamp)
+  storageKey?: string;    // localStorage/sessionStorage key
+  storageValue?: string;  // localStorage/sessionStorage value
+  tabId?: string;         // Tab/target ID
+  script?: string;        // JavaScript to execute
+  // P6 drag/gesture params
+  toX?: number;           // Drag destination X
+  toY?: number;           // Drag destination Y
+  dragPath?: Array<{ x: number; y: number }>;  // Full drag path (waypoints)
+  stepDelay?: number;     // Delay between waypoints in ms (default 10)
+  button?: 'left' | 'middle' | 'right';  // Mouse button for drag (default: left)
 }
 
 export interface ActionResult {
@@ -126,6 +153,98 @@ export interface AppState {
   modals: UIElement[];
   menus: UIElement[];
   clipboard?: string;
+}
+
+// ─── Focused Element ────────────────────────────────────────────
+
+export interface FocusedElementInfo {
+  pid: number;
+  name: string;
+  type: string;
+  automationId: string;
+  bounds: Bounds;
+  center: { x: number; y: number };
+  patterns: string[];
+  className: string;
+  /** UIA tree path from window root → focused element */
+  path: string[];
+  timestamp: number;
+}
+
+// ─── Element Path Selector ──────────────────────────────────────
+
+export interface PathSelector {
+  /** Tree path: ["Menu Bar", "File", "Save As..."] */
+  path?: string[];
+  /** Parent name context: find "Close" inside parent "Dialog" */
+  name?: string;
+  parent?: string;
+  /** Type filter for disambiguation */
+  type?: ElementType;
+  /** Match occurrence: 'first', 'last', or numeric index */
+  occurrence?: 'first' | 'last' | number;
+}
+
+// ─── State Change Event ─────────────────────────────────────────
+
+export interface StateChangeEvent {
+  type: 'focus' | 'structureChanged' | 'propertyChanged' | 'windowOpened' | 'windowClosed' | 'menuOpened' | 'menuClosed';
+  timestamp: number;
+  pid: number;
+  element?: {
+    name: string;
+    type: string;
+    automationId: string;
+    bounds: Bounds;
+  };
+  details?: Record<string, unknown>;
+}
+
+export type StateChangeCallback = (event: StateChangeEvent) => void;
+
+// ─── Atomic Chain ───────────────────────────────────────────────
+
+export interface AtomicStep {
+  action: 'hotkey' | 'keypress' | 'click' | 'type' | 'wait';
+  /** Key name for keypress */
+  key?: string;
+  /** Key combo for hotkey: ["alt", "m"] */
+  keys?: string[];
+  /** Coordinates for click */
+  x?: number;
+  y?: number;
+  /** Text for type action */
+  text?: string;
+  /** Milliseconds for wait action */
+  ms?: number;
+}
+
+export interface AtomicChainDef {
+  pid: number;
+  steps: AtomicStep[];
+  /** Label for logging */
+  label?: string;
+}
+
+export interface AtomicChainResult {
+  success: boolean;
+  stepsCompleted: number;
+  totalSteps: number;
+  durationMs: number;
+  error?: string;
+}
+
+// ─── Smart Resolve ──────────────────────────────────────────────
+
+export interface SmartResolveResult {
+  success: boolean;
+  method: 'invoke' | 'focus-enter' | 'parent-invoke' | 'click-coordinates' | 'expand' | 'toggle';
+  element: {
+    name: string;
+    type: string;
+    bounds: Bounds;
+  };
+  error?: string;
 }
 
 // ─── Events / Subscriptions ─────────────────────────────────────
@@ -151,7 +270,7 @@ export interface Subscription {
 // ─── Framework Detection ────────────────────────────────────────
 
 export type FrameworkType =
-  | 'electron' | 'qt5' | 'qt6' | 'gtk3' | 'gtk4'
+  | 'electron' | 'browser' | 'qt5' | 'qt6' | 'gtk3' | 'gtk4'
   | 'macos-native' | 'wpf' | 'winui' | 'dotnet'
   | 'flutter' | 'java-swing' | 'javafx' | 'office' | 'unknown';
 

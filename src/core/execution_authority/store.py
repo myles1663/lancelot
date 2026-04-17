@@ -43,7 +43,8 @@ class ExecutionTokenStore:
         parent_receipt_id TEXT,
         actions_used INTEGER NOT NULL DEFAULT 0,
         expires_at TEXT,
-        session_id TEXT NOT NULL DEFAULT ''
+        session_id TEXT NOT NULL DEFAULT '',
+        operator_id TEXT NOT NULL DEFAULT ''
     );
 
     CREATE INDEX IF NOT EXISTS idx_tokens_status ON execution_tokens(status);
@@ -79,6 +80,17 @@ class ExecutionTokenStore:
     def _init_database(self):
         with self._transaction() as conn:
             conn.executescript(self.CREATE_TABLE_SQL)
+            self._ensure_columns(conn)
+
+    def _ensure_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(execution_tokens)").fetchall()
+        }
+        if "operator_id" not in existing:
+            conn.execute(
+                "ALTER TABLE execution_tokens ADD COLUMN operator_id TEXT NOT NULL DEFAULT ''"
+            )
 
     def create(self, token: ExecutionToken) -> str:
         """Persist a new ExecutionToken. Returns token ID."""
@@ -90,8 +102,8 @@ class ExecutionTokenStore:
                     network_policy, network_allowlist, secret_policy,
                     max_duration_sec, max_actions, risk_tier,
                     requires_verifier, status, parent_receipt_id,
-                    actions_used, expires_at, session_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    actions_used, expires_at, session_id, operator_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 token.id, token.created_at, token.created_by,
                 token.scope, token.task_type,
@@ -104,7 +116,7 @@ class ExecutionTokenStore:
                 token.max_duration_sec, token.max_actions,
                 token.risk_tier, int(token.requires_verifier),
                 token.status, token.parent_receipt_id,
-                token.actions_used, token.expires_at, token.session_id,
+                token.actions_used, token.expires_at, token.session_id, token.operator_id,
             ))
         return token.id
 
@@ -199,6 +211,7 @@ class ExecutionTokenStore:
             actions_used=row["actions_used"],
             expires_at=row["expires_at"],
             session_id=row["session_id"],
+            operator_id=row["operator_id"] if "operator_id" in row.keys() else "",
         )
 
     def close(self):

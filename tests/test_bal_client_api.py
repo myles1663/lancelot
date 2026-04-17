@@ -8,6 +8,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from src.core import api_auth, auth_api
+from src.core.operator_identity import OperatorIdentity
 from src.core.bal.clients.api import router, init_client_api
 from src.core.bal.clients.models import ClientStatus, PlanTier
 from src.core.bal.clients.repository import ClientRepository
@@ -41,11 +43,29 @@ def app_client(bal_db, monkeypatch):
 
     repo = ClientRepository(bal_db)
     init_client_api(repo)
+    api_auth.init_api_auth(lambda request: True)
+    auth_api._sessions.clear()
+    auth_api._sessions["bal-test-session"] = {
+        "expires_at": 9999999999,
+        "username": "Arthur",
+        "operator_identity": OperatorIdentity(
+            operator_id="op-arthur",
+            display_name="Arthur",
+            session_id="session-1",
+            session_started_at="2026-04-10T00:00:00Z",
+            auth_method="local",
+            ip_address="127.0.0.1",
+        ),
+        "capabilities": sorted({"warroom.login", "bal.admin"}),
+        "groups": [],
+    }
 
     app = FastAPI()
     app.include_router(router)
 
-    return TestClient(app)
+    client = TestClient(app)
+    client.cookies.set(auth_api.get_warroom_session_cookie_name(), "bal-test-session")
+    return client
 
 
 # ===================================================================

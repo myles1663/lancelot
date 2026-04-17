@@ -358,10 +358,11 @@ class TestHealthCheck:
 
             health = sandbox.health_check()
 
-            assert health.state == ProviderState.OFFLINE
+            assert health.state == ProviderState.DEGRADED
             assert health.is_healthy is False
-            assert health.is_available is False
-            assert health.error_message == "Docker not available"
+            assert health.is_available is True
+            assert health.error_message == "Docker not available for container-backed operations"
+            assert health.metadata["available_capabilities"] == [Capability.FILE_OPS.value]
 
     def test_health_check_image_not_pulled(self, sandbox):
         """Health check with image not pulled."""

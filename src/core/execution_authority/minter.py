@@ -44,6 +44,8 @@ class PermissionMinter:
         max_actions: int = 50,
         requires_verifier: bool = False,
         session_id: str = "",
+        operator_id: str = "",
+        operator_name: str = "",
     ) -> ExecutionToken:
         """Mint a new ExecutionToken from an approved permission request.
 
@@ -60,11 +62,14 @@ class PermissionMinter:
             max_actions: Maximum number of actions.
             requires_verifier: Whether each step needs verification.
             session_id: Session this token belongs to.
+            operator_id: Stable operator identity for audit attribution.
+            operator_name: Human-readable approver name for token provenance.
 
         Returns:
             The minted ExecutionToken.
         """
         token = ExecutionToken(
+            created_by=operator_name or operator_id or "Commander",
             scope=scope,
             task_type=task_type,
             allowed_tools=tools or [],
@@ -77,6 +82,7 @@ class PermissionMinter:
             max_actions=max_actions,
             requires_verifier=requires_verifier,
             session_id=session_id,
+            operator_id=operator_id,
         )
 
         self.store.create(token)
@@ -88,8 +94,15 @@ class PermissionMinter:
                 receipt = create_receipt(
                     ActionType.TOKEN_MINTED,
                     "mint_execution_token",
-                    inputs={"scope": scope, "task_type": task_type, "risk_tier": risk_tier},
+                    inputs={
+                        "scope": scope,
+                        "task_type": task_type,
+                        "risk_tier": risk_tier,
+                        "created_by": token.created_by,
+                    },
                     tier=CognitionTier.DETERMINISTIC,
+                    operator_id=operator_id or None,
+                    session_id=session_id or None,
                 )
                 receipt = receipt.complete(
                     outputs={"token_id": token.id, "max_actions": max_actions,

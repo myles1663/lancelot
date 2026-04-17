@@ -1,0 +1,144 @@
+{
+  "skill_name": "capcut_flow",
+  "app_name": "CapCut",
+  "executable": "CapCut.exe",
+  "app_framework": "Qt6 QML + CEF + OpenGL (GPU-rendered)",
+  "target_flow": "Video editing — import, cut, split, add effects, export via keyboard shortcuts",
+  "architecture_note": "CapCut is a Qt6 QML app with GPU-rendered UI. RawViewWalker finds 147 elements but ALL are unnamed. The class names reveal structure (TitleBarButton, ExportButton, NewTabItem, MainTimeLineToolBarBtn, etc.) but no text labels. Control is primarily through KEYBOARD SHORTCUTS — CapCut has 50+ shortcuts covering every editing operation. The search field (TextField_QMLTYPE) at the media panel is the one text-input element.",
+  "pid_resolution": {
+    "strategy": "Multiple CapCut.exe processes. Find the one with MainWindowTitle set. The main window class is 'MainWindow_QMLTYPE_463' — NOT the tooltip window 'LVToolTipWindow_QMLTYPE_1779'.",
+    "warning": "The titlebar window (102x17) is NOT the main window. The full-screen window (3440x1392) is."
+  },
+  "input_method": "keyboard_shortcuts",
+  "ui_sections": {
+    "title_bar": {
+      "y_range": "0-35",
+      "elements": "TitleBarButton (min/max/close), ExportButton"
+    },
+    "panel_tabs": {
+      "y_range": "36-78",
+      "description": "Left side: 12 NewTabItem buttons (Media, Audio, Text, Stickers, Effects, Transitions, Filters, etc.). Right side: 6 QQuickItem buttons (Video, Audio, Speed, etc.)"
+    },
+    "media_browser": {
+      "y_range": "78-770",
+      "description": "Left panel with VETreeNewMainCellItem/SubCellItem (media folders), search TextField, MaterialIconButtons"
+    },
+    "video_preview": {
+      "y_range": "94-770",
+      "description": "Center-right area: VideoGamePlayView for preview playback"
+    },
+    "timeline": {
+      "y_range": "771-1383",
+      "description": "MainMultiTimelineLayout with 20+ MainTimeLineToolBarBtn toolbar buttons and MainTimeLine track area"
+    }
+  },
+  "keyboard_shortcuts": {
+    "file": {
+      "Ctrl+N": "New draft",
+      "Ctrl+I": "Import video/image",
+      "Ctrl+E": "Export",
+      "Ctrl+Q": "Quit"
+    },
+    "edit": {
+      "Ctrl+C": "Copy",
+      "Ctrl+X": "Cut",
+      "Ctrl+V": "Paste",
+      "Ctrl+Z": "Undo",
+      "Ctrl+Shift+Z": "Redo",
+      "Backspace": "Delete selected",
+      "Delete": "Delete selected",
+      "Ctrl+B": "Split clip at playhead",
+      "Ctrl+Shift+B": "Split ALL clips at playhead",
+      "Q": "Delete left of playhead (ripple)",
+      "W": "Delete right of playhead (ripple)",
+      "V": "Activate/deactivate clip"
+    },
+    "timeline_editing": {
+      "A": "Select mode",
+      "B": "Split mode",
+      "[": "Select to the left",
+      "]": "Select to the right",
+      "Ctrl+G": "Group clips",
+      "Ctrl+Shift+G": "Ungroup clips",
+      "Alt+G": "Create compound clip",
+      "Alt+Shift+G": "Undo compound clip",
+      "Shift+X": "Select by clip",
+      "Alt+X": "Deselect clips",
+      "Ctrl+Shift+S": "Extract/restore audio"
+    },
+    "navigation": {
+      "Left": "Previous frame",
+      "Right": "Next frame",
+      "Shift+Left": "Step back many frames",
+      "Shift+Right": "Step forward many frames",
+      "Home": "First frame",
+      "End": "Last frame",
+      "Up": "Previous cut point",
+      "Down": "Next cut point",
+      "I": "Set in point",
+      "O": "Set out point"
+    },
+    "playback": {
+      "Space": "Play/Pause",
+      "J": "Shuttle left (reverse playback)",
+      "K": "Shuttle stop",
+      "L": "Shuttle right (forward playback)",
+      "Shift+Enter": "Play from in point"
+    },
+    "zoom_and_view": {
+      "Ctrl++": "Zoom in timeline",
+      "Ctrl+-": "Zoom out timeline",
+      "Shift+Z": "Zoom to fit timeline",
+      "Ctrl+F": "Toggle fullscreen preview",
+      "N": "Toggle auto-snapping",
+      "S": "Switch preview axis",
+      "P": "Main track magnet"
+    },
+    "markers": {
+      "M": "Add marker",
+      "Alt+M": "Add marker with new color",
+      "Shift+M": "Next marker",
+      "Alt+Shift+M": "Previous marker"
+    },
+    "audio": {
+      "Ctrl+.": "Volume +0.1 dB",
+      "Ctrl+,": "Volume -0.1 dB",
+      "Shift+B": "Curve speed"
+    },
+    "speed": {
+      "Ctrl+R": "Show speed panel"
+    },
+    "keyframes": {
+      "Alt+K": "Show/hide keyframe panel",
+      "Shift++": "Add keyframe on keyframe panel"
+    },
+    "misc": {
+      "Tab": "Switch material panel",
+      "~": "Switch linkage",
+      "Ctrl+J": "Manual jump point"
+    }
+  },
+  "recommended_workflow": {
+    "import": "Ctrl+I to import, or drag files into media panel",
+    "basic_edit": "Space to play, Left/Right to scrub frames, Ctrl+B to split, Q/W to ripple delete",
+    "export": "Ctrl+E opens export dialog",
+    "navigation_tip": "Use J/K/L for shuttle playback (J=reverse, K=stop, L=forward) — press L multiple times to increase speed",
+    "timeline_tip": "Shift+Z zooms timeline to fit all clips. Ctrl+/- for manual zoom."
+  },
+  "coordinate_elements": {
+    "note": "Since all elements are unnamed, these are the key positions based on class names. Positions may vary with window size.",
+    "export_button": {"class": "ExportButton", "approximate_position": "top-right corner"},
+    "search_field": {"class": "TextField_QMLTYPE_206_QML_887", "type": "Edit", "patterns": "ValuePattern,TextPattern", "note": "The ONE text input — use for searching media"},
+    "timeline_toolbar": {"class": "MainTimeLineToolBarBtn_QMLTYPE_1171", "count": 20, "y": 775, "note": "Row of toolbar buttons at top of timeline. All invokable by coordinate."}
+  },
+  "known_issues": [
+    "ALL 147 UI elements are unnamed — Qt6 QML does not expose accessibility names by default",
+    "Control is keyboard-shortcut-primary, coordinate-click-secondary",
+    "Multiple CapCut.exe processes — only one has the main window",
+    "GPU-rendered preview and timeline — no element data in those areas",
+    "The tooltip window (102x17) appears as the first match — skip it, find the full-size MainWindow"
+  ],
+  "risk_tier": "T2",
+  "version": "1.0",
+  "last_verified": "2026-03-25"
+}

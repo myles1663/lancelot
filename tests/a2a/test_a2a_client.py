@@ -22,11 +22,17 @@ from src.a2a.client import A2AClient
 def _make_agent(
     agent_id="remote-1",
     agent_card_url="https://agent.example.com/.well-known/agent.json",
+    agent_framework="unknown",
+    auth_type="none",
+    agent_card_cache=None,
 ):
     return RemoteAgent(
         agent_id=agent_id,
         display_name="Remote Agent",
         agent_card_url=agent_card_url,
+        agent_framework=agent_framework,
+        auth_type=auth_type,
+        agent_card_cache=agent_card_cache,
     )
 
 
@@ -192,6 +198,22 @@ class TestPollTaskStatus:
             result = client.poll_task_status(agent, "nonexistent")
         assert result["status"] == A2ATaskStatus.FAILED.value
 
+    def test_includes_api_key_headers(self):
+        mock_httpx, mock_client = _mock_httpx_client(
+            response_data={"id": "t1", "status": "completed"},
+        )
+        with patch.dict("sys.modules", {"httpx": mock_httpx}):
+            agent = _make_agent()
+            client = A2AClient()
+            client.poll_task_status(
+                agent,
+                "t1",
+                credentials={"type": "api_key", "key": "mykey"},
+            )
+        call_args = mock_client.get.call_args
+        headers = call_args[1].get("headers", {})
+        assert headers.get("X-API-Key") == "mykey"
+
 
 # ── is_lancelot_instance ───────────────────────────────────
 
@@ -237,5 +259,50 @@ class TestVerifyAgentCard:
     def test_successful_verification(self, mock_fetch):
         mock_fetch.return_value = AgentCard(name="Agent", description="", url="")
         client = A2AClient()
-        agent = _make_agent()
+        agent = _make_agent(
+            agent_card_cache={"card_hash": A2AClient._hash_payload(AgentCard(name="Agent", description="", url="").to_dict())},
+        )
         assert client.verify_agent_card(agent) is True
+
+    @patch.object(A2AClient, "fetch_agent_card")
+    def test_lancelot_card_is_rejected(self, mock_fetch):
+        mock_fetch.return_value = AgentCard(
+            name="Lancelot Peer",
+            description="",
+            url="",
+            governance_declaration={"governance_framework": "lancelot"},
+        )
+        client = A2AClient()
+        agent = _make_agent()
+        assert client.verify_agent_card(agent) is False
+
+    @patch.object(A2AClient, "fetch_agent_card")
+    def test_unpinned_card_requires_operator_verification(self, mock_fetch):
+        mock_fetch.return_value = AgentCard(name="Agent", description="", url="https://agent.example.com")
+        client = A2AClient()
+        agent = _make_agent(auth_type="none")
+        assert client.verify_agent_card(agent) is False
+
+    @patch.object(A2AClient, "fetch_agent_card")
+    def test_allow_repin_persists_card_cache_on_agent(self, mock_fetch):
+        mock_fetch.return_value = AgentCard(
+            name="Agent",
+            description="",
+            url="https://agent.example.com",
+            authentication={"type": "bearer_token"},
+            metadata={"agent_id": "remote-1", "agent_framework": "crewai"},
+        )
+        client = A2AClient()
+        agent = _make_agent(agent_framework="crewai", auth_type="bearer_token")
+        assert client.verify_agent_card(agent, allow_repin=True) is True
+        assert agent.agent_card_cache is not None
+        assert "card_hash" in agent.agent_card_cache
+
+    @patch.object(A2AClient, "fetch_agent_card")
+    def test_origin_mismatch_is_rejected(self, mock_fetch):
+        mock_fetch.return_value = AgentCard(name="Agent", description="", url="https://evil.example")
+        client = A2AClient()
+        agent = _make_agent(
+            agent_card_cache={"card_hash": "placeholder"},
+        )
+        assert client.verify_agent_card(agent) is False

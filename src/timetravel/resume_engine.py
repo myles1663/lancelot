@@ -15,7 +15,7 @@ Fork Creation Pipeline:
 4. Risk Reclassification — re-tier under current Soul
 5. T3 Approval Gate — request and await T3 approval (if required)
 6. Fork Quest Creation — mint new quest_id + link to source
-7. Governed Execution — (stub: actual re-execution happens in orchestrator)
+7. Governed Execution — delegate to the injected governed quest executor
 8. Fork Receipt — emit QUEST_FORKED receipt
 
 Replay Pipeline:
@@ -23,7 +23,7 @@ Replay Pipeline:
 2. Soul Validation — evaluate replay permission
 3. T3 Approval Gate — if required by fork_permissions
 4. Replay Quest Creation — mint new quest_id + link to source
-5. Governed Execution — (stub)
+5. Governed Execution — delegate to the injected governed quest executor
 6. Replay Receipt — emit QUEST_REPLAYED receipt
 
 Public API:
@@ -38,7 +38,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from src.shared.receipts import ActionType, Receipt, ReceiptStatus, CognitionTier
 
@@ -124,10 +124,64 @@ class ResumeEngine:
         receipt_service: Any,
         soul: Any,
         snapshot_reader: Any = None,
+        quest_executor: Optional[Callable[..., Dict[str, Any]]] = None,
     ):
         self._receipt_service = receipt_service
         self._soul = soul
         self._snapshot_reader = snapshot_reader
+        self._quest_executor = quest_executor
+
+    def _get_soul(self) -> Any:
+        """Resolve the live Soul object."""
+        soul = self._soul
+        if soul is None:
+            return None
+        if hasattr(soul, "fork_permissions") or hasattr(soul, "version"):
+            return soul
+        return soul() if callable(soul) else soul
+
+    def update_soul(self, soul: Any) -> None:
+        """Refresh the Soul/provider used for replay and fork policy."""
+        self._soul = soul
+
+    def update_quest_executor(self, quest_executor: Optional[Callable[..., Dict[str, Any]]]) -> None:
+        """Refresh the quest execution callback used by replay and fork."""
+        self._quest_executor = quest_executor
+
+    def _execute_governed_quest(
+        self,
+        *,
+        mode: str,
+        source_quest_id: str,
+        new_quest_id: str,
+        modifications: Optional[Dict[str, Any]],
+        operator_id: Optional[str],
+        session_id: Optional[str],
+    ) -> Dict[str, Any]:
+        """Delegate replay/fork execution to the injected tasking runtime."""
+        if self._quest_executor is None:
+            raise RuntimeError(
+                "Time-Travel governed quest executor not configured "
+                f"for {mode} on quest {source_quest_id}"
+            )
+
+        result = self._quest_executor(
+            mode=mode,
+            source_quest_id=source_quest_id,
+            new_quest_id=new_quest_id,
+            modifications=modifications or {},
+            operator_id=operator_id or "",
+            session_id=session_id or "",
+        )
+        if result is None:
+            raise RuntimeError("Time-Travel executor returned no result")
+        if not isinstance(result, dict):
+            raise RuntimeError(
+                f"Time-Travel executor returned unsupported result type: {type(result)!r}"
+            )
+        if not result:
+            raise RuntimeError("Time-Travel executor returned an empty result")
+        return result
 
     def create_inspection(
         self,
@@ -143,7 +197,8 @@ class ResumeEngine:
         from src.timetravel.fork_permissions import evaluate_inspect_request
 
         # Validate inspect permission (always true, but follows pattern)
-        decision = evaluate_inspect_request(self._soul)
+        soul = self._get_soul()
+        decision = evaluate_inspect_request(soul)
         if not decision.allowed:
             return InspectionResult(
                 success=False,
@@ -213,7 +268,8 @@ class ResumeEngine:
             )
 
         # Stage 2: Soul validation
-        decision = evaluate_replay_request(self._soul)
+        soul = self._get_soul()
+        decision = evaluate_replay_request(soul)
         if not decision.allowed:
             self._emit_rejection_receipt(
                 decision, source_quest_id, operator_id, session_id,
@@ -244,18 +300,38 @@ class ResumeEngine:
         # Stage 4: Mint new quest_id
         replay_quest_id = str(uuid.uuid4())
 
-        # Stage 5: Emit QUEST_REPLAYED receipt
+        # Stage 5: Governed execution
+        try:
+            execution = self._execute_governed_quest(
+                mode="replay",
+                source_quest_id=source_quest_id,
+                new_quest_id=replay_quest_id,
+                modifications={},
+                operator_id=operator_id,
+                session_id=session_id,
+            )
+        except Exception as e:
+            logger.error("Replay execution failed: %s", e)
+            return ReplayResult(
+                success=False,
+                replay_quest_id=replay_quest_id,
+                source_quest_id=source_quest_id,
+                error=f"Replay execution failed: {e}",
+            )
+
+        # Stage 6: Emit QUEST_REPLAYED receipt
         replay_receipt = Receipt(
             action_type=ActionType.QUEST_REPLAYED.value,
             action_name="quest_replay",
             inputs={
                 "source_quest_id": source_quest_id,
                 "source_receipt_count": len(source_receipts),
-                "soul_version": getattr(self._soul, "version", "unknown"),
+                "soul_version": getattr(soul, "version", "unknown"),
             },
             outputs={
                 "replay_quest_id": replay_quest_id,
                 "mode": "replay",
+                "execution": execution,
             },
             status=ReceiptStatus.SUCCESS.value,
             tier=CognitionTier.PLANNING.value,
@@ -300,10 +376,10 @@ class ResumeEngine:
         1. Receipt Selection — validate source quest
         2. State Modification — validate modification structure
         3. Soul Validation — check fork_permissions
-        4. Risk Reclassification — re-tier (stub: uses source tiers)
+        4. Risk Reclassification — re-tier using source quest history
         5. T3 Approval Gate — request approval
         6. Fork Quest Creation — mint new quest_id
-        7. Governed Execution — (stub: orchestrator handles)
+        7. Governed Execution — delegate to the injected governed quest executor
         8. Fork Receipt — emit QUEST_FORKED receipt
         """
         from src.timetravel.fork_permissions import evaluate_fork_request
@@ -326,7 +402,8 @@ class ResumeEngine:
             )
 
         # Stage 3: Soul Validation
-        decision = evaluate_fork_request(self._soul, modifications)
+        soul = self._get_soul()
+        decision = evaluate_fork_request(soul, modifications)
         if not decision.allowed:
             self._emit_rejection_receipt(
                 decision, source_quest_id, operator_id, session_id,
@@ -338,7 +415,7 @@ class ResumeEngine:
                 approval_status="rejected",
             )
 
-        # Stage 4: Risk Reclassification (stub — uses max tier from source)
+        # Stage 4: Risk Reclassification (uses max tier from source receipts)
         max_tier = max((r.tier for r in source_receipts), default=0)
 
         # Stage 5: T3 Approval Gate
@@ -361,8 +438,25 @@ class ResumeEngine:
         # Stage 6: Fork Quest Creation
         fork_quest_id = str(uuid.uuid4())
 
-        # Stage 7: Governed Execution (stub — actual re-execution
-        # happens in the orchestrator when it processes the fork quest)
+        try:
+            execution = self._execute_governed_quest(
+                mode="fork",
+                source_quest_id=source_quest_id,
+                new_quest_id=fork_quest_id,
+                modifications=modifications,
+                operator_id=operator_id,
+                session_id=session_id,
+            )
+        except Exception as e:
+            logger.error("Fork execution failed: %s", e)
+            return ForkResult(
+                success=False,
+                fork_quest_id=fork_quest_id,
+                source_quest_id=source_quest_id,
+                error=f"Fork execution failed: {e}",
+            )
+
+        # Stage 7 completed via the injected governed quest executor above.
 
         # Stage 8: Fork Receipt
         fork_receipt = Receipt(
@@ -372,13 +466,14 @@ class ResumeEngine:
                 "source_quest_id": source_quest_id,
                 "source_receipt_count": len(source_receipts),
                 "modifications": modifications,
-                "soul_version": getattr(self._soul, "version", "unknown"),
+                "soul_version": getattr(soul, "version", "unknown"),
                 "max_source_tier": max_tier,
             },
             outputs={
                 "fork_quest_id": fork_quest_id,
                 "mode": "fork",
                 "modifications_applied": list(modifications.keys()),
+                "execution": execution,
             },
             status=ReceiptStatus.SUCCESS.value,
             tier=CognitionTier.SYNTHESIS.value,  # Forks are always T3

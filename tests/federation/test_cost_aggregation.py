@@ -5,6 +5,8 @@
 
 """Tests for Federated Cost Aggregation Engine."""
 
+import threading
+
 import pytest
 from src.federation.cost_aggregation import (
     CostThreshold,
@@ -68,6 +70,26 @@ class TestThresholdCallback:
         agg.update_instance(_cost("i1", actual=8.0, ceiling=10.0))
         assert len(changes) == 1
         assert changes[0] == (CostThreshold.NORMAL, CostThreshold.WARNING)
+
+    def test_callback_can_read_aggregate_without_deadlocking(self):
+        observed = {}
+        agg = None
+
+        def on_threshold_change(old, new):
+            observed["pair"] = (old, new)
+            observed["utilization_pct"] = agg.get_aggregate().utilization_pct
+
+        agg = FederatedCostAggregator(on_threshold_change=on_threshold_change)
+        worker = threading.Thread(
+            target=lambda: agg.update_instance(_cost("i1", actual=10.0, ceiling=10.0)),
+            daemon=True,
+        )
+        worker.start()
+        worker.join(timeout=2.0)
+
+        assert not worker.is_alive()
+        assert observed["pair"] == (CostThreshold.NORMAL, CostThreshold.HARD_STOP)
+        assert observed["utilization_pct"] == 100.0
 
 
 class TestAggregate:
@@ -149,3 +171,55 @@ class TestInstanceManagement:
         d = data.to_dict()
         assert d["utilization_pct"] == 50.0
         assert d["projected_utilization_pct"] == 70.0
+
+
+class TestFreshness:
+    def test_stale_remote_snapshot_blocks_spawn(self):
+        aggregator = FederatedCostAggregator(stale_after_s=1.0)
+        aggregator.update_instance(
+            InstanceCostData(
+                instance_id="peer-1",
+                actual_today_usd=1.0,
+                daily_ceiling_usd=10.0,
+                updated_at="2000-01-01T00:00:00+00:00",
+            )
+        )
+        ok, reason = aggregator.check_spawn_allowed("self-1")
+        assert not ok
+        assert "stale" in reason.lower()
+        assert "peer-1" in reason
+
+    def test_stale_remote_snapshot_excluded_from_threshold_math(self):
+        aggregator = FederatedCostAggregator(stale_after_s=1.0)
+        aggregator.update_instance(
+            InstanceCostData(
+                instance_id="peer-1",
+                actual_today_usd=9.6,
+                daily_ceiling_usd=10.0,
+                updated_at="2000-01-01T00:00:00+00:00",
+            )
+        )
+        assert aggregator.current_threshold == CostThreshold.NORMAL
+        assert aggregator.get_aggregate().utilization_pct == 0.0
+        assert aggregator.get_stale_instance_ids() == ["peer-1"]
+
+
+class TestPersistence:
+    def test_threshold_survives_restart(self, tmp_path):
+        path = tmp_path / "cost_aggregate.json"
+        aggregator = FederatedCostAggregator(persistence_path=str(path))
+        aggregator.update_instance(_cost("i1", actual=9.6, ceiling=10.0))
+
+        reloaded = FederatedCostAggregator(persistence_path=str(path))
+        assert reloaded.current_threshold == CostThreshold.SPAWN_GATED
+        assert reloaded.get_aggregate().utilization_pct == 96.0
+
+    def test_remove_instance_persists_cleanup(self, tmp_path):
+        path = tmp_path / "cost_aggregate.json"
+        aggregator = FederatedCostAggregator(persistence_path=str(path))
+        aggregator.update_instance(_cost("i1", actual=9.6, ceiling=10.0))
+        assert aggregator.remove_instance("i1")
+
+        reloaded = FederatedCostAggregator(persistence_path=str(path))
+        assert reloaded.current_threshold == CostThreshold.NORMAL
+        assert reloaded.get_aggregate().utilization_pct == 0.0

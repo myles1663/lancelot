@@ -12,6 +12,33 @@ interface ChatMessageProps {
 export function ChatMessage({ role, content, timestamp, crusaderMode, filesCount }: ChatMessageProps) {
   const isUser = role === 'user'
 
+  async function handleSecureDownload(event: React.MouseEvent<HTMLAnchorElement>, href: string) {
+    const url = new URL(href, window.location.origin)
+    if (url.origin !== window.location.origin || !url.pathname.startsWith('/api/files/')) {
+      return
+    }
+
+    event.preventDefault()
+
+    const response = await fetch(url.toString(), { credentials: 'include' })
+    if (!response.ok) {
+      throw new Error(`Download failed with status ${response.status}`)
+    }
+
+    const blob = await response.blob()
+    const disposition = response.headers.get('Content-Disposition') || ''
+    const dispositionMatch = disposition.match(/filename="?([^"]+)"?/)
+    const filename = dispositionMatch?.[1] || decodeURIComponent(url.pathname.split('/').pop() || 'download')
+    const blobUrl = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = blobUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(blobUrl)
+  }
+
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3`}>
       <div
@@ -54,7 +81,27 @@ export function ChatMessage({ role, content, timestamp, crusaderMode, filesCount
             prose-hr:border-border-default prose-hr:my-3
             prose-blockquote:border-l-2 prose-blockquote:border-accent-primary/50 prose-blockquote:pl-3 prose-blockquote:italic
           ">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                a: ({ href, children, ...props }) => (
+                  <a
+                    {...props}
+                    href={href}
+                    onClick={(event) => {
+                      if (!href) return
+                      void handleSecureDownload(event, href).catch((error) => {
+                        console.error('Workspace download failed', error)
+                      })
+                    }}
+                  >
+                    {children}
+                  </a>
+                ),
+              }}
+            >
+              {content}
+            </ReactMarkdown>
           </div>
         )}
         <span className="text-[10px] text-text-muted font-mono mt-1 block">{timestamp}</span>

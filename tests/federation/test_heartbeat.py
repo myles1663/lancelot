@@ -5,6 +5,7 @@
 
 """Tests for Federation heartbeat emission and staleness computation."""
 
+import asyncio
 import time
 from datetime import datetime, timezone, timedelta
 import pytest
@@ -14,6 +15,8 @@ from src.federation.heartbeat import (
     StalenessLevel,
     compute_staleness,
 )
+from src.federation.heartbeat_mesh import HeartbeatMesh
+from src.federation.topology import TopologyRegistry
 
 
 class TestHeartbeat:
@@ -158,3 +161,185 @@ class TestHeartbeatEmitter:
         # Should not raise
         hb = emitter.emit_once()
         assert hb is not None
+
+
+class TestHeartbeatMesh:
+    def test_divergence_snapshot_uses_runtime_providers(self):
+        topo = TopologyRegistry(self_instance_id="self-1")
+        topo.register_peer(
+            instance_id="peer-1",
+            fingerprint="fp",
+            public_key_hex="pk",
+            address="http://peer-1:8000",
+            role="peer",
+        )
+        captured = {}
+
+        class _FakeDivergence:
+            def check_connectivity(self, peer_last_heartbeats, **kwargs):
+                captured["peer_last_heartbeats"] = peer_last_heartbeats
+                captured.update(kwargs)
+
+        mesh = HeartbeatMesh(
+            topology=topo,
+            divergence_detector=_FakeDivergence(),
+            current_soul_hash_provider=lambda: "soul-123",
+            active_task_count_provider=lambda: 4,
+            hive_spawn_count_provider=lambda: 2,
+            hive_spawn_states_provider=lambda: {"agent-1": "executing"},
+            pending_handoffs_provider=lambda: [{"handoff_id": "h1", "state": "accepted"}],
+            budget_utilization_provider=lambda: 87.5,
+        )
+
+        mesh._process_sse_event("peer-1", 'event: heartbeat\ndata: {"timestamp": "2026-04-15T00:00:00+00:00", "soul_version_hash":"peer-soul"}')
+
+        assert captured["current_soul_hash"] == "soul-123"
+        assert captured["active_task_count"] == 4
+        assert captured["hive_spawn_count"] == 2
+        assert captured["hive_spawn_states"] == {"agent-1": "executing"}
+        assert captured["pending_handoffs"] == [{"handoff_id": "h1", "state": "accepted"}]
+        assert captured["budget_utilization_pct"] == 87.5
+
+    def test_divergence_callbacks_fire_on_state_transitions(self):
+        topo = TopologyRegistry(self_instance_id="self-1", staleness_lost_s=1.0)
+        topo.register_peer(
+            instance_id="peer-1",
+            fingerprint="fp",
+            public_key_hex="pk",
+            address="http://peer-1:8000",
+            role="peer",
+        )
+
+        class _FakeDivergence:
+            def __init__(self):
+                self.state = type("State", (), {"value": "connected"})()
+                self.divergence_snapshot = None
+
+            def check_connectivity(self, peer_last_heartbeats, **kwargs):
+                from src.federation.divergence import DivergenceSnapshot
+                if kwargs["current_soul_hash"] == "diverge-now":
+                    self.state = type("State", (), {"value": "diverged"})()
+                    self.divergence_snapshot = DivergenceSnapshot(
+                        soul_hash_at_divergence="diverge-now"
+                    )
+                    return self.state, self.divergence_snapshot
+                self.state = type("State", (), {"value": "reconnecting"})()
+                return self.state, None
+
+        events = []
+        fake = _FakeDivergence()
+        current_soul = {"value": "diverge-now"}
+        mesh = HeartbeatMesh(
+            topology=topo,
+            divergence_detector=fake,
+            current_soul_hash_provider=lambda: current_soul["value"],
+            on_diverged=lambda peer_id, snapshot: events.append(("diverged", peer_id, snapshot.soul_hash_at_divergence)),
+            on_reconnecting=lambda peer_id, detector: events.append(("reconnecting", peer_id, detector.state.value)),
+        )
+
+        mesh._process_sse_event("peer-1", 'event: heartbeat\ndata: {"timestamp": "2026-04-15T00:00:00+00:00", "soul_version_hash":"peer-soul"}')
+        current_soul["value"] = "reconnect-now"
+        mesh._process_sse_event("peer-1", 'event: heartbeat\ndata: {"timestamp": "2026-04-15T00:00:01+00:00", "soul_version_hash":"peer-soul"}')
+
+        assert events[0] == ("diverged", "peer-1", "diverge-now")
+        assert events[1] == ("reconnecting", "peer-1", "reconnecting")
+
+    @pytest.mark.asyncio
+    async def test_start_evaluates_persisted_lost_peer_state(self):
+        topo = TopologyRegistry(self_instance_id="self-1", staleness_lost_s=1.0)
+        topo.register_peer(
+            instance_id="peer-1",
+            fingerprint="fp",
+            public_key_hex="pk",
+            address="http://peer-1:8000",
+            role="peer",
+        )
+        old = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+        topo.update_heartbeat("peer-1", timestamp=old)
+        events = []
+
+        from src.federation.divergence import DivergenceDetector
+
+        detector = DivergenceDetector(instance_id="self-1", staleness_lost_s=1.0)
+        mesh = HeartbeatMesh(
+            topology=topo,
+            divergence_detector=detector,
+            on_diverged=lambda peer_id, snapshot: events.append((peer_id, snapshot.soul_hash_at_divergence)),
+        )
+
+        await mesh.start()
+        try:
+            assert detector.state.value == "diverged"
+            assert events == [("", "")]
+        finally:
+            await mesh.stop()
+
+    def test_divergence_evaluation_failure_is_surfaced(self):
+        topo = TopologyRegistry(self_instance_id="self-1")
+
+        class BrokenDivergence:
+            def check_connectivity(self, peer_last_heartbeats, **kwargs):
+                raise RuntimeError("detector exploded")
+
+        mesh = HeartbeatMesh(
+            topology=topo,
+            divergence_detector=BrokenDivergence(),
+        )
+
+        mesh._evaluate_divergence("peer-1")
+
+        assert mesh.divergence_evaluation_failed is True
+        assert mesh.divergence_status_error == "detector exploded"
+
+    @pytest.mark.asyncio
+    async def test_subscription_status_reports_reconnecting_on_failure(self):
+        topo = TopologyRegistry(self_instance_id="self-1")
+        topo.register_peer(
+            instance_id="peer-1",
+            fingerprint="fp",
+            public_key_hex="pk",
+            address="http://peer-1:8000",
+            role="peer",
+        )
+
+        class FlakyMesh(HeartbeatMesh):
+            async def _consume_stream(self, instance_id: str, url: str) -> None:
+                raise RuntimeError("connect failed")
+
+        mesh = FlakyMesh(topology=topo)
+        await mesh.start()
+        try:
+            await asyncio.sleep(0.05)
+            assert mesh.get_subscription_status()["peer-1"] == "reconnecting"
+            assert mesh.get_stream_outcome_status()["peer-1"] == "failed"
+            assert mesh.get_stream_errors()["peer-1"] == "connect failed"
+        finally:
+            await mesh.stop()
+
+    @pytest.mark.asyncio
+    async def test_subscription_status_preserves_http_failure_outcome(self):
+        topo = TopologyRegistry(self_instance_id="self-1")
+        topo.register_peer(
+            instance_id="peer-1",
+            fingerprint="fp",
+            public_key_hex="pk",
+            address="http://peer-1:8000",
+            role="peer",
+        )
+
+        class HttpFailMesh(HeartbeatMesh):
+            async def _consume_stream(self, instance_id: str, url: str) -> None:
+                self._subscription_status[instance_id] = "failed"
+                self._stream_outcome_status[instance_id] = "failed"
+                self._stream_errors[instance_id] = "HTTP 503"
+                return
+
+        mesh = HttpFailMesh(topology=topo)
+        await mesh.start()
+        try:
+            await asyncio.sleep(0.05)
+            assert mesh.get_subscription_status()["peer-1"] == "reconnecting"
+            assert mesh.get_stream_outcome_status()["peer-1"] == "failed"
+            assert mesh.get_stream_errors()["peer-1"] == "HTTP 503"
+        finally:
+            await mesh.stop()

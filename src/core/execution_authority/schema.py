@@ -50,7 +50,7 @@ class ExecutionToken:
     """Scoped authority to perform actions within defined boundaries."""
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    created_by: str = "Commander"
+    created_by: str = ""
     scope: str = ""
     task_type: str = TaskType.OTHER.value
     allowed_tools: List[str] = field(default_factory=list)
@@ -68,6 +68,7 @@ class ExecutionToken:
     actions_used: int = 0
     expires_at: Optional[str] = None
     session_id: str = ""
+    operator_id: str = ""
 
     def __post_init__(self):
         """Set expires_at from max_duration_sec if not already set."""
@@ -144,6 +145,7 @@ class ExecutionToken:
             "actions_used": self.actions_used,
             "expires_at": self.expires_at,
             "session_id": self.session_id,
+            "operator_id": self.operator_id,
         }
 
     @classmethod

@@ -15,9 +15,11 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability, resolve_authenticated_identity
 
 from src.incidents.models import (
     IncidentRecord,
@@ -35,7 +37,14 @@ from src.shared.receipts import (
 
 logger = logging.getLogger("lancelot.incidents.api")
 
-router = APIRouter(prefix="/api/incidents", tags=["incidents"])
+router = APIRouter(
+    prefix="/api/incidents",
+    tags=["incidents"],
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("incidents.admin")),
+    ],
+)
 
 _data_dir: Optional[str] = None
 _receipt_service = None
@@ -54,33 +63,28 @@ def init_incidents_api(receipt_service, data_dir: str) -> None:
 # ── Request Models ────────────────────────────────────────────────────
 
 class AcknowledgeRequest(BaseModel):
-    operator_id: str
+    pass
 
 
 class StatusUpdateRequest(BaseModel):
-    operator_id: str
     status: str
     note: str = ""
 
 
 class TimelineEntryRequest(BaseModel):
-    operator_id: str
     entry_text: str
 
 
 class LinkReceiptRequest(BaseModel):
-    operator_id: str
     receipt_id: str
 
 
 class EscalateRequest(BaseModel):
-    operator_id: str
     new_severity: str
     reason: str
 
 
 class CloseRequest(BaseModel):
-    operator_id: str
     root_cause: Optional[str] = None
     false_positive: bool = False
     false_positive_reason: Optional[str] = None
@@ -146,34 +150,37 @@ def get_incident(incident_id: str):
 
 
 @router.post("/{incident_id}/acknowledge")
-def acknowledge_incident(incident_id: str, req: AcknowledgeRequest):
+def acknowledge_incident(incident_id: str, req: AcknowledgeRequest, request: Request):
     """Acknowledge an incident. Sets status to INVESTIGATING."""
     store = get_incident_store()
     incident = _get_or_404(store, incident_id)
 
+    identity = resolve_authenticated_identity(request)
+    operator_id = identity.operator_id
+    actor = identity.display_name or identity.operator_id
     now = datetime.now(timezone.utc).isoformat()
     incident.status = IncidentStatus.INVESTIGATING.value
-    incident.responder_id = req.operator_id
+    incident.responder_id = operator_id
     incident.acknowledged_at = now
     incident.add_timeline_entry(TimelineEntry(
         timestamp=now,
         entry_type="acknowledged",
-        actor=req.operator_id,
+        actor=actor,
         detail="Incident acknowledged",
     ))
     store.update(incident)
 
     _emit_receipt(ActionType.INCIDENT_ACKNOWLEDGED, {
         "incident_id": incident_id,
-        "responder_id": req.operator_id,
+        "responder_id": operator_id,
         "acknowledged_at": now,
-    }, operator_id=req.operator_id)
+    }, operator_id=operator_id)
 
     return {"status": "acknowledged", "incident_id": incident_id}
 
 
 @router.post("/{incident_id}/status")
-def update_status(incident_id: str, req: StatusUpdateRequest):
+def update_status(incident_id: str, req: StatusUpdateRequest, request: Request):
     """Update incident status."""
     store = get_incident_store()
     incident = _get_or_404(store, incident_id)
@@ -186,13 +193,16 @@ def update_status(incident_id: str, req: StatusUpdateRequest):
             detail=f"Invalid status: {req.status}. Valid: {[s.value for s in IncidentStatus]}",
         )
 
+    identity = resolve_authenticated_identity(request)
+    operator_id = identity.operator_id
+    actor = identity.display_name or identity.operator_id
     previous_status = incident.status
     now = datetime.now(timezone.utc).isoformat()
     incident.status = new_status.value
     incident.add_timeline_entry(TimelineEntry(
         timestamp=now,
         entry_type="status_change",
-        actor=req.operator_id,
+        actor=actor,
         detail=f"Status changed: {previous_status} → {new_status.value}. {req.note}",
     ))
     store.update(incident)
@@ -202,22 +212,25 @@ def update_status(incident_id: str, req: StatusUpdateRequest):
         "previous_status": previous_status,
         "new_status": new_status.value,
         "note": req.note,
-    }, operator_id=req.operator_id)
+    }, operator_id=operator_id)
 
     return {"status": "updated", "previous": previous_status, "new": new_status.value}
 
 
 @router.post("/{incident_id}/timeline")
-def add_timeline_entry(incident_id: str, req: TimelineEntryRequest):
+def add_timeline_entry(incident_id: str, req: TimelineEntryRequest, request: Request):
     """Add a timeline entry to an incident."""
     store = get_incident_store()
     incident = _get_or_404(store, incident_id)
 
+    identity = resolve_authenticated_identity(request)
+    operator_id = identity.operator_id
+    actor = identity.display_name or identity.operator_id
     now = datetime.now(timezone.utc).isoformat()
     incident.add_timeline_entry(TimelineEntry(
         timestamp=now,
         entry_type="note",
-        actor=req.operator_id,
+        actor=actor,
         detail=req.entry_text,
     ))
     store.update(incident)
@@ -225,24 +238,27 @@ def add_timeline_entry(incident_id: str, req: TimelineEntryRequest):
     _emit_receipt(ActionType.INCIDENT_TIMELINE_ENTRY, {
         "incident_id": incident_id,
         "entry_text": req.entry_text,
-    }, operator_id=req.operator_id)
+    }, operator_id=operator_id)
 
     return {"status": "added", "incident_id": incident_id}
 
 
 @router.post("/{incident_id}/link-receipt")
-def link_receipt(incident_id: str, req: LinkReceiptRequest):
+def link_receipt(incident_id: str, req: LinkReceiptRequest, request: Request):
     """Link a remediation receipt to an incident."""
     store = get_incident_store()
     incident = _get_or_404(store, incident_id)
 
+    identity = resolve_authenticated_identity(request)
+    operator_id = identity.operator_id
+    actor = identity.display_name or identity.operator_id
     if req.receipt_id not in incident.remediation_receipts:
         incident.remediation_receipts.append(req.receipt_id)
     now = datetime.now(timezone.utc).isoformat()
     incident.add_timeline_entry(TimelineEntry(
         timestamp=now,
         entry_type="remediation_linked",
-        actor=req.operator_id,
+        actor=actor,
         detail=f"Linked remediation receipt: {req.receipt_id}",
         receipt_id=req.receipt_id,
     ))
@@ -251,13 +267,13 @@ def link_receipt(incident_id: str, req: LinkReceiptRequest):
     _emit_receipt(ActionType.INCIDENT_REMEDIATION_LINKED, {
         "incident_id": incident_id,
         "linked_receipt_id": req.receipt_id,
-    }, operator_id=req.operator_id)
+    }, operator_id=operator_id)
 
     return {"status": "linked", "receipt_id": req.receipt_id}
 
 
 @router.post("/{incident_id}/escalate")
-def escalate_incident(incident_id: str, req: EscalateRequest):
+def escalate_incident(incident_id: str, req: EscalateRequest, request: Request):
     """Escalate incident severity."""
     store = get_incident_store()
     incident = _get_or_404(store, incident_id)
@@ -270,13 +286,16 @@ def escalate_incident(incident_id: str, req: EscalateRequest):
             detail=f"Invalid severity: {req.new_severity}",
         )
 
+    identity = resolve_authenticated_identity(request)
+    operator_id = identity.operator_id
+    actor = identity.display_name or identity.operator_id
     previous_severity = incident.severity
     now = datetime.now(timezone.utc).isoformat()
     incident.severity = new_severity.value
     incident.add_timeline_entry(TimelineEntry(
         timestamp=now,
         entry_type="escalation",
-        actor=req.operator_id,
+        actor=actor,
         detail=f"Escalated: {previous_severity} → {new_severity.value}. Reason: {req.reason}",
     ))
     store.update(incident)
@@ -286,13 +305,13 @@ def escalate_incident(incident_id: str, req: EscalateRequest):
         "previous_severity": previous_severity,
         "new_severity": new_severity.value,
         "escalation_reason": req.reason,
-    }, operator_id=req.operator_id)
+    }, operator_id=operator_id)
 
     return {"status": "escalated", "previous": previous_severity, "new": new_severity.value}
 
 
 @router.post("/{incident_id}/close")
-def close_incident(incident_id: str, req: CloseRequest):
+def close_incident(incident_id: str, req: CloseRequest, request: Request):
     """Close an incident or mark as false positive."""
     store = get_incident_store()
     incident = _get_or_404(store, incident_id)
@@ -305,6 +324,9 @@ def close_incident(incident_id: str, req: CloseRequest):
                 detail=f"Root cause is required for {incident.severity} incidents",
             )
 
+    identity = resolve_authenticated_identity(request)
+    operator_id = identity.operator_id
+    actor = identity.display_name or identity.operator_id
     now = datetime.now(timezone.utc).isoformat()
 
     if req.false_positive:
@@ -312,31 +334,31 @@ def close_incident(incident_id: str, req: CloseRequest):
         incident.add_timeline_entry(TimelineEntry(
             timestamp=now,
             entry_type="closed_false_positive",
-            actor=req.operator_id,
+            actor=actor,
             detail=f"Closed as false positive: {req.false_positive_reason or 'No reason provided'}",
         ))
         _emit_receipt(ActionType.INCIDENT_FALSE_POSITIVE, {
             "incident_id": incident_id,
             "false_positive_reason": req.false_positive_reason,
             "playbook_adjustment_recommended": False,
-        }, operator_id=req.operator_id)
+        }, operator_id=operator_id)
     else:
         incident.status = IncidentStatus.CLOSED.value
         incident.root_cause = req.root_cause
         incident.add_timeline_entry(TimelineEntry(
             timestamp=now,
             entry_type="closed",
-            actor=req.operator_id,
+            actor=actor,
             detail=f"Incident closed. Root cause: {req.root_cause}",
         ))
         _emit_receipt(ActionType.INCIDENT_CLOSED, {
             "incident_id": incident_id,
             "root_cause": req.root_cause,
             "board_report_generated": req.generate_report,
-        }, operator_id=req.operator_id)
+        }, operator_id=operator_id)
 
     incident.closed_at = now
-    incident.closed_by = req.operator_id
+    incident.closed_by = operator_id
 
     # Generate report if requested
     if req.generate_report:
@@ -431,3 +453,6 @@ def _emit_receipt(
             svc.create(receipt)
     except Exception as exc:
         logger.debug("Failed to emit receipt %s: %s", action_type.value, exc)
+    identity = resolve_authenticated_identity(request)
+    operator_id = identity.operator_id
+    actor = identity.display_name or identity.operator_id

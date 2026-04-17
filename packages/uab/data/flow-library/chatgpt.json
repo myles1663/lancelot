@@ -1,0 +1,29 @@
+{
+  "skill_name": "chatgpt_chat_flow",
+  "app_name": "ChatGPT",
+  "executable": "chatgpt.exe",
+  "app_framework": "Electron",
+  "target_flow": "Send and read messages in ChatGPT desktop app",
+  "input_method": "tab_then_type",
+  "focus_method": "focus_endpoint",
+  "read_method": "copy",
+  "navigation_plan": [
+    {"step": 1, "action": "connect", "params": {"target": "chatgpt"}, "note": "Returns pid"},
+    {"step": 2, "action": "focus", "params": {"pid": "{pid}"}, "note": "Bring window to front without resizing"},
+    {"step": 3, "action": "keypress", "params": {"pid": "{pid}", "key": "Tab"}, "note": "EXACTLY ONE Tab — focuses the input field. Do NOT repeat."},
+    {"step": 4, "action": "type", "params": {"pid": "{pid}", "elementId": "", "action": "type", "params": {"text": "{message}"}}, "note": "Sends full string instantly via SendKeys"},
+    {"step": 5, "action": "screenshot_confirm", "params": {"pid": "{pid}"}, "note": "Verify text appeared in input before sending", "timeout_ms": 500},
+    {"step": 6, "action": "keypress", "params": {"pid": "{pid}", "key": "Enter"}, "note": "Send the message"},
+    {"step": 7, "action": "wait", "duration_ms": 12000, "note": "Wait for AI to finish responding"},
+    {"step": 8, "action": "copy", "params": {"pid": "{pid}"}, "note": "Ctrl+A+C returns full conversation text including response"}
+  ],
+  "known_issues": [
+    "Multiple processes share chatgpt.exe — UAB auto-selects the one with a window title",
+    "Second Tab press opens attachment menu — never press Tab more than once",
+    "SendKeys works for typing (spaces preserved) via Tab focus method",
+    "Ctrl+A in Grok selects nothing but works in ChatGPT — use /copy endpoint"
+  ],
+  "risk_tier": "T1",
+  "version": "1.0",
+  "last_verified": "2026-03-21"
+}

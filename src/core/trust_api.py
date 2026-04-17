@@ -6,12 +6,18 @@ Exposes the TrustLedger for the War Room Trust Ledger page.
 
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/trust", tags=["trust"])
+router = APIRouter(
+    prefix="/api/trust",
+    tags=["trust"],
+    dependencies=[Depends(require_authenticated_request)],
+)
 
 _trust_ledger = None
 
@@ -116,7 +122,11 @@ async def trust_timeline():
 
 
 @router.post("/proposals/{proposal_id}/approve")
-async def approve_proposal(proposal_id: str, request: Request):
+async def approve_proposal(
+    proposal_id: str,
+    request: Request,
+    _authz: None = Depends(require_operator_capability("trust.admin")),
+):
     """Approve a graduation proposal."""
     try:
         if _trust_ledger is None:
@@ -142,7 +152,11 @@ async def approve_proposal(proposal_id: str, request: Request):
 
 
 @router.post("/proposals/{proposal_id}/decline")
-async def decline_proposal(proposal_id: str, request: Request):
+async def decline_proposal(
+    proposal_id: str,
+    request: Request,
+    _authz: None = Depends(require_operator_capability("trust.admin")),
+):
     """Decline a graduation proposal."""
     try:
         if _trust_ledger is None:

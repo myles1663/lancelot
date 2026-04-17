@@ -107,6 +107,20 @@ class TestComputeSnapshot:
         snapshot = monitor.compute_snapshot()
         assert snapshot.last_health_tick_at is not None
 
+    def test_scheduler_tick_metadata_included(self):
+        checks = [
+            HealthCheck(
+                "scheduler",
+                _always_true,
+                "Scheduler not running",
+                snapshot_details_fn=lambda: {"last_scheduler_tick_at": "2026-01-01T00:00:00Z"},
+            ),
+        ]
+        monitor = _make_monitor(checks)
+        snapshot = monitor.compute_snapshot()
+        assert snapshot.scheduler_running is True
+        assert snapshot.last_scheduler_tick_at == "2026-01-01T00:00:00Z"
+
     def test_no_checks_is_ready(self):
         monitor = _make_monitor(checks=[])
         snapshot = monitor.compute_snapshot()

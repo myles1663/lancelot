@@ -109,6 +109,8 @@ class TaskRun:
     receipts_index: List[str] = field(default_factory=list)
     last_error: Optional[str] = None
     session_id: str = ""
+    operator_id: str = ""
+    quest_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -122,6 +124,8 @@ class TaskRun:
             "receipts_index": self.receipts_index,
             "last_error": self.last_error,
             "session_id": self.session_id,
+            "operator_id": self.operator_id,
+            "quest_id": self.quest_id,
         }
 
     @classmethod

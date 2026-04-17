@@ -20,13 +20,12 @@ import zipfile
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from src.core.auth_api import require_operator_capability
 from update_checker import read_current_version
 
 logger = logging.getLogger(__name__)
-
-router = APIRouter(prefix="/api/setup", tags=["setup"])
 
 # Set by init_setup_api() at startup
 _data_dir: Optional[Path] = None
@@ -34,6 +33,26 @@ _startup_time: Optional[float] = None
 _audit_logger = None
 _connector_vault = None
 _receipt_service = None
+_verify_request = None
+
+
+def _require_authenticated_request(request: Request) -> None:
+    """Fail closed unless gateway auth verification is explicitly wired in."""
+    if _verify_request is None:
+        logger.error("Setup API auth callback not configured; refusing request")
+        raise HTTPException(status_code=503, detail="Setup API auth not configured")
+    if not _verify_request(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+router = APIRouter(
+    prefix="/api/setup",
+    tags=["setup"],
+    dependencies=[
+        Depends(_require_authenticated_request),
+        Depends(require_operator_capability("setup.admin")),
+    ],
+)
 
 
 def init_setup_api(
@@ -42,14 +61,16 @@ def init_setup_api(
     audit_logger=None,
     connector_vault=None,
     receipt_service=None,
+    verify_request=None,
 ) -> None:
     """Initialise the setup API with references to subsystems."""
-    global _data_dir, _startup_time, _audit_logger, _connector_vault, _receipt_service
+    global _data_dir, _startup_time, _audit_logger, _connector_vault, _receipt_service, _verify_request
     _data_dir = Path(data_dir)
     _startup_time = startup_time
     _audit_logger = audit_logger
     _connector_vault = connector_vault
     _receipt_service = receipt_service
+    _verify_request = verify_request
     logger.info("Setup API initialised (data_dir=%s)", data_dir)
 
 
@@ -57,11 +78,30 @@ def _safe_error(status_code: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": message, "status": status_code})
 
 
-def _audit(event_type: str, details: str) -> None:
+def _resolve_audit_user(request: Optional[Request]) -> str:
+    """Resolve the authenticated operator for audit logging."""
+    if request is None:
+        return "WarRoom"
+    try:
+        from src.core.auth_api import get_api_key_identity, resolve_operator_identity
+    except ImportError:
+        return "WarRoom"
+
+    try:
+        identity = resolve_operator_identity(request) or get_api_key_identity(request)
+    except Exception:
+        return "WarRoom"
+
+    if not identity:
+        return "WarRoom"
+    return identity.display_name or identity.operator_id or "WarRoom"
+
+
+def _audit(event_type: str, details: str, request: Optional[Request] = None) -> None:
     """Log to audit trail if available."""
     if _audit_logger:
         try:
-            _audit_logger.log_event(event_type, details, user="WarRoom")
+            _audit_logger.log_event(event_type, details, user=_resolve_audit_user(request))
         except Exception:
             pass
 
@@ -115,7 +155,7 @@ async def restart_container(request: Request):
         if not data.get("confirm"):
             return _safe_error(400, "Confirmation required: {\"confirm\": true}")
 
-        _audit("SETUP_RESTART", "Container restart initiated via War Room")
+        _audit("SETUP_RESTART", "Container restart initiated via War Room", request=request)
         logger.warning("RESTART initiated via Setup API — exiting with code 0")
 
         # Flush state before exit
@@ -143,7 +183,7 @@ async def shutdown_container(request: Request):
         if not data.get("confirm"):
             return _safe_error(400, "Confirmation required: {\"confirm\": true}")
 
-        _audit("SETUP_SHUTDOWN", "Container shutdown initiated via War Room")
+        _audit("SETUP_SHUTDOWN", "Container shutdown initiated via War Room", request=request)
         logger.warning("SHUTDOWN initiated via Setup API — exiting with code 1")
 
         try:
@@ -252,7 +292,7 @@ def _mask_value(value: str) -> str:
 
 
 @router.delete("/vault/keys/{key}")
-async def delete_vault_key(key: str):
+async def delete_vault_key(key: str, request: Request):
     """Delete a credential from the vault."""
     try:
         if _connector_vault is None:
@@ -262,7 +302,7 @@ async def delete_vault_key(key: str):
         if not deleted:
             return _safe_error(404, f"Key '{key}' not found in vault")
 
-        _audit("SETUP_VAULT_DELETE", f"Deleted vault key: {key}")
+        _audit("SETUP_VAULT_DELETE", f"Deleted vault key: {key}", request=request)
         return {"status": "deleted", "key": key}
     except Exception as exc:
         logger.error("delete_vault_key error: %s", exc)
@@ -291,7 +331,7 @@ async def clear_receipts(request: Request):
             if hasattr(_receipt_service, '_save'):
                 _receipt_service._save()
 
-        _audit("SETUP_RECEIPTS_CLEAR", "All receipts cleared via War Room")
+        _audit("SETUP_RECEIPTS_CLEAR", "All receipts cleared via War Room", request=request)
         return {"status": "cleared", "message": "All receipts have been cleared"}
     except Exception as exc:
         logger.error("clear_receipts error: %s", exc)
@@ -303,7 +343,7 @@ async def clear_receipts(request: Request):
 # ------------------------------------------------------------------
 
 @router.post("/config/reload")
-async def reload_config():
+async def reload_config(request: Request):
     """Re-read YAML configs and reload subsystems where possible."""
     try:
         results = {}
@@ -335,7 +375,7 @@ async def reload_config():
         except Exception as e:
             results["connectors"] = f"failed: {e}"
 
-        _audit("SETUP_CONFIG_RELOAD", f"Config reloaded: {results}")
+        _audit("SETUP_CONFIG_RELOAD", f"Config reloaded: {results}", request=request)
         return {"status": "reloaded", "results": results}
     except Exception as exc:
         logger.error("reload_config error: %s", exc)
@@ -347,7 +387,7 @@ async def reload_config():
 # ------------------------------------------------------------------
 
 @router.get("/export")
-async def export_backup():
+async def export_backup(request: Request):
     """Generate and return a ZIP backup of config, soul, memory, flags."""
     try:
         buf = io.BytesIO()
@@ -387,7 +427,7 @@ async def export_backup():
                     zf.write(f, f"scheduler/{f.name}")
 
         buf.seek(0)
-        _audit("SETUP_EXPORT", "Backup ZIP exported via War Room")
+        _audit("SETUP_EXPORT", "Backup ZIP exported via War Room", request=request)
 
         return StreamingResponse(
             buf,
@@ -411,7 +451,7 @@ async def factory_reset(request: Request):
         if not data.get("confirm") or data.get("confirmation_text") != "RESET":
             return _safe_error(400, "Type RESET to confirm factory reset")
 
-        _audit("SETUP_FACTORY_RESET", "Factory reset initiated via War Room")
+        _audit("SETUP_FACTORY_RESET", "Factory reset initiated via War Room", request=request)
 
         # Stop all subsystems
         try:
@@ -468,7 +508,7 @@ async def purge_memory(request: Request):
                 db_file.unlink()
                 purged.append(db_file.name)
 
-        _audit("SETUP_MEMORY_PURGE", f"Memory purged: {purged}")
+        _audit("SETUP_MEMORY_PURGE", f"Memory purged: {purged}", request=request)
         return {"status": "purged", "purged_files": purged}
     except Exception as exc:
         logger.error("purge_memory error: %s", exc)
@@ -496,7 +536,7 @@ async def reset_flags(request: Request):
         except Exception:
             pass
 
-        _audit("SETUP_FLAGS_RESET", "Feature flags reset to defaults")
+        _audit("SETUP_FLAGS_RESET", "Feature flags reset to defaults", request=request)
         return {
             "status": "reset",
             "message": "Feature flags reset to code defaults" + (" (state file deleted)" if existed else " (no state file found)"),

@@ -20,6 +20,8 @@ import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from pathlib import Path
 
+from src.core import api_auth, auth_api
+from src.core.operator_identity import OperatorIdentity
 from src.compliance.api import (
     router,
     init_compliance_api,
@@ -56,7 +58,25 @@ def _get_client(receipt_service=None, data_dir="/tmp/test_data"):
     import src.compliance.api as api_mod
     api_mod._receipt_service = receipt_service
     api_mod._data_dir = data_dir
-    return TestClient(_app)
+    api_auth.init_api_auth(lambda request: True)
+    auth_api._sessions.clear()
+    auth_api._sessions["compliance-test-session"] = {
+        "expires_at": 9999999999,
+        "username": "Arthur",
+        "operator_identity": OperatorIdentity(
+            operator_id="op-arthur",
+            display_name="Arthur",
+            session_id="session-1",
+            session_started_at="2026-04-10T00:00:00Z",
+            auth_method="local",
+            ip_address="127.0.0.1",
+        ),
+        "capabilities": sorted({"warroom.login", "compliance.admin"}),
+        "groups": [],
+    }
+    client = TestClient(_app)
+    client.cookies.set(auth_api.get_warroom_session_cookie_name(), "compliance-test-session")
+    return client
 
 
 def _make_mock_receipt(

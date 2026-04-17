@@ -14,15 +14,18 @@ Public API:
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Any, Callable, Dict, List, Optional
 
 from src.core.scheduler.service import SchedulerService
+from src.core.runtime_pause import get_runtime_pause_status, is_runtime_paused
 
 logger = logging.getLogger(__name__)
 
@@ -127,13 +130,21 @@ class JobExecutor:
         self._stop_event = threading.Event()
         self._job_locks: Dict[str, threading.Lock] = {}
         self._job_locks_guard = threading.Lock()
+        self._approval_state_lock = threading.Lock()
+        self._approvals_file = Path(self._scheduler._data_dir) / "scheduler_approvals.json"
         # F-008: Pending approval tracking
         self._pending_approvals: Dict[str, Dict[str, Any]] = {}
         self._granted_approvals: Dict[str, str] = {}  # job_id -> ISO timestamp
+        self._load_approval_state()
 
     @property
     def receipts(self) -> List[Dict[str, Any]]:
         return list(self._receipts)
+
+    @property
+    def is_running(self) -> bool:
+        """True when the scheduler tick loop thread is alive."""
+        return bool(self._tick_thread and self._tick_thread.is_alive() and not self._stop_event.is_set())
 
     def _emit_receipt(self, event: str, **kwargs: Any) -> Dict[str, Any]:
         receipt = {
@@ -144,6 +155,37 @@ class JobExecutor:
         self._receipts.append(receipt)
         logger.info("%s: %s", event, {k: v for k, v in kwargs.items()})
         return receipt
+
+    def _load_approval_state(self) -> None:
+        """Restore pending and granted approvals from disk."""
+        try:
+            if not self._approvals_file.exists():
+                self._pending_approvals = {}
+                self._granted_approvals = {}
+                return
+            data = json.loads(self._approvals_file.read_text(encoding="utf-8"))
+            self._pending_approvals = dict(data.get("pending", {}))
+            self._granted_approvals = dict(data.get("granted", {}))
+        except Exception as exc:
+            logger.warning("Failed to load scheduler approval state: %s", exc)
+            self._pending_approvals = {}
+            self._granted_approvals = {}
+
+    def _save_approval_state(self) -> None:
+        """Persist pending and granted approvals to disk."""
+        payload = {
+            "pending": self._pending_approvals,
+            "granted": self._granted_approvals,
+        }
+        with self._approval_state_lock:
+            try:
+                self._approvals_file.parent.mkdir(parents=True, exist_ok=True)
+                self._approvals_file.write_text(
+                    json.dumps(payload, indent=2, sort_keys=True),
+                    encoding="utf-8",
+                )
+            except Exception as exc:
+                logger.warning("Failed to persist scheduler approval state: %s", exc)
 
     # ------------------------------------------------------------------
     # Tick loop — evaluates cron/interval triggers every 60 seconds
@@ -184,6 +226,10 @@ class JobExecutor:
     def _tick(self) -> None:
         """Single tick — evaluate all jobs."""
         now_utc = datetime.now(timezone.utc)
+        self._scheduler.mark_scheduler_tick(now_utc.isoformat())
+        if is_runtime_paused():
+            logger.info("Scheduler tick skipped while runtime is paused")
+            return
         jobs = self._scheduler.list_jobs()
         fired = 0
 
@@ -251,6 +297,16 @@ class JobExecutor:
             return self._job_locks[job_id]
 
     def execute_job(self, job_id: str) -> JobExecutionResult:
+        return self.execute_job_with_identity(job_id)
+
+    def execute_job_with_identity(
+        self,
+        job_id: str,
+        *,
+        operator_id: str = "",
+        session_id: str = "",
+        actor: str = "",
+    ) -> JobExecutionResult:
         """Execute a job through the gating pipeline.
 
         Gating order:
@@ -272,6 +328,9 @@ class JobExecutor:
                 "scheduled_job_skipped",
                 job_id=job_id,
                 reason="Already running (concurrent execution blocked)",
+                operator_id=operator_id,
+                session_id=session_id,
+                actor=actor,
             )
             return JobExecutionResult(
                 job_id=job_id,
@@ -280,11 +339,23 @@ class JobExecutor:
                 receipt=receipt,
             )
         try:
-            return self._execute_job_inner(job_id)
+            return self._execute_job_inner(
+                job_id,
+                operator_id=operator_id,
+                session_id=session_id,
+                actor=actor,
+            )
         finally:
             lock.release()
 
-    def _execute_job_inner(self, job_id: str) -> JobExecutionResult:
+    def _execute_job_inner(
+        self,
+        job_id: str,
+        *,
+        operator_id: str = "",
+        session_id: str = "",
+        actor: str = "",
+    ) -> JobExecutionResult:
         """Inner execution logic (called with per-job lock held)."""
         # Check job exists
         job = self._scheduler.get_job(job_id)
@@ -301,11 +372,33 @@ class JobExecutor:
                 "scheduled_job_skipped",
                 job_id=job_id,
                 reason="Job is disabled",
+                operator_id=operator_id,
+                session_id=session_id,
+                actor=actor,
             )
             return JobExecutionResult(
                 job_id=job_id,
                 skipped=True,
                 skip_reason="Job is disabled",
+                receipt=receipt,
+            )
+
+        if is_runtime_paused():
+            pause_state = get_runtime_pause_status()
+            reason = pause_state.get("reason") or "Runtime paused by operator"
+            receipt = self._emit_receipt(
+                "scheduled_job_skipped",
+                job_id=job_id,
+                reason=reason,
+                gate="runtime_pause",
+                operator_id=operator_id,
+                session_id=session_id,
+                actor=actor,
+            )
+            return JobExecutionResult(
+                job_id=job_id,
+                skipped=True,
+                skip_reason=reason,
                 receipt=receipt,
             )
 
@@ -319,6 +412,9 @@ class JobExecutor:
                         job_id=job_id,
                         reason=reason,
                         gate=gate.name,
+                        operator_id=operator_id,
+                        session_id=session_id,
+                        actor=actor,
                     )
                     return JobExecutionResult(
                         job_id=job_id,
@@ -333,6 +429,9 @@ class JobExecutor:
                     job_id=job_id,
                     reason=reason,
                     gate=gate.name,
+                    operator_id=operator_id,
+                    session_id=session_id,
+                    actor=actor,
                 )
                 return JobExecutionResult(
                     job_id=job_id,
@@ -347,6 +446,7 @@ class JobExecutor:
                 # Approval was granted — consume it and proceed
                 del self._granted_approvals[job_id]
                 self._pending_approvals.pop(job_id, None)
+                self._save_approval_state()
                 logger.info("Job '%s' approval granted, executing", job_id)
             else:
                 # Request approval via War Room notification
@@ -356,6 +456,9 @@ class JobExecutor:
                     job_id=job_id,
                     reason="Awaiting owner approval",
                     required_approvals=job.requires_approvals,
+                    operator_id=operator_id,
+                    session_id=session_id,
+                    actor=actor,
                 )
                 return JobExecutionResult(
                     job_id=job_id,
@@ -368,8 +471,12 @@ class JobExecutor:
         job_inputs = job.inputs if isinstance(job.inputs, dict) else {}
         start = time.monotonic()
         try:
-            if self._skill_execute_fn and job.skill:
-                self._skill_execute_fn(job.skill, job_inputs)
+            if not job.skill:
+                raise RuntimeError("Scheduled job is missing a skill binding")
+            if not self._skill_execute_fn:
+                raise RuntimeError("Scheduler skill executor is not configured")
+
+            self._skill_execute_fn(job.skill, job_inputs)
 
             duration_ms = (time.monotonic() - start) * 1000
 
@@ -381,6 +488,9 @@ class JobExecutor:
                 job_id=job_id,
                 skill=job.skill,
                 duration_ms=round(duration_ms, 2),
+                operator_id=operator_id,
+                session_id=session_id,
+                actor=actor,
             )
             return JobExecutionResult(
                 job_id=job_id,
@@ -397,6 +507,9 @@ class JobExecutor:
                 job_id=job_id,
                 error=str(exc),
                 duration_ms=round(duration_ms, 2),
+                operator_id=operator_id,
+                session_id=session_id,
+                actor=actor,
             )
             return JobExecutionResult(
                 job_id=job_id,
@@ -421,6 +534,7 @@ class JobExecutor:
             "required_approvals": required,
             "requested_at": datetime.now(timezone.utc).isoformat(),
         }
+        self._save_approval_state()
         logger.info(
             "Job '%s' requires approvals %s — notifying via War Room",
             job_id, required,
@@ -446,19 +560,65 @@ class JobExecutor:
             except Exception as exc:
                 logger.warning("Failed to emit approval request event: %s", exc)
 
-    def approve_job(self, job_id: str) -> bool:
+    def approve_job(
+        self,
+        job_id: str,
+        *,
+        operator_id: str = "",
+        session_id: str = "",
+        actor: str = "",
+    ) -> bool:
         """Grant approval for a pending job. Returns True if approval was pending."""
         if job_id not in self._pending_approvals:
             return False
         self._granted_approvals[job_id] = datetime.now(timezone.utc).isoformat()
-        logger.info("Approval granted for job '%s'", job_id)
+        self._save_approval_state()
+        logger.info(
+            "Approval granted for job '%s' by %s",
+            job_id,
+            actor or operator_id or "operator",
+        )
 
         self._emit_receipt(
             "scheduled_job_approved",
             job_id=job_id,
             approved_at=self._granted_approvals[job_id],
+            operator_id=operator_id,
+            session_id=session_id,
+            actor=actor,
         )
         return True
+
+    def clear_approval_state(
+        self,
+        *,
+        reason: str = "",
+        operator_id: str = "",
+        session_id: str = "",
+        actor: str = "",
+    ) -> Dict[str, int]:
+        """Clear pending/granted approvals during a runtime full stop."""
+        pending_count = len(self._pending_approvals)
+        granted_count = len(self._granted_approvals)
+        if pending_count == 0 and granted_count == 0:
+            return {"pending_cleared": 0, "granted_cleared": 0}
+
+        self._pending_approvals = {}
+        self._granted_approvals = {}
+        self._save_approval_state()
+        self._emit_receipt(
+            "scheduled_job_approvals_cleared",
+            pending_cleared=pending_count,
+            granted_cleared=granted_count,
+            reason=reason,
+            operator_id=operator_id,
+            session_id=session_id,
+            actor=actor,
+        )
+        return {
+            "pending_cleared": pending_count,
+            "granted_cleared": granted_count,
+        }
 
     @property
     def pending_approvals(self) -> Dict[str, Dict[str, Any]]:

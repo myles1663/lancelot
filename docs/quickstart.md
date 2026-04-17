@@ -33,7 +33,7 @@ The installer walks you through each step interactively:
 1. **Prerequisites check** — verifies Docker, Git, disk space, RAM, GPU
 2. **Install location** — where to put Lancelot (default: `./lancelot`)
 3. **LLM provider** — select Gemini, OpenAI, Anthropic, xAI, or NVIDIA and paste your API key
-4. **Communications** — optionally configure a messaging channel: Telegram, Google Chat, Slack, Discord, Teams, WhatsApp, Email, or SMS (you can skip this)
+4. **Communications** — optionally configure a messaging channel: Telegram or Google Chat (you can skip this)
 5. **Repository clone** — pulls the latest code from GitHub
 6. **Configuration** — generates your `.env` file automatically
 7. **Model download** — downloads the 5GB local utility model (with progress bar)
@@ -217,7 +217,7 @@ Now that you have a running instance:
 | Learn how governance works | [Governance](governance.md) |
 | Customize Lancelot's behavior | [Authoring Souls](authoring-souls.md) |
 | Configure providers and models | [Configuration Reference](configuration-reference.md) |
-| Set up integrations (Telegram, Slack, Discord, etc.) | [Installation Guide](installation.md) |
+| Set up communications (Telegram or Google Chat) | [Installation Guide](installation.md) |
 | Understand the security model | [Security Posture](security.md) |
 | Operate the War Room dashboard | [War Room Guide](war-room.md) |
 
@@ -261,3 +261,11 @@ If empty, re-run the installer with `npx create-lancelot --resume`, or manually 
 ```ini
 LOCAL_MODEL_CTX=2048
 ```
+
+---
+
+## Before Production
+
+Quickstart gets you to a working instance, not a production-approved one.
+
+Before go-live, run the checklist in the [Production Hardening Guide](production-hardening.md). That is where the runtime-control, auth, federation, A2A, and compliance-export requirements are documented.

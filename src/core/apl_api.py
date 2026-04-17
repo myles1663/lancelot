@@ -6,12 +6,18 @@ Exposes the RuleEngine and DecisionLog for the War Room APL panel.
 
 import logging
 
-from fastapi import APIRouter, Request, Query
+from fastapi import APIRouter, Depends, Request, Query
 from fastapi.responses import JSONResponse
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/apl", tags=["apl"])
+router = APIRouter(
+    prefix="/api/apl",
+    tags=["apl"],
+    dependencies=[Depends(require_authenticated_request)],
+)
 
 _rule_engine = None
 _decision_log = None
@@ -146,7 +152,10 @@ async def apl_circuit_breakers():
 
 
 @router.post("/rules/{rule_id}/pause")
-async def pause_rule(rule_id: str):
+async def pause_rule(
+    rule_id: str,
+    _authz: None = Depends(require_operator_capability("apl.admin")),
+):
     """Pause an active rule."""
     try:
         if _rule_engine is None:
@@ -159,7 +168,10 @@ async def pause_rule(rule_id: str):
 
 
 @router.post("/rules/{rule_id}/resume")
-async def resume_rule(rule_id: str):
+async def resume_rule(
+    rule_id: str,
+    _authz: None = Depends(require_operator_capability("apl.admin")),
+):
     """Resume a paused rule."""
     try:
         if _rule_engine is None:
@@ -172,7 +184,11 @@ async def resume_rule(rule_id: str):
 
 
 @router.post("/rules/{rule_id}/revoke")
-async def revoke_rule(rule_id: str, request: Request):
+async def revoke_rule(
+    rule_id: str,
+    request: Request,
+    _authz: None = Depends(require_operator_capability("apl.admin")),
+):
     """Revoke a rule permanently."""
     try:
         if _rule_engine is None:
@@ -198,7 +214,11 @@ async def revoke_rule(rule_id: str, request: Request):
 
 
 @router.post("/proposals/{rule_id}/activate")
-async def activate_proposal(rule_id: str, request: Request):
+async def activate_proposal(
+    rule_id: str,
+    request: Request,
+    _authz: None = Depends(require_operator_capability("apl.admin")),
+):
     """Activate a proposed rule."""
     try:
         if _rule_engine is None:
@@ -222,7 +242,11 @@ async def activate_proposal(rule_id: str, request: Request):
 
 
 @router.post("/proposals/{rule_id}/decline")
-async def decline_proposal(rule_id: str, request: Request):
+async def decline_proposal(
+    rule_id: str,
+    request: Request,
+    _authz: None = Depends(require_operator_capability("apl.admin")),
+):
     """Decline a proposed rule."""
     try:
         if _rule_engine is None:

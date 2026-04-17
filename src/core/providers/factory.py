@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 API_KEY_VARS = {
     "gemini": "GEMINI_API_KEY",
     "openai": "OPENAI_API_KEY",
+    "openai-codex": "",  # Codex uses OAuth, no API key env var
     "anthropic": "ANTHROPIC_API_KEY",
     "xai": "XAI_API_KEY",
     "nvidia": "NVIDIA_API_KEY",
@@ -32,10 +33,10 @@ def create_provider(
     """Factory to create the right ProviderClient based on provider name.
 
     Args:
-        provider_name: One of "gemini", "openai", "anthropic", "xai", "nvidia".
+        provider_name: One of "gemini", "openai", "openai-codex", "anthropic", "xai", "nvidia".
         api_key: The API key for the provider.
         mode: "sdk" (full SDK features) or "api" (lightweight). Default: "sdk".
-        auth_token: V28 — OAuth bearer token (Anthropic only, takes priority over api_key).
+        auth_token: OAuth bearer token (Anthropic or OpenAI Codex, takes priority over api_key).
         **kwargs: Additional provider-specific options.
 
     Returns:
@@ -51,6 +52,10 @@ def create_provider(
     elif provider_name == "openai":
         from providers.openai_client import OpenAIProviderClient
         return OpenAIProviderClient(api_key=api_key, **kwargs)
+
+    elif provider_name == "openai-codex":
+        from providers.codex_cli_client import CodexCLIProviderClient
+        return CodexCLIProviderClient(**kwargs)
 
     elif provider_name == "anthropic":
         from providers.anthropic_client import AnthropicProviderClient

@@ -22,12 +22,21 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import get_api_key_identity, require_operator_capability, resolve_operator_identity
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/timetravel", tags=["time-travel"])
+router = APIRouter(
+    prefix="/api/timetravel",
+    tags=["time-travel"],
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("timetravel.admin")),
+    ],
+)
 
 # Module-level dependencies (injected at startup)
 _receipt_service: Any = None
@@ -40,6 +49,7 @@ def init_timetravel_api(
     receipt_service: Any,
     soul: Any,
     soul_dir: Optional[str] = None,
+    quest_executor: Any = None,
 ) -> None:
     """Initialize the Time-Travel API with required dependencies."""
     global _receipt_service, _soul, _resume_engine, _snapshot_reader
@@ -50,9 +60,38 @@ def init_timetravel_api(
     _receipt_service = receipt_service
     _soul = soul
     _snapshot_reader = StateSnapshotReader(receipt_service, soul_dir)
-    _resume_engine = ResumeEngine(receipt_service, soul, _snapshot_reader)
+    _resume_engine = ResumeEngine(
+        receipt_service,
+        soul,
+        _snapshot_reader,
+        quest_executor=quest_executor,
+    )
 
     logger.info("Time-Travel Debugging API initialized")
+
+
+def _get_soul() -> Any:
+    """Resolve the live Time-Travel Soul."""
+    soul = _soul
+    if soul is None:
+        return None
+    if hasattr(soul, "fork_permissions") or hasattr(soul, "version"):
+        return soul
+    return soul() if callable(soul) else soul
+
+
+def update_timetravel_soul(soul: Any) -> None:
+    """Refresh the live Soul used by Time-Travel."""
+    global _soul
+    _soul = soul
+    if _resume_engine is not None and hasattr(_resume_engine, "update_soul"):
+        _resume_engine.update_soul(soul)
+
+
+def update_timetravel_executor(quest_executor: Any) -> None:
+    """Refresh the execution callback used for replay and fork."""
+    if _resume_engine is not None and hasattr(_resume_engine, "update_quest_executor"):
+        _resume_engine.update_quest_executor(quest_executor)
 
 
 # ── Request Models ───────────────────────────────────────────────
@@ -75,11 +114,12 @@ class ForkRequest(BaseModel):
 
 # ── Helper ───────────────────────────────────────────────────────
 
-def _extract_identity(request: Request) -> tuple:
-    """Extract operator_id and session_id from request headers."""
-    operator_id = request.headers.get("X-Operator-ID")
-    session_id = request.headers.get("X-Session-ID")
-    return operator_id, session_id
+def _extract_identity(request: Request) -> tuple[str, str]:
+    """Extract operator_id and session_id from authenticated request identity."""
+    identity = resolve_operator_identity(request)
+    if identity is None:
+        identity = get_api_key_identity(request)
+    return identity.operator_id, identity.session_id
 
 
 def _require_engine() -> None:
@@ -96,16 +136,50 @@ def _require_engine() -> None:
 @router.get("/status")
 async def get_status():
     """Get Time-Travel subsystem status."""
+    degraded_reasons = []
+    runtime_errors = []
+    soul = None
+
+    if _resume_engine is None:
+        degraded_reasons.append("Time-Travel engine not initialized")
+    if _snapshot_reader is None:
+        degraded_reasons.append("Time-Travel snapshot reader not initialized")
+    if _receipt_service is None:
+        degraded_reasons.append("Time-Travel receipt service not initialized")
+    quest_executor_ready = bool(
+        _resume_engine is not None
+        and getattr(_resume_engine, "_quest_executor", None) is not None
+    )
+    if _resume_engine is not None and not quest_executor_ready:
+        degraded_reasons.append("Time-Travel quest executor not initialized")
+
+    try:
+        soul = _get_soul()
+    except Exception as exc:
+        logger.error("Failed to resolve Time-Travel Soul: %s", exc)
+        degraded_reasons.append("Time-Travel Soul status unavailable")
+        runtime_errors.append(f"soul_error: {exc}")
+
+    if soul is None:
+        degraded_reasons.append("Time-Travel Soul not loaded")
+
     return {
         "enabled": _resume_engine is not None,
-        "soul_version": getattr(_soul, "version", None) if _soul else None,
+        "engine_ready": _resume_engine is not None,
+        "quest_executor_ready": quest_executor_ready,
+        "snapshot_reader_ready": _snapshot_reader is not None,
+        "receipt_service_ready": _receipt_service is not None,
+        "soul_version": getattr(soul, "version", None) if soul else None,
         "fork_allowed": (
-            getattr(_soul, "fork_permissions", None) is not None
-            and getattr(_soul.fork_permissions, "allow_fork", False)
-        ) if _soul else False,
+            getattr(soul, "fork_permissions", None) is not None
+            and getattr(soul.fork_permissions, "allow_fork", False)
+        ) if soul else False,
         "require_approval_tier": (
-            getattr(_soul.fork_permissions, "require_approval_tier", 3)
-        ) if _soul and getattr(_soul, "fork_permissions", None) else 3,
+            getattr(soul.fork_permissions, "require_approval_tier", 3)
+        ) if soul and getattr(soul, "fork_permissions", None) else 3,
+        "runtime_degraded": bool(degraded_reasons or runtime_errors),
+        "degraded_reasons": degraded_reasons,
+        "runtime_errors": runtime_errors,
     }
 
 
@@ -170,7 +244,7 @@ async def create_replay(body: ReplayRequest, request: Request):
     if not operator_id:
         raise HTTPException(
             status_code=401,
-            detail="Replay requires operator identity (X-Operator-ID header)",
+            detail="Replay requires authenticated operator identity",
         )
 
     result = _resume_engine.create_replay(
@@ -195,7 +269,7 @@ async def create_fork(body: ForkRequest, request: Request):
     if not operator_id:
         raise HTTPException(
             status_code=401,
-            detail="Fork requires operator identity (X-Operator-ID header)",
+            detail="Fork requires authenticated operator identity",
         )
 
     result = _resume_engine.create_fork(

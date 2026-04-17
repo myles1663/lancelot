@@ -22,6 +22,7 @@ os.environ["FEATURE_MEMORY_VNEXT"] = "true"
 from src.core.memory.jobs import (
     JobResult,
     MemoryJobExecutor,
+    execute_memory_job,
     get_memory_job_specs,
 )
 from src.core.memory.store import CoreBlockStore
@@ -230,6 +231,7 @@ class TestEpisodicSummarization:
     def test_summarization_with_items(self, job_executor, store_manager):
         """Test summarization with episodic items."""
         store = store_manager.get_store(MemoryTier.episodic)
+        archival = store_manager.get_store(MemoryTier.archival)
 
         # Add enough items to trigger summarization
         for i in range(10):
@@ -248,6 +250,35 @@ class TestEpisodicSummarization:
         assert result.success is True
         assert result.items_processed == 10
         assert result.details["namespaces_found"] >= 1
+        archived_summaries = archival.list_items()
+        assert len(archived_summaries) >= 1
+        assert archived_summaries[0].tier == MemoryTier.archival
+        assert "Memory content 0" in archived_summaries[0].content
+        assert "Time range:" in archived_summaries[0].content
+
+    def test_summarization_includes_tags_and_content_snippets(self, job_executor, store_manager):
+        """Summaries should reflect actual episodic content, not only titles."""
+        store = store_manager.get_store(MemoryTier.episodic)
+        archival = store_manager.get_store(MemoryTier.archival)
+
+        for i in range(5):
+            item = MemoryItem(
+                id=f"episodic_tagged_{i}",
+                tier=MemoryTier.episodic,
+                namespace="project:tagged",
+                title=f"Tagged Memory {i}",
+                content=f"Detailed content for memory {i} about incident review and follow-up actions.",
+                tags=["incident", "review"] if i < 3 else ["review"],
+                confidence=0.8,
+            )
+            store.insert(item)
+
+        result = job_executor.run_episodic_summarization(min_items_for_summary=5)
+
+        assert result.success is True
+        summary = archival.list_items()[0].content
+        assert "Common tags: review, incident." in summary
+        assert "Detailed content for memory 0" in summary
 
     def test_summarization_dry_run(self, job_executor, store_manager):
         """Test summarization dry run."""
@@ -435,6 +466,7 @@ class TestJobSpecs:
             assert "trigger" in spec
             assert "enabled" in spec
             assert "timeout_s" in spec
+            assert "skill" in spec
 
     def test_job_spec_triggers(self):
         """Test job spec triggers are valid."""
@@ -481,3 +513,16 @@ class TestErrorHandling:
 
         assert result.success is False
         assert len(result.errors) > 0
+
+
+class TestMemoryJobDispatch:
+    """Tests for scheduler dispatch into memory maintenance jobs."""
+
+    def test_execute_memory_job_dispatches_by_skill(self, job_executor):
+        result = execute_memory_job(job_executor, "memory_integrity_audit", {})
+        assert result.job_name == "integrity_audit"
+        assert result.success is True
+
+    def test_execute_memory_job_rejects_unknown_skill(self, job_executor):
+        with pytest.raises(ValueError, match="Unknown memory job skill"):
+            execute_memory_job(job_executor, "not_a_memory_job", {})

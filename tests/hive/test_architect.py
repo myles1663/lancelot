@@ -170,12 +170,55 @@ class TestExecuteTask:
         assert result["plan"]["subtask_count"] == 2
         assert result["plan"]["execution_order"] == [["0"], ["1"]]
 
+    async def test_task_and_decomposition_receipts_are_parent_linked(self, lifecycle, receipt_mgr):
+        architect, _ = _make_architect(lifecycle, receipt_mgr, n_subtasks=1)
+        result = await architect.execute_task("Chain receipts")
+        quest_id = result["quest_id"]
+
+        receipts = receipt_mgr.get_task_receipt_tree(quest_id)
+        task_received = next(r for r in receipts if r.action_name == "task_received")
+        task_decomposed = next(r for r in receipts if r.action_name == "task_decomposed")
+        task_completed = next(r for r in receipts if r.action_name == "task_completed")
+
+        assert task_decomposed.parent_id == task_received.id
+        assert task_completed.parent_id == task_decomposed.id
+
     async def test_decomposition_failure(self, lifecycle, receipt_mgr):
         router = MockModelRouter(response="not json")
         architect, _ = _make_architect(lifecycle, receipt_mgr, router=router)
         result = await architect.execute_task("Bad plan")
         assert result["success"] is False
         assert "error" in result
+
+    async def test_federation_spawn_gate_blocks_execution(self, lifecycle, receipt_mgr):
+        lifecycle.update_spawn_controls(
+            spawn_gate=lambda task_spec: (_ for _ in ()).throw(
+                RuntimeError("Federation spawn budget blocked: gated")
+            )
+        )
+        architect, _ = _make_architect(lifecycle, receipt_mgr, n_subtasks=1)
+        result = await architect.execute_task("Blocked by federation budget")
+        assert result["success"] is False
+        assert "Federation spawn budget blocked" in result["error"]
+
+    async def test_federation_spawn_hooks_record_spawn_and_collapse(self, lifecycle, receipt_mgr):
+        seen = {"spawned": [], "collapsed": []}
+
+        def _record_spawn(record):
+            seen["spawned"].append(record.agent_id)
+
+        def _record_collapse(record, result):
+            seen["collapsed"].append((record.agent_id, result.success))
+
+        lifecycle.update_spawn_controls(
+            spawn_record_hook=_record_spawn,
+            collapse_record_hook=_record_collapse,
+        )
+        architect, _ = _make_architect(lifecycle, receipt_mgr, n_subtasks=1)
+        result = await architect.execute_task("Tracked spawn lifecycle")
+        assert result["success"] is True
+        assert len(seen["spawned"]) == 1
+        assert seen["collapsed"] == [(seen["spawned"][0], True)]
 
 
 @pytest.mark.asyncio

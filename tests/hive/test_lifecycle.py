@@ -2,6 +2,8 @@
 
 import time
 import pytest
+from unittest.mock import MagicMock
+from src.shared.receipts import get_receipt_service
 
 from src.hive.types import (
     AgentState,
@@ -15,7 +17,15 @@ from src.hive.registry import AgentRegistry
 from src.hive.receipt_manager import HiveReceiptManager
 from src.hive.scoped_soul import ScopedSoulGenerator
 from src.hive.lifecycle import AgentLifecycleManager
-from src.hive.errors import InterventionRequiresReasonError
+from src.hive.errors import AgentSpawnDeniedError, InterventionRequiresReasonError
+from src.core.soul.store import (
+    ApprovalRules,
+    AutonomyPosture,
+    RiskRule,
+    SchedulingBoundaries,
+    Soul,
+    SpawnBudgetGovernance,
+)
 
 
 @pytest.fixture
@@ -78,6 +88,24 @@ class TestSpawn:
             lifecycle.spawn(TaskSpec(description=f"Task {i}"))
         assert registry.active_count() == 3
 
+    def test_spawn_rejects_non_restrictive_scoped_soul(self, config, registry, receipt_mgr):
+        soul_gen = MagicMock(spec=ScopedSoulGenerator)
+        soul_gen.generate.return_value = _make_parent_soul()
+        soul_gen.validate_more_restrictive.return_value = False
+
+        mgr = AgentLifecycleManager(
+            config=config,
+            registry=registry,
+            receipt_manager=receipt_mgr,
+            soul_generator=soul_gen,
+            parent_soul=_make_parent_soul(),
+        )
+        try:
+            with pytest.raises(AgentSpawnDeniedError):
+                mgr.spawn(TaskSpec(description="bad scope"))
+        finally:
+            mgr.shutdown()
+
 
 class TestExecute:
     def test_execute_runs_actions(self, lifecycle, registry):
@@ -100,6 +128,27 @@ class TestExecute:
         found = registry.get(record.agent_id)
         assert found is not None
         assert found.state == AgentState.COLLAPSED
+
+    def test_agent_receipts_preserve_operator_provenance(self, lifecycle, registry, receipt_mgr):
+        spec = TaskSpec(description="Test provenance")
+        record = lifecycle.spawn(
+            spec,
+            quest_id="quest-provenance",
+            operator_id="op-1",
+            session_id="sess-1",
+            operator_name="Myles",
+        )
+        future = lifecycle.execute(record.agent_id, [{"action": "done"}])
+        result = future.result(timeout=10)
+        assert result.success is True
+
+        service = get_receipt_service(receipt_mgr._data_dir)
+        receipts = service.get_quest_receipts("quest-provenance")
+        agent_receipts = [r for r in receipts if r.action_type == "hive_agent_event"]
+        assert agent_receipts
+        assert any(r.operator_id == "op-1" for r in agent_receipts)
+        assert any(r.session_id == "sess-1" for r in agent_receipts)
+        assert any(r.metadata.get("operator_name") == "Myles" for r in agent_receipts)
 
 
 class TestKill:
@@ -188,3 +237,29 @@ class TestCapacityEnforcement:
         from src.hive.errors import MaxAgentsExceededError
         with pytest.raises(MaxAgentsExceededError):
             lifecycle.spawn(TaskSpec())
+
+
+def _make_parent_soul() -> Soul:
+    return Soul(
+        version="v1",
+        mission="Support software reliably",
+        allegiance="Customer and operator trust",
+        autonomy_posture=AutonomyPosture(
+            level="supervised",
+            description="test",
+            allowed_autonomous=["classify", "summarize", "read_document"],
+            requires_approval=["deploy", "delete", "uab_click"],
+        ),
+        risk_rules=[RiskRule(name="destructive_actions_require_approval", description="test")],
+        approval_rules=ApprovalRules(default_timeout_seconds=3600, channels=["war_room"]),
+        tone_invariants=["Never mislead"],
+        memory_ethics=["No PII without consent"],
+        scheduling_boundaries=SchedulingBoundaries(
+            max_concurrent_jobs=5,
+            max_job_duration_seconds=300,
+        ),
+        spawn_budget=SpawnBudgetGovernance(
+            max_concurrent_spawns=10,
+            max_spawn_model_tier="T2",
+        ),
+    )

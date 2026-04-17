@@ -71,7 +71,14 @@ class TestActionCardResolver:
 
         result = resolver.resolve(card.card_id, "approve", "warroom")
 
-        handler.assert_called_once_with("item-1", "approve")
+        handler.assert_called_once_with(
+            "item-1",
+            "approve",
+            operator_id=None,
+            session_id=None,
+            actor=None,
+            card=card,
+        )
         assert result["status"] == "approved"
 
     def test_resolve_marks_card_resolved(self, resolver, store):
@@ -192,5 +199,36 @@ class TestActionCardResolver:
 
         result = resolver.resolve(card.card_id, "deny", "telegram")
 
-        handler.assert_called_once_with("item-1", "deny")
+        handler.assert_called_once_with(
+            "item-1",
+            "deny",
+            operator_id=None,
+            session_id=None,
+            actor=None,
+            card=card,
+        )
         assert result["status"] == "denied"
+
+    def test_passes_authenticated_context_to_handler(self, resolver, store):
+        """Authenticated operator context is forwarded to subsystem handlers."""
+        card = _make_card(store)
+        handler = MagicMock(return_value={"status": "approved", "message": "OK"})
+        resolver.register_handler("governance", handler)
+
+        resolver.resolve(
+            card.card_id,
+            "approve",
+            "warroom",
+            operator_id="op-1",
+            session_id="sess-1",
+            actor="Arthur",
+        )
+
+        handler.assert_called_once_with(
+            "item-1",
+            "approve",
+            operator_id="op-1",
+            session_id="sess-1",
+            actor="Arthur",
+            card=card,
+        )

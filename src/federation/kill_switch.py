@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import logging
 import threading
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -74,6 +76,30 @@ class KillTarget:
     reject_reason: str = ""
     agents_killed: int = 0
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "instance_id": self.instance_id,
+            "ack_state": self.ack_state.value,
+            "ack_at": self.ack_at,
+            "reject_reason": self.reject_reason,
+            "agents_killed": self.agents_killed,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "KillTarget":
+        ack_state = data.get("ack_state", PropagationAck.PENDING.value)
+        try:
+            ack_enum = PropagationAck(ack_state)
+        except Exception:
+            ack_enum = PropagationAck.PENDING
+        return cls(
+            instance_id=data.get("instance_id", ""),
+            ack_state=ack_enum,
+            ack_at=data.get("ack_at"),
+            reject_reason=data.get("reject_reason", ""),
+            agents_killed=int(data.get("agents_killed", 0) or 0),
+        )
+
 
 @dataclass
 class KillCommand:
@@ -117,15 +143,43 @@ class KillCommand:
             "target_agent_id": self.target_agent_id,
             "target_feature": self.target_feature,
             "targets": [
-                {
-                    "instance_id": t.instance_id,
-                    "ack_state": t.ack_state.value,
-                    "ack_at": t.ack_at,
-                    "agents_killed": t.agents_killed,
-                }
+                t.to_dict()
                 for t in self.targets
             ],
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "KillCommand":
+        try:
+            command_type = KillCommandType(data.get("command_type", KillCommandType.LOCAL_KILL.value))
+        except Exception:
+            command_type = KillCommandType.LOCAL_KILL
+        try:
+            authority = KillAuthority(data.get("authority", KillAuthority.L2_LOCAL_INSTANCE.value))
+        except Exception:
+            authority = KillAuthority.L2_LOCAL_INSTANCE
+        try:
+            state = KillCommandState(data.get("state", KillCommandState.PENDING.value))
+        except Exception:
+            state = KillCommandState.PENDING
+        return cls(
+            command_id=data.get("command_id", ""),
+            command_type=command_type,
+            authority=authority,
+            issuer_id=data.get("issuer_id", ""),
+            reason=data.get("reason", ""),
+            state=state,
+            issued_at=data.get("issued_at", datetime.now(timezone.utc).isoformat()),
+            completed_at=data.get("completed_at"),
+            lifted_at=data.get("lifted_at"),
+            lifted_by=data.get("lifted_by"),
+            lift_review_notes=data.get("lift_review_notes", ""),
+            target_instance_id=data.get("target_instance_id"),
+            target_agent_id=data.get("target_agent_id"),
+            target_feature=data.get("target_feature"),
+            targets=[KillTarget.from_dict(t) for t in data.get("targets", [])],
+            timeout_seconds=float(data.get("timeout_seconds", 30.0) or 30.0),
+        )
 
 
 class FederatedKillSwitch:
@@ -160,6 +214,7 @@ class FederatedKillSwitch:
         self_instance_id: str,
         peer_ids: Optional[List[str]] = None,
         local_kill_handler: Optional[Callable[[str], int]] = None,
+        persistence_path: str = "",
     ):
         """
         Args:
@@ -173,11 +228,14 @@ class FederatedKillSwitch:
         self._local_kill_handler = local_kill_handler
         self._commands: Dict[str, KillCommand] = {}
         self._lock = threading.Lock()
+        self._persistence_path = Path(persistence_path) if persistence_path else None
+        self._load_from_disk()
 
     def update_peers(self, peer_ids: List[str]) -> None:
         """Update the known peer list."""
         with self._lock:
             self._peer_ids = list(peer_ids)
+            self._persist_to_disk_locked()
 
     def validate_authority(
         self,
@@ -270,7 +328,72 @@ class FederatedKillSwitch:
 
             cmd.state = KillCommandState.PROPAGATING
             self._commands[command_id] = cmd
+            self._persist_to_disk_locked()
             return cmd
+
+    def execute_received_command(
+        self,
+        *,
+        command_id: str,
+        command_type: str,
+        authority: str,
+        issuer_id: str,
+        reason: str,
+        target_instance_id: Optional[str] = None,
+        target_agent_id: Optional[str] = None,
+        target_feature: Optional[str] = None,
+        timeout_seconds: float = 30.0,
+    ) -> int:
+        """Persist and execute a received federated kill command locally.
+
+        Returns the number of local agents affected. Raises ValueError if the
+        command payload is invalid.
+        """
+        if not command_id:
+            raise ValueError("Kill command missing command_id")
+
+        try:
+            command_type_enum = KillCommandType(command_type)
+        except Exception as exc:
+            raise ValueError(f"Unknown kill command type: {command_type}") from exc
+
+        try:
+            authority_enum = KillAuthority(authority)
+        except Exception as exc:
+            raise ValueError(f"Unknown kill authority: {authority}") from exc
+
+        with self._lock:
+            existing = self._commands.get(command_id)
+            if existing is not None:
+                if (
+                    existing.command_type != command_type_enum
+                    or existing.authority != authority_enum
+                    or existing.issuer_id != issuer_id
+                ):
+                    raise ValueError(
+                        "Kill command_id collision with different command metadata"
+                    )
+                result = self._propagate_local_locked(existing)
+                self._persist_to_disk_locked()
+                return result
+
+            cmd = KillCommand(
+                command_id=command_id,
+                command_type=command_type_enum,
+                authority=authority_enum,
+                issuer_id=issuer_id,
+                reason=reason,
+                target_instance_id=target_instance_id,
+                target_agent_id=target_agent_id,
+                target_feature=target_feature,
+                timeout_seconds=timeout_seconds,
+            )
+            cmd.targets = [KillTarget(instance_id=self._self_id)]
+            cmd.state = KillCommandState.PROPAGATING
+            self._commands[command_id] = cmd
+            result = self._propagate_local_locked(cmd)
+            self._persist_to_disk_locked()
+            return result
 
     def propagate_local(self, command_id: str) -> int:
         """Execute kill on local instance. Returns agents killed."""
@@ -278,30 +401,9 @@ class FederatedKillSwitch:
             cmd = self._commands.get(command_id)
             if not cmd:
                 return 0
-
-            local_target = next(
-                (t for t in cmd.targets if t.instance_id == self._self_id),
-                None,
-            )
-            if not local_target:
-                return 0
-
-        # Execute outside lock
-        agents_killed = 0
-        if self._local_kill_handler and cmd.command_type != KillCommandType.FEATURE_KILL:
-            try:
-                agents_killed = self._local_kill_handler(cmd.reason)
-            except Exception as e:
-                logger.error("Local kill handler failed: %s", e)
-
-        with self._lock:
-            if local_target:
-                local_target.ack_state = PropagationAck.ACKNOWLEDGED
-                local_target.ack_at = datetime.now(timezone.utc).isoformat()
-                local_target.agents_killed = agents_killed
-                self._check_completion(cmd)
-
-        return agents_killed
+            result = self._propagate_local_locked(cmd)
+            self._persist_to_disk_locked()
+            return result
 
     def record_ack(
         self,
@@ -326,6 +428,7 @@ class FederatedKillSwitch:
             target.ack_at = datetime.now(timezone.utc).isoformat()
             target.agents_killed = agents_killed
             self._check_completion(cmd)
+            self._persist_to_disk_locked()
             return True
 
     def record_rejection(
@@ -351,6 +454,7 @@ class FederatedKillSwitch:
             target.ack_at = datetime.now(timezone.utc).isoformat()
             target.reject_reason = reason
             self._check_completion(cmd)
+            self._persist_to_disk_locked()
             return True
 
     def check_timeouts(self, command_id: str) -> List[str]:
@@ -376,8 +480,49 @@ class FederatedKillSwitch:
 
                 if timed_out:
                     self._check_completion(cmd)
+                    self._persist_to_disk_locked()
 
             return timed_out
+
+    def sweep_timeouts(self) -> Dict[str, List[str]]:
+        """Advance timeout state for all active commands.
+
+        Returns a mapping of command_id to timed-out instance IDs for commands
+        that changed during this sweep.
+        """
+        with self._lock:
+            now = datetime.now(timezone.utc)
+            updates: Dict[str, List[str]] = {}
+            changed = False
+
+            for command_id, cmd in self._commands.items():
+                if cmd.state not in (
+                    KillCommandState.PROPAGATING,
+                    KillCommandState.PENDING,
+                ):
+                    continue
+
+                issued = datetime.fromisoformat(cmd.issued_at)
+                elapsed = (now - issued).total_seconds()
+                if elapsed < cmd.timeout_seconds:
+                    continue
+
+                timed_out = []
+                for target in cmd.targets:
+                    if target.ack_state == PropagationAck.PENDING:
+                        target.ack_state = PropagationAck.TIMEOUT
+                        target.ack_at = now.isoformat()
+                        timed_out.append(target.instance_id)
+
+                if timed_out:
+                    self._check_completion(cmd)
+                    updates[command_id] = timed_out
+                    changed = True
+
+            if changed:
+                self._persist_to_disk_locked()
+
+            return updates
 
     def lift_kill(
         self,
@@ -407,15 +552,18 @@ class FederatedKillSwitch:
             cmd.lifted_at = datetime.now(timezone.utc).isoformat()
             cmd.lifted_by = lifted_by
             cmd.lift_review_notes = review_notes
+            self._persist_to_disk_locked()
             return True
 
     def get_command(self, command_id: str) -> Optional[KillCommand]:
         """Get a kill command by ID."""
+        self.sweep_timeouts()
         with self._lock:
             return self._commands.get(command_id)
 
     def get_active_commands(self) -> List[KillCommand]:
         """Get all non-lifted commands."""
+        self.sweep_timeouts()
         with self._lock:
             return [
                 cmd for cmd in self._commands.values()
@@ -424,6 +572,7 @@ class FederatedKillSwitch:
 
     def get_all_commands(self) -> List[KillCommand]:
         """Get all commands."""
+        self.sweep_timeouts()
         with self._lock:
             return list(self._commands.values())
 
@@ -436,7 +585,78 @@ class FederatedKillSwitch:
         acked = [t for t in cmd.targets if t.ack_state == PropagationAck.ACKNOWLEDGED]
         if len(acked) == len(cmd.targets):
             cmd.state = KillCommandState.COMPLETED
+        elif not acked:
+            cmd.state = KillCommandState.FAILED
         else:
             cmd.state = KillCommandState.PARTIAL
 
         cmd.completed_at = datetime.now(timezone.utc).isoformat()
+
+    def _propagate_local_locked(self, cmd: KillCommand) -> int:
+        """Execute the local part of a command while preserving command state.
+
+        Caller must already hold ``self._lock``.
+        """
+        local_target = next(
+            (t for t in cmd.targets if t.instance_id == self._self_id),
+            None,
+        )
+        if not local_target:
+            return 0
+
+        if cmd.command_type != KillCommandType.FEATURE_KILL and self._local_kill_handler is None:
+            local_target.ack_state = PropagationAck.REJECTED
+            local_target.ack_at = datetime.now(timezone.utc).isoformat()
+            local_target.reject_reason = "Local kill handler not configured"
+            self._check_completion(cmd)
+            return 0
+
+        agents_killed = 0
+        if self._local_kill_handler and cmd.command_type != KillCommandType.FEATURE_KILL:
+            try:
+                agents_killed = self._local_kill_handler(cmd.reason)
+            except Exception as e:
+                logger.error("Local kill handler failed: %s", e)
+                local_target.ack_state = PropagationAck.REJECTED
+                local_target.ack_at = datetime.now(timezone.utc).isoformat()
+                local_target.reject_reason = f"Local kill failed: {e}"
+                local_target.agents_killed = 0
+                self._check_completion(cmd)
+                return 0
+
+        local_target.ack_state = PropagationAck.ACKNOWLEDGED
+        local_target.ack_at = datetime.now(timezone.utc).isoformat()
+        local_target.agents_killed = agents_killed
+        self._check_completion(cmd)
+        return agents_killed
+
+    def _persist_to_disk_locked(self) -> None:
+        if not self._persistence_path:
+            return
+        try:
+            self._persistence_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "self_instance_id": self._self_id,
+                "peer_ids": self._peer_ids,
+                "commands": [cmd.to_dict() for cmd in self._commands.values()],
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            self._persistence_path.write_text(
+                json.dumps(payload, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning("Failed to persist federation kill commands: %s", exc)
+
+    def _load_from_disk(self) -> None:
+        if not self._persistence_path or not self._persistence_path.exists():
+            return
+        try:
+            data = json.loads(self._persistence_path.read_text(encoding="utf-8"))
+            self._peer_ids = list(data.get("peer_ids", self._peer_ids))
+            for cmd_data in data.get("commands", []):
+                cmd = KillCommand.from_dict(cmd_data)
+                if cmd.command_id:
+                    self._commands[cmd.command_id] = cmd
+        except Exception as exc:
+            logger.warning("Failed to load federation kill commands: %s", exc)

@@ -81,6 +81,10 @@ class ArchitectAgent:
         self,
         goal: str,
         context: Optional[Dict[str, Any]] = None,
+        *,
+        operator_id: str = "",
+        session_id: str = "",
+        operator_name: str = "",
     ) -> Dict[str, Any]:
         """Execute a high-level task.
 
@@ -98,10 +102,13 @@ class ArchitectAgent:
         self._results = {}
         self._plan_history = []
 
-        self._receipts.record_task_received(
+        task_received_receipt_id = self._receipts.record_task_received(
             goal=goal,
             quest_id=quest_id,
             context=context,
+            operator_id=operator_id or None,
+            session_id=session_id or None,
+            operator_name=operator_name or None,
         )
 
         try:
@@ -110,13 +117,24 @@ class ArchitectAgent:
             self._current_plan = plan
             self._plan_history.append(self._plan_hash(plan))
 
-            self._receipts.record_decomposition(
+            decomposition_receipt_id = self._receipts.record_decomposition(
                 decomposed=plan,
+                parent_receipt_id=task_received_receipt_id,
+                operator_id=operator_id or None,
+                session_id=session_id or None,
+                operator_name=operator_name or None,
             )
 
             # Execute groups in order
             self._status = "executing"
-            group_results = await self._execute_plan(plan, quest_id)
+            group_results = await self._execute_plan(
+                plan,
+                quest_id,
+                parent_receipt_id=decomposition_receipt_id,
+                operator_id=operator_id or None,
+                session_id=session_id or None,
+                operator_name=operator_name or None,
+            )
 
             # Assemble results
             self._status = "completing"
@@ -125,6 +143,10 @@ class ArchitectAgent:
             self._receipts.record_task_completed(
                 quest_id=quest_id,
                 results=group_results,
+                parent_receipt_id=decomposition_receipt_id,
+                operator_id=operator_id or None,
+                session_id=session_id or None,
+                operator_name=operator_name or None,
             )
 
             self._status = "idle"
@@ -152,6 +174,10 @@ class ArchitectAgent:
             self._receipts.record_task_failed(
                 quest_id=quest_id,
                 error=str(exc),
+                parent_receipt_id=task_received_receipt_id,
+                operator_id=operator_id or None,
+                session_id=session_id or None,
+                operator_name=operator_name or None,
             )
             return {
                 "quest_id": quest_id,
@@ -166,6 +192,10 @@ class ArchitectAgent:
         self,
         plan: DecomposedTask,
         quest_id: str,
+        parent_receipt_id: Optional[str] = None,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        operator_name: Optional[str] = None,
     ) -> List[TaskResult]:
         """Execute a decomposed plan group by group.
 
@@ -181,7 +211,13 @@ class ArchitectAgent:
             )
 
             group_results = await self._execute_group(
-                plan, group, quest_id,
+                plan,
+                group,
+                quest_id,
+                parent_receipt_id=parent_receipt_id,
+                operator_id=operator_id,
+                session_id=session_id,
+                operator_name=operator_name,
             )
             all_results.extend(group_results)
 
@@ -207,6 +243,10 @@ class ArchitectAgent:
         plan: DecomposedTask,
         group_indices: List,
         quest_id: str,
+        parent_receipt_id: Optional[str] = None,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        operator_name: Optional[str] = None,
     ) -> List[TaskResult]:
         """Execute a single group of subtasks concurrently."""
         futures: List[tuple[str, Future]] = []
@@ -218,7 +258,14 @@ class ArchitectAgent:
             spec = plan.subtasks[idx]
 
             # Spawn agent
-            record = self._lifecycle.spawn(spec, quest_id=quest_id)
+            record = self._lifecycle.spawn(
+                spec,
+                quest_id=quest_id,
+                parent_receipt_id=parent_receipt_id,
+                operator_id=operator_id,
+                session_id=session_id,
+                operator_name=operator_name,
+            )
 
             # Build actions for the agent with full context for UAB execution
             task_context = plan.context.get("original_context", {}) if plan.context else {}
@@ -417,7 +464,10 @@ class ArchitectAgent:
             # Execute new plan
             self._status = "executing"
             group_results = await self._execute_plan(
-                new_plan, self._current_quest_id,
+                new_plan,
+                self._current_quest_id,
+                operator_id=operator_id,
+                session_id=session_id,
             )
 
             success = all(r.success for r in group_results)

@@ -96,11 +96,7 @@ export function reloadConfig() {
 
 /** GET /api/setup/export — download as ZIP */
 export async function exportBackup() {
-  const token = localStorage.getItem('lancelot_api_token')
-  const headers: Record<string, string> = {}
-  if (token) headers['Authorization'] = `Bearer ${token}`
-
-  const res = await fetch('/api/setup/export', { headers })
+  const res = await fetch('/api/setup/export', { credentials: 'include' })
   if (!res.ok) throw new Error('Export failed')
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)

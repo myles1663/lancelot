@@ -10,12 +10,22 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability
+from src.core.runtime_pause import get_runtime_pause_status, is_runtime_paused
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/hive", tags=["hive"])
+router = APIRouter(
+    prefix="/api/hive",
+    tags=["hive"],
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("hive.admin")),
+    ],
+)
 
 # Module-level references set by _init_hive() in gateway
 _architect = None
@@ -28,19 +38,27 @@ _config = None
 _audit_logger = None
 
 
-def _resolve_operator_ids(request: Request):
-    """Extract operator_id and session_id from a FastAPI request.
+def _resolve_operator_context(request: Request):
+    """Extract operator identity fields from a FastAPI request.
 
-    Returns (operator_id, session_id) or (None, None) if unavailable.
+    Returns (operator_id, session_id, actor) where actor is the best
+    human-readable display value for text audit logs.
     """
     try:
         from src.core.governance_receipts import _resolve_identity
         identity = _resolve_identity(request)
         if identity:
-            return identity.operator_id, identity.session_id
+            actor = identity.display_name or identity.operator_id
+            return identity.operator_id, identity.session_id, actor
     except Exception:
         pass
-    return None, None
+    return None, None, None
+
+
+def _resolve_operator_ids(request: Request):
+    """Backward-compatible helper for existing tests/callers."""
+    operator_id, session_id, _actor = _resolve_operator_context(request)
+    return operator_id, session_id
 
 
 def init_hive_api(architect, lifecycle, registry, receipt_mgr, config, audit_logger=None):
@@ -94,13 +112,54 @@ class KillAllRequest(BaseModel):
 @router.get("/status")
 async def get_status():
     """Get HIVE system status."""
+    degraded_reasons: List[str] = []
+    runtime_errors: List[str] = []
+    status: Dict[str, Any] = {
+        "status": "not_initialized",
+        "enabled": _architect is not None,
+        "architect_ready": _architect is not None,
+        "lifecycle_ready": _lifecycle is not None,
+        "registry_ready": _registry is not None,
+        "receipt_manager_ready": _receipt_mgr is not None,
+        "config_ready": _config is not None,
+        "active_agents": 0,
+        "max_agents": _config.max_concurrent_agents if _config else 10,
+        "runtime_degraded": False,
+        "degraded_reasons": [],
+        "runtime_errors": [],
+    }
+
     if _architect is None:
-        return {"status": "not_initialized", "enabled": False}
-    status = _architect.get_status()
-    status["enabled"] = True
-    if _registry:
-        status["active_agents"] = _registry.active_count()
-        status["max_agents"] = _config.max_concurrent_agents if _config else 10
+        degraded_reasons.append("HIVE architect not initialized")
+    else:
+        try:
+            status.update(_architect.get_status())
+        except Exception as exc:
+            logger.error("Failed to resolve HIVE architect status: %s", exc)
+            status["status"] = "error"
+            degraded_reasons.append("HIVE architect status unavailable")
+            runtime_errors.append(f"architect_error: {exc}")
+
+    if _lifecycle is None:
+        degraded_reasons.append("HIVE lifecycle manager not initialized")
+    if _registry is None:
+        degraded_reasons.append("HIVE registry not initialized")
+    else:
+        try:
+            status["active_agents"] = _registry.active_count()
+        except Exception as exc:
+            logger.error("Failed to resolve HIVE registry status: %s", exc)
+            degraded_reasons.append("HIVE registry status unavailable")
+            runtime_errors.append(f"registry_error: {exc}")
+
+    if _receipt_mgr is None:
+        degraded_reasons.append("HIVE receipt manager not initialized")
+    if _config is None:
+        degraded_reasons.append("HIVE config not initialized")
+
+    status["runtime_degraded"] = bool(degraded_reasons or runtime_errors)
+    status["degraded_reasons"] = degraded_reasons
+    status["runtime_errors"] = runtime_errors
     return status
 
 
@@ -162,11 +221,24 @@ async def get_agent_soul(agent_id: str):
 # ── Task Endpoints ───────────────────────────────────────────────────
 
 @router.post("/tasks")
-async def submit_task(req: TaskSubmitRequest):
+async def submit_task(req: TaskSubmitRequest, request: Request):
     """Submit a new high-level task for HIVE to execute."""
     if _architect is None:
         raise HTTPException(status_code=503, detail="HIVE not initialized")
-    result = await _architect.execute_task(req.goal, req.context)
+    if is_runtime_paused():
+        pause_state = get_runtime_pause_status()
+        raise HTTPException(
+            status_code=423,
+            detail=pause_state.get("reason") or "Runtime paused by operator",
+        )
+    operator_id, session_id, actor = _resolve_operator_context(request)
+    result = await _architect.execute_task(
+        req.goal,
+        req.context,
+        operator_id=operator_id or "",
+        session_id=session_id or "",
+        operator_name=actor or "",
+    )
     return result
 
 
@@ -196,9 +268,9 @@ async def pause_agent(agent_id: str, req: PauseRequest, request: Request):
     if _lifecycle is None:
         raise HTTPException(status_code=503, detail="HIVE not initialized")
     try:
-        op_id, sess_id = _resolve_operator_ids(request)
+        op_id, sess_id, actor = _resolve_operator_context(request)
         _lifecycle.pause(agent_id, req.reason, operator_id=op_id, session_id=sess_id)
-        _hive_audit("HIVE_AGENT_PAUSE", f"Paused agent {agent_id}: {req.reason}")
+        _hive_audit("HIVE_AGENT_PAUSE", f"Paused agent {agent_id}: {req.reason}", actor)
 
         from src.core.governance_receipts import emit_governance_receipt
         from src.shared.receipts import ActionType
@@ -219,9 +291,9 @@ async def resume_agent(agent_id: str, request: Request):
     if _lifecycle is None:
         raise HTTPException(status_code=503, detail="HIVE not initialized")
     try:
-        op_id, sess_id = _resolve_operator_ids(request)
+        op_id, sess_id, actor = _resolve_operator_context(request)
         _lifecycle.resume(agent_id, operator_id=op_id, session_id=sess_id)
-        _hive_audit("HIVE_AGENT_RESUME", f"Resumed agent {agent_id}")
+        _hive_audit("HIVE_AGENT_RESUME", f"Resumed agent {agent_id}", actor)
 
         from src.core.governance_receipts import emit_governance_receipt
         from src.shared.receipts import ActionType
@@ -242,9 +314,9 @@ async def kill_agent(agent_id: str, req: KillRequest, request: Request):
     if _lifecycle is None:
         raise HTTPException(status_code=503, detail="HIVE not initialized")
     try:
-        op_id, sess_id = _resolve_operator_ids(request)
+        op_id, sess_id, actor = _resolve_operator_context(request)
         _lifecycle.kill(agent_id, req.reason, operator_id=op_id, session_id=sess_id)
-        _hive_audit("HIVE_AGENT_KILL", f"Killed agent {agent_id}: {req.reason}")
+        _hive_audit("HIVE_AGENT_KILL", f"Killed agent {agent_id}: {req.reason}", actor)
 
         from src.core.governance_receipts import emit_governance_receipt
         from src.shared.receipts import ActionType
@@ -272,11 +344,11 @@ async def modify_agent(agent_id: str, req: ModifyRequest, request: Request):
         feedback=req.feedback,
         constraints=req.constraints,
     )
-    op_id, sess_id = _resolve_operator_ids(request)
+    op_id, sess_id, actor = _resolve_operator_context(request)
     result = await _architect.handle_intervention(
         intervention, req.feedback, operator_id=op_id, session_id=sess_id,
     )
-    _hive_audit("HIVE_AGENT_MODIFY", f"Modified agent {agent_id}: {req.reason}")
+    _hive_audit("HIVE_AGENT_MODIFY", f"Modified agent {agent_id}: {req.reason}", actor)
 
     from src.core.governance_receipts import emit_governance_receipt
     from src.shared.receipts import ActionType
@@ -294,9 +366,9 @@ async def kill_all(req: KillAllRequest, request: Request):
     """Kill all active agents. Requires reason."""
     if _lifecycle is None:
         raise HTTPException(status_code=503, detail="HIVE not initialized")
-    op_id, sess_id = _resolve_operator_ids(request)
+    op_id, sess_id, actor = _resolve_operator_context(request)
     collapsed = _lifecycle.kill_all(req.reason, operator_id=op_id, session_id=sess_id)
-    _hive_audit("HIVE_KILL_ALL", f"Kill-all: {req.reason} ({len(collapsed)} agents)")
+    _hive_audit("HIVE_KILL_ALL", f"Kill-all: {req.reason} ({len(collapsed)} agents)", actor)
 
     from src.core.governance_receipts import emit_governance_receipt
     from src.shared.receipts import ActionType
@@ -331,11 +403,11 @@ async def get_task_interventions(quest_id: str):
 
 # ── Audit Helper ────────────────────────────────────────────────────
 
-def _hive_audit(event_type: str, details: str) -> None:
+def _hive_audit(event_type: str, details: str, actor: Optional[str] = None) -> None:
     """Log an audit event for HIVE operator actions."""
     if _audit_logger:
         try:
-            _audit_logger.log_event(event_type, details, user="WarRoom")
+            _audit_logger.log_event(event_type, details, user=actor or "operator")
         except Exception as exc:
             logger.warning("Hive audit log failed: %s", exc)
 

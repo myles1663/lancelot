@@ -2,7 +2,7 @@
 
 Comprehensive installation guide for Lancelot covering all supported deployment methods, hardware configuration, and provider setup.
 
-If you just want to get running quickly, see the [Quickstart](quickstart.md) instead. This guide is for custom deployments, non-Docker setups, GPU configuration, and detailed tuning.
+If you just want to get running quickly, see the [Quickstart](quickstart.md) instead. This guide is for custom deployments, non-Docker setups, GPU configuration, and detailed tuning. If you are preparing an instance for enterprise use, finish with the [Production Hardening Guide](production-hardening.md) before go-live.
 
 ---
 
@@ -81,6 +81,8 @@ Docker Compose is the primary and recommended deployment method. It runs two con
 
 Both containers communicate on an internal bridge network (`lancelot_net`). The core container depends on the local LLM being healthy before starting.
 
+> **Production note:** installation success is not the same as production readiness. Before go-live, run the auth, runtime-control, federation, A2A, and compliance checks in the [Production Hardening Guide](production-hardening.md).
+
 ---
 
 ## One-Command Installer
@@ -96,6 +98,7 @@ The installer handles:
 - Prerequisites verification (Docker, Git, disk, RAM, GPU)
 - Install location selection
 - Provider and API key configuration (with live validation)
+- War Room auth model selection (`local` account or enterprise `oidc`)
 - Repository clone
 - `.env` generation and `docker-compose.yml` patching for your hardware
 - Model download (5 GB, with resume support)
@@ -148,6 +151,20 @@ GEMINI_API_KEY=your-key-here
 # LANCELOT_OWNER_TOKEN=
 # LANCELOT_API_TOKEN=
 # LANCELOT_VAULT_KEY=
+
+# War Room authentication
+# Choose exactly one model:
+# LANCELOT_AUTH_PROVIDER=local
+# WARROOM_USERNAME=admin
+# WARROOM_PASSWORD=choose-a-strong-password
+# WARROOM_PASSWORD_RESET_CODE=store-this-reset-code-securely
+
+# LANCELOT_AUTH_PROVIDER=oidc
+# OIDC_ISSUER_URL=https://your-idp.example.com/realms/lancelot
+# OIDC_CLIENT_ID=lancelot-war-room
+# OIDC_CLIENT_SECRET=your-client-secret
+# OIDC_REDIRECT_URI=http://localhost:8000/auth/oidc/callback
+# OIDC_ALLOWED_GROUPS=lancelot-admins,lancelot-operators
 
 # Local model settings
 LOCAL_LLM_URL=http://local-llm:8080
@@ -221,7 +238,7 @@ lancelot_local_llm  | INFO:     Model loaded successfully
 .\launch.ps1           # PowerShell (Windows)
 ```
 
-Or open `http://localhost:8000` manually. The in-app onboarding will guide you through any remaining configuration (provider selection, API key validation, comms setup, security tokens).
+Or open `http://localhost:8000` manually. The in-app onboarding will guide you through any remaining configuration, including provider selection, API key validation, comms setup, security tokens, and War Room auth model selection.
 
 ### 7. Verify
 
@@ -342,6 +359,8 @@ Lancelot works without the local model — it routes all tasks (including classi
 - Higher API costs (routine tasks use cloud tokens)
 - PII redaction happens via cloud APIs (data leaves your machine)
 - Slightly higher latency for classification tasks
+
+Without the local model, Lancelot loses the live frontier scrub boundary. User prompts and tool-result payloads are sent directly to the configured frontier provider, and routine low-risk work no longer stays on the local lane.
 
 To skip the local model during install: `npx create-lancelot --skip-model`
 
@@ -551,15 +570,14 @@ Open `http://localhost:8000` in a browser. You should see the operator dashboard
 | **General** | | | |
 | `LANCELOT_LOG_LEVEL` | No | `INFO` | Logging level |
 | **Communications** | | | |
-| `LANCELOT_COMMS_TYPE` | No | — | Channel type: `telegram`, `google_chat`, `slack`, `discord`, `teams`, `whatsapp`, `email`, `sms`, or `none` |
+| `LANCELOT_COMMS_TYPE` | No | — | Channel type: `telegram`, `google_chat`, or `none` |
 | `LANCELOT_TELEGRAM_TOKEN` | No | — | Telegram bot token |
 | `LANCELOT_TELEGRAM_CHAT_ID` | No | — | Telegram chat ID |
 | `LANCELOT_CHAT_SPACE_NAME` | No | — | Google Chat space resource name |
-| `SLACK_BOT_TOKEN` | No | — | Slack Bot User OAuth Token |
-| `DISCORD_BOT_TOKEN` | No | — | Discord bot token |
-| `TEAMS_ACCESS_TOKEN` | No | — | Microsoft Graph API access token |
-
+| `LANCELOT_WEBHOOK_BEARER` | No | falls back to `LANCELOT_API_TOKEN` | Dedicated bearer secret for bonded inbound comms callbacks such as Google Chat approval actions |
 > **Note:** Security tokens (`LANCELOT_OWNER_TOKEN`, `LANCELOT_API_TOKEN`, `LANCELOT_VAULT_KEY`) are auto-generated during onboarding if not manually set. The CLI installer and in-app onboarding both handle this automatically.
+>
+> **Current runtime support:** bidirectional communications are currently implemented for `telegram` and `google_chat`. Other messaging and outreach services remain connector-level capabilities until dedicated comms runtimes are added.
 
 ### YAML Configuration Files
 

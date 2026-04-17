@@ -1,6 +1,6 @@
 # Compliance Export
 
-One-click compliance report generation from Lancelot's receipt DAG. Turns the internal governance trail into external audit artifacts in the formats compliance teams expect.
+One-click compliance report generation from Lancelot's receipt DAG. The goal is not just to dump receipts. The goal is to produce auditor-grade evidence packages that preserve traceability back to the receipt chain.
 
 ---
 
@@ -8,10 +8,10 @@ One-click compliance report generation from Lancelot's receipt DAG. Turns the in
 
 | Format | Description | Status |
 |--------|-------------|--------|
-| **Forensic Timeline PDF** | Human-readable PDF for board presentation, legal review, regulatory submission. Executive summary, governance controls, human authorization log, full event log, anomaly report. | Available |
-| **SOC 2 Type II JSON** | Structured JSON mapped to Trust Services Criteria (CC1–CC9). Machine-readable for GRC platforms (Vanta, Drata, Secureframe). | Available |
-| **ISO 27001:2022 JSON** | Structured JSON mapped to Annex A controls. Covers A.5, A.8 with explicit exclusion notes for out-of-scope controls. | Available |
-| **GDPR Article 30 JSON** | Processing activity records per workflow. PII category detection, data recipients, retention periods, security measures. | Available |
+| **Forensic Timeline PDF** | Human-readable package for board presentation, legal review, and regulator or auditor walkthroughs. Includes executive summary, governance controls, authorization log, full event log, anomaly report, and schema appendix. | Available |
+| **SOC 2 Type II JSON Bundle** | ZIP bundle containing the auditor-grade SOC 2 evidence JSON, a summary PDF, a control index CSV, a README, and a manifest with per-file hashes. | Available |
+| **ISO 27001:2022 JSON Bundle** | ZIP bundle containing the ISO evidence JSON, a summary PDF, a control index CSV, a README, and a manifest with per-file hashes. | Available |
+| **GDPR Article 30 JSON Bundle** | ZIP bundle containing the GDPR evidence JSON, a summary PDF, a processing index CSV, a README, and a manifest with per-file hashes. | Available |
 
 ---
 
@@ -21,29 +21,94 @@ Every export runs through an 8-stage pipeline:
 
 | Stage | Description |
 |-------|-------------|
-| 1. Period Resolution | Validate start/end timestamps, confirm receipts exist in the period |
+| 1. Period Resolution | Validate start/end timestamps and confirm receipts exist in the period |
 | 2. Receipt Fetch | Read-only fetch of all receipts in the period |
-| 3. Chain Integrity Check | Verify parent_id chain is unbroken — CHAIN_INTACT or CHAIN_ANOMALY |
-| 4. Identity Resolution | Resolve operator display names from operator registry |
-| 5. Format Transform | Apply format-specific transformation (SOC 2 mapping, ISO 27001 mapping, GDPR records) |
-| 6. ip_address Redaction | Unconditional removal from all output — no configuration, no bypass |
-| 7. Output Generation | Render final artifact (JSON or PDF) |
-| 8. Export Receipt | Write COMPLIANCE_EXPORT_GENERATED receipt with output SHA-256 |
+| 3. Chain Integrity Check | Verify parent_id chain is unbroken - `CHAIN_INTACT` or `CHAIN_ANOMALY` |
+| 4. Identity Resolution | Preserve exporter identity and receipt-level operator attribution |
+| 5. Format Transform | Apply format-specific transformation (SOC 2, ISO 27001, GDPR, PDF narrative) |
+| 6. `ip_address` Redaction | Unconditional removal from all output - no configuration, no bypass |
+| 7. Output Generation | Render the final artifact |
+| 8. Export Receipt | Write `COMPLIANCE_EXPORT_GENERATED` with the artifact SHA-256 |
 
-The pipeline is **idempotent** — running the same export twice for the same period produces the same output.
+The pipeline is idempotent: running the same export twice for the same period should produce the same evidence package shape for the same receipt population.
 
 ---
 
-## Chain Integrity Check
+## Auditor-Grade JSON Contract
+
+The JSON exports are not raw receipt dumps. Each JSON artifact now includes these top-level sections:
+
+- `export_metadata`
+  - format, version, export id, period, exporter identity, receipt count
+- `system_context`
+  - deployment/environment metadata plus active Soul versions observed in the evidence population
+- `export_scope`
+  - exact receipt and quest/workflow population included in the artifact
+- `integrity`
+  - chain status, anomaly detail, and the export-receipt verification reference
+- `evidence_population_summary`
+  - status counts, attribution counts, quest counts, and receipt-type counts for the full population
+- `operator_attribution_summary`
+  - human vs automation vs federated-peer vs legacy-unattributed distribution
+- `exception_summary`
+  - operational exceptions such as failures, pending states, and review-required evidence
+- `legacy_attribution_summary`
+  - pre-identity-migration evidence population surfaced separately so legacy attribution debt does not drown current-period operational exceptions
+
+Framework-specific sections then add their own contract:
+
+- SOC 2
+  - `control_summary`
+  - per-control `control_status`, `evidence_summary`, `exception_count`, `exceptions`, `evidence`
+- ISO 27001
+  - `statement_of_applicability`
+  - per-control `control_status`, `evidence_summary`, `exception_count`, `exceptions`, `evidence`
+- GDPR
+  - `processing_summary`
+  - per-record `evidence_summary`
+
+The raw `evidence` arrays remain in the artifact because auditor traceability still matters. The difference is that they are now wrapped in the summary and exception structure an auditor can actually use.
+
+---
+
+## Bundle Packaging
+
+All machine-readable framework exports are delivered as ZIP bundles rather than loose JSON files.
+
+Each bundle contains:
+
+- the primary evidence JSON
+- a short summary PDF for quick auditor review
+- a flat CSV index
+- `manifest.json` with per-file SHA-256 hashes
+- `README.txt`
+
+The bundle itself is still covered by the `COMPLIANCE_EXPORT_GENERATED` receipt via the top-level `output_sha256`. The manifest gives auditors file-level integrity inside the bundle.
+
+The packaging pattern is intentionally consistent across framework exports:
+
+- SOC 2 bundle -> SOC 2 JSON plus SOC 2 summary artifacts
+- ISO 27001 bundle -> ISO JSON plus ISO summary artifacts
+- GDPR bundle -> GDPR JSON plus GDPR summary artifacts
+
+The bundle shape is consistent. The evidence mapping inside the JSON and CSV is framework-specific.
+
+---
+
+## Chain Integrity
 
 The foundational trust claim of the compliance export. Before generating any artifact, the engine verifies that the receipt DAG's parent_id chain is unbroken for the export period.
 
-- **CHAIN_INTACT**: Every receipt's parent_id references an existing receipt. The governance record is tamper-evident.
-- **CHAIN_ANOMALY**: One or more receipts reference a parent that doesn't exist. Gap details are included in the export metadata.
+- `CHAIN_INTACT`: every receipt's parent_id references an existing receipt
+- `CHAIN_ANOMALY`: one or more receipts reference a missing parent
 
-A chain anomaly does **not** block export. It is reported with full detail. An auditor receiving a Lancelot export with CHAIN_INTACT has evidence of a tamper-evident governance record.
+A chain anomaly does not block export. It is surfaced explicitly in:
 
-The chain integrity check endpoint is also available standalone at `GET /api/compliance/chain-integrity` for verification without generating a full export.
+- `export_metadata.chain_integrity`
+- `export_metadata.chain_anomaly_detail`
+- `integrity.chain_anomaly_detail`
+
+The standalone verification endpoint remains available at `GET /api/compliance/chain-integrity`.
 
 ---
 
@@ -51,49 +116,65 @@ The chain integrity check endpoint is also available standalone at `GET /api/com
 
 | SOC 2 Control | Lancelot Evidence |
 |--------------|-------------------|
-| CC1.1 — COSO Principles | Soul version history, governance posture records |
-| CC2.2 — Internal Communication | Kill switch events with operator identity |
-| CC6.1 — Logical Access Controls | All identity-required receipt types (26 types) |
-| CC6.2 — New Access Provisioned | CREDENTIAL_REGISTERED, MCP_SERVER_REGISTERED, CONNECTOR_ENABLED |
-| CC6.3 — Access Removed | CREDENTIAL_REVOKED, MCP_SERVER_REVOKED, CONNECTOR_DISABLED |
-| CC6.6 — External Threats | MCP_TOOL_BLOCKED (injection detection, allowlist enforcement) |
-| CC7.1 — System Monitoring | GOVERNANCE_WRITE_ERROR, T3 approval response times |
-| CC7.2 — Anomalies Evaluated | T3_APPROVED/REJECTED, MCP_T3_APPROVED/REJECTED |
-| CC7.3 — Incident Identification | Kill switch activation, AGENT_STOPPED |
-| CC8.1 — Change Management | SOUL_UPDATED, AGENT_DEPLOYED, ALLOWLIST_MODIFIED, TOOL_ENABLED/DISABLED |
-| CC9.2 — Risk Mitigation | APL_RULE_APPROVED/REJECTED, risk tier distribution |
+| CC1.1 - COSO Principles | Soul version history, governance posture records |
+| CC2.2 - Internal Communication | Kill switch events with operator identity |
+| CC6.1 - Logical Access Controls | Identity-required governance receipts |
+| CC6.2 - New Access Provisioned | `CREDENTIAL_REGISTERED`, `MCP_SERVER_REGISTERED`, `CONNECTOR_ENABLED` |
+| CC6.3 - Access Removed | `CREDENTIAL_REVOKED`, `MCP_SERVER_REVOKED`, `CONNECTOR_DISABLED` |
+| CC6.6 - External Threats | `MCP_TOOL_BLOCKED` |
+| CC7.1 - System Monitoring | `GOVERNANCE_WRITE_ERROR` and governance-gap evidence |
+| CC7.2 - Anomalies Evaluated | `T3_APPROVED` / `T3_REJECTED`, `MCP_T3_APPROVED` / `MCP_T3_REJECTED` |
+| CC7.3 - Incident Identification | Kill switch activation, `AGENT_STOPPED` |
+| CC8.1 - Change Management | `SOUL_UPDATED`, `AGENT_DEPLOYED`, `ALLOWLIST_MODIFIED`, `TOOL_ENABLED`, `TOOL_DISABLED` |
+| CC9.2 - Risk Mitigation | `APL_RULE_APPROVED`, `APL_RULE_REJECTED` and related governed risk actions |
 
 ---
 
-## ISO 27001:2022 Control Mapping
+## ISO 27001:2022
 
-Covers Annex A controls directly addressed by an AI agent governance platform. Controls outside scope (physical security, supplier relationships, business continuity) are explicitly excluded with explanatory notes in the export.
+ISO exports include the same global summary blocks plus:
 
----
+- `statement_of_applicability.controls_in_scope`
+- `statement_of_applicability.controls_out_of_scope`
+- `excluded_controls`
 
-## GDPR Article 30 Processing Records
-
-One processing activity record per workflow (`quest_id`) where PII scrubbing was triggered. Records include:
-
-- **Purpose**: Derived from Soul document
-- **Categories of personal data**: From PII scrubbing pipeline (or "detected, category not recorded" if pipeline records only occurrence)
-- **Recipients**: External services that received outputs (connectors, MCP servers)
-- **Retention period**: From receipt TTL configuration
-- **Security measures**: Soul constraints, risk tier controls, input sanitization, credential vault isolation
-
-Workflows with no PII events produce a brief "no personal data processing" record — not an omission.
+Controls outside the scope of an AI agent governance platform are explicitly marked rather than silently omitted.
 
 ---
 
-## ip_address Redaction
+## GDPR Article 30
 
-All `ip_address` fields from OperatorIdentity records are removed from every export format. This is **unconditional**. There is no configuration flag, no bypass, and no exception. The redaction is applied at the compliance redaction layer before any format-specific transformation.
+GDPR exports generate one processing record per workflow (`quest_id`) and include:
+
+- whether personal data was processed
+- categories of personal data detected by the scrubbing pipeline
+- external recipients
+- retention period note
+- security measures
+- per-record evidence summary
+
+Workflows with no PII events still produce a record noting that no personal data processing was observed.
 
 ---
 
-## PRE_IDENTITY_MIGRATION
+## `ip_address` Redaction
 
-Receipts generated before Operator Identity tracking was implemented (operator_id is NULL) are flagged with `pre_identity_migration: true` and an explanatory note in all export formats. They do not cause export failure. They are present in the artifact with the flag so auditors can distinguish between "automated action" and "action from before identity tracking existed."
+All `ip_address` fields are removed from every export format. This is unconditional.
+
+- no configuration flag
+- no bypass
+- no exception path
+
+---
+
+## Pre-Identity Migration
+
+Receipts generated before operator identity tracking was available are flagged with:
+
+- `pre_identity_migration: true`
+- `pre_identity_migration_note`
+
+These receipts remain visible in the export. They are surfaced in `legacy_attribution_summary` so auditors can distinguish legacy attribution gaps from current-process activity without mixing them into current operational exception counts.
 
 ---
 
@@ -121,7 +202,7 @@ Every completed export generates a `COMPLIANCE_EXPORT_GENERATED` receipt:
 }
 ```
 
-This receipt requires OperatorIdentity — anonymous exports are blocked. The `output_sha256` allows recipients to verify they received an unmodified copy.
+This receipt is the canonical delivery-integrity reference for the artifact. The JSON package includes an `integrity.export_receipt_verification` block pointing back to it.
 
 ---
 
@@ -132,7 +213,7 @@ This receipt requires OperatorIdentity — anonymous exports are blocked. The `o
 | POST | `/api/compliance/export` | Generate a compliance export |
 | GET | `/api/compliance/download/{export_id}` | Download a generated export |
 | GET | `/api/compliance/chain-integrity` | Standalone chain integrity check |
-| GET | `/api/compliance/history` | List all previous exports with metadata |
+| GET | `/api/compliance/history` | List previous exports with metadata |
 | POST | `/api/compliance/verify/{export_id}` | Verify export hash integrity |
 | GET | `/api/compliance/formats` | List available export formats |
 
@@ -140,36 +221,41 @@ This receipt requires OperatorIdentity — anonymous exports are blocked. The `o
 
 ## Storage
 
-Exports are persisted to `data/compliance_exports/` with self-describing filenames:
+Exports are persisted under `data/compliance_exports/` using self-describing filenames:
 
-```
+```text
 {format}_{period_start}_{period_end}_{export_id_short}.{ext}
 ```
 
-Example: `soc2_json_2026-01-01_2026-03-17_a1b2c3d4.json`
+Example:
+
+```text
+soc2_json_2026-01-01_2026-03-17_a1b2c3d4.zip
+```
 
 ---
 
 ## War Room UI
 
-The Compliance Export panel is available at `/compliance` in the War Room sidebar under the **COMPLIANCE** section.
+The Compliance Export panel is available at `/compliance` in War Room.
 
-**Features:**
-- **Format selector** — choose PDF, SOC 2, ISO 27001, or GDPR export format
-- **Period picker** — custom date range with presets (7d, 30d, 90d, YTD)
-- **Scope selector** — optional quest_id to scope exports to a single workflow
-- **Anomaly threshold** — configurable blocked-actions-per-24h threshold
-- **One-click generate** — progress indicator with inline results (receipt count, duration, chain status, SHA-256, download link)
-- **Export history table** — all previous exports with format badge, period, receipt count, chain integrity status, duration, SHA-256 preview, download, and hash verification
-- **Hash verification** — per-export SHA-256 re-verification button that compares current disk hash against the original export receipt
+Features:
+
+- format selector
+- period picker
+- optional quest scope
+- anomaly threshold input
+- one-click generation
+- export history table
+- per-export hash verification
 
 ---
 
 ## Configuration
 
-No separate configuration file. Export behavior is determined by:
+There is no separate compliance-export config file. Behavior comes from:
 
-- **Receipt store**: All data comes from the existing receipt DAG
-- **SOC 2 control mapping**: Maintained in `src/compliance/soc2_mapper.py`
-- **ISO 27001 control mapping**: Maintained in `src/compliance/iso27001_mapper.py`
-- **Anomaly threshold**: Configurable per-export (default: 5 blocked actions per 24h)
+- the receipt DAG
+- the framework mappers in `src/compliance/`
+- the PDF renderer in `src/compliance/pdf_export.py`
+- runtime environment metadata such as deployment/environment identifiers

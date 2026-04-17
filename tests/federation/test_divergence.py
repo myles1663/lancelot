@@ -82,6 +82,25 @@ class TestDivergenceDetector:
         dd.mark_reconciled()
         assert dd.state == DivergenceState.RECONCILED
 
+    def test_mark_reconciled_records_outcome_and_conflicts(self):
+        dd = DivergenceDetector(instance_id="test-1", staleness_lost_s=5.0)
+        old = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+        dd.check_connectivity({"peer-a": old})
+        dd.mark_reconciled(
+            ReconciliationOutcome.INCOMPATIBLE,
+            [
+                ConflictRecord(
+                    conflict_type="budget_exceeded",
+                    description="Budget exceeded",
+                    resolution="needs_operator_review",
+                    affected_component="budget",
+                )
+            ],
+        )
+        assert dd.last_reconciliation is not None
+        assert dd.last_reconciliation.outcome == "incompatible"
+        assert dd.last_reconciliation.conflicts[0]["conflict_type"] == "budget_exceeded"
+
     def test_reset_to_connected(self):
         dd = DivergenceDetector(instance_id="test-1", staleness_lost_s=5.0)
         old = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()

@@ -10,8 +10,10 @@ Thread-safe: all mutable state behind a single `threading.Lock`.
 import json
 import logging
 import os
+import socket
 import threading
 import time
+import urllib.error
 from pathlib import Path
 from typing import Optional
 
@@ -177,4 +179,23 @@ class UpdateChecker:
             with self._lock:
                 self._checked_at = time.time()
                 self._check_error = str(exc)
-            logger.warning("Version check failed: %s", exc)
+            if _is_expected_network_failure(exc):
+                logger.info("Version check unavailable: %s", exc)
+            else:
+                logger.warning("Version check failed: %s", exc)
+
+
+def _is_expected_network_failure(exc: Exception) -> bool:
+    """Treat offline/DNS failures as informational so startup logs stay actionable."""
+    if isinstance(exc, (socket.gaierror, TimeoutError)):
+        return True
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        if isinstance(reason, (socket.gaierror, TimeoutError, ConnectionError)):
+            return True
+        if isinstance(reason, OSError):
+            return reason.errno in {-3, -2, 101, 110, 111}
+    if isinstance(exc, OSError):
+        return exc.errno in {-3, -2, 101, 110, 111}
+    return False
+

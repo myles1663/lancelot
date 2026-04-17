@@ -42,7 +42,7 @@ Every subsystem is **independently disableable** via feature flags. If something
 | **Memory** | Tiered, commit-based memory with quarantine and rollback | [Memory](docs/memory.md) |
 | **Skills** | Modular capabilities with manifest-declared permissions | [Developing Skills](docs/developing-skills.md) |
 | **Tool Fabric** | Provider-agnostic execution with sandboxing and policy gates | [Architecture](docs/architecture.md) |
-| **UAB** | Framework-level desktop app control across 8 UI frameworks (feature-gated) | [UAB](docs/uab.md) |
+| **UAB** | Framework-level desktop app control across 10 plugins with the standalone 1.3.0 core embedded behind Lancelot's governed JSON-RPC compatibility bridge on `:7900` (feature-gated) | [UAB](docs/uab.md) |
 | **Hive Mesh** | Ephemeral sub-agent architecture with task decomposition and scoped souls (feature-gated) | [Hive](docs/hive.md) |
 | **Federation** | Multi-instance coordination with Soul propagation, task handoff, and cross-instance audit (feature-gated) | [Federation](docs/federation.md) |
 | **MCP Governance** | Governed MCP tool server access with 8-gate fail-closed pipeline (feature-gated) | [MCP](docs/mcp.md) |
@@ -80,7 +80,7 @@ Options:
 #### Prerequisites
 
 - Docker Desktop
-- At least one LLM API key (Gemini, OpenAI, Anthropic, xAI, or NVIDIA)
+- At least one LLM API key (Gemini, OpenAI, Anthropic, xAI, or NVIDIA), or a ChatGPT Plus/Pro subscription (via Codex OAuth)
 - NVIDIA GPU recommended for local model (works without, just slower)
 
 #### Steps
@@ -102,6 +102,10 @@ docker compose up -d
 ```
 
 The launch scripts start the containers, wait for the health check to pass, then automatically open the War Room in your default browser.
+
+If you are using ChatGPT Plus/Pro via Codex, complete the Codex sign-in flow on the host first so `~/.codex/auth.json` exists. Lancelot mounts that directory into the container and runs the official `codex exec` client for the `openai-codex` provider.
+
+In `openai-codex` mode, Codex is the planner, not the direct executor. Codex proposes tool calls, then Lancelot routes those calls through its own governance layer, approval checks, receipts, and skill execution pipeline before any action runs.
 
 #### Verify
 
@@ -143,7 +147,7 @@ Lancelot is **safe by construction**, not by convention:
 - Capability-based tool access with default-deny posture
 - Sandboxed execution (Docker containers, workspace boundary enforcement)
 - Symlink-safe path validation, atomic file writes
-- Local PII redaction before any external API call
+- Local PII redaction before frontier API calls when the local model is enabled; direct frontier mode remains available for reduced-footprint installs
 - Feature-flag kill switches for every high-risk subsystem
 - 96 vulnerabilities identified and remediated across two hardening passes
 
@@ -237,7 +241,7 @@ lancelot/
 | [Developing Connectors](docs/developing-connectors.md) | Build governed integrations |
 | [Developing Skills](docs/developing-skills.md) | Build capabilities that pass the security pipeline |
 | [Authoring Souls](docs/authoring-souls.md) | Customize Lancelot's constitutional governance |
-| [UAB (Universal Application Bridge)](docs/uab.md) | Desktop app control via framework hooking |
+| [UAB (Universal Application Bridge)](docs/uab.md) | Desktop app control via the embedded standalone UAB core and governed host bridge |
 | [Hive Agent Mesh](docs/hive.md) | Ephemeral sub-agent task decomposition |
 | [Federation Data Plane](docs/federation.md) | Multi-instance coordination, Soul propagation, task handoff |
 | [MCP Governance](docs/mcp.md) | Governed MCP tool server access with 8-gate pipeline |

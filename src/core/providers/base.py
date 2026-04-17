@@ -42,7 +42,8 @@ def _is_auth_error(exc: Exception) -> bool:
     return any(kw in err_str for kw in (
         "401", "unauthorized", "invalid api key", "invalid_api_key",
         "invalid x-api-key", "incorrect api key", "authentication",
-        "api key not valid", "api_key_invalid",
+        "api key not valid", "api_key_invalid", "missing_scope",
+        "missing scopes", "insufficient permissions",
     ))
 
 

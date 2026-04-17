@@ -27,7 +27,6 @@ import hashlib
 import logging
 import os
 import threading
-import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -83,6 +82,7 @@ class FederationAuth:
         peer_key_resolver=None,
         timestamp_window_s: float = 30.0,
         nonce_cache_size: int = 10_000,
+        nonce_store=None,
     ):
         """
         Args:
@@ -92,13 +92,18 @@ class FederationAuth:
                 Typically wraps TopologyRegistry.get_peer().
             timestamp_window_s: Maximum age of a valid request timestamp.
             nonce_cache_size: Maximum nonces to track for replay protection.
+            nonce_store: Optional persistent nonce store implementing
+                check_and_store_nonce(nonce) and prune_old_nonces(max_age_s).
         """
         self._identity = identity
         self._peer_key_resolver = peer_key_resolver
         self._timestamp_window_s = timestamp_window_s
+        self._nonce_store = nonce_store
         self._nonce_cache: Deque[str] = deque(maxlen=nonce_cache_size)
         self._nonce_set: Set[str] = set()
         self._lock = threading.Lock()
+        self._last_nonce_prune_at = 0.0
+        self._nonce_prune_interval_s = max(10.0, min(300.0, timestamp_window_s))
 
     def set_peer_key_resolver(self, resolver) -> None:
         """Set or update the peer public key resolver."""
@@ -187,6 +192,7 @@ class FederationAuth:
             )
 
         # 4. Nonce replay check
+        self._maybe_prune_nonce_store()
         if not self._check_nonce(nonce):
             return VerifyResult(
                 valid=False,
@@ -231,21 +237,54 @@ class FederationAuth:
 
         Returns True if the nonce is fresh and records it.
         Returns False if it has been seen before.
+
+        When a persistent nonce store is configured, that store is the
+        authoritative replay ledger across process restarts. The in-memory
+        cache remains as a local fast-path optimization.
         """
         with self._lock:
             if nonce in self._nonce_set:
                 return False
 
-            # Evict oldest if at capacity
-            if len(self._nonce_cache) >= self._nonce_cache.maxlen:
-                evicted = self._nonce_cache[0]
-                self._nonce_set.discard(evicted)
+            if self._nonce_store is not None:
+                fresh = self._nonce_store.check_and_store_nonce(nonce)
+                if not fresh:
+                    return False
 
-            self._nonce_cache.append(nonce)
-            self._nonce_set.add(nonce)
+            self._remember_nonce(nonce)
             return True
 
+    def _remember_nonce(self, nonce: str) -> None:
+        """Record a nonce in the local fast-path cache."""
+        # Evict oldest if at capacity
+        if len(self._nonce_cache) >= self._nonce_cache.maxlen:
+            evicted = self._nonce_cache[0]
+            self._nonce_set.discard(evicted)
+
+        self._nonce_cache.append(nonce)
+        self._nonce_set.add(nonce)
+
+    def _maybe_prune_nonce_store(self) -> None:
+        """Prune old persistent nonces on a bounded interval."""
+        if self._nonce_store is None:
+            return
+
+        now_ts = datetime.now(timezone.utc).timestamp()
+        if (now_ts - self._last_nonce_prune_at) < self._nonce_prune_interval_s:
+            return
+
+        with self._lock:
+            if (now_ts - self._last_nonce_prune_at) < self._nonce_prune_interval_s:
+                return
+            try:
+                self._nonce_store.prune_old_nonces(max_age_s=self._timestamp_window_s)
+            except Exception as exc:
+                logger.warning("Federation nonce prune failed: %s", exc)
+            finally:
+                self._last_nonce_prune_at = now_ts
+
     def prune_nonces(self) -> int:
-        """Manually prune the nonce cache. Returns number remaining."""
+        """Manually prune nonce state. Returns remaining local cache count."""
+        self._maybe_prune_nonce_store()
         with self._lock:
             return len(self._nonce_set)

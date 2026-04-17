@@ -5,7 +5,7 @@
 set -e
 
 # Ensure data and workspace directories exist and are writable
-for dir in /home/lancelot/data /home/lancelot/workspace; do
+for dir in /home/lancelot/data /home/lancelot/workspace /home/lancelot/.codex; do
     mkdir -p "$dir"
     chown -R lancelot:lancelot "$dir" 2>/dev/null || true
     chmod -R u+rwX "$dir" 2>/dev/null || true

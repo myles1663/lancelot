@@ -4,7 +4,6 @@
 # Patent Pending: US Provisional Application #63/982,183
 
 """Tests for Soul Propagation Engine."""
-
 import pytest
 from src.federation.soul_propagation import (
     ConsistencyState,
@@ -116,8 +115,13 @@ class TestT3Propagation:
             engine.record_pause_ack("ev-1", iid)
         engine.advance_to_activation("ev-1")
 
-        # Activate one — should move to CONFIRMING
+        # Activate one — should remain ACTIVATING until all instances activate
         engine.record_activation("ev-1", "self-001")
+        event = engine.get_event("ev-1")
+        assert event.state == PropagationState.ACTIVATING
+
+        for iid in ["peer-a", "peer-b"]:
+            engine.record_activation("ev-1", iid)
         event = engine.get_event("ev-1")
         assert event.state == PropagationState.CONFIRMING
 
@@ -130,11 +134,16 @@ class TestT3Propagation:
         for iid in ["self-001", "peer-a", "peer-b"]:
             engine.record_pause_ack("ev-1", iid)
         engine.advance_to_activation("ev-1")
-        engine.record_activation("ev-1", "self-001")
+        for iid in ["self-001", "peer-a", "peer-b"]:
+            engine.record_activation("ev-1", iid)
 
         for iid in ["self-001", "peer-a", "peer-b"]:
             engine.record_confirmation("ev-1", iid)
 
+        event = engine.get_event("ev-1")
+        assert event.state == PropagationState.CONFIRMING
+
+        assert engine.complete_confirmed_event("ev-1") is True
         event = engine.get_event("ev-1")
         assert event.state == PropagationState.COMPLETED
 
@@ -184,3 +193,53 @@ class TestEventToDict:
         assert d["event_id"] == "ev-1"
         assert d["tier"] == "T1"
         assert len(d["instances"]) == 3
+
+
+class TestPersistence:
+    def test_active_event_survives_restart(self, tmp_path):
+        path = tmp_path / "soul_propagation.json"
+        engine = SoulPropagationEngine(
+            self_instance_id="self-001",
+            peer_ids=["peer-a"],
+            persistence_path=str(path),
+        )
+        engine.initiate_propagation(
+            "ev-1", PropagationTier.T2_SIGNIFICANT,
+            "self-001", "autonomy change",
+            "v1", "hash1", "v2", "hash2",
+        )
+
+        reloaded = SoulPropagationEngine(
+            self_instance_id="self-001",
+            peer_ids=[],
+            persistence_path=str(path),
+        )
+        event = reloaded.get_event("ev-1")
+        assert event is not None
+        assert event.state == PropagationState.PAUSING
+        assert reloaded.consistency_state == ConsistencyState.PROPAGATING
+
+    def test_completed_event_persists_consistency_state(self, tmp_path):
+        path = tmp_path / "soul_propagation.json"
+        engine = SoulPropagationEngine(
+            self_instance_id="self-001",
+            peer_ids=["peer-a"],
+            persistence_path=str(path),
+        )
+        engine.initiate_propagation(
+            "ev-1", PropagationTier.T1_MINOR,
+            "self-001", "tone update",
+            "v1", "hash1", "v2", "hash2",
+        )
+        engine.record_activation("ev-1", "self-001")
+        engine.record_activation("ev-1", "peer-a")
+
+        reloaded = SoulPropagationEngine(
+            self_instance_id="self-001",
+            peer_ids=[],
+            persistence_path=str(path),
+        )
+        event = reloaded.get_event("ev-1")
+        assert event is not None
+        assert event.state == PropagationState.COMPLETED
+        assert reloaded.consistency_state == ConsistencyState.SYNCHRONIZED

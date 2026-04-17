@@ -69,6 +69,11 @@ class _GovTestConnector(ConnectorBase):
         return True
 
 
+class _FailingConnector(_GovTestConnector):
+    def execute(self, operation_id, params):
+        raise RuntimeError("connector execution blocked")
+
+
 # ── Fixtures ──────────────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)
@@ -219,6 +224,24 @@ class TestGovernedConnectorProxy:
         governed, _, _ = governed_setup
         resp = governed.execute_governed("test", "nonexistent_op", {})
         assert resp.success is False
+
+    def test_execute_governed_returns_structured_error_on_connector_exception(
+        self, registry, vault, classifier
+    ):
+        connector = _FailingConnector()
+        registry.register(connector)
+
+        proxy = ConnectorProxy(registry, vault)
+        governed = GovernedConnectorProxy(
+            proxy=proxy,
+            registry=registry,
+            risk_classifier=classifier,
+        )
+        governed.register_connector_tiers("test")
+
+        resp = governed.execute_governed("test", "read_data", {})
+        assert resp.success is False
+        assert resp.error == "connector execution blocked"
 
     @patch("src.connectors.proxy.ConnectorProxy.execute")
     def test_execute_governed_with_policy_denial(self, mock_execute, registry, vault, classifier):

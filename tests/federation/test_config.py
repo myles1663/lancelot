@@ -7,8 +7,9 @@
 
 import os
 import tempfile
+
 import pytest
-from src.federation.config import FederationConfig, load_federation_config
+from src.federation.config import FederationConfig, load_federation_config, save_federation_config
 
 
 class TestFederationConfig:
@@ -72,3 +73,12 @@ tls_required: true
                 f.write("")
             config = load_federation_config(config_dir=tmpdir)
         assert config.heartbeat_interval_s == 2.0
+
+    def test_save_and_reload_config(self):
+        """Persisted federation config should round-trip through YAML."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = FederationConfig(self_address="https://mesh.example.internal:8000")
+            save_federation_config(config, config_dir=tmpdir)
+            reloaded = load_federation_config(config_dir=tmpdir)
+
+        assert reloaded.self_address == "https://mesh.example.internal:8000"

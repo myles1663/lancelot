@@ -66,7 +66,29 @@ export interface SystemStatusResponse {
     remaining_seconds: number
     reason: string | null
   }
+  runtime_pause: RuntimePauseStatusResponse
   uptime_seconds: number
+}
+
+export interface RuntimePauseStatusResponse {
+  paused: boolean
+  reason: string | null
+  source: string | null
+  paused_at: string | null
+  paused_by_operator_id: string | null
+  paused_by_display_name: string | null
+  paused_by_session_id: string | null
+  resumed_at: string | null
+  resumed_by_operator_id: string | null
+  resumed_by_display_name: string | null
+  resumed_by_session_id: string | null
+  updated_at: string | null
+}
+
+export interface RuntimeEmergencyStopResponse extends RuntimePauseStatusResponse {
+  stopped_hive_agents: number
+  stopped_agent_ids: string[]
+  execution_state: string
 }
 
 // ------------------------------------------------------------------
@@ -284,6 +306,24 @@ export interface MemorySearchResponse {
   query: string
 }
 
+export interface RecentMemoryItem {
+  id: string
+  tier: string
+  title: string
+  content: string
+  namespace: string
+  confidence: number
+  token_count: number
+  created_at: string
+  updated_at: string
+  tags: string[]
+}
+
+export interface RecentMemoryResponse {
+  items: RecentMemoryItem[]
+  total_count: number
+}
+
 export interface BeginCommitResponse {
   commit_id: string
   status: string
@@ -305,6 +345,24 @@ export interface RollbackResponse {
   rolled_back_commit_id: string
 }
 
+export interface MemoryCommitSummary {
+  commit_id: string
+  created_at: string
+  created_by: string
+  status: string
+  message: string
+  edit_count: number
+  affected_targets: string[]
+  has_core_edits: boolean
+  receipt_id?: string | null
+  rollback_of?: string | null
+}
+
+export interface MemoryCommitHistoryResponse {
+  commits: MemoryCommitSummary[]
+  total_count: number
+}
+
 export interface QuarantineItem {
   id: string
   tier: string
@@ -322,6 +380,14 @@ export interface QuarantineResponse {
   items: QuarantineItem[]
 }
 
+export interface MemoryActionResponse {
+  status: string
+  item_id: string
+  tier?: string | null
+  block_type?: string | null
+  reason: string
+}
+
 export interface CompileContextResponse {
   context_id: string
   token_estimate: number
@@ -332,7 +398,11 @@ export interface CompileContextResponse {
 }
 
 export interface MemoryStatsResponse {
-  index: Record<string, unknown>
+  index: {
+    total_items: number
+    items_by_tier: Record<string, number>
+    tiers_available: string[]
+  }
   core_blocks: {
     total_tokens: number
     budget_issues: unknown[]

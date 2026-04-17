@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import logging
+from collections import deque
 import google.auth
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -22,6 +23,8 @@ class ChatPoller:
         self.space_name = None
         self.running = False
         self.last_poll_time = datetime.now(timezone.utc).isoformat()
+        self._sent_message_ids = deque(maxlen=100)
+        self._sent_message_set = set()
         
         # Load config
         self._load_config()
@@ -30,13 +33,12 @@ class ChatPoller:
         self._init_service()
 
     def _load_config(self):
-        """Loads space name from .env if available."""
-        env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-        if os.path.exists(env_path):
-            with open(env_path, "r") as f:
-                for line in f:
-                    if line.startswith("LANCELOT_CHAT_SPACE_NAME="):
-                        self.space_name = line.split("=", 1)[1].strip()
+        """Loads the configured Google Chat space from the live environment."""
+        self.space_name = (
+            os.getenv("LANCELOT_CHAT_SPACE_NAME")
+            or os.getenv("GOOGLE_CHAT_SPACE_NAME")
+            or self.space_name
+        )
 
     def _init_service(self):
         """Initializes the Authenticated Chat Service."""
@@ -78,12 +80,52 @@ class ChatPoller:
             return
             
         try:
-            self.service.spaces().messages().create(
+            created = self.service.spaces().messages().create(
                 parent=target,
                 body={'text': text}
             ).execute()
+            self._remember_sent_message_id(created.get("name"))
         except HttpError as e:
             logger.error(f"ChatPoller: Send failed: {e}")
+
+    def _remember_sent_message_id(self, message_id: str | None):
+        """Track sent message IDs so they are not reprocessed on the next poll."""
+        if not message_id or message_id in self._sent_message_set:
+            return
+        if len(self._sent_message_ids) == self._sent_message_ids.maxlen:
+            oldest = self._sent_message_ids.popleft()
+            self._sent_message_set.discard(oldest)
+        self._sent_message_ids.append(message_id)
+        self._sent_message_set.add(message_id)
+
+    def _is_self_sent_message(self, msg: dict) -> bool:
+        """Return True when the message was previously sent by this poller."""
+        msg_id = msg.get("name")
+        return bool(msg_id and msg_id in self._sent_message_set)
+
+    def _process_messages(self, messages):
+        """Process a batch of polled messages and update the high-water mark."""
+        latest_time_str = self.last_poll_time
+        ordered = sorted(messages, key=lambda m: m.get("createTime", ""))
+
+        for msg in ordered:
+            create_time = msg.get("createTime")
+            if not create_time or create_time <= self.last_poll_time:
+                continue
+            if self._is_self_sent_message(msg):
+                latest_time_str = max(latest_time_str, create_time)
+                continue
+
+            text = (msg.get("text") or "").strip()
+            if self.orchestrator and text:
+                logger.info("ChatPoller: Received %s...", text[:20])
+                response = self.orchestrator.chat(text, channel="google_chat")
+                if response:
+                    self.send_message(response)
+
+            latest_time_str = max(latest_time_str, create_time)
+
+        self.last_poll_time = latest_time_str
 
     def start_polling(self):
         """Starts the background polling loop."""
@@ -101,72 +143,11 @@ class ChatPoller:
         """Main polling loop."""
         while self.running:
             try:
-                # Poll for messages created AFTER last_poll_time
-                # Note: filter syntax for user credentials might be limited.
-                # If filter is not supported for users, we get last N and check timestamp manually.
-                
-                # 'spaces.messages.list' with filter is often supported. 
-                # Otherwise standard list defaults to recent.
-                
                 resp = self.service.spaces().messages().list(
                     parent=self.space_name,
-                    pageSize=10  # grab recent
+                    pageSize=10
                 ).execute()
-                
-                messages = resp.get('messages', [])
-                
-                # Sort by time
-                # Process only new ones (simple dedup by timestamp > last_poll_time)
-                # ISO format comparison
-                
-                latest_time_str = self.last_poll_time
-                
-                for msg in messages:
-                    # Skip messages from the bot/user itself? 
-                    # sender.type == 'HUMAN' vs 'BOT'? 
-                    # If functioning as User, self-sent messages appear too.
-                    # We assume we only want to process *other* people's messages or handle 'self' carefully.
-                    
-                    # msg['createTime'] e.g. '2025-01-01T12:00:00.000Z'
-                    create_time = msg.get('createTime')
-                    if create_time > self.last_poll_time:
-                        sender = msg.get('sender', {})
-                        # If we have Orchestrator, feed it
-                        if self.orchestrator:
-                            # Avoid infinite loops: check if sender is Lancelot? 
-                            # Since we use User Creds, Lancelot "IS" the user. 
-                            # This is tricky. 
-                            # We need a way to distinguish "User Input via Mobile" vs "Lancelot Output".
-                            # Lancelot outputs trigger via send_message.
-                            # We can simple ignore messages that match exactly what Lancelot just sent?
-                            # Or rely on threadKey?
-                            
-                            # For v1: Process everything. If Lancelot replies, we might re-process it?
-                            # Orchestrator checks for 'ACTIONS' or replies.
-                            # If the message comes from the "User" (us), it might be a command from mobile.
-                            # So we SHOULD process it.
-                            
-                            text = msg.get('text', '')
-                            # Simple loop breaker: If text starts with "Lancelot:" or similar?
-                            # Or if Orchestrator just replied, we might see our own reply.
-                            
-                            # Let's assume we process it.
-                            logger.info(f"ChatPoller: Received {text[:20]}...")
-                            response = self.orchestrator.chat(text)
-                            
-                            # If Orchestrator gives a response, WE send it back.
-                            # This creates a message in the chat.
-                            # Next poll, we see that message.
-                            # We need to IGNORE messages that we just sent.
-                            # But since we are the same user, sender.name is identical.
-                            # We can use a "sent_cache" of IDs?
-                            pass
-                            
-                        # Update high-water mark
-                        latest_time_str = max(latest_time_str, create_time)
-                
-                self.last_poll_time = latest_time_str
-                
+                self._process_messages(resp.get('messages', []))
             except Exception as e:
                 logger.error(f"ChatPoller: Poll error: {e}")
                 

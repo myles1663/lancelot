@@ -26,12 +26,21 @@ import logging
 import time
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/mcp", tags=["mcp"])
+router = APIRouter(
+    prefix="/api/mcp",
+    tags=["mcp"],
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("mcp.admin")),
+    ],
+)
 
 # ── Module-level state (wired by gateway) ────────────────────
 
@@ -60,6 +69,21 @@ def init_mcp_api(
     _network_policy = network_policy
     _receipt_service = receipt_service
     logger.info("MCP API initialized")
+
+
+def update_mcp_soul(soul) -> None:
+    """Refresh MCP permissions from the live Soul document."""
+    if _evaluator is None:
+        return
+    if soul is None:
+        _evaluator.load_permissions([], soul_version="")
+        return
+    if hasattr(soul, "model_dump"):
+        _evaluator.load_from_soul(soul.model_dump())
+    elif hasattr(soul, "dict"):
+        _evaluator.load_from_soul(soul.dict())
+    else:
+        _evaluator.load_from_soul(dict(soul))
 
 
 def _check_initialized():
@@ -102,22 +126,69 @@ async def list_servers():
     except ImportError:
         feature_enabled = False
 
+    degraded_reasons = []
+    runtime_errors = []
+
     if _registry is None:
         return {
             "servers": [],
             "total": 0,
             "active_count": 0,
             "feature_enabled": feature_enabled,
+            "registry_ready": False,
+            "evaluator_ready": _evaluator is not None,
+            "proxy_ready": _proxy is not None,
+            "vault_ready": _vault is not None,
+            "network_policy_ready": _network_policy is not None,
+            "runtime_degraded": bool(feature_enabled),
+            "degraded_reasons": (
+                ["MCP registry not initialized"] if feature_enabled else []
+            ),
+            "runtime_errors": [],
         }
 
-    servers = _registry.list_servers()
+    if feature_enabled and _evaluator is None:
+        degraded_reasons.append("MCP permission evaluator not initialized")
+    if feature_enabled and _proxy is None:
+        degraded_reasons.append("MCP proxy not initialized")
+    if feature_enabled and _vault is None:
+        degraded_reasons.append("MCP vault not initialized")
+    if feature_enabled and _network_policy is None:
+        degraded_reasons.append("MCP network policy not initialized")
+
+    try:
+        servers = _registry.list_servers()
+    except Exception as exc:
+        logger.error("Failed to list MCP servers: %s", exc)
+        degraded_reasons.append("MCP registry status unavailable")
+        runtime_errors.append(f"registry_error: {exc}")
+        return {
+            "servers": [],
+            "total": 0,
+            "active_count": 0,
+            "feature_enabled": feature_enabled,
+            "registry_ready": True,
+            "evaluator_ready": _evaluator is not None,
+            "proxy_ready": _proxy is not None,
+            "vault_ready": _vault is not None,
+            "network_policy_ready": _network_policy is not None,
+            "runtime_degraded": True,
+            "degraded_reasons": degraded_reasons,
+            "runtime_errors": runtime_errors,
+        }
+
     server_list = []
     for s in servers:
-        info = s.safe_summary()
-        info["kill_switch_id"] = s.kill_switch_id
-        info["registered_at"] = s.registered_at
-        info["tool_count"] = 0  # Populated on demand via detail/test
-        server_list.append(info)
+        try:
+            info = s.safe_summary()
+            info["kill_switch_id"] = s.kill_switch_id
+            info["registered_at"] = s.registered_at
+            info["tool_count"] = 0  # Populated on demand via detail/test
+            server_list.append(info)
+        except Exception as exc:
+            logger.error("Failed to summarize MCP server %s: %s", getattr(s, "server_id", "unknown"), exc)
+            degraded_reasons.append("MCP server summary unavailable")
+            runtime_errors.append(f"server_summary_error: {exc}")
 
     active_count = sum(
         1 for s in servers
@@ -129,6 +200,14 @@ async def list_servers():
         "total": len(server_list),
         "active_count": active_count,
         "feature_enabled": feature_enabled,
+        "registry_ready": True,
+        "evaluator_ready": _evaluator is not None,
+        "proxy_ready": _proxy is not None,
+        "vault_ready": _vault is not None,
+        "network_policy_ready": _network_policy is not None,
+        "runtime_degraded": bool(degraded_reasons or runtime_errors),
+        "degraded_reasons": degraded_reasons,
+        "runtime_errors": runtime_errors,
     }
 
 

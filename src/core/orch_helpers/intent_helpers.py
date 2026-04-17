@@ -153,6 +153,12 @@ def needs_research(prompt: str) -> bool:
         "remind me to", "remind me at", "create a reminder",
         "cron job", "set up a job", "create a job",
         "cancel the job", "delete the job", "list my jobs", "list scheduled jobs",
+        # Live environment / freshness-sensitive status checks
+        "health check", "system status", "current status",
+        "current system status", "runtime status", "service status",
+        "what's the status", "what is the status", "check status",
+        "check health", "current health", "uptime", "disk usage",
+        "memory usage", "what is running", "what's running",
     ]
     if any(phrase in prompt_lower for phrase in research_phrases):
         return True

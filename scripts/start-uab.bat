@@ -1,26 +1,35 @@
 @echo off
-REM ── start-uab.bat ──────────────────────────────────────────────────
-REM Starts the Universal App Bridge (UAB) daemon on Windows.
-REM UAB is licensed under MIT (see packages\uab\LICENSE).
-REM ────────────────────────────────────────────────────────────────────
+setlocal
 
 echo ================================================
-echo   Universal App Bridge (UAB) v0.5.0 — Daemon
-echo   Licensed under MIT
+echo   Universal App Bridge (UAB) v1.3.0 - Daemon
+echo   JSON-RPC compatibility bridge for Lancelot
 echo ================================================
 echo.
 
-cd /d "%~dp0..\packages\uab"
+pushd "%~dp0..\packages\uab" >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: packages\uab directory not found.
+    exit /b 1
+)
 
-REM Check if daemon is built
 if not exist "dist\daemon.js" (
-    echo dist\daemon.js not found — building UAB...
+    echo dist\daemon.js not found - building UAB...
     call npm install
+    if errorlevel 1 (
+        popd >nul
+        exit /b 1
+    )
     call npm run build
+    if errorlevel 1 (
+        popd >nul
+        exit /b 1
+    )
     echo.
 )
+popd >nul
 
 echo TIP: For auto-start on login, run scripts\install-uab.bat instead.
 echo.
 echo Starting UAB daemon on port 7900 (foreground)...
-node dist\daemon.js --port 7900
+call "%~dp0run-uab-daemon.bat"

@@ -8,6 +8,8 @@ import json
 import uuid
 import time
 import datetime
+import os
+from pathlib import Path
 from typing import Optional
 from urllib.request import urlopen, Request
 from urllib.error import URLError
@@ -26,6 +28,11 @@ class UCPConnector:
         self._audit_logger = audit_logger or AuditLogger()
         self._registered_merchants = {}  # domain -> manifest
         self._pending_transactions = {}  # transaction_id -> transaction info
+        self._state_file = Path(
+            os.getenv("LANCELOT_UCP_STATE_FILE", "/home/lancelot/data/ucp_pending_transactions.json")
+        )
+        self._state_file.parent.mkdir(parents=True, exist_ok=True)
+        self._load_pending_transactions()
 
     def discover_merchant(self, merchant_url: str) -> dict:
         """Discovers UCP capabilities from a merchant's well-known endpoint.
@@ -156,6 +163,7 @@ class UCPConnector:
         }
 
         self._pending_transactions[transaction_id] = transaction
+        self._save_pending_transactions()
 
         self._audit_logger.log_event(
             "UCP_TRANSACTION_INITIATED",
@@ -219,6 +227,7 @@ class UCPConnector:
             transaction["status"] = "completed"
             transaction["result"] = result
             transaction["completed_at"] = datetime.datetime.utcnow().isoformat()
+            self._save_pending_transactions()
 
             self._audit_logger.log_event(
                 "UCP_TRANSACTION_COMPLETED",
@@ -230,6 +239,7 @@ class UCPConnector:
         except (URLError, Exception) as e:
             transaction["status"] = "failed"
             transaction["error"] = str(e)
+            self._save_pending_transactions()
 
             self._audit_logger.log_event(
                 "UCP_TRANSACTION_FAILED",
@@ -248,3 +258,25 @@ class UCPConnector:
             {"url": url, "name": manifest.get("name", "Unknown")}
             for url, manifest in self._registered_merchants.items()
         ]
+
+    def _load_pending_transactions(self) -> None:
+        if not self._state_file.exists():
+            return
+        try:
+            raw = self._state_file.read_text(encoding="utf-8").strip()
+            if not raw:
+                self._pending_transactions = {}
+                return
+            data = json.loads(raw)
+            self._pending_transactions = data if isinstance(data, dict) else {}
+        except Exception:
+            self._pending_transactions = {}
+
+    def _save_pending_transactions(self) -> None:
+        try:
+            self._state_file.write_text(
+                json.dumps(self._pending_transactions, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass

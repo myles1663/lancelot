@@ -51,6 +51,15 @@ PROVIDERS = {
         "signup": "https://build.nvidia.com/",
         "description": "Nemotron models via NIM, free tier available",
     },
+    "openai-codex": {
+        "name": "OpenAI (Codex/Pro)",
+        "env_var": None,
+        "env_provider": "openai-codex",
+        "prefix": None,
+        "signup": "https://chatgpt.com/",
+        "description": "ChatGPT Plus/Pro subscription via OAuth — flat rate, no per-token billing",
+        "oauth_only": True,
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -303,9 +312,13 @@ class OnboardingOrchestrator:
             "FLAGSHIP_SELECTION": OnboardingState.FLAGSHIP_SELECTION,
             "HANDSHAKE": OnboardingState.CREDENTIALS_CAPTURE,
             "ANTHROPIC_OAUTH_WAITING": OnboardingState.CREDENTIALS_CAPTURE,  # V28: OAuth browser flow
+            "OPENAI_CODEX_OAUTH_WAITING": OnboardingState.CREDENTIALS_CAPTURE,  # Codex OAuth browser flow
             "PROVIDER_MODE_SELECTION": OnboardingState.CREDENTIALS_CAPTURE,  # V27: shares credential phase
             "LOCAL_UTILITY_SETUP": OnboardingState.LOCAL_UTILITY_SETUP,
             "COMMS_SELECTION": OnboardingState.COMMS_SELECTION,
+            "AUTH_MODEL_SELECTION": OnboardingState.CREDENTIALS_CAPTURE,
+            "LOCAL_AUTH_SETUP": OnboardingState.CREDENTIALS_CAPTURE,
+            "ENTERPRISE_AUTH_SETUP": OnboardingState.CREDENTIALS_CAPTURE,
             "FINAL_CHECKS": OnboardingState.FINAL_CHECKS,
             "READY": OnboardingState.READY,
         }
@@ -342,6 +355,7 @@ class OnboardingOrchestrator:
 
         V27 flow: WELCOME -> FLAGSHIP_SELECTION -> HANDSHAKE -> PROVIDER_MODE_SELECTION
                   -> LOCAL_UTILITY_SETUP -> COMMS_SELECTION -> [comms sub-states]
+                  -> AUTH_MODEL_SELECTION -> LOCAL_AUTH_SETUP|ENTERPRISE_AUTH_SETUP
                   -> FINAL_CHECKS -> READY
         """
         # v4: COOLDOWN replaces permanent LOCKDOWN — check snapshot first
@@ -364,7 +378,7 @@ class OnboardingOrchestrator:
         provider_info = PROVIDERS.get(provider, {})
         env_var = provider_info.get("env_var", "")
         api_key = self._get_env_value(env_var) if env_var else None
-        if not api_key:
+        if not api_key and env_var:
             api_key = os.getenv(env_var)
         # Also check Vault-backed secret_cache (key may only be in Vault)
         if not api_key and env_var:
@@ -417,7 +431,26 @@ class OnboardingOrchestrator:
         if not comms_type:
             return "COMMS_SELECTION"
 
-        # Step 6: V16 — Security tokens must exist
+        # Step 6: War Room / enterprise auth must be configured
+        auth_provider = self._infer_auth_provider()
+        if not auth_provider:
+            return "AUTH_MODEL_SELECTION"
+
+        if auth_provider == "local":
+            if not self._get_env_value("WARROOM_USERNAME") or not self._get_env_value("WARROOM_PASSWORD"):
+                return "LOCAL_AUTH_SETUP"
+        elif auth_provider == "oidc":
+            oidc_required = [
+                "OIDC_ISSUER_URL",
+                "OIDC_CLIENT_ID",
+                "OIDC_CLIENT_SECRET",
+            ]
+            if any(not self._get_env_value(key) for key in oidc_required):
+                return "ENTERPRISE_AUTH_SETUP"
+        else:
+            return "AUTH_MODEL_SELECTION"
+
+        # Step 7: V16 — Security tokens must exist
         if not self._has_security_tokens():
             return "FINAL_CHECKS"
 
@@ -429,6 +462,8 @@ class OnboardingOrchestrator:
 
     def _get_env_value(self, key):
         """Read a value from .env file (not just os.environ)."""
+        if not key:
+            return None
         val = os.getenv(key)
         if val:
             return val
@@ -446,7 +481,8 @@ class OnboardingOrchestrator:
     def _infer_provider_from_keys(self):
         """Backward compat: infer provider from which API key exists."""
         for provider_id, info in PROVIDERS.items():
-            if self._get_env_value(info["env_var"]):
+            env_var = info.get("env_var")
+            if env_var and self._get_env_value(env_var):
                 return provider_id
         adc_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
         if adc_path and os.path.exists(adc_path):
@@ -455,6 +491,20 @@ class OnboardingOrchestrator:
         if os.path.exists(default_adc):
             return "gemini"
         return None
+
+    def _infer_auth_provider(self):
+        """Backward compat: infer auth mode for upgraded installs."""
+        explicit = (self._get_env_value("LANCELOT_AUTH_PROVIDER") or "").strip().lower()
+        if explicit in {"local", "oidc"}:
+            return explicit
+
+        if self._get_env_value("OIDC_ISSUER_URL") and self._get_env_value("OIDC_CLIENT_ID"):
+            return "oidc"
+
+        if self._get_env_value("WARROOM_USERNAME") and self._get_env_value("WARROOM_PASSWORD"):
+            return "local"
+
+        return ""
 
     def _has_security_tokens(self):
         """Check if all three security tokens exist in vault, .env, or env."""
@@ -535,6 +585,8 @@ class OnboardingOrchestrator:
             "    Get a key at: https://console.x.ai/\n\n"
             "[5] NVIDIA Nemotron — Nemotron models via NIM, free tier available\n"
             "    Get a key at: https://build.nvidia.com/\n\n"
+            "[6] OpenAI Codex (Pro) — ChatGPT Plus/Pro subscription via OAuth\n"
+            "    No API key needed — uses your existing subscription at flat rate\n\n"
             "Enter the number of your choice:"
         )
 
@@ -548,6 +600,7 @@ class OnboardingOrchestrator:
             "3": "anthropic", "anthropic": "anthropic", "claude": "anthropic",
             "4": "xai", "xai": "xai", "grok": "xai",
             "5": "nvidia", "nvidia": "nvidia", "nemotron": "nvidia",
+            "6": "openai-codex", "codex": "openai-codex", "openai-codex": "openai-codex",
         }
 
         provider_id = provider_map.get(choice.lower())
@@ -556,6 +609,11 @@ class OnboardingOrchestrator:
 
         self.temp_data["provider"] = provider_id
         provider = PROVIDERS[provider_id]
+
+        # OpenAI Codex is OAuth-only — go straight to OAuth flow
+        if provider.get("oauth_only"):
+            return self._initiate_openai_codex_oauth()
+
         self.state = "HANDSHAKE"
 
         msg = f"**{provider['name']} Selected.**\n\n"
@@ -719,6 +777,74 @@ class OnboardingOrchestrator:
 
         return ("Please type **'done'** after completing browser authorization, "
                 "or **'cancel'** to use an API key instead.")
+
+    # ------------------------------------------------------------------
+    # OpenAI Codex OAuth flow
+    # ------------------------------------------------------------------
+
+    def _initiate_openai_codex_oauth(self) -> str:
+        """Start OpenAI Codex OAuth PKCE flow — generate auth URL for browser."""
+        try:
+            from openai_codex_oauth_manager import get_openai_codex_manager
+            manager = get_openai_codex_manager()
+            if manager is None:
+                self.state = "FLAGSHIP_SELECTION"
+                return ("Codex OAuth manager not available. Please choose a different provider.\n\n"
+                        + self._flagship_selection_prompt())
+
+            auth_url, state = manager.generate_auth_url()
+            self.temp_data["oauth_state"] = state
+            self.state = "OPENAI_CODEX_OAUTH_WAITING"
+
+            return (
+                "**OpenAI Codex OAuth Setup**\n\n"
+                "Please open this URL in your browser to sign in with your ChatGPT account:\n\n"
+                f"{auth_url}\n\n"
+                "After you authorize, the browser will redirect back to Lancelot.\n"
+                "Your ChatGPT Plus/Pro subscription will be used for API access (no per-token billing).\n\n"
+                "Type **'done'** once you see the success page, or **'cancel'** to choose a different provider."
+            )
+        except Exception as e:
+            self.state = "FLAGSHIP_SELECTION"
+            return f"Codex OAuth initialization failed: {e}\n\n" + self._flagship_selection_prompt()
+
+    def _handle_openai_codex_oauth_waiting(self, text: str) -> str:
+        """Handle user input while waiting for Codex OAuth browser completion."""
+        cmd = text.strip().lower()
+
+        if cmd == "cancel":
+            self.state = "FLAGSHIP_SELECTION"
+            return ("Codex OAuth cancelled.\n\n" + self._flagship_selection_prompt())
+
+        if cmd == "done":
+            try:
+                from openai_codex_oauth_manager import get_openai_codex_manager
+                manager = get_openai_codex_manager()
+                if manager and manager.get_token_status().get("configured"):
+                    self._write_env_values({
+                        "LANCELOT_AUTH_MODE": "OAUTH",
+                        "LANCELOT_PROVIDER": "openai-codex",
+                    }, section_comment="OpenAI Codex OAuth")
+                    self.fail_count = 0
+                    self.state = "PROVIDER_MODE_SELECTION"
+                    return (
+                        "**OAuth Authorized.** (OpenAI Codex)\n\n"
+                        "Your Lancelot instance is connected to your ChatGPT account.\n"
+                        "API calls will use your subscription at flat rate.\n\n"
+                        + self._provider_mode_prompt()
+                    )
+                else:
+                    return (
+                        "OAuth tokens not detected yet. Make sure you completed "
+                        "the browser authorization.\n\n"
+                        "Type **'done'** to check again, or **'cancel'** to choose "
+                        "a different provider."
+                    )
+            except Exception as e:
+                return f"Error checking Codex OAuth status: {e}\n\nType **'done'** or **'cancel'**."
+
+        return ("Please type **'done'** after completing browser authorization, "
+                "or **'cancel'** to choose a different provider.")
 
     def _validate_api_key_live(self, provider: str, key: str) -> dict:
         """Live HTTP probe to validate API key. Non-blocking on network errors."""
@@ -929,38 +1055,41 @@ class OnboardingOrchestrator:
     # ------------------------------------------------------------------
 
     def _comms_selection_prompt(self) -> str:
-        """Render the full comms selection menu with all connectors."""
+        """Render the comms selection menu for supported runtime backends."""
         return (
             "**Secure Comms Link**\n"
             "Select your communication channel:\n\n"
             "**Messaging (Bidirectional)**\n"
-            "[1] Telegram (Recommended) — Simple setup via BotFather\n"
-            "[2] Google Chat — Requires Google Cloud project\n"
-            "[3] Slack — Slack workspace integration\n"
-            "[4] Discord — Discord server integration\n"
-            "[5] Microsoft Teams — Teams via Graph API\n\n"
-            "**Notifications & Outreach**\n"
-            "[6] WhatsApp Business — WhatsApp via Meta Cloud API\n"
-            "[7] Email (SMTP) — Email via SMTP/IMAP\n"
-            "[8] SMS (Twilio) — SMS/MMS via Twilio\n\n"
-            "[9] Skip (Configure later in the War Room)"
+            "[1] Telegram (Recommended) - Simple setup via BotFather\n"
+            "[2] Google Chat - Requires Google Cloud project\n"
+            "\n"
+            "[3] Skip (Configure later in the War Room)\n\n"
+            "Additional channels remain connector-level capabilities until their "
+            "bidirectional runtime adapters are implemented."
         )
 
     def _handle_comms_selection(self, text: str) -> str:
-        """Handles comms connector selection — V16: all connectors."""
+        """Handles comms connector selection for supported runtime backends."""
         choice = text.strip().lower()
+
+        unsupported_choices = {
+            "4", "5", "6", "7", "8",
+            "slack", "discord", "teams", "microsoft teams", "ms teams",
+            "whatsapp", "email", "smtp", "sms", "twilio",
+        }
+        if choice in unsupported_choices:
+            return (
+                "That channel is not yet available as a bidirectional runtime backend. "
+                "Use Telegram or Google Chat for bonded comms, or configure the service "
+                "later through governed connectors.\n\n"
+                + self._comms_selection_prompt()
+            )
 
         # Map user input to connector ID
         selection_map = {
             "1": "telegram", "telegram": "telegram",
             "2": "google_chat", "google chat": "google_chat", "google": "google_chat", "gchat": "google_chat",
-            "3": "slack", "slack": "slack",
-            "4": "discord", "discord": "discord",
-            "5": "teams", "microsoft teams": "teams", "ms teams": "teams", "teams": "teams",
-            "6": "whatsapp", "whatsapp": "whatsapp",
-            "7": "email", "email": "email", "smtp": "email",
-            "8": "sms", "sms": "sms", "twilio": "sms",
-            "9": "skip", "skip": "skip",
+            "3": "skip", "9": "skip", "skip": "skip",
         }
 
         connector_id = selection_map.get(choice)
@@ -1248,11 +1377,168 @@ class OnboardingOrchestrator:
             return "Verification Failed. Code does not match. Try again."
 
     # ------------------------------------------------------------------
+    # Auth model setup
+    # ------------------------------------------------------------------
+
+    def _auth_model_prompt(self) -> str:
+        return (
+            "**War Room Authentication**\n\n"
+            "Choose how operators will sign in:\n\n"
+            "[1] Local Account (Recommended for personal and small-team deployments)\n"
+            "    Create a War Room username/password on this Lancelot instance.\n\n"
+            "[2] Enterprise SSO (OIDC)\n"
+            "    Sign in with your existing identity provider such as Entra, Okta, or Keycloak.\n\n"
+            "Enter your choice:"
+        )
+
+    def _handle_auth_model_selection(self, text: str) -> str:
+        choice = text.strip().lower()
+        selection_map = {
+            "1": "local", "local": "local",
+            "2": "oidc", "enterprise": "oidc", "oidc": "oidc", "sso": "oidc",
+        }
+        provider = selection_map.get(choice)
+        if not provider:
+            return "Invalid selection.\n\n" + self._auth_model_prompt()
+
+        self._write_env_values(
+            {"LANCELOT_AUTH_PROVIDER": provider},
+            "War Room Authentication",
+        )
+
+        if provider == "local":
+            self.temp_data["local_auth_stage"] = "username"
+            self.state = "LOCAL_AUTH_SETUP"
+            return (
+                "**Local authentication selected.**\n\n"
+                "Choose your War Room username:"
+            )
+
+        self.temp_data["enterprise_auth_stage"] = "issuer"
+        self.state = "ENTERPRISE_AUTH_SETUP"
+        return (
+            "**Enterprise SSO selected.**\n\n"
+            "Enter your OIDC issuer URL.\n"
+            "Example: `https://login.microsoftonline.com/<tenant>/v2.0` or `https://your-okta-domain/oauth2/default`"
+        )
+
+    def _handle_local_auth_setup(self, text: str) -> str:
+        stage = self.temp_data.get("local_auth_stage", "username")
+        value = text.strip()
+
+        if stage == "username":
+            if len(value) < 2 or not all(ch.isalnum() or ch in "._-" for ch in value):
+                return (
+                    "Username must be at least 2 characters and only use letters, numbers, dots, dashes, or underscores.\n\n"
+                    "Choose your War Room username:"
+                )
+            self.temp_data["warroom_username"] = value
+            self.temp_data["local_auth_stage"] = "password"
+            return "Enter your War Room password (minimum 8 characters):"
+
+        if stage == "password":
+            if len(value) < 8:
+                return "Password must be at least 8 characters.\n\nEnter your War Room password:"
+            self.temp_data["warroom_password"] = value
+            self.temp_data["local_auth_stage"] = "confirm_password"
+            return "Confirm your War Room password:"
+
+        if stage == "confirm_password":
+            if value != self.temp_data.get("warroom_password", ""):
+                self.temp_data["local_auth_stage"] = "password"
+                return (
+                    "Passwords do not match.\n\n"
+                    "Enter your War Room password again:"
+                )
+
+            self._write_env_values(
+                {
+                    "LANCELOT_AUTH_PROVIDER": "local",
+                    "WARROOM_USERNAME": self.temp_data.get("warroom_username", "admin"),
+                    "WARROOM_PASSWORD": self.temp_data.get("warroom_password", ""),
+                },
+                "War Room Local Authentication",
+            )
+            self.state = "FINAL_CHECKS"
+            return (
+                "**Local authentication configured.**\n\n"
+                + self._handle_final_checks()
+            )
+
+        self.temp_data["local_auth_stage"] = "username"
+        return self._handle_auth_model_selection("local")
+
+    def _handle_enterprise_auth_setup(self, text: str) -> str:
+        stage = self.temp_data.get("enterprise_auth_stage", "issuer")
+        value = text.strip()
+
+        if stage == "issuer":
+            if not value.startswith("http://") and not value.startswith("https://"):
+                return "Issuer URL must start with `http://` or `https://`.\n\nEnter your OIDC issuer URL:"
+            self.temp_data["oidc_issuer_url"] = value.rstrip("/")
+            self.temp_data["enterprise_auth_stage"] = "client_id"
+            return "Enter your OIDC client ID:"
+
+        if stage == "client_id":
+            if not value:
+                return "Client ID is required.\n\nEnter your OIDC client ID:"
+            self.temp_data["oidc_client_id"] = value
+            self.temp_data["enterprise_auth_stage"] = "client_secret"
+            return "Enter your OIDC client secret:"
+
+        if stage == "client_secret":
+            if not value:
+                return "Client secret is required.\n\nEnter your OIDC client secret:"
+            self.temp_data["oidc_client_secret"] = value
+            self.temp_data["enterprise_auth_stage"] = "allowed_groups"
+            return (
+                "Enter allowed OIDC groups separated by commas, or type `skip` to allow any authenticated enterprise user:"
+            )
+
+        if stage == "allowed_groups":
+            allowed_groups = "" if value.lower() == "skip" else value
+            self._write_env_values(
+                {
+                    "LANCELOT_AUTH_PROVIDER": "oidc",
+                    "OIDC_ISSUER_URL": self.temp_data.get("oidc_issuer_url", ""),
+                    "OIDC_CLIENT_ID": self.temp_data.get("oidc_client_id", ""),
+                    "OIDC_CLIENT_SECRET": self.temp_data.get("oidc_client_secret", ""),
+                    "OIDC_ALLOWED_GROUPS": allowed_groups,
+                },
+                "War Room Enterprise Authentication",
+            )
+            self.state = "FINAL_CHECKS"
+            return (
+                "**Enterprise SSO configured.**\n\n"
+                + self._handle_final_checks()
+            )
+
+        self.temp_data["enterprise_auth_stage"] = "issuer"
+        return self._handle_auth_model_selection("oidc")
+
+    # ------------------------------------------------------------------
     # V16: FINAL_CHECKS state
     # ------------------------------------------------------------------
 
     def _handle_final_checks(self) -> str:
         """Auto-generate missing config, display summary, advance to READY."""
+        auth_provider = self._infer_auth_provider()
+        if not auth_provider:
+            self.state = "AUTH_MODEL_SELECTION"
+            return self._auth_model_prompt()
+        if auth_provider == "local" and (
+            not self._get_env_value("WARROOM_USERNAME") or not self._get_env_value("WARROOM_PASSWORD")
+        ):
+            self.temp_data["local_auth_stage"] = "username"
+            self.state = "LOCAL_AUTH_SETUP"
+            return "War Room local authentication is not configured yet.\n\nChoose your War Room username:"
+        if auth_provider == "oidc":
+            oidc_required = ["OIDC_ISSUER_URL", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET"]
+            if any(not self._get_env_value(key) for key in oidc_required):
+                self.temp_data["enterprise_auth_stage"] = "issuer"
+                self.state = "ENTERPRISE_AUTH_SETUP"
+                return "Enterprise SSO is not configured yet.\n\nEnter your OIDC issuer URL:"
+
         generated = []
 
         # 1. Generate security tokens if missing
@@ -1280,32 +1566,16 @@ class OnboardingOrchestrator:
             except Exception:
                 pass
 
-        # 2. Generate War Room credentials if missing
-        warroom_creds = {}
-        warroom_password = None
-        if not self._get_env_value("WARROOM_USERNAME"):
-            warroom_creds["WARROOM_USERNAME"] = "admin"
-        if not self._get_env_value("WARROOM_PASSWORD"):
-            warroom_password = secrets.token_urlsafe(16)
-            warroom_creds["WARROOM_PASSWORD"] = warroom_password
-        if warroom_creds:
-            self._write_env_values(warroom_creds, "War Room Credentials (auto-generated)")
-            generated.append("War Room credentials generated")
-            # Also store in vault if available
-            try:
-                import secret_cache
-                if secret_cache.is_bootstrapped():
-                    import hashlib as _hlib
-                    from connectors.vault import CredentialVault as _OnbVault2
-                    _onb_vault2 = _OnbVault2(config_path="config/vault.yaml")
-                    if "WARROOM_USERNAME" in warroom_creds:
-                        _onb_vault2.store("system.warroom_username", warroom_creds["WARROOM_USERNAME"], type="system_secret")
-                    if warroom_password:
-                        _pw_hash = _hlib.sha256(warroom_password.encode("utf-8")).hexdigest()
-                        _onb_vault2.store("system.warroom_password_hash", _pw_hash, type="system_secret")
-                    secret_cache.bootstrap(_onb_vault2)
-            except Exception:
-                pass
+        # 2. Generate local-auth recovery code if missing
+        warroom_username = self._get_env_value("WARROOM_USERNAME")
+        password_reset_code = None
+        if auth_provider == "local" and not self._get_env_value("WARROOM_PASSWORD_RESET_CODE"):
+            password_reset_code = secrets.token_urlsafe(16)
+            self._write_env_values(
+                {"WARROOM_PASSWORD_RESET_CODE": password_reset_code},
+                "War Room Password Recovery",
+            )
+            generated.append("War Room password reset code generated")
 
         # 3. Write default feature flags if missing
         flags_written = {}
@@ -1356,16 +1626,25 @@ class OnboardingOrchestrator:
         msg += f"- Communications: {comms_display}\n"
         msg += f"- Security: Tokens configured\n"
         msg += f"- Feature Flags: Set\n"
+        msg += f"- War Room Auth: {'Enterprise SSO (OIDC)' if auth_provider == 'oidc' else 'Local Account'}\n"
         if uab_running:
             msg += f"- UAB Daemon: Running\n"
         else:
             msg += f"- UAB Daemon: Not running — run `scripts\\install-uab.bat` on the host for auto-start\n"
 
-        if warroom_password:
-            msg += f"\n**War Room Login Credentials:**\n"
-            msg += f"- Username: `admin`\n"
-            msg += f"- Password: `{warroom_password}`\n"
-            msg += f"*Save these credentials — you will need them to access the War Room.*\n"
+        if auth_provider == "local":
+            msg += f"\n**War Room Login:**\n"
+            msg += f"- Username: `{warroom_username or 'admin'}`\n"
+            msg += "*Use the password you created during setup.*\n"
+            if password_reset_code:
+                msg += f"- Password reset code: `{password_reset_code}`\n"
+                msg += "*Store this reset code securely. It is required for local password recovery from the login screen.*\n"
+        else:
+            msg += (
+                "\n**War Room Login:**\n"
+                "- Enterprise SSO is enabled.\n"
+                "*Users will sign in through your configured OIDC identity provider.*\n"
+            )
 
         if generated:
             msg += f"\n*Auto-configured: {', '.join(generated)}*\n"
@@ -1423,6 +1702,9 @@ class OnboardingOrchestrator:
         elif self.state == "ANTHROPIC_OAUTH_WAITING":
             return self._handle_anthropic_oauth_waiting(text)
 
+        elif self.state == "OPENAI_CODEX_OAUTH_WAITING":
+            return self._handle_openai_codex_oauth_waiting(text)
+
         elif self.state == "PROVIDER_MODE_SELECTION":
             return self._handle_provider_mode(text)
 
@@ -1449,6 +1731,15 @@ class OnboardingOrchestrator:
 
         elif self.state == "COMMS_VERIFY":
             return self._verify_handshake(text)
+
+        elif self.state == "AUTH_MODEL_SELECTION":
+            return self._handle_auth_model_selection(text)
+
+        elif self.state == "LOCAL_AUTH_SETUP":
+            return self._handle_local_auth_setup(text)
+
+        elif self.state == "ENTERPRISE_AUTH_SETUP":
+            return self._handle_enterprise_auth_setup(text)
 
         elif self.state == "FINAL_CHECKS":
             return self._handle_final_checks()

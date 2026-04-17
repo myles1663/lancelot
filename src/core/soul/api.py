@@ -11,20 +11,21 @@ Endpoints:
     POST /soul/proposals/{id}/approve    — owner approves a proposal
     POST /soul/proposals/{id}/activate   — owner activates an approved proposal
 
-All mutation endpoints require owner identity (Bearer token).
+All mutation endpoints require the Soul admin capability.
 """
 
 from __future__ import annotations
 
-import hmac
 import logging
 import os
 import threading
 from typing import Optional
 
 import yaml
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import get_api_key_identity, request_has_capability, resolve_operator_identity
 
 from src.core.soul.store import (
     Soul,
@@ -44,25 +45,101 @@ from src.core.soul.linter import lint, lint_or_raise
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/soul", tags=["soul"])
+router = APIRouter(
+    prefix="/soul",
+    tags=["soul"],
+    dependencies=[Depends(require_authenticated_request)],
+)
 
 # Soul directory — configurable via env or default
 _SOUL_DIR: Optional[str] = os.environ.get("SOUL_DIR", None)
-try:
-    import secret_cache
-    _API_TOKEN = secret_cache.get("LANCELOT_API_TOKEN", "") or os.environ.get("API_TOKEN", "")
-except Exception:
-    _API_TOKEN = os.environ.get("LANCELOT_API_TOKEN", os.environ.get("API_TOKEN", ""))
 _proposals_lock = threading.Lock()
 
 # V31: ActionCard factory — set by gateway.py during startup
 _actioncard_factory = None
+_runtime_reload_callback = None
 
 
 def init_soul_actioncards(factory) -> None:
     """Inject ActionCard factory for proposal notifications."""
     global _actioncard_factory
     _actioncard_factory = factory
+
+
+def init_soul_runtime(reload_callback) -> None:
+    """Inject a runtime callback for live Soul activation."""
+    global _runtime_reload_callback
+    _runtime_reload_callback = reload_callback
+
+
+def _approve_proposal_direct(
+    proposal_id: str,
+    *,
+    actor: str = "operator",
+):
+    """Approve a pending Soul proposal outside the HTTP request layer."""
+    with _proposals_lock:
+        proposals = list_proposals(_SOUL_DIR)
+        target = None
+        for p in proposals:
+            if p.id == proposal_id:
+                target = p
+                break
+
+        if target is None:
+            raise HTTPException(status_code=404, detail="Proposal not found")
+
+        if target.status != ProposalStatus.PENDING:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Proposal status is '{target.status}', expected 'pending'",
+            )
+
+        target.status = ProposalStatus.APPROVED
+        save_proposals(proposals, _SOUL_DIR)
+
+    logger.info(
+        "soul_approved: proposal=%s, version=%s, actor=%s",
+        target.id,
+        target.proposed_version,
+        actor,
+    )
+    return {"status": "approved", "proposal_id": target.id}
+
+
+def _reject_proposal_direct(
+    proposal_id: str,
+    *,
+    actor: str = "operator",
+):
+    """Reject a pending Soul proposal outside the HTTP request layer."""
+    with _proposals_lock:
+        proposals = list_proposals(_SOUL_DIR)
+        target = None
+        for p in proposals:
+            if p.id == proposal_id:
+                target = p
+                break
+
+        if target is None:
+            raise HTTPException(status_code=404, detail="Proposal not found")
+
+        if target.status != ProposalStatus.PENDING:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Proposal status is '{target.status}', expected 'pending'",
+            )
+
+        target.status = ProposalStatus.REJECTED
+        save_proposals(proposals, _SOUL_DIR)
+
+    logger.info(
+        "soul_rejected: proposal=%s, version=%s, actor=%s",
+        target.id,
+        target.proposed_version,
+        actor,
+    )
+    return {"status": "denied", "proposal_id": target.id}
 
 
 def _set_soul_dir(soul_dir: str) -> None:
@@ -72,17 +149,8 @@ def _set_soul_dir(soul_dir: str) -> None:
 
 
 def _verify_owner(request: Request) -> bool:
-    """Check that the request comes from the owner (Bearer token)."""
-    if not _API_TOKEN:
-        logger.warning(
-            "SECURITY: Soul API running in dev mode — no authentication token configured. "
-            "Set LANCELOT_API_TOKEN for production."
-        )
-        return True  # dev mode — no token configured
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        return hmac.compare_digest(auth_header[7:], _API_TOKEN)
-    return False
+    """Check that the request has the Soul admin capability."""
+    return request_has_capability(request, "soul.admin")
 
 
 def _get_active_overlays() -> list:
@@ -105,6 +173,18 @@ def _get_active_overlays() -> list:
     except Exception as exc:
         logger.debug("Could not load overlays: %s", exc)
         return []
+
+
+def _load_merged_active_soul() -> Soul:
+    """Load the active Soul and apply any currently enabled overlays."""
+    from src.core.soul.store import load_active_soul
+    from src.core.soul.layers import load_overlays, merge_soul
+
+    active_soul = load_active_soul(_SOUL_DIR)
+    overlays = load_overlays(_SOUL_DIR)
+    if overlays:
+        return merge_soul(active_soul, overlays)
+    return active_soul
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +223,7 @@ async def soul_content():
     """Return the full active soul document (with overlays merged) as structured JSON."""
     try:
         from src.core.soul.store import load_active_soul, _resolve_soul_dir
-        from src.core.soul.layers import load_overlays, merge_soul
+        from src.core.soul.layers import load_overlays
 
         base_soul = load_active_soul(_SOUL_DIR)
         d = _resolve_soul_dir(_SOUL_DIR)
@@ -155,7 +235,7 @@ async def soul_content():
         active_overlays = _get_active_overlays()
 
         if overlays:
-            merged = merge_soul(base_soul, overlays)
+            merged = _load_merged_active_soul()
             return {
                 "soul": merged.model_dump(),
                 "raw_yaml": raw_yaml,
@@ -179,7 +259,7 @@ async def soul_content():
 async def propose_amendment(request: Request):
     """Create a soul amendment proposal from edited YAML.
 
-    Body: {"proposed_yaml": "<full yaml text>", "author": "Commander"}
+    Body: {"proposed_yaml": "<full yaml text>"}
     """
     if not _verify_owner(request):
         raise HTTPException(status_code=403, detail="Owner identity required")
@@ -187,7 +267,10 @@ async def propose_amendment(request: Request):
     try:
         body = await request.json()
         proposed_yaml = body.get("proposed_yaml", "")
-        author = body.get("author", "Commander")
+        identity = resolve_operator_identity(request)
+        if identity is None:
+            identity = get_api_key_identity(request)
+        author = identity.display_name or identity.operator_id or "owner"
 
         if not proposed_yaml.strip():
             raise HTTPException(status_code=400, detail="proposed_yaml is required")
@@ -254,30 +337,9 @@ async def approve_proposal(proposal_id: str, request: Request):
     """Approve a pending soul amendment proposal. Owner only."""
     if not _verify_owner(request):
         raise HTTPException(status_code=403, detail="Owner identity required")
-
-    with _proposals_lock:
-        proposals = list_proposals(_SOUL_DIR)
-        target = None
-        for p in proposals:
-            if p.id == proposal_id:
-                target = p
-                break
-
-        if target is None:
-            raise HTTPException(status_code=404, detail="Proposal not found")
-
-        if target.status != ProposalStatus.PENDING:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Proposal status is '{target.status}', expected 'pending'",
-            )
-
-        target.status = ProposalStatus.APPROVED
-        save_proposals(proposals, _SOUL_DIR)
-
-    logger.info("soul_approved: proposal=%s, version=%s",
-                target.id, target.proposed_version)
-    return {"status": "approved", "proposal_id": target.id}
+    identity = resolve_operator_identity(request) or get_api_key_identity(request)
+    actor = identity.display_name or identity.operator_id or "operator"
+    return _approve_proposal_direct(proposal_id, actor=actor)
 
 
 # ---------------------------------------------------------------------------
@@ -341,8 +403,22 @@ async def activate_proposal(proposal_id: str, request: Request):
         version_file = d / "soul_versions" / f"soul_{soul.version}.yaml"
         version_file.write_text(target.proposed_yaml, encoding="utf-8")
 
+        previous_version = get_active_version(_SOUL_DIR)
+
         # Set active pointer
         set_active_version(soul.version, _SOUL_DIR)
+
+        # Refresh the live runtime before reporting success.
+        if _runtime_reload_callback is not None:
+            try:
+                runtime_soul = _load_merged_active_soul()
+                _runtime_reload_callback(runtime_soul)
+            except Exception as exc:
+                set_active_version(previous_version, _SOUL_DIR)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Activated Soul version {soul.version} on disk but failed to refresh runtime: {exc}",
+                )
 
         # Update proposal status
         target.status = ProposalStatus.ACTIVATED

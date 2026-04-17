@@ -7,12 +7,12 @@
 # UAB itself is licensed separately under MIT — see packages/uab/LICENSE.
 
 """
-UABProvider — Universal App Bridge Desktop App Control (v0.5.0)
+UABProvider — Universal App Bridge Desktop App Control (v0.6.0)
 ================================================================
 
 Framework-level desktop application control via the UAB daemon.
-Hooks into 7 framework plugins to give Lancelot structured, reliable
-access to any desktop app's interface.
+Hooks into 9 framework plugins (including Browser CDP and Claude Vision)
+to give Lancelot structured, reliable access to any desktop app's interface.
 
 Gated by: FEATURE_TOOLS_UAB (default: false)
 Requires: FEATURE_TOOLS_FABRIC, FEATURE_TOOLS_HOST_BRIDGE
@@ -21,14 +21,17 @@ Architecture:
     Container (Lancelot)
         |-- HTTP --> host.docker.internal:7900 (UAB daemon, JSON-RPC 2.0)
                          |-- CDP ------------> Electron apps
+                         |-- Browser CDP ----> Chrome, Edge, Brave, Vivaldi, Opera
+                         |-- Chrome Ext WS --> Browser (no relaunch, port 8787)
                          |-- Win-UIA --------> WPF, WinForms, native Win32 (fallback)
                          |-- Qt UIA ---------> Qt5/Qt6 apps
                          |-- GTK UIA --------> GTK3/GTK4 apps
                          |-- JAB → UIA ------> Java Swing/JavaFX apps
                          |-- Flutter UIA ----> Flutter Windows apps
                          |-- Office UIA -----> Word, Excel, PowerPoint, Outlook
+                         |-- Vision ---------> Screenshot + Claude AI (last resort)
 
-Capabilities (v0.5.0):
+Capabilities (v0.6.0):
     - Smart element caching with TTL (5s tree, 3s query, 2s state)
     - Connection health monitoring + auto-reconnect
     - Permission model with risk levels + audit log
@@ -37,6 +40,14 @@ Capabilities (v0.5.0):
     - Office document operations (read/write cells, documents, emails)
     - Window management (minimize, maximize, move, resize, screenshot)
     - Keyboard input (keypress, hotkey combos)
+    - Browser control (CDP): tabs, cookies, storage, navigation, JS execution
+    - Spatial Map engine: structured UI layout replaces screenshots
+    - Composite query engine: UIA + bounding rects + text + optional vision
+    - Vision fallback: Claude Vision API for universal app coverage
+    - App registry with JSON persistence across sessions
+    - Chrome extension bridge for zero-relaunch browser control
+    - MCP server for Claude Desktop integration (17 tools)
+    - AgentSDK high-level workflow API
 
 Security model:
     - UAB daemon runs on host machine (started from packages/uab/)
@@ -188,6 +199,48 @@ class UABProvider(BaseProvider):
     def capabilities(self) -> List[Capability]:
         return [Capability.APP_CONTROL]
 
+    def _normalize_connection(self, item: Any) -> Dict[str, Any]:
+        """Normalize daemon connection metadata across daemon versions."""
+        if not isinstance(item, dict):
+            return {}
+        return {
+            "pid": item.get("pid", 0),
+            "name": item.get("name", "unknown"),
+            "framework": item.get("framework", "unknown"),
+            "connection_method": item.get("connectionMethod") or item.get("method"),
+            "element_count": item.get("elementCount", 0),
+            "window_title": item.get("windowTitle"),
+        }
+
+    def _normalize_status(self, info: Any) -> Dict[str, Any]:
+        """Normalize daemon status metadata across compatibility layers."""
+        if not isinstance(info, dict):
+            return {
+                "version": "unknown",
+                "connected_apps": 0,
+                "supported_frameworks": [],
+                "transport": "json-rpc",
+                "standalone_features": [],
+                "connections": [],
+            }
+
+        connections = info.get("connections", [])
+        normalized_connections = []
+        if isinstance(connections, list):
+            normalized_connections = [
+                conn for conn in (self._normalize_connection(item) for item in connections)
+                if conn
+            ]
+
+        return {
+            "version": info.get("version", "unknown"),
+            "connected_apps": info.get("connectedApps", len(normalized_connections)),
+            "supported_frameworks": info.get("supportedFrameworks", []) or [],
+            "transport": info.get("transport", "json-rpc"),
+            "standalone_features": info.get("standaloneFeatures", []) or [],
+            "connections": normalized_connections,
+        }
+
     # =========================================================================
     # JSON-RPC Communication
     # =========================================================================
@@ -256,19 +309,14 @@ class UABProvider(BaseProvider):
     def health_check(self) -> ProviderHealth:
         """Check if the UAB daemon is reachable and operational."""
         try:
-            # Try a lightweight RPC call
-            info = self._rpc_call("getStatus", timeout=self.config.connect_timeout_s)
-
-            connected_count = 0
-            frameworks = []
-            if isinstance(info, dict):
-                connected_count = info.get("connectedApps", 0)
-                frameworks = info.get("supportedFrameworks", [])
+            info = self._normalize_status(
+                self._rpc_call("getStatus", timeout=self.config.connect_timeout_s)
+            )
 
             return ProviderHealth(
                 provider_id=self.provider_id,
                 state=ProviderState.HEALTHY,
-                version=info.get("version", "unknown") if isinstance(info, dict) else "unknown",
+                version=info["version"],
                 last_check=datetime.now(timezone.utc).isoformat(),
                 capabilities=[c.value for c in self.capabilities],
                 degraded_reasons=[],
@@ -276,8 +324,10 @@ class UABProvider(BaseProvider):
                 metadata={
                     "mode": "uab_bridge",
                     "daemon_url": self.config.daemon_url,
-                    "connected_apps": connected_count,
-                    "supported_frameworks": frameworks,
+                    "connected_apps": info["connected_apps"],
+                    "supported_frameworks": info["supported_frameworks"],
+                    "transport": info["transport"],
+                    "standalone_features": info["standalone_features"],
                 },
             )
         except Exception as e:
@@ -294,6 +344,16 @@ class UABProvider(BaseProvider):
                     "daemon_url": self.config.daemon_url,
                 },
             )
+
+    def get_daemon_status(self) -> Dict[str, Any]:
+        """Return normalized daemon status metadata."""
+        try:
+            return self._normalize_status(
+                self._rpc_call("getStatus", timeout=self.config.connect_timeout_s)
+            )
+        except Exception as e:
+            logger.warning("UAB status query failed: %s", e)
+            return self._normalize_status(None)
 
     # =========================================================================
     # AppControl Capability
@@ -334,12 +394,13 @@ class UABProvider(BaseProvider):
 
             pid = result.get("pid", 0)
             success = result.get("success", False)
+            connection_method = result.get("connectionMethod") or result.get("method")
 
             if success:
                 self._connected_apps[pid] = {
                     "name": result.get("name", "unknown"),
                     "framework": result.get("framework"),
-                    "connection_method": result.get("connectionMethod"),
+                    "connection_method": connection_method,
                     "connected_at": datetime.now(timezone.utc).isoformat(),
                 }
 
@@ -347,7 +408,7 @@ class UABProvider(BaseProvider):
                 success=success,
                 pid=pid,
                 framework=result.get("framework"),
-                connection_method=result.get("connectionMethod"),
+                connection_method=connection_method,
                 error_message=result.get("error"),
             )
 
@@ -695,6 +756,216 @@ class UABProvider(BaseProvider):
             return []
 
     # =========================================================================
+    # v0.6.0: Spatial Map / Composite Engine
+    # =========================================================================
+
+    def spatial_map(self, pid: int, format: str = "detailed") -> Dict[str, Any]:
+        """Get a spatial map of an app's UI (rows, grid, text content).
+
+        This replaces screenshots for most use cases — structured data
+        is faster and more accurate for AI to process.
+
+        Args:
+            pid: Process ID of connected app.
+            format: 'detailed', 'compact', or 'json'.
+
+        Returns:
+            CompositeResult dict with spatialMap, timing, textContent.
+        """
+        try:
+            result = self._rpc_call("spatialMap", {"pid": pid, "options": {"mapFormat": format}})
+            return result if isinstance(result, dict) else {"error": "Invalid response"}
+        except Exception as e:
+            logger.warning("UAB spatialMap failed: %s", e)
+            return {"error": str(e)[:200]}
+
+    def text_map(self, pid: int, format: str = "detailed") -> Dict[str, Any]:
+        """Get a text-based UI map for AI consumption (replaces screenshots).
+
+        Args:
+            pid: Process ID of connected app.
+            format: 'detailed', 'compact', or 'json'.
+
+        Returns:
+            Dict with 'text' (the map string) and 'timing' (ms).
+        """
+        try:
+            result = self._rpc_call("textMap", {"pid": pid, "format": format})
+            return result if isinstance(result, dict) else {"error": "Invalid response"}
+        except Exception as e:
+            logger.warning("UAB textMap failed: %s", e)
+            return {"error": str(e)[:200]}
+
+    def find_by_description(self, pid: int, description: str) -> List[Dict[str, Any]]:
+        """Find UI elements by natural language description using spatial map.
+
+        Args:
+            pid: Process ID of connected app.
+            description: Natural language description of the element (e.g., "Save button").
+
+        Returns:
+            List of matching SpatialElement dicts.
+        """
+        try:
+            result = self._rpc_call("findByDescription", {"pid": pid, "description": description})
+            return result if isinstance(result, list) else []
+        except Exception as e:
+            logger.warning("UAB findByDescription failed: %s", e)
+            return []
+
+    def focused(self, pid: int) -> Dict[str, Any]:
+        """Get the currently focused element for a window."""
+        try:
+            result = self._rpc_call("focused", {"pid": pid})
+            return result if isinstance(result, dict) else {}
+        except Exception as e:
+            logger.warning("UAB focused failed: %s", e)
+            return {"error": str(e)[:200]}
+
+    def find_by_path(
+        self,
+        pid: int,
+        *,
+        path: Optional[List[str]] = None,
+        name: Optional[str] = None,
+        parent: Optional[str] = None,
+        element_type: Optional[str] = None,
+        occurrence: Optional[Union[str, int]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Find UI elements by path or parent context."""
+        params: Dict[str, Any] = {"pid": pid}
+        if path:
+            params["path"] = path
+        if name:
+            params["name"] = name
+        if parent:
+            params["parent"] = parent
+        if element_type:
+            params["type"] = element_type
+        if occurrence is not None:
+            params["occurrence"] = occurrence
+
+        try:
+            result = self._rpc_call("findByPath", params)
+            if isinstance(result, dict):
+                elements = result.get("elements", [])
+                return elements if isinstance(elements, list) else []
+            return result if isinstance(result, list) else []
+        except Exception as e:
+            logger.warning("UAB findByPath failed: %s", e)
+            return []
+
+    def watch_changes(
+        self,
+        pid: int,
+        duration_ms: int = 3000,
+        poll_ms: int = 200,
+    ) -> List[Dict[str, Any]]:
+        """Watch for state changes on a window over a short interval."""
+        try:
+            result = self._rpc_call(
+                "watchChanges",
+                {"pid": pid, "durationMs": duration_ms, "pollMs": poll_ms},
+                timeout=max(self.config.read_timeout_s, int(duration_ms / 1000) + 5),
+            )
+            if isinstance(result, dict):
+                events = result.get("events", [])
+                return events if isinstance(events, list) else []
+            return result if isinstance(result, list) else []
+        except Exception as e:
+            logger.warning("UAB watchChanges failed: %s", e)
+            return []
+
+    def atomic_chain(
+        self,
+        pid: int,
+        steps: List[Dict[str, Any]],
+        label: str = "atomic-chain",
+    ) -> Dict[str, Any]:
+        """Execute an atomic multi-step input chain."""
+        try:
+            result = self._rpc_call("atomicChain", {"pid": pid, "steps": steps, "label": label})
+            return result if isinstance(result, dict) else {"success": False, "error": "Invalid response"}
+        except Exception as e:
+            logger.warning("UAB atomicChain failed: %s", e)
+            return {"success": False, "error": str(e)[:200]}
+
+    def smart_invoke(
+        self,
+        pid: int,
+        name: str,
+        *,
+        parent: Optional[str] = None,
+        element_type: Optional[str] = None,
+        occurrence: Optional[Union[str, int]] = None,
+    ) -> Dict[str, Any]:
+        """Invoke an element using the daemon's best-effort strategy."""
+        params: Dict[str, Any] = {"pid": pid, "name": name}
+        if parent:
+            params["parent"] = parent
+        if element_type:
+            params["type"] = element_type
+        if occurrence is not None:
+            params["occurrence"] = occurrence
+
+        try:
+            result = self._rpc_call("smartInvoke", params)
+            return result if isinstance(result, dict) else {"success": False, "error": "Invalid response"}
+        except Exception as e:
+            logger.warning("UAB smartInvoke failed: %s", e)
+            return {"success": False, "error": str(e)[:200]}
+
+    # =========================================================================
+    # v0.6.0: Browser Operations
+    # =========================================================================
+
+    def navigate(self, pid: int, url: str) -> AppActionResult:
+        """Navigate browser to a URL."""
+        return self.act(pid, "", "navigate", {"url": url})
+
+    def get_tabs(self, pid: int) -> AppActionResult:
+        """List all browser tabs."""
+        return self.act(pid, "", "getTabs")
+
+    def switch_tab(self, pid: int, tab_id: str) -> AppActionResult:
+        """Switch to a browser tab by ID or index."""
+        return self.act(pid, "", "switchTab", {"tabId": tab_id})
+
+    def execute_script(self, pid: int, script: str) -> AppActionResult:
+        """Execute JavaScript in the browser."""
+        return self.act(pid, "", "executeScript", {"script": script})
+
+    def get_cookies(self, pid: int, url: str = "", domain: str = "") -> AppActionResult:
+        """Get browser cookies, optionally filtered by URL or domain."""
+        params: Dict[str, Any] = {}
+        if url:
+            params["url"] = url
+        if domain:
+            params["domain"] = domain
+        return self.act(pid, "", "getCookies", params)
+
+    def set_cookie(self, pid: int, name: str, value: str,
+                   domain: str = "", url: str = "") -> AppActionResult:
+        """Set a browser cookie."""
+        params: Dict[str, Any] = {"cookieName": name, "cookieValue": value}
+        if domain:
+            params["domain"] = domain
+        if url:
+            params["url"] = url
+        return self.act(pid, "", "setCookie", params)
+
+    def get_local_storage(self, pid: int, key: str = "") -> AppActionResult:
+        """Get localStorage value(s) from browser."""
+        params: Dict[str, Any] = {}
+        if key:
+            params["storageKey"] = key
+        return self.act(pid, "", "getLocalStorage", params)
+
+    def set_local_storage(self, pid: int, key: str, value: str) -> AppActionResult:
+        """Set a localStorage value in the browser."""
+        return self.act(pid, "", "setLocalStorage", {"storageKey": key, "storageValue": value})
+
+    # =========================================================================
     # Helpers
     # =========================================================================
 
@@ -720,7 +991,24 @@ class UABProvider(BaseProvider):
 
     def get_connected_apps(self) -> Dict[int, Dict[str, Any]]:
         """Return locally tracked connected apps (for War Room panel)."""
-        return dict(self._connected_apps)
+        if self._connected_apps:
+            return dict(self._connected_apps)
+
+        status = self.get_daemon_status()
+        connections = status.get("connections", [])
+        result: Dict[int, Dict[str, Any]] = {}
+        for item in connections:
+            pid = item.get("pid", 0)
+            if not pid:
+                continue
+            result[pid] = {
+                "name": item.get("name", "unknown"),
+                "framework": item.get("framework"),
+                "connection_method": item.get("connection_method"),
+                "element_count": item.get("element_count", 0),
+                "window_title": item.get("window_title"),
+            }
+        return result
 
     def get_app_name(self, pid: int) -> str:
         """Get the name of a connected app by PID."""

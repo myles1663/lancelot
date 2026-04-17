@@ -8,7 +8,11 @@ echo.
 
 :: Stop the running agent via shutdown endpoint
 echo  Stopping running agent...
-curl -s -X POST -H "Authorization: Bearer lancelot-host-agent" http://127.0.0.1:9111/shutdown >nul 2>&1
+if defined HOST_AGENT_TOKEN (
+    if not "%HOST_AGENT_TOKEN%"=="lancelot-host-agent" (
+        curl -s -X POST -H "Authorization: Bearer %HOST_AGENT_TOKEN%" http://127.0.0.1:9111/shutdown >nul 2>&1
+    )
+)
 timeout /t 2 /nobreak >nul
 
 :: Kill any remaining pythonw agent processes

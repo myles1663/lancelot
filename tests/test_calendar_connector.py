@@ -2,15 +2,30 @@
 Tests for Prompt 39: CalendarConnector.
 """
 
+import os
 import pytest
 from src.connectors.connectors.calendar import CalendarConnector
 from src.connectors.models import HTTPMethod
+from src.core import feature_flags
 from src.core.governance.models import RiskTier
 
 
 @pytest.fixture
 def cal():
     return CalendarConnector()
+
+
+@pytest.fixture(autouse=True)
+def enable_google_oauth(monkeypatch):
+    old = os.environ.get("FEATURE_GOOGLE_OAUTH")
+    monkeypatch.setenv("FEATURE_GOOGLE_OAUTH", "true")
+    feature_flags.reload_flags()
+    yield
+    if old is None:
+        monkeypatch.delenv("FEATURE_GOOGLE_OAUTH", raising=False)
+    else:
+        monkeypatch.setenv("FEATURE_GOOGLE_OAUTH", old)
+    feature_flags.reload_flags()
 
 
 class TestCalendarConnector:
@@ -94,3 +109,24 @@ class TestCalendarConnector:
             params = {"event_id": "e1", "time_min": "a", "time_max": "b", "summary": "s", "start": "s", "end": "e"}
             result = cal.execute(op_id, params)
             assert result.credential_vault_key == "calendar.google_token"
+
+    def test_calendar_disabled_when_google_oauth_flag_off(self, monkeypatch):
+        old = os.environ.get("FEATURE_GOOGLE_OAUTH")
+        monkeypatch.setenv("FEATURE_GOOGLE_OAUTH", "false")
+        feature_flags.reload_flags()
+
+        class _Vault:
+            def exists(self, key):
+                return key == "calendar.google_token"
+
+        try:
+            cal = CalendarConnector(vault=_Vault())
+            assert cal.validate_credentials() is False
+            with pytest.raises(RuntimeError, match="Google OAuth is disabled"):
+                cal.execute("read_events", {})
+        finally:
+            if old is None:
+                monkeypatch.delenv("FEATURE_GOOGLE_OAUTH", raising=False)
+            else:
+                monkeypatch.setenv("FEATURE_GOOGLE_OAUTH", old)
+            feature_flags.reload_flags()

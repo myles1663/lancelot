@@ -18,15 +18,24 @@ import os
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability
 
 from src.shared.receipts import ReceiptService
 
 logger = logging.getLogger("lancelot.compliance.api")
 
-router = APIRouter(prefix="/api/compliance", tags=["compliance"])
+router = APIRouter(
+    prefix="/api/compliance",
+    tags=["compliance"],
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("compliance.admin")),
+    ],
+)
 
 # Module-level references, set during app startup
 _receipt_service: Optional[ReceiptService] = None
@@ -131,6 +140,7 @@ async def generate_export(body: ExportRequest, request: Request):
         period_end=body.period_end,
         data_dir=_data_dir,
         operator_id=identity.operator_id,
+        operator_display_name=identity.display_name,
         session_id=identity.session_id,
         quest_id=body.quest_id,
         anomaly_threshold=body.anomaly_threshold,

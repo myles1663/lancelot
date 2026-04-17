@@ -21,6 +21,17 @@ from typing import Any, Dict, List, Optional, Set
 from src.shared.receipts import ActionType, Receipt
 from src.compliance.chain_integrity import ChainIntegrityResult
 from src.compliance.redaction import redact_receipts
+from src.compliance.audit_report import (
+    build_attribution_summary,
+    build_evidence_entry,
+    build_exception_summary,
+    build_export_scope,
+    build_integrity_block,
+    build_legacy_attribution_summary,
+    build_system_context,
+    collect_soul_versions,
+    summarize_evidence_entries,
+)
 
 
 # PII-related receipt types and metadata keys
@@ -149,6 +160,9 @@ def _build_processing_record(
         "total_actions": len(quest_receipts),
         "period_start": start_time,
         "period_end": end_time,
+        "evidence_summary": summarize_evidence_entries(
+            build_evidence_entry(receipt) for receipt in quest_receipts
+        ),
     }
 
 
@@ -160,6 +174,7 @@ def transform_gdpr(
     operator_id: str,
     generated_at: str,
     export_id: str,
+    operator_display_name: str = "",
 ) -> Dict[str, Any]:
     """Transform receipts into GDPR Article 30 Processing Record format."""
 
@@ -186,27 +201,76 @@ def transform_gdpr(
     # Separate PII and non-PII quests
     pii_quests = [r for r in processing_records if r["personal_data_processed"]]
     non_pii_quests = [r for r in processing_records if not r["personal_data_processed"]]
+    evidence_entries = [build_evidence_entry(rd) for rd in redacted]
+    soul_versions = collect_soul_versions(redacted)
+    recipients = sorted(
+        {
+            recipient
+            for record in processing_records
+            for recipient in record.get("recipients", [])
+        }
+    )
+    pii_categories = sorted(
+        {
+            category
+            for record in pii_quests
+            for category in record.get("categories_of_personal_data", [])
+        }
+    )
 
     return {
         "export_metadata": {
             "format": "GDPR_ARTICLE_30",
-            "format_version": "1.0",
+            "format_version": "2.0",
             "generated_at": generated_at,
-            "generated_by": {"operator_id": operator_id},
+            "generated_by": {
+                "operator_id": operator_id,
+                "display_name": operator_display_name or operator_id,
+            },
             "period_start": period_start,
             "period_end": period_end,
             "export_id": export_id,
             "receipt_count": len(receipts),
             "chain_integrity": chain_result.status,
-            "chain_anomaly_detail": (
-                chain_result.to_dict() if not chain_result.is_intact else None
-            ),
+            "chain_anomaly_detail": build_integrity_block(
+                chain_result, export_id
+            )["chain_anomaly_detail"],
         },
+        "system_context": build_system_context(
+            generated_at=generated_at,
+            operator_id=operator_id,
+            operator_display_name=operator_display_name,
+            format_name="GDPR_ARTICLE_30",
+            format_version="2.0",
+            active_soul_versions=soul_versions,
+        ),
+        "export_scope": build_export_scope(
+            period_start,
+            period_end,
+            receipt_count=len(receipts),
+            quest_count=len(processing_records),
+        ),
+        "integrity": build_integrity_block(chain_result, export_id),
+        "evidence_population_summary": summarize_evidence_entries(
+            evidence_entries
+        ),
+        "operator_attribution_summary": build_attribution_summary(redacted),
+        "exception_summary": build_exception_summary(
+            evidence_entries, include_legacy_attribution=False
+        ),
+        "legacy_attribution_summary": build_legacy_attribution_summary(
+            evidence_entries
+        ),
         "processing_activities": {
             "total_quests": len(processing_records),
             "quests_with_personal_data": len(pii_quests),
             "quests_without_personal_data": len(non_pii_quests),
             "records": processing_records,
+        },
+        "processing_summary": {
+            "unique_recipients": recipients,
+            "pii_categories_observed": pii_categories,
+            "quests_requiring_article_30_attention": len(pii_quests),
         },
         "pii_category_note": (
             "PII categories are derived from the PII scrubbing pipeline. "

@@ -74,6 +74,14 @@ def mock_httpx_client():
         yield mock_instance
 
 
+@pytest.fixture(autouse=True)
+def isolated_webhook_pending_file(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "LANCELOT_WEBHOOK_PENDING_FILE",
+        str(tmp_path / "webhook-pending.json"),
+    )
+
+
 # ── Lifecycle ────────────────────────────────────────────────────
 
 

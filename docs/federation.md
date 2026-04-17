@@ -66,7 +66,7 @@ Mode is derived automatically from the topology shape — not configured directl
 | `contradiction_detector.py` | Receipt DAG consistency checking |
 | `receipt_manager.py` | Federation receipt emission |
 | `receipts.py` | Federation-specific receipt schema |
-| `audit.py` | Cross-instance forensic timeline reconstruction |
+| `audit.py` | Cross-instance forensic timeline reconstruction with persisted audit log |
 | `graph_models.py` | Graph Builder data models |
 | `graph_api.py` | Graph Builder REST API |
 | `graph_persistence.py` | Topology document storage |
@@ -104,6 +104,7 @@ All inter-instance HTTP requests include signed headers:
 - Nonces are persisted in SQLite and deduplicated
 - Timestamp window: ±30 seconds (configurable via `auth_timestamp_window_s`)
 - Nonces older than 120 seconds are pruned automatically
+- Pending mutual-registration handshakes are persisted with bounded TTL, so a restart during `/peer/register -> /peer/confirm` does not silently drop the in-flight peer trust exchange.
 
 ---
 
@@ -135,6 +136,9 @@ Each instance emits heartbeats at a configurable interval (default: 2 seconds).
 | **CRITICAL** | 20–30s | Likely connectivity issue |
 | **LOST** | > 30s | Instance unreachable |
 
+The heartbeat mesh now subscribes to newly registered peers and removes dropped peers immediately, so federation SSE coverage follows live topology changes without requiring a restart.
+Subscription status is now connection-truthful instead of task-truthful: peers report `connecting`, `connected`, `reconnecting`, `failed`, or `disconnected` from the real SSE state instead of showing a generic "active" status whenever a reconnect loop task exists.
+
 ---
 
 ## Soul Propagation
@@ -154,7 +158,7 @@ Soul updates are pushed from root to all instances using a **3-tier risk model**
 
 ### T3 — Critical Changes (Risk Rules, Scheduling, Budgets)
 
-- Full stop → Push → Activate → Per-instance confirmation required
+- Full stop → Push → Activate → Per-instance confirmation required before resume
 - Most disruptive but safest
 
 ### Soul Consistency States
@@ -169,6 +173,22 @@ Soul updates are pushed from root to all instances using a **3-tier risk model**
 ### MCP Ceiling Enforcement
 
 When a Soul is pushed to a child/peer, the child's `mcp_permissions` are intersected with the root's. This enforces the **monotonic narrowing** principle — child instances can only have equal or more restrictive MCP permissions.
+
+### Runtime Soul Transport Contract
+
+The federation Soul transport is now a live runtime boundary rather than a planning stub:
+
+- `GET /api/federation/soul` returns the current active runtime Soul document plus its deterministic hash.
+- `POST /api/federation/soul/update` is a **root-authority** path. Only authenticated peers registered as `role=root` can push a runtime Soul update into another instance.
+- incoming Soul pushes validate the pushed Soul as a real Soul document, lint it, verify the supplied hash, narrow `mcp_permissions` against the receiver's current runtime Soul ceiling, persist the version locally, refresh the live runtime, and emit a fresh heartbeat so peers can observe the new hash immediately.
+- the sender hash is validated against the raw pushed Soul first; if the receiver enforces an MCP ceiling, the applied local Soul hash is recomputed from the narrowed document instead of rejecting the push as if it were tampered in transit.
+- `POST /api/federation/soul/handshake` now evaluates a real remote Soul document against the live local runtime Soul and returns compatibility metadata instead of doing a hash-only comparison.
+- the gateway instantiates the `SoulPropagationEngine`, and `push_soul_update(...)` now records live T1/T2/T3 rollout state so `/api/federation/status` reports real Soul consistency and active propagation events instead of static placeholders.
+- push results are also summarized through the Soul handshake model, so governance gaps and timed-out peer acknowledgements are surfaced explicitly instead of being left as silent transport failures.
+- stale propagation events are finalized from the live runtime view rather than remaining indefinitely "active" after the timeout window expires.
+- T2 propagation performs an explicit federation resume phase after successful update delivery instead of pausing peers indefinitely.
+- T3 propagation no longer auto-confirms on delivery. Peers stay in `confirming` until each updated instance sends a second-leg `/api/federation/soul/confirm` callback after local apply, and only then does the root instance issue the resume phase.
+- Federation full-stop paths now run through the real local pause engine: budget `hard_stop` and T3 full-stop pauses cancel scheduler and Sentry approval queues, pause active HIVE execution when available, and remain operator-resume-only after the event is cleared.
 
 ---
 
@@ -193,6 +213,21 @@ Source                          Target
 - **Soul context** — Operating Soul document
 - **HandoffContract** — Assumptions, success criteria, data schema
 - **Receipt chain** — Prior work receipts for audit continuity
+
+### Acceptance Enforcement
+
+Handoff acceptance is now enforced as a runtime boundary, not just a planning convention.
+
+- The incoming source must already be a known peer.
+- `data_payload_schema` is validated against the incoming `task_context` before the handoff is accepted.
+- The incoming `soul_context` is validated as a real Soul document.
+- The target computes a Soul intersection between its active Soul and the received Soul context.
+- That intersection must remain more restrictive than both the receiver's Soul and the incoming Soul context.
+- If `soul_context_constraints` are present in the contract, the computed operating Soul must satisfy them or the handoff is rejected.
+- `RED` compatibility outcomes are rejected outright instead of being recorded as advisory metadata.
+- Incoming receipt chains are checked for temporal contradictions before the handoff is accepted.
+- Completion reports are re-validated against the contract on return: declared result schemas, numeric bounds, and success-criteria expectations can all reject a completion as contradictory.
+- Detected contradictions are written into the federation audit timeline so post-incident review sees the failed handoff boundary explicitly.
 
 ### Handoff States
 
@@ -233,6 +268,11 @@ PENDING → PROPAGATING → COMPLETED
 LIFTED (after operator review)
 ```
 
+Incoming federation kill commands now fail closed if the local instance has no live kill engine configured. In the current gateway wiring, the local kill path is backed by HIVE `kill_all`, so an acknowledged federation kill reflects a real local intervention rather than a placeholder success response.
+Incoming federation kills are also now **root-authority only** at the receiving boundary: peers registered as `role=peer` or `role=child` cannot issue a federation kill into another instance just by claiming `L1_FEDERATION_ROOT` in the payload. Active kill-command state is persisted so propagation acknowledgements, partial failures, and lift-review state survive restart instead of being lost with process memory.
+Operator-issued federation kills now use that same persisted kill ledger: `/api/federation/manage/kill` issues through `FederatedKillSwitch`, executes the local target leg, propagates to peers, and records remote acknowledgements/rejections into the shared command record instead of bypassing the hardened kill engine with a relay-only broadcast.
+Kill timeout progression is also live now. Reading active or historical kill commands advances overdue `pending` targets into `timeout`, so commands do not remain stuck in `propagating` forever unless a separate sweeper is called manually.
+
 ---
 
 ## Cost Governance
@@ -250,6 +290,27 @@ Real-time cost tracking across the federation with threshold-based enforcement.
 
 Cost data is aggregated from heartbeat payloads. Per-instance budgets are enforced independently via Soul parameters.
 
+The live runtime now wires federation budget status to the main usage tracker and HIVE registry:
+
+- local `actual_today_usd`, `projected_today_usd`, and `total_tokens_today` come from the orchestrator usage tracker
+- local `daily_ceiling_usd` now comes from the deployed/active Graph Builder local-node budget when present, with `federation.yaml` fallback via `daily_budget_ceiling_usd` instead of a gateway hardcoded `$10/day`
+- entering `HARD_STOP` now drives the real persisted runtime pause manager instead of only blocking HIVE spawns, so chat, scheduler dispatch, inbound A2A, and other paused-runtime ingress points honor the federation budget stop as a true instance-wide halt
+- recovery from federation `HARD_STOP` is operator-controlled; dropping back under 100% does not auto-resume the runtime
+- `active_spawns` comes from the HIVE registry
+- root instances aggregate remote cost reports through `FederatedCostAggregator`; non-root/peer instances do not accept remote budget reports that can drive local threshold actions
+- `/api/federation/budget`, `/api/federation/budget/threshold`, and `/api/federation/status` now report live threshold state instead of a hardcoded `normal`
+
+Budget governance now also gates the real HIVE spawn path:
+
+- threshold transitions emit `budget_threshold` receipts and federation audit entries
+- federation-wide `spawn_gated` and `hard_stop` states block new HIVE spawns before sub-agents are registered
+- per-instance spawn ceilings from `budget.py` are enforced before spawn registration
+- successful spawn and collapse events update the live federation budget tracker so runtime enforcement follows actual agent lifecycle state instead of status-only estimates
+- persisted peer cost snapshots are freshness-aware: stale remote budget data is surfaced in the aggregate status and blocks new spawns until refreshed or the peer is removed, rather than silently preserving stale pressure or stale free capacity
+- inbound peer budget reports now fail closed if the root-side aggregate cannot be updated, and `/api/federation/budget` surfaces aggregate computation failures directly instead of silently falling back to a partial local-only snapshot
+- `/api/federation/status` and `/api/federation/health` now fail closed on runtime inspection: degraded transport, mesh, Soul, divergence, or budget introspection is surfaced explicitly instead of silently returning optimistic defaults such as `synchronized`, `normal`, or `connected`
+- heartbeat-mesh divergence evaluation failures are now surfaced as explicit degraded runtime state, and T3 HIVE spawns fail closed while divergence evaluation is unavailable instead of proceeding as if the mesh were still healthy
+
 ---
 
 ## Divergence and Reconciliation
@@ -260,6 +321,18 @@ When connectivity is lost, the `DivergenceDetector` tracks:
 - Soul hash at point of divergence
 - Active task count and Hive spawn states
 - Pending handoffs and budget utilization
+
+The live heartbeat mesh now feeds those richer runtime fields into divergence detection instead of only passing peer heartbeat timestamps.
+
+Reconnection is now a live runtime flow instead of a passive state flag:
+
+- when fresh peer heartbeats arrive after divergence, the mesh runs `reconcile_divergence(...)` against the current runtime Soul hash and current federation budget utilization
+- compatible reconciliations emit reconnection receipts/audit entries and return the detector to `connected`
+- incompatible reconciliations remain visible in detector state for operator review instead of being silently cleared
+- `/api/federation/status` now exposes `divergence_state`, `divergence_duration_s`, and the last reconciliation outcome/conflicts
+- while divergence is active, T3 HIVE spawns are blocked at the live runtime boundary instead of continuing as normal or pretending to queue work that the platform cannot yet resume automatically
+- Soul propagation events and federated cost-aggregate state are now persisted, so restart does not silently clear an in-flight rollout or reset cost governance back to `normal`
+- divergence is evaluated immediately when the heartbeat mesh starts from the persisted peer heartbeat ledger, so a cold restart during an outage does not leave the instance falsely `connected` until a new SSE event arrives
 
 ### Divergence States
 
@@ -317,6 +390,8 @@ The Graph Builder provides a visual topology editor in the War Room for designin
 | Capability scope | Can target execute required actions? |
 | Handoff contract match | Data payload schema compatibility? |
 | Divergence preparedness | Can instances tolerate connectivity loss? |
+
+Graph Builder remains a preflight and deployment-gate tool. Runtime handoff acceptance re-validates Soul compatibility and contract constraints independently, so a previously green graph does not bypass the live federation boundary.
 
 ### Deployment Gates
 
@@ -393,9 +468,48 @@ The audit engine supports complete timeline reconstruction across all instances,
 ### Peer Registration
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/peer/register` | Initiate registration (challenge/response) |
-| POST | `/peer/confirm` | Confirm registration |
-| DELETE | `/peers/{instance_id}` | Unregister peer |
+| POST | `/peer/register` | Initiate registration (challenge + signed identity proof) |
+| POST | `/peer/confirm` | Complete the mutual counter-challenge leg |
+| DELETE | `/peer/{instance_id}` | Unregister peer |
+
+Registration now follows a strict mutual-confirm bootstrap:
+
+1. The initiator sends `/peer/register` with its instance identity, its externally reachable `self_address`, and a signed random challenge.
+2. The target verifies the submitted key material, rejects silent key/address changes for already-known peers, then calls back to `/peer/confirm` on the initiator.
+3. The initiator verifies the target's response against the pending challenge, pins the target identity locally, signs the counter-challenge, and returns the confirmation signature.
+4. Only after that confirm leg succeeds does the target persist the new peer.
+
+Important federation trust rules:
+
+- Caller-supplied fingerprints are not trusted. The receiver recomputes them from the submitted public key.
+- Existing peer identities are pinned. A registration that changes a known peer's public key or address is rejected by default.
+- Rekeying or address migration is treated as an explicit operator workflow, not something an inbound bootstrap request can do silently.
+- `self_address` must be configured for outbound peer bootstrap so the callback leg can complete.
+- For signed federation traffic, the authenticated peer identity from the request signature is authoritative. Body fields such as `issuer_instance_id`, `source_instance_id`, and `instance_id` must match the signed peer or the request is rejected.
+
+### Runtime Status Contract
+
+`/api/federation/status` is now the source of truth for live federation runtime health, not just topology shape.
+
+Important fields include:
+
+- `runtime_degraded`
+- `degraded_reasons`
+- `runtime_errors`
+- `transport_started`
+- `heartbeat_mesh_running`
+- `cost_reporter_running`
+- `subscription_status`
+- `subscription_stream_outcome`
+- `subscription_stream_errors`
+- `circuit_breaker_summary`
+- `stale_instance_ids`
+- `local_soul_hash`
+- `divergence_state`
+
+`/api/federation/health` now includes the same runtime degradation signals in addition to peer freshness counts.
+
+If Soul, budget, divergence, or transport inspection fails, these endpoints now fail closed by surfacing degraded runtime state instead of returning optimistic defaults.
 
 ### Soul Management
 | Method | Endpoint | Description |
@@ -403,7 +517,17 @@ The audit engine supports complete timeline reconstruction across all instances,
 | GET | `/soul` | Fetch this instance's Soul |
 | GET | `/soul/hash` | Get Soul version hash |
 | POST | `/soul/update` | Receive Soul push from peer |
+| POST | `/soul/confirm` | Record T3 confirmation from a peer before resume |
 | POST | `/pause` | Pause for Soul propagation |
+
+Pause semantics are now fail-closed and runtime-backed:
+
+- A peer pause is only acknowledged if this instance has a real local pause engine wired.
+- Pause and resume are now **root-authority** federation controls at the receiving boundary; known `peer` or `child` instances cannot pause or resume another instance's runtime.
+- On the live standalone runtime, that pause engine is the persisted global runtime pause manager plus local HIVE intervention hooks.
+- Outbound federation pause propagation now preserves the `full_stop` flag so T3/full-stop pauses trigger the stricter local handling path on receiving instances.
+- A successful peer pause now sets the instance-wide runtime pause state so new work is blocked across chat, scheduler, HIVE spawn, A2A ingress, and TaskRun execution, and currently executing HIVE agents are paused when the HIVE lifecycle is available.
+- If no local pause engine is available, `/api/federation/pause` rejects the request instead of reporting a false successful pause.
 
 ### Task Handoff
 | Method | Endpoint | Description |
@@ -417,6 +541,12 @@ The audit engine supports complete timeline reconstruction across all instances,
 |--------|----------|-------------|
 | POST | `/killswitch` | Receive kill command |
 | POST | `/cost/report` | Report cost data |
+
+Budget-report authority is intentionally narrow:
+
+- remote budget reports are accepted for aggregation only on the authority side of the topology
+- non-root/peer instances do not accept arbitrary remote budget reports that can drive a local `hard_stop`
+- local `hard_stop` now becomes a real instance-wide runtime pause, not just a HIVE spawn denial
 
 ### Graph Builder
 | Method | Endpoint | Description |
@@ -436,15 +566,15 @@ The audit engine supports complete timeline reconstruction across all instances,
 
 Three War Room pages provide federation visibility:
 
-- **Federation Overview** — Status dashboard with peer list, heartbeats, Soul consistency
+- **Federation Overview** — Status dashboard with peer list, heartbeats, Soul consistency, plus the local instance identity card for `self_address`, instance ID, fingerprint, and public key
 - **Federation Audit** — Searchable cross-instance audit trail
-- **Graph Builder** — Visual topology editor with deployment gate validation
+- **Graph Builder** — Visual topology editor with deployment gate validation; the local node should reuse the configured `self_address` from Federation Overview rather than inventing a second endpoint source of truth
 
 ---
 
 ## Peer Registry (SQLite Backend)
 
-Peer state is persisted in SQLite with WAL mode for concurrent reads and thread-safe access via `threading.Lock`.
+Peer state is persisted in SQLite with WAL mode for concurrent reads and thread-safe access via `threading.Lock`, while topology and federation control-plane state are persisted to disk so restart does not drop live heartbeats, Soul hash observations, active handoff status, or audit timelines.
 
 **Tables:**
 - `peers` — instance_id, fingerprint, public_key_hex, address, role, soul_version_hash, heartbeat times

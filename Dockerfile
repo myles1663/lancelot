@@ -29,6 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends docker-ce-cli nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+RUN npm install -g @openai/codex@0.118.0
+
 # Install uv for deterministic dependency resolution
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 

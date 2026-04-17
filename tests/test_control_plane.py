@@ -7,22 +7,52 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from src.core import api_auth
+from src.core import auth_api
 from src.core.onboarding_snapshot import OnboardingSnapshot, OnboardingState
 from src.core import control_plane
+from src.core.operator_identity import OperatorIdentity
+from src.core.runtime_pause import get_runtime_pause_status
 
 
 @pytest.fixture
 def app(tmp_data_dir):
     """Create a fresh FastAPI app with the control-plane router for each test."""
+    api_auth.init_api_auth(lambda request: True)
+    auth_api._sessions.clear()
+    identity = OperatorIdentity(
+        operator_id="op-1",
+        display_name="Arthur",
+        session_id="session-1",
+        session_started_at="2026-04-14T00:00:00Z",
+        auth_method="local",
+        ip_address="127.0.0.1",
+    )
+    auth_api._sessions["test-session"] = {
+        "expires_at": 9999999999,
+        "username": "Arthur",
+        "operator_identity": identity,
+        "capabilities": sorted({"warroom.login", "platform.admin", "onboarding.admin"}),
+        "groups": [],
+    }
     test_app = FastAPI()
     control_plane.init_control_plane(str(tmp_data_dir))
+    control_plane.set_runtime_control_hooks(
+        emergency_stop_handler=lambda **kwargs: {
+            "stopped_hive_agents": 2,
+            "stopped_agent_ids": ["agent-1", "agent-2"],
+            "execution_state": "emergency_stopped",
+        }
+    )
     test_app.include_router(control_plane.router)
     return test_app
 
 
 @pytest.fixture
 def client(app):
-    return TestClient(app)
+    client = TestClient(app)
+    client.cookies.set(auth_api.get_warroom_session_cookie_name(), "test-session")
+    return client
 
 
 @pytest.fixture
@@ -62,6 +92,11 @@ class TestSystemStatus:
         data = client.get("/system/status").json()
         assert "uptime_seconds" in data
         assert data["uptime_seconds"] >= 0
+
+    def test_contains_runtime_pause(self, client):
+        data = client.get("/system/status").json()
+        assert "runtime_pause" in data
+        assert data["runtime_pause"]["paused"] is False
 
     def test_reflects_state_changes(self, client, snap):
         snap.transition(OnboardingState.CREDENTIALS_CAPTURE,
@@ -225,6 +260,42 @@ class TestOnboardingReset:
         assert "Already" in resp.json()["response"]
 
 
+class TestRuntimePause:
+    def test_runtime_pause_status(self, client):
+        resp = client.get("/system/pause")
+        assert resp.status_code == 200
+        assert resp.json()["paused"] is False
+
+    def test_pause_and_resume_runtime(self, client):
+        paused = client.post("/system/pause", json={"reason": "Maintenance window"})
+        assert paused.status_code == 200
+        assert paused.json()["paused"] is True
+        assert paused.json()["reason"] == "Maintenance window"
+
+        resumed = client.post("/system/resume")
+        assert resumed.status_code == 200
+        assert resumed.json()["paused"] is False
+        assert get_runtime_pause_status()["paused"] is False
+
+    def test_pause_without_body_fails_cleanly(self, client):
+        paused = client.post("/system/pause")
+        assert paused.status_code == 400
+        assert paused.json()["error"] == "Missing pause reason"
+
+    def test_emergency_stop_runtime(self, client):
+        stopped = client.post("/system/emergency-stop", json={"reason": "Emergency maintenance"})
+        assert stopped.status_code == 200
+        body = stopped.json()
+        assert body["paused"] is True
+        assert body["stopped_hive_agents"] == 2
+        assert body["execution_state"] == "emergency_stopped"
+
+    def test_emergency_stop_without_body_fails_cleanly(self, client):
+        stopped = client.post("/system/emergency-stop")
+        assert stopped.status_code == 400
+        assert stopped.json()["error"] == "Missing emergency stop reason"
+
+
 # ==================================================================
 # Error handling — no stack traces
 # ==================================================================
@@ -247,3 +318,49 @@ class TestSafeErrors:
         data = resp.json()
         assert "error" in data
         assert "status" in data
+
+
+class TestWarRoomArtifacts:
+
+    def test_store_artifact_normalizes_server_side_fields(self, client):
+        session_cookie = {auth_api.get_warroom_session_cookie_name(): "test-session"}
+        resp = client.post(
+            "/warroom/artifacts",
+            json={
+                "id": "client-id",
+                "type": "TOOL_TRACE",
+                "content": {"message": "hello"},
+                "session_id": "foreign-session",
+            },
+            cookies=session_cookie,
+        )
+        assert resp.status_code == 200
+
+        listing = client.get("/warroom/artifacts", cookies=session_cookie).json()
+        artifact = listing["artifacts"][0]
+        assert artifact["id"] != "client-id"
+        assert artifact["session_id"] == "session-1"
+        assert artifact["operator_id"] == "op-1"
+        assert artifact["source"] == "api"
+
+    def test_store_artifact_rejects_unknown_type(self, client):
+        session_cookie = {auth_api.get_warroom_session_cookie_name(): "test-session"}
+        resp = client.post(
+            "/warroom/artifacts",
+            json={"type": "ARBITRARY_FAKE", "content": {"message": "x"}},
+            cookies=session_cookie,
+        )
+        assert resp.status_code == 400
+
+    def test_artifact_store_is_bounded(self, client):
+        session_cookie = {auth_api.get_warroom_session_cookie_name(): "test-session"}
+        for idx in range(205):
+            resp = client.post(
+                "/warroom/artifacts",
+                json={"type": "TOOL_TRACE", "content": {"idx": idx}},
+                cookies=session_cookie,
+            )
+            assert resp.status_code == 200
+
+        listing = client.get("/warroom/artifacts", cookies=session_cookie).json()
+        assert listing["total"] == 200

@@ -9,16 +9,39 @@ import logging
 import os
 
 import yaml
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/flags", tags=["flags"])
+router = APIRouter(
+    prefix="/api/flags",
+    tags=["flags"],
+    dependencies=[Depends(require_authenticated_request)],
+)
 
 _audit_logger = None
+
+
+def _resolve_audit_user(request: Request) -> str:
+    """Resolve the authenticated operator display name for text audit logs."""
+    try:
+        from src.core.auth_api import get_api_key_identity, resolve_operator_identity
+
+        identity = resolve_operator_identity(request)
+        if identity is None:
+            identity = get_api_key_identity(request)
+        if identity.display_name:
+            return identity.display_name
+        if identity.operator_id:
+            return identity.operator_id
+    except Exception as exc:
+        logger.debug("Falling back to generic flags audit user: %s", exc)
+    return "operator"
 
 
 def init_flags_api(audit_logger=None):
@@ -436,7 +459,10 @@ async def get_network_allowlist():
 
 
 @router.put("/network-allowlist")
-async def update_network_allowlist(body: AllowlistUpdate):
+async def update_network_allowlist(
+    body: AllowlistUpdate,
+    _authz: None = Depends(require_operator_capability("flags.admin")),
+):
     """Update the network allowlist domains."""
     try:
         data = _load_allowlist()
@@ -464,7 +490,14 @@ async def update_network_allowlist(body: AllowlistUpdate):
 # host machine. Must be defined before /{name}/* wildcard routes.
 
 HOST_AGENT_URL = os.environ.get("HOST_AGENT_URL", "http://host.docker.internal:9111")
-HOST_AGENT_TOKEN = os.environ.get("HOST_AGENT_TOKEN", "lancelot-host-agent")
+_LEGACY_HOST_AGENT_TOKEN = "lancelot-host-agent"
+
+
+def _get_host_agent_token() -> str:
+    token = os.environ.get("HOST_AGENT_TOKEN", "").strip()
+    if not token or token == _LEGACY_HOST_AGENT_TOKEN:
+        return ""
+    return token
 
 
 @router.get("/host-agent-status")
@@ -472,12 +505,14 @@ async def get_host_agent_status():
     """Check if the host agent is reachable and return its status."""
     import urllib.request
     import json as _json
+    token = _get_host_agent_token()
     try:
         req = urllib.request.Request(f"{HOST_AGENT_URL}/health", method="GET")
         with urllib.request.urlopen(req, timeout=3) as resp:
             data = _json.loads(resp.read().decode("utf-8"))
         return {
             "reachable": True,
+            "auth_configured": bool(token),
             "platform": data.get("platform", "unknown"),
             "platform_version": data.get("platform_version", ""),
             "hostname": data.get("hostname", "unknown"),
@@ -486,6 +521,7 @@ async def get_host_agent_status():
     except Exception:
         return {
             "reachable": False,
+            "auth_configured": bool(token),
             "platform": "",
             "platform_version": "",
             "hostname": "",
@@ -494,16 +530,24 @@ async def get_host_agent_status():
 
 
 @router.post("/host-agent-shutdown")
-async def shutdown_host_agent():
+async def shutdown_host_agent(
+    _authz: None = Depends(require_operator_capability("flags.admin")),
+):
     """Send shutdown signal to the host agent."""
     import urllib.request
     import json as _json
+    token = _get_host_agent_token()
+    if not token:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "HOST_AGENT_TOKEN is not configured for host bridge control."},
+        )
     try:
         req = urllib.request.Request(
             f"{HOST_AGENT_URL}/shutdown",
             method="POST",
             headers={
-                "Authorization": f"Bearer {HOST_AGENT_TOKEN}",
+                "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
             },
         )
@@ -553,7 +597,10 @@ class WriteCommandsUpdate(BaseModel):
 
 
 @router.put("/host-write-commands")
-async def update_host_write_commands(body: WriteCommandsUpdate):
+async def update_host_write_commands(
+    body: WriteCommandsUpdate,
+    _authz: None = Depends(require_operator_capability("flags.admin")),
+):
     """Update the host write commands list."""
     try:
         os.makedirs(os.path.dirname(WRITE_COMMANDS_PATH), exist_ok=True)
@@ -582,7 +629,9 @@ async def get_host_write_status():
 
 
 @router.post("/host-write-toggle")
-async def toggle_host_write_commands():
+async def toggle_host_write_commands(
+    _authz: None = Depends(require_operator_capability("flags.admin")),
+):
     """Toggle FEATURE_HOST_WRITE_COMMANDS on/off."""
     import feature_flags as ff
     new_val = ff.toggle_flag("FEATURE_HOST_WRITE_COMMANDS")
@@ -622,10 +671,19 @@ def _validate_flag_dependencies(name: str, new_value: bool) -> Optional[str]:
     return None
 
 
+def _restart_required_for_flag(name: str) -> bool:
+    import feature_flags as ff
+    return name in getattr(ff, "RESTART_REQUIRED_FLAGS", frozenset())
+
+
 # ── Flag Toggle/Set Routes ───────────────────────────────────────────
 
 @router.post("/{name}/toggle")
-async def toggle_flag(name: str, request: Request):
+async def toggle_flag(
+    name: str,
+    request: Request,
+    _authz: None = Depends(require_operator_capability("flags.admin")),
+):
     """Toggle a feature flag at runtime. Hot-toggles subsystems automatically."""
     try:
         import feature_flags as ff
@@ -660,7 +718,7 @@ async def toggle_flag(name: str, request: Request):
                 return {
                     "flag": name,
                     "enabled": new_val,
-                    "restart_required": False,
+                    "restart_required": _restart_required_for_flag(name),
                     "hot_toggled": False,
                     "message": f"{name} set to {new_val} but subsystem toggle failed: {exc}",
                 }
@@ -668,20 +726,25 @@ async def toggle_flag(name: str, request: Request):
         # Host Bridge lifecycle: auto-shutdown on disable, reachability check on enable
         agent_reachable = None
         if name == "FEATURE_TOOLS_HOST_BRIDGE":
+            token = _get_host_agent_token()
             if not new_val:
                 # Shutting down — send stop signal to host agent
-                try:
-                    import urllib.request as _ur
-                    _req = _ur.Request(
-                        f"{HOST_AGENT_URL}/shutdown",
-                        method="POST",
-                        headers={"Authorization": f"Bearer {HOST_AGENT_TOKEN}"},
-                    )
-                    _ur.urlopen(_req, timeout=3)
-                    logger.info("Host agent shutdown signal sent (flag toggled off)")
+                if not token:
                     agent_reachable = False
-                except Exception:
-                    agent_reachable = False
+                    logger.info("Host agent token not configured - skipping shutdown request")
+                else:
+                    try:
+                        import urllib.request as _ur
+                        _req = _ur.Request(
+                            f"{HOST_AGENT_URL}/shutdown",
+                            method="POST",
+                            headers={"Authorization": f"Bearer {token}"},
+                        )
+                        _ur.urlopen(_req, timeout=3)
+                        logger.info("Host agent shutdown signal sent (flag toggled off)")
+                        agent_reachable = False
+                    except Exception:
+                        agent_reachable = False
             else:
                 # Enabling — check if host agent is reachable
                 try:
@@ -701,7 +764,7 @@ async def toggle_flag(name: str, request: Request):
                 f"Flag {name} toggled to {new_val}" + (
                     " (hot-toggled)" if hot_toggled else ""
                 ),
-                user="WarRoom",
+                user=_resolve_audit_user(request),
             )
 
         # Governance receipt — kill switch issued (disabled) or lifted (enabled)
@@ -717,7 +780,7 @@ async def toggle_flag(name: str, request: Request):
         result = {
             "flag": name,
             "enabled": new_val,
-            "restart_required": False,
+            "restart_required": _restart_required_for_flag(name),
             "hot_toggled": hot_toggled,
             "message": f"{name} set to {new_val}" + (
                 " (subsystem hot-toggled)" if hot_toggled else ""
@@ -742,7 +805,12 @@ async def toggle_flag(name: str, request: Request):
 
 
 @router.post("/{name}/set")
-async def set_flag(name: str, request: Request, value: bool = True):
+async def set_flag(
+    name: str,
+    request: Request,
+    value: bool = True,
+    _authz: None = Depends(require_operator_capability("flags.admin")),
+):
     """Set a feature flag to a specific value. Hot-toggles subsystems automatically."""
     try:
         import feature_flags as ff
@@ -782,7 +850,7 @@ async def set_flag(name: str, request: Request, value: bool = True):
         return {
             "flag": name,
             "enabled": value,
-            "restart_required": False,
+            "restart_required": _restart_required_for_flag(name),
             "hot_toggled": hot_toggled,
         }
     except ValueError as exc:
@@ -798,33 +866,43 @@ async def set_flag(name: str, request: Request, value: bool = True):
 UAB_DAEMON_URL = os.environ.get("UAB_DAEMON_URL", "http://host.docker.internal:7900")
 
 
+def _uab_rpc(method: str, params: Optional[dict] = None, timeout: int = 3):
+    """Call the UAB daemon JSON-RPC compatibility endpoint."""
+    import urllib.request
+    import json as _json
+
+    payload = _json.dumps({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params or {},
+        "id": 1,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        UAB_DAEMON_URL,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = _json.loads(resp.read().decode("utf-8"))
+    return data.get("result")
+
+
 @router.get("/uab-status")
 async def get_uab_status():
     """Check if the UAB daemon is reachable and return its status."""
-    import urllib.request
-    import json as _json
     try:
-        payload = _json.dumps({
-            "jsonrpc": "2.0",
-            "method": "getStatus",
-            "params": {},
-            "id": 1,
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            UAB_DAEMON_URL,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = _json.loads(resp.read().decode("utf-8"))
-        result = data.get("result", {})
+        result = _uab_rpc("getStatus") or {}
+        connections = result.get("connections", [])
         return {
             "reachable": True,
             "version": result.get("version", "unknown"),
             "connected_apps": result.get("connectedApps", 0),
             "supported_frameworks": result.get("supportedFrameworks", []),
             "uptime_seconds": result.get("uptimeSeconds", 0),
+            "transport": result.get("transport", "json-rpc"),
+            "standalone_features": result.get("standaloneFeatures", []),
+            "connections": connections if isinstance(connections, list) else [],
         }
     except Exception:
         return {
@@ -833,31 +911,33 @@ async def get_uab_status():
             "connected_apps": 0,
             "supported_frameworks": [],
             "uptime_seconds": 0,
+            "transport": "",
+            "standalone_features": [],
+            "connections": [],
         }
 
 
 @router.get("/uab-apps")
 async def get_uab_connected_apps():
     """Get list of currently connected apps from the UAB daemon."""
-    import urllib.request
-    import json as _json
     try:
-        payload = _json.dumps({
-            "jsonrpc": "2.0",
-            "method": "getConnectedApps",
-            "params": {},
-            "id": 1,
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            UAB_DAEMON_URL,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = _json.loads(resp.read().decode("utf-8"))
-        apps = data.get("result", [])
-        return {"apps": apps if isinstance(apps, list) else []}
+        status = _uab_rpc("getStatus") or {}
+        apps = status.get("connections", [])
+        if not isinstance(apps, list):
+            apps = []
+        normalized = []
+        for item in apps:
+            if not isinstance(item, dict):
+                continue
+            normalized.append({
+                "pid": item.get("pid", 0),
+                "name": item.get("name", "unknown"),
+                "framework": item.get("framework", "unknown"),
+                "connectionMethod": item.get("connectionMethod") or item.get("method"),
+                "windowTitle": item.get("windowTitle", ""),
+                "elementCount": item.get("elementCount", 0),
+            })
+        return {"apps": normalized}
     except Exception:
         return {"apps": []}
 

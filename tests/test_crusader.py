@@ -251,6 +251,14 @@ class TestCrusaderGatewayIntegration(unittest.TestCase):
         self.assertIn("Crusader Mode engaged", data["response"])
         self.assertTrue(data["crusader_mode"])
 
+    def test_chat_trigger_uses_runtime_safe_transition(self):
+        import gateway
+
+        with patch.object(gateway, "_transition_crusader_mode", return_value=(True, ACTIVATION_RESPONSE)) as transition:
+            response = self.client.post("/chat", json={"text": "enter crusader mode", "user": "Arthur"})
+        self.assertEqual(response.status_code, 200)
+        transition.assert_called_once_with("activate")
+
     def test_deactivate_via_gateway(self):
         self.client.post("/chat", json={"text": "enter crusader mode", "user": "Arthur"})
         response = self.client.post("/chat", json={"text": "stand down", "user": "Arthur"})
@@ -278,6 +286,26 @@ class TestCrusaderGatewayIntegration(unittest.TestCase):
         data = response.json()
         self.assertIn("Crusader Mode engaged", data["response"])
         self.assertTrue(data["crusader_mode"])
+
+    def test_api_activate_refreshes_runtime_soul(self):
+        import gateway
+
+        with patch.object(gateway, "_refresh_runtime_soul_from_store") as refresh:
+            response = self.client.post("/api/crusader/activate")
+        self.assertEqual(response.status_code, 200)
+        refresh.assert_called_once()
+
+    def test_api_deactivate_refreshes_runtime_soul(self):
+        import gateway
+
+        with patch.object(gateway, "_refresh_runtime_soul_from_store") as refresh_activate:
+            self.client.post("/api/crusader/activate")
+        refresh_activate.assert_called_once()
+
+        with patch.object(gateway, "_refresh_runtime_soul_from_store") as refresh_deactivate:
+            response = self.client.post("/api/crusader/deactivate")
+        self.assertEqual(response.status_code, 200)
+        refresh_deactivate.assert_called_once()
 
     def tearDown(self):
         self.crusader_mode.deactivate()

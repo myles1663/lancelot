@@ -1,6 +1,6 @@
 
 # Lancelot vNext Upgrade Specification (Integrated Edition)
-**Single-Choice Flagship Brain · Mandatory Local Utility Brain · Unbrickable Onboarding · War Room Control Plane**
+**Single-Choice Flagship Brain · Recommended Local Utility Brain · Unbrickable Onboarding · War Room Control Plane**
 
 ---
 
@@ -18,7 +18,7 @@ This specification defines the next major evolution of **Project Lancelot**.
 Lancelot becomes a **fully provisioned, single-install system** where:
 
 - The user selects **one flagship model provider** (Gemini / OpenAI / Anthropic)
-- A **local utility language model is mandatory and installed during onboarding**
+- A **local utility language model is strongly recommended during onboarding**
 - All model routing, tiering, and cost optimization is automatic and hidden
 - Onboarding is **unbrickable** and always recoverable
 - The War Room functions as a **true operational control plane**, not a viewer
@@ -35,8 +35,8 @@ Users make exactly one AI choice: the **Flagship Brain**.
 
 All other models—local or remote—are automatically orchestrated.
 
-### 1.2 Mandatory Local Utility Brain
-A local open-source language model is required and installed as part of onboarding.
+### 1.2 Recommended Local Utility Brain
+A local open-source language model is the preferred privacy and cost boundary for onboarding and runtime operation.
 It handles all low-risk, high-volume cognitive tasks to:
 
 - reduce token costs
@@ -44,7 +44,7 @@ It handles all low-risk, high-volume cognitive tasks to:
 - protect privacy
 - stabilize behavior
 
-The system **does not enter READY without a verified local model**.
+The recommended deployment enters READY with a verified local model. Reduced-footprint installs may skip it, but that removes the local scrub boundary and shifts utility/redaction work to the frontier provider.
 
 ### 1.3 No Bricking, Ever
 There are no dead-end states.
@@ -137,7 +137,7 @@ WELCOME
 FLAGSHIP_SELECTION
 CREDENTIALS_CAPTURE
 CREDENTIALS_VERIFY
-LOCAL_UTILITY_SETUP   ← mandatory
+LOCAL_UTILITY_SETUP   ← recommended / strongly encouraged
 COMMS_SELECTION
 COMMS_CONFIGURE
 COMMS_VERIFY
@@ -146,7 +146,7 @@ READY
 COOLDOWN (temporary failure state)
 ```
 
-### 4.2 Mandatory Local Utility Setup
+### 4.2 Local Utility Setup
 
 The `LOCAL_UTILITY_SETUP` state:
 
@@ -160,7 +160,7 @@ The `LOCAL_UTILITY_SETUP` state:
    - service start
    - smoke test inference
 4. Shows real-time progress
-5. Blocks advancement until success
+5. Blocks advancement until success in the recommended path
 
 Failure handling:
 - retry
@@ -168,7 +168,7 @@ Failure handling:
 - cooldown
 - War Room-assisted recovery
 
-There is **no skip path**.
+Installers may expose an explicit skip path for reduced-footprint deployments. That choice must be surfaced clearly because it weakens privacy posture and removes local cost-saving lanes.
 
 ---
 
@@ -285,7 +285,7 @@ Each phase is incremental, test-driven, and production-safe.
 ## 10. Definition of Done
 
 - One flagship choice
-- Mandatory local utility brain installed during onboarding
+- Local utility brain installed in the recommended deployment, or an explicit operator acknowledgment that the instance is running without the local privacy/cost boundary
 - No onboarding dead ends
 - War Room can intervene and repair
 - Model routing is automatic and auditable

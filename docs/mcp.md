@@ -13,6 +13,7 @@ Lancelot's MCP subsystem provides governed access to external MCP-compliant tool
 2. **Receipts before proxy** — The proxy constructor requires a receipt manager. It is impossible to construct a proxy that can complete invocations without generating receipts.
 3. **Fourth fail-closed gate** — If receipt persistence fails, the tool invocation result is discarded. A governance system whose audit trail is broken is not governed.
 4. **Federation ceiling reuse** — MCP permission narrowing uses the same monotonic contract as HIVE scoped Souls, not a separate mechanism.
+5. **Guard stack required** — The governed proxy now refuses to construct unless the argument screener, response guard, and network policy are all present. The live gateway already wires those dependencies; constructor-level fail-closed behavior now matches the runtime contract.
 
 ---
 

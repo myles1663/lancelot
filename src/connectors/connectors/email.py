@@ -18,6 +18,10 @@ from typing import Any, Dict, List
 from urllib.parse import urlencode
 
 from src.connectors.base import ConnectorBase, ConnectorManifest, CredentialSpec
+from src.connectors.google_feature_gate import (
+    google_connector_disabled_reason,
+    is_google_connector_enabled,
+)
 from src.connectors.models import (
     ConnectorOperation,
     ConnectorResult,
@@ -262,6 +266,8 @@ class EmailConnector(ConnectorBase):
         ]
 
     def execute(self, operation_id: str, params: dict) -> ConnectorResult:
+        if self._backend == "gmail" and not is_google_connector_enabled("email", self._backend):
+            raise RuntimeError(google_connector_disabled_reason("email", self._backend))
         if self._backend == "gmail":
             return self._execute_gmail(operation_id, params)
         elif self._backend == "outlook":
@@ -548,6 +554,8 @@ class EmailConnector(ConnectorBase):
 
     def validate_credentials(self) -> bool:
         if self._vault is None:
+            return False
+        if self._backend == "gmail" and not is_google_connector_enabled("email", self._backend):
             return False
         if self._backend == "smtp":
             return (

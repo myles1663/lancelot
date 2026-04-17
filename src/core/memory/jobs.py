@@ -13,7 +13,9 @@ Each job returns a JobResult with execution details.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
+from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -27,6 +29,14 @@ from .schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+MEMORY_JOB_SKILLS = {
+    "memory_working_compaction",
+    "memory_episodic_summarization",
+    "memory_archival_decay",
+    "memory_integrity_audit",
+}
 
 
 @dataclass
@@ -202,6 +212,7 @@ class MemoryJobExecutor:
 
         try:
             store = self._store_manager.get_store(MemoryTier.episodic)
+            archival_store = self._store_manager.get_store(MemoryTier.archival)
 
             # Get all episodic items grouped by namespace
             all_items = store.list_items(status=MemoryStatus.active)
@@ -224,8 +235,8 @@ class MemoryJobExecutor:
                     items.sort(key=lambda x: x.created_at)
                     batch = items[:items_per_batch]
 
-                    # Create summary item (in real implementation, use LLM)
-                    summary_content = self._create_summary_placeholder(batch)
+                    # Create a deterministic summary from the actual episodic content.
+                    summary_content = self._create_episodic_summary(batch)
 
                     # Create new summary item
                     from .schemas import MemoryItem as MI
@@ -233,12 +244,13 @@ class MemoryJobExecutor:
 
                     summary_item = MI(
                         id=f"summary_{uuid.uuid4().hex[:8]}",
-                        tier=MemoryTier.episodic,
+                        tier=MemoryTier.archival,
                         namespace=namespace,
                         title=f"Summary: {namespace} ({len(batch)} items)",
                         content=summary_content,
                         tags=["summary", "auto-generated"],
                         confidence=0.7,
+                        decay_half_life_days=90,
                         provenance=[
                             Provenance(
                                 type=ProvenanceType.system,
@@ -247,7 +259,7 @@ class MemoryJobExecutor:
                         ],
                     )
 
-                    store.insert(summary_item)
+                    archival_store.insert(summary_item)
                     summaries_created += 1
 
                     # Archive original items (lower confidence)
@@ -282,10 +294,60 @@ class MemoryJobExecutor:
                 errors=[str(exc)],
             )
 
-    def _create_summary_placeholder(self, items: List[MemoryItem]) -> str:
-        """Create a placeholder summary (real impl would use LLM)."""
-        titles = [item.title for item in items[:5]]
-        return f"Summary of {len(items)} episodic memories:\n- " + "\n- ".join(titles)
+    def _create_episodic_summary(self, items: List[MemoryItem]) -> str:
+        """Create a deterministic summary from actual episodic items.
+
+        This avoids a fake placeholder while keeping the scheduler job free of
+        live LLM dependencies. The summary captures:
+        - batch size and time range
+        - most common tags
+        - concise title/content bullets from the source items
+        """
+        if not items:
+            return "No episodic memories were available for summarization."
+
+        sorted_items = sorted(items, key=lambda x: x.created_at)
+        start = sorted_items[0].created_at.isoformat()
+        end = sorted_items[-1].created_at.isoformat()
+
+        tag_counts: Counter[str] = Counter()
+        for item in sorted_items:
+            for tag in item.tags or []:
+                clean_tag = (tag or "").strip()
+                if clean_tag:
+                    tag_counts[clean_tag] += 1
+        common_tags = [tag for tag, _count in tag_counts.most_common(3)]
+
+        lines = [
+            f"Episodic summary for {len(sorted_items)} memories.",
+            f"Time range: {start} to {end}.",
+        ]
+        if common_tags:
+            lines.append("Common tags: " + ", ".join(common_tags) + ".")
+
+        lines.append("Highlights:")
+        for item in sorted_items[:5]:
+            title = (item.title or "Untitled memory").strip()
+            snippet = self._summarize_text(item.content)
+            if snippet:
+                lines.append(f"- {title}: {snippet}")
+            else:
+                lines.append(f"- {title}")
+
+        if len(sorted_items) > 5:
+            lines.append(f"- ... plus {len(sorted_items) - 5} additional related memories.")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _summarize_text(text: str, max_len: int = 160) -> str:
+        """Collapse content to a readable single-line snippet."""
+        cleaned = re.sub(r"\s+", " ", (text or "").strip())
+        if not cleaned:
+            return ""
+        if len(cleaned) <= max_len:
+            return cleaned
+        return cleaned[: max_len - 3].rstrip() + "..."
 
     def run_archival_decay(
         self,
@@ -481,6 +543,7 @@ def get_memory_job_specs() -> List[Dict[str, Any]]:
             "enabled": True,
             "requires_ready": True,
             "timeout_s": 120,
+            "skill": "memory_working_compaction",
         },
         {
             "id": "memory_episodic_summarization",
@@ -490,6 +553,7 @@ def get_memory_job_specs() -> List[Dict[str, Any]]:
             "enabled": True,
             "requires_ready": True,
             "timeout_s": 300,
+            "skill": "memory_episodic_summarization",
         },
         {
             "id": "memory_archival_decay",
@@ -499,6 +563,7 @@ def get_memory_job_specs() -> List[Dict[str, Any]]:
             "enabled": True,
             "requires_ready": True,
             "timeout_s": 120,
+            "skill": "memory_archival_decay",
         },
         {
             "id": "memory_integrity_audit",
@@ -508,5 +573,25 @@ def get_memory_job_specs() -> List[Dict[str, Any]]:
             "enabled": True,
             "requires_ready": True,
             "timeout_s": 60,
+            "skill": "memory_integrity_audit",
         },
     ]
+
+
+def execute_memory_job(
+    executor: MemoryJobExecutor,
+    skill_name: str,
+    inputs: Optional[Dict[str, Any]] = None,
+) -> JobResult:
+    """Execute a memory maintenance job by its scheduler skill name."""
+    payload = dict(inputs or {})
+    handlers = {
+        "memory_working_compaction": executor.run_working_compaction,
+        "memory_episodic_summarization": executor.run_episodic_summarization,
+        "memory_archival_decay": executor.run_archival_decay,
+        "memory_integrity_audit": executor.run_integrity_audit,
+    }
+    handler = handlers.get(skill_name)
+    if handler is None:
+        raise ValueError(f"Unknown memory job skill: {skill_name}")
+    return handler(**payload)

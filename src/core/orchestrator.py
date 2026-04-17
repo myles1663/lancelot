@@ -198,6 +198,7 @@ class LancelotOrchestrator:
         self.scheduler_service = None
         self.job_executor = None
         self.local_model = None  # Fix Pack V8: LocalModelClient for local agentic routing
+        self.model_router = None  # Injected by gateway for local redaction + utility routing
         self.usage_tracker = None  # Injected by gateway for Cost Tracker panel
         self._memory_enabled = False
         self.context_compiler = None
@@ -226,6 +227,109 @@ class LancelotOrchestrator:
         self.rule_engine = None
 
         self._init_governance()
+
+    def _redact_for_frontier(self, text: str) -> str:
+        """Scrub sensitive text locally before it reaches a frontier provider."""
+        if not isinstance(text, str) or not text.strip():
+            return text
+
+        router = getattr(self, "model_router", None)
+        if router is not None:
+            try:
+                routed = router.route("redact", text)
+                if getattr(routed, "executed", False) and isinstance(getattr(routed, "output", None), str):
+                    redacted = routed.output.strip()
+                    if redacted:
+                        return redacted
+            except Exception as exc:
+                _gov_logger.warning("Local redaction router failed, falling back to direct local model: %s", exc)
+
+        local_model = getattr(self, "local_model", None)
+        if local_model is not None:
+            try:
+                if local_model.is_healthy():
+                    redacted = local_model.redact(text)
+                    if isinstance(redacted, str) and redacted.strip():
+                        return redacted.strip()
+            except Exception as exc:
+                _gov_logger.warning("Direct local redaction failed, using original text: %s", exc)
+
+        return text
+
+    def _scrub_frontier_payload(self, payload: Any) -> Any:
+        """Recursively scrub provider-native payloads where text content is present."""
+        if isinstance(payload, str):
+            return self._redact_for_frontier(payload)
+
+        if isinstance(payload, list):
+            return [self._scrub_frontier_payload(item) for item in payload]
+
+        if isinstance(payload, dict):
+            scrubbed: dict[str, Any] = {}
+            passthrough_keys = {
+                "role", "type", "id", "tool_call_id", "tool_use_id",
+                "name", "model", "mime_type", "media_type",
+            }
+            for key, value in payload.items():
+                if key in passthrough_keys:
+                    scrubbed[key] = value
+                elif key in {"content", "text", "input", "output", "result"}:
+                    scrubbed[key] = self._scrub_frontier_payload(value)
+                else:
+                    scrubbed[key] = self._scrub_frontier_payload(value) if isinstance(value, (dict, list)) else value
+            return scrubbed
+
+        return payload
+
+    def _build_frontier_user_message(self, text: str, images: list | None = None) -> Any:
+        """Build a frontier-bound user message after local redaction."""
+        return self.provider.build_user_message(self._redact_for_frontier(text), images=images)
+
+    def _build_frontier_tool_response_message(
+        self,
+        tool_results: list[tuple[str, str, str]],
+    ) -> Any:
+        """Build a frontier-bound tool response message after local redaction."""
+        scrubbed_results = []
+        for call_id, fn_name, result_str in tool_results:
+            scrubbed_results.append((call_id, fn_name, self._redact_for_frontier(str(result_str))))
+        return self.provider.build_tool_response_message(scrubbed_results)
+
+    def _provider_generate(
+        self,
+        *,
+        model: str,
+        messages: list,
+        system_instruction: str = "",
+        config: Optional[dict] = None,
+    ):
+        """Frontier provider wrapper that enforces local scrubbing before generation."""
+        return self.provider.generate(
+            model=model,
+            messages=self._scrub_frontier_payload(messages),
+            system_instruction=system_instruction,
+            config=config,
+        )
+
+    def _provider_generate_with_tools(
+        self,
+        *,
+        model: str,
+        messages: list,
+        system_instruction: str,
+        tools: list,
+        tool_config: Optional[dict] = None,
+        config: Optional[dict] = None,
+    ):
+        """Frontier provider wrapper for tool calls with local scrubbing."""
+        return self.provider.generate_with_tools(
+            model=model,
+            messages=self._scrub_frontier_payload(messages),
+            system_instruction=system_instruction,
+            tools=tools,
+            tool_config=tool_config,
+            config=config,
+        )
 
     def _init_governance(self):
         """Initialize vNext4 governance subsystems if feature flags are enabled."""
@@ -356,6 +460,7 @@ class LancelotOrchestrator:
                     receipt_service=self.receipt_service,
                     skill_executor=self.skill_executor,
                     verifier=self.verifier,
+                    connector_runtime=getattr(self, "connector_runtime", None),
                 )
                 print("Fix Pack V1: TaskRunner initialized.")
 
@@ -442,6 +547,8 @@ class LancelotOrchestrator:
             task_graph_id=active_graph.id,
             execution_token_id=token.id,
             session_id=session_id,
+            operator_id=getattr(token, "operator_id", "") or "",
+            quest_id=getattr(self, "_current_quest_id", None) or active_graph.id,
         )
         self.task_store.create_run(run)
 
@@ -501,8 +608,11 @@ class LancelotOrchestrator:
 
     def _request_permission(self, graph: TaskGraph) -> str:
         """Format a permission request for a TaskGraph."""
+        from src.core.tasking.authority import list_graph_authorities
+
         if self.assembler:
-            tools_needed = set(s.type for s in graph.steps)
+            authorities = list_graph_authorities(graph.steps)
+            tools_needed = set(authorities["tools"]) | set(authorities["skills"])
             risk_levels = [s.risk_level for s in graph.steps]
             risk = max(risk_levels, key=lambda r: {"LOW": 0, "MED": 1, "HIGH": 2}.get(r, 0)) if risk_levels else "LOW"
 
@@ -525,16 +635,36 @@ class LancelotOrchestrator:
         if not graph:
             return "No pending plan to approve."
 
-        tools_needed = list(set(s.type for s in graph.steps))
+        from src.core.tasking.authority import list_graph_authorities
+
+        authorities = list_graph_authorities(graph.steps)
+        tools_needed = authorities["tools"]
+        skills_needed = authorities["skills"]
         risk_levels = [s.risk_level for s in graph.steps]
         risk = max(risk_levels, key=lambda r: {"LOW": 0, "MED": 1, "HIGH": 2}.get(r, 0)) if risk_levels else "LOW"
+        operator_id = ""
+        operator_name = ""
+        try:
+            if hasattr(self, "warroom_state") and session_id:
+                session = self.warroom_state.get_session(session_id)
+                identity = session.get("operator_identity") if session else None
+                if identity is not None:
+                    operator_id = getattr(identity, "operator_id", "") or ""
+                    operator_name = (
+                        getattr(identity, "display_name", "") or operator_id
+                    )
+        except Exception:
+            pass
 
         token = self.minter.mint_from_approval(
             scope=graph.goal,
             tools=tools_needed,
+            skills=skills_needed,
             risk_tier=risk,
             max_actions=len(graph.steps) * 2,
             session_id=session_id,
+            operator_id=operator_id,
+            operator_name=operator_name,
         )
 
         # Now execute
@@ -592,11 +722,11 @@ class LancelotOrchestrator:
                     skip_structured_reformat=True,
                 )
             else:
-                msg = self.provider.build_user_message(
+                msg = self._build_frontier_user_message(
                     f"{self.context_env.get_context_string()}\n\n{prompt}"
                 )
                 result = self._llm_call_with_retry(
-                    lambda: self.provider.generate(
+                    lambda: self._provider_generate(
                         model=self.model_name,
                         messages=[msg],
                         system_instruction=sys_instruction,
@@ -678,11 +808,11 @@ class LancelotOrchestrator:
                     skip_structured_reformat=True,
                 )
             else:
-                msg = self.provider.build_user_message(
+                msg = self._build_frontier_user_message(
                     f"{self.context_env.get_context_string()}\n\n{prompt}"
                 )
                 gen_result = self._llm_call_with_retry(
-                    lambda: self.provider.generate(
+                    lambda: self._provider_generate(
                         model=self._route_model(goal),
                         messages=[msg],
                         system_instruction=system_instruction,
@@ -735,11 +865,11 @@ class LancelotOrchestrator:
 
         try:
             system_instruction = self._build_execution_instruction()
-            msg = self.provider.build_user_message(
+            msg = self._build_frontier_user_message(
                 f"{self.context_env.get_context_string()}\n\n{prompt}"
             )
             gen_result = self._llm_call_with_retry(
-                lambda: self.provider.generate(
+                lambda: self._provider_generate(
                     model=self._route_model(graph.goal or ""),
                     messages=[msg],
                     system_instruction=system_instruction,
@@ -804,6 +934,9 @@ class LancelotOrchestrator:
         auth_token = ""
         if provider_name == "anthropic" and not api_key:
             auth_token = self._get_anthropic_oauth_token()
+        # Codex OAuth: ChatGPT Pro subscription access (no API key needed)
+        elif provider_name == "openai-codex":
+            auth_token = self._get_openai_codex_oauth_token()
 
         if api_key or auth_token:
             try:
@@ -848,7 +981,10 @@ class LancelotOrchestrator:
             except Exception as e:
                 print(f"Error initializing OAuth GenAI: {e}")
 
-        print(f"No API key for {provider_name} (set {api_key_var}). LLM features disabled.")
+        if provider_name == "openai-codex":
+            print("No Codex OAuth token found yet. Waiting for OAuth recovery.")
+        else:
+            print(f"No API key for {provider_name} (set {api_key_var}). LLM features disabled.")
 
     def switch_provider(self, provider_name: str) -> str:
         """Hot-swap the active LLM provider at runtime.
@@ -869,16 +1005,19 @@ class LancelotOrchestrator:
         from providers.factory import create_provider, API_KEY_VARS
 
         api_key_var = API_KEY_VARS.get(provider_name)
-        if not api_key_var:
+        if api_key_var is None:
             raise ValueError(f"Unknown provider: {provider_name}")
 
-        api_key = os.getenv(api_key_var, "")
+        api_key = os.getenv(api_key_var, "") if api_key_var else ""
         # V28: Check for OAuth token as alternative for Anthropic
         auth_token = ""
         if provider_name == "anthropic" and not api_key:
             auth_token = self._get_anthropic_oauth_token()
+        # Codex OAuth: ChatGPT Pro subscription access
+        elif provider_name == "openai-codex":
+            auth_token = self._get_openai_codex_oauth_token()
         if not api_key and not auth_token:
-            raise ValueError(f"No API key configured for {provider_name} (set {api_key_var})")
+            raise ValueError(f"No API key or OAuth token configured for {provider_name}")
 
         # V27: Read provider mode
         provider_mode = os.getenv("LANCELOT_PROVIDER_MODE", "sdk")
@@ -920,6 +1059,17 @@ class LancelotOrchestrator:
         try:
             from oauth_token_manager import get_oauth_manager
             manager = get_oauth_manager()
+            if manager:
+                return manager.get_valid_token() or ""
+        except Exception:
+            pass
+        return ""
+
+    def _get_openai_codex_oauth_token(self) -> str:
+        """Try to get a valid OpenAI Codex OAuth token from the global token manager."""
+        try:
+            from openai_codex_oauth_manager import get_openai_codex_manager
+            manager = get_openai_codex_manager()
             if manager:
                 return manager.get_valid_token() or ""
         except Exception:
@@ -2481,7 +2631,7 @@ class LancelotOrchestrator:
             print(f"V22: Literal terms extracted: {terms_str}")
 
         full_text = f"{ctx}\n\n{prompt}{literal_guard}"
-        initial_msg = self.provider.build_user_message(full_text, images=image_parts)
+        initial_msg = self._build_frontier_user_message(full_text, images=image_parts)
         messages = [initial_msg]
 
         # Track tool calls for receipts and cost
@@ -2526,7 +2676,7 @@ class LancelotOrchestrator:
                 # Instead, structured output is applied as a post-processing
                 # reformat step after the loop completes (see below).
                 result = self._llm_call_with_retry(
-                    lambda: self.provider.generate_with_tools(
+                    lambda: self._provider_generate_with_tools(
                         model=self._route_model(prompt),
                         messages=messages,
                         system_instruction=system_instruction,
@@ -2556,8 +2706,8 @@ class LancelotOrchestrator:
                                 f"Be concise. Only claim actions that appear in the receipts.\n\n"
                                 f"TOOL RECEIPTS:\n{_receipt_summary}"
                             )
-                            _err_msg = self.provider.build_user_message(_err_prompt)
-                            _err_result = self.provider.generate(
+                            _err_msg = self._build_frontier_user_message(_err_prompt)
+                            _err_result = self._provider_generate(
                                 model=self._route_model(prompt),
                                 messages=[_err_msg],
                                 system_instruction="You summarize tool results into JSON. Only include actions verified by receipts.",
@@ -2632,8 +2782,8 @@ class LancelotOrchestrator:
                             f"TOOL RECEIPTS (ground truth — only these actions happened):\n{_receipt_summary}\n\n"
                             f"ORIGINAL RESPONSE:\n{text}"
                         )
-                        _reformat_msg = self.provider.build_user_message(_reformat_prompt)
-                        _reformat_result = self.provider.generate(
+                        _reformat_msg = self._build_frontier_user_message(_reformat_prompt)
+                        _reformat_result = self._provider_generate(
                             model=self._route_model(prompt),
                             messages=[_reformat_msg],
                             system_instruction="You reformat text into JSON. Only include actions verified by tool receipts.",
@@ -2797,9 +2947,8 @@ class LancelotOrchestrator:
                             if skill_name == "document_creator" and result_data.get("path"):
                                 doc_abs = result_data["path"]
                                 _ws = os.getenv("LANCELOT_WORKSPACE", "/home/lancelot/workspace")
-                                _tok = os.getenv("LANCELOT_API_TOKEN", "")
                                 doc_rel = doc_abs.replace(f"{_ws}/", "").lstrip("/")
-                                _dl_url = f"/api/files/{doc_rel}?token={_tok}" if _tok else f"/api/files/{doc_rel}"
+                                _dl_url = f"/api/files/{doc_rel}"
                                 result_data["download_url"] = _dl_url
                                 result_data["download_note"] = (
                                     f"Document created. Include this link in your response so "
@@ -2865,7 +3014,7 @@ class LancelotOrchestrator:
                 tool_results.append((tc.id, skill_name, str(result_data)))
 
             # Feed ALL results back via provider's tool response builder
-            tool_response_msg = self.provider.build_tool_response_message(tool_results)
+            tool_response_msg = self._build_frontier_tool_response_message(tool_results)
             if isinstance(tool_response_msg, list):
                 messages.extend(tool_response_msg)
             else:
@@ -2878,7 +3027,7 @@ class LancelotOrchestrator:
                 for r in tool_receipts[-len(result.tool_calls):]
             )
             if _batch_had_failures:
-                _nudge = self.provider.build_user_message(
+                _nudge = self._build_frontier_user_message(
                     "[SYSTEM] A tool failed. Try an alternative tool or approach NOW. "
                     "Do NOT tell the user about the failure or say 'let me try'. "
                     "Just silently use the next tool. If no alternatives exist, "
@@ -2937,8 +3086,8 @@ class LancelotOrchestrator:
                     f"Be concise. Only claim actions that appear in the receipts.\n\n"
                     f"TOOL RECEIPTS:\n{_receipt_summary}"
                 )
-                _summary_msg = self.provider.build_user_message(_summary_prompt)
-                _summary_result = self.provider.generate(
+                _summary_msg = self._build_frontier_user_message(_summary_prompt)
+                _summary_result = self._provider_generate(
                     model=self._route_model(prompt),
                     messages=[_summary_msg],
                     system_instruction="Summarize tool execution results concisely. Only mention actions in the receipts.",
@@ -2984,11 +3133,11 @@ class LancelotOrchestrator:
 
         try:
             # Build message — provider handles multimodal format differences
-            msg = self.provider.build_user_message(full_text, images=image_parts)
+            msg = self._build_frontier_user_message(full_text, images=image_parts)
             messages = [msg]
 
             result = self._llm_call_with_retry(
-                lambda: self.provider.generate(
+                lambda: self._provider_generate(
                     model=self._route_model(prompt),
                     messages=messages,
                     system_instruction=system_instruction,
@@ -3162,7 +3311,7 @@ class LancelotOrchestrator:
             )
 
         try:
-            msg = self.provider.build_user_message(user_message)
+            msg = self._build_frontier_user_message(user_message)
             messages = [msg]
 
             # V27: Provider-specific thinking configuration
@@ -3183,7 +3332,7 @@ class LancelotOrchestrator:
             # OpenAI/xAI: no native extended thinking — use standard reasoning
 
             result = self._llm_call_with_retry(
-                lambda: self.provider.generate(
+                lambda: self._provider_generate(
                     model=deep_model,
                     messages=messages,
                     system_instruction=reasoning_instruction,
@@ -3602,7 +3751,7 @@ class LancelotOrchestrator:
             messages.append(raw_msg)
 
             # Send follow-up demanding actual content (not more narration)
-            synthesis_msg = self.provider.build_user_message(
+            synthesis_msg = self._build_frontier_user_message(
                 "IMPORTANT: You just described what you would do instead of actually doing it. "
                 "Now produce the COMPLETE, DETAILED report. This is your FINAL response — "
                 "the user will see exactly this text.\n\n"
@@ -3631,7 +3780,7 @@ class LancelotOrchestrator:
             deep_model = self._get_deep_model()
             print(f"V29: Synthesis call with max_tokens=16384, model={deep_model}")
             result = self._llm_call_with_retry(
-                lambda: self.provider.generate(
+                lambda: self._provider_generate(
                     model=deep_model,
                     messages=messages,
                     system_instruction=system_instruction,
@@ -4181,7 +4330,17 @@ class LancelotOrchestrator:
 
         return self.model_name
 
-    def chat(self, user_message: str, crusader_mode: bool = False, attachments: list = None, channel: str = "api") -> str:
+    def chat(
+        self,
+        user_message: str,
+        crusader_mode: bool = False,
+        attachments: list = None,
+        channel: str = "api",
+        session_id: str = "",
+        operator_id: str = "",
+        operator_name: str = "",
+        quest_id: Optional[str] = None,
+    ) -> str:
         """Sends a message to the LLM provider with full context.
 
         Uses context caching when available for token savings (Gemini only).
@@ -4194,10 +4353,13 @@ class LancelotOrchestrator:
         """
         self.wake_up("User Chat")
         self._current_channel = channel
+        self._current_session_id = session_id or ""
+        self._current_operator_id = operator_id or ""
+        self._current_operator_name = operator_name or ""
         self._telegram_already_sent = False  # V15: Reset duplicate-send guard
         # V29: Quest ID — groups all receipts from a single chat() invocation
         import uuid as _uuid
-        self._current_quest_id = str(_uuid.uuid4())
+        self._current_quest_id = quest_id or str(_uuid.uuid4())
         if hasattr(self, 'context_env') and self.context_env:
             self.context_env._current_quest_id = self._current_quest_id
         start_time = __import__("time").time()
@@ -4262,7 +4424,11 @@ class LancelotOrchestrator:
         if FEATURE_UNIFIED_CLASSIFICATION and self.provider:
             try:
                 from unified_classifier import UnifiedClassifier
-                _clf = UnifiedClassifier(self.provider)
+                _clf = UnifiedClassifier(
+                    self.provider,
+                    model_router=getattr(self, "model_router", None),
+                    local_model=getattr(self, "local_model", None),
+                )
                 # Build recent history for continuation detection
                 _recent_history = []
                 if hasattr(self, 'context_env') and self.context_env:
@@ -4451,8 +4617,14 @@ class LancelotOrchestrator:
             {"user_message": user_message, "model": selected_model},
             tier=CognitionTier.CLASSIFICATION,
             quest_id=getattr(self, '_current_quest_id', None),
-            metadata={"model": selected_model, "channel": channel,
-                      "provider": getattr(self.provider, 'provider_name', 'unknown')},
+            metadata={
+                "model": selected_model,
+                "channel": channel,
+                "provider": getattr(self.provider, 'provider_name', 'unknown'),
+                "operator_id": self._current_operator_id or None,
+                "operator_name": self._current_operator_name or None,
+                "session_id": self._current_session_id or None,
+            },
         )
         self.receipt_service.create(receipt)
 
@@ -4463,8 +4635,14 @@ class LancelotOrchestrator:
             # Get Deterministic Context (memory-augmented if enabled)
             if self._memory_enabled and self.context_compiler:
                 try:
+                    self.context_compiler.record_active_objective(
+                        objective=user_message,
+                        quest_id=getattr(self, "_current_quest_id", None),
+                        channel=channel,
+                    )
                     compiled = self.context_compiler.compile_for_objective(
                         objective=user_message,
+                        quest_id=getattr(self, "_current_quest_id", None),
                         mode="crusader" if crusader_mode else "normal",
                     )
                     # V30: Memory vNext compiler provides core blocks, working memory,
@@ -4656,11 +4834,11 @@ class LancelotOrchestrator:
             ):
                 print(f"V17: Auto-escalation triggered — fast model response too thin ({len(raw_response.strip())} chars), retrying with {deep_model}")
                 try:
-                    esc_msg = self.provider.build_user_message(
+                    esc_msg = self._build_frontier_user_message(
                         f"{context_str or self.context_env.get_context_string()}\n\n{user_message}"
                     )
                     esc_result = self._llm_call_with_retry(
-                        lambda: self.provider.generate(
+                        lambda: self._provider_generate(
                             model=deep_model,
                             messages=[esc_msg],
                             system_instruction=system_instruction,
@@ -5009,3 +5187,4 @@ if __name__ == "__main__":
     # Simple CLI test
     orchestrator = LancelotOrchestrator()
     print(orchestrator.execute_command("echo 'Lancelot setup complete'"))
+

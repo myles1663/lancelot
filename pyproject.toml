@@ -19,6 +19,7 @@ dependencies = [
     "pywebview",
     "plyer",
     "cryptography",
+    "bcrypt>=4.0.0",
     "pyyaml>=6.0",
     "llama-cpp-python>=0.2.0",
     "requests",

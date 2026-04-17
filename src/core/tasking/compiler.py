@@ -139,6 +139,7 @@ class PlanCompiler:
                 inputs={
                     "description": ps.description,
                     "tool": ps.tool,
+                    "tool_name": ps.tool,
                     "params": [{"name": p.name, "value": p.value} for p in ps.params]
                     if hasattr(ps, 'params') and ps.params else [],
                 },

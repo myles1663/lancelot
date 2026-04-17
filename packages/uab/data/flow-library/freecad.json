@@ -1,0 +1,47 @@
+{
+  "skill_name": "freecad_cad_flow",
+  "app_name": "FreeCAD",
+  "executable": "freecad.exe",
+  "app_framework": "Qt",
+  "target_flow": "Create and modify parametric 3D models in FreeCAD",
+  "input_method": "direct_invoke",
+  "focus_method": "focus_endpoint",
+  "read_method": "screenshot",
+  "critical_note": "FreeCAD is Qt-based and exposes 191+ elements via UIA. All toolbar buttons, menus, and panels are directly invokable via /invoke. Use /deep-query to discover available tools. The 3D viewport is OpenGL-rendered but all controls around it are accessible.",
+  "navigation_plan": [
+    {"step": 1, "action": "connect", "params": {"target": "freecad"}, "note": "Returns pid"},
+    {"step": 2, "action": "focus", "params": {"pid": "{pid}"}, "note": "Bring to front"},
+    {"step": 3, "action": "deep_query", "note": "Discover all available buttons and controls"},
+    {"step": 4, "action": "invoke", "note": "Click any button by name — all Part Design operations are directly invokable"}
+  ],
+  "available_operations": {
+    "file": ["New", "Open", "Save"],
+    "edit": ["Undo", "Redo", "Refresh"],
+    "part_design_setup": ["Create part", "Create body", "Create datum", "Validate sketch", "Check Geometry"],
+    "additive": ["Pad", "Revolution", "Additive loft", "Additive pipe", "Additive helix", "Create an additive primitive"],
+    "subtractive": ["Pocket", "Hole", "Groove", "Subtractive loft", "Subtractive pipe", "Subtractive helix", "Create a subtractive primitive"],
+    "dressup": ["Fillet", "Chamfer", "Draft", "Thickness"],
+    "patterns": ["Mirrored", "LinearPattern", "PolarPattern", "Create MultiTransform"],
+    "boolean": ["Boolean operation"],
+    "view": ["Fit all", "Fit selection", "Standard views", "Draw style"]
+  },
+  "workbenches": ["Assembly", "BIM", "CAM", "Draft", "FEM", "Inspection", "Material", "Mesh", "OpenSCAD", "Part Design", "Part", "Points", "Reverse Engineering", "Robot"],
+  "primitive_types": ["Box", "Cylinder", "Sphere", "Cone", "Ellipsoid", "Torus", "Prism", "Wedge"],
+  "known_issues": [
+    "Welcome/New File page covers the 3D view on first launch — use Ctrl+N to create empty document",
+    "Some text elements invoke but don't trigger the action — use Ctrl+N or menu buttons instead",
+    "Create body may fail with bounding rect overflow — use first occurrence if multiple matches",
+    "Primitive parameters panel has editable fields for Length/Width/Height — these are Qt widgets accessible via UIA",
+    "3D viewport is OpenGL — no accessibility for 3D objects, but all controls/panels are fully accessible"
+  ],
+  "keyboard_shortcuts": {
+    "new_file": "Ctrl+N",
+    "save": "Ctrl+S",
+    "undo": "Ctrl+Z",
+    "redo": "Ctrl+Y"
+  },
+  "risk_tier": "T1",
+  "version": "1.0",
+  "last_verified": "2026-03-23",
+  "achievement": "Full parametric CAD control through direct UIA button invocation. 58 toolbar buttons and 191 total elements accessible. Created 3D primitives via invoke."
+}
