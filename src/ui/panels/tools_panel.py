@@ -1,6 +1,5 @@
 """
-War Room — Tool Fabric Panel (Prompt 10)
-=========================================
+War Room tool fabric panel.
 
 Displays Tool Fabric status in the War Room:
 - Provider toggles and health display

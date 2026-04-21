@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 import src.core.auth_api as auth_module
 from src.core.auth_api import (
@@ -166,6 +168,19 @@ class TestAuthorizationCapabilities:
         assert "warroom.login" in admin_caps
         assert "platform.admin" not in user_caps
         assert "warroom.login" in user_caps
+
+    def test_enforce_allowed_groups_requires_explicit_policy(self, monkeypatch):
+        monkeypatch.delenv("OIDC_ALLOWED_GROUPS", raising=False)
+        monkeypatch.delenv("OIDC_ALLOW_ANY_AUTHENTICATED", raising=False)
+
+        with pytest.raises(PermissionError, match="OIDC_ALLOWED_GROUPS"):
+            auth_module._enforce_allowed_groups(["engineering"])
+
+    def test_enforce_allowed_groups_allows_explicit_open_mode(self, monkeypatch):
+        monkeypatch.delenv("OIDC_ALLOWED_GROUPS", raising=False)
+        monkeypatch.setenv("OIDC_ALLOW_ANY_AUTHENTICATED", "true")
+
+        auth_module._enforce_allowed_groups(["engineering"])
 
     def test_resolve_request_capabilities_reads_session_capabilities(self):
         token = "session-token"
@@ -366,12 +381,30 @@ class TestAuthConfig:
         monkeypatch.setenv("OIDC_ISSUER_URL", "https://issuer.example")
         monkeypatch.setenv("OIDC_CLIENT_ID", "client-id")
         monkeypatch.setenv("OIDC_CLIENT_SECRET", "client-secret")
+        monkeypatch.setenv("OIDC_ALLOWED_GROUPS", "lancelot-admins")
 
         response = await auth_config()
 
         assert response["provider"] == "oidc"
         assert response["oidc"]["enabled"] is True
         assert response["oidc"]["configured"] is True
+        assert response["oidc"]["allowed_groups_configured"] is True
+        assert response["oidc"]["allow_any_authenticated"] is False
+
+    @pytest.mark.asyncio
+    async def test_oidc_auth_config_open_mode_is_explicit(self, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "oidc")
+        monkeypatch.setenv("OIDC_ISSUER_URL", "https://issuer.example")
+        monkeypatch.setenv("OIDC_CLIENT_ID", "client-id")
+        monkeypatch.setenv("OIDC_CLIENT_SECRET", "client-secret")
+        monkeypatch.delenv("OIDC_ALLOWED_GROUPS", raising=False)
+        monkeypatch.setenv("OIDC_ALLOW_ANY_AUTHENTICATED", "true")
+
+        response = await auth_config()
+
+        assert response["oidc"]["configured"] is True
+        assert response["oidc"]["allowed_groups_configured"] is False
+        assert response["oidc"]["allow_any_authenticated"] is True
 
 
 class TestResetPassword:
@@ -673,7 +706,9 @@ class TestAuthStatePersistence:
 
     def test_session_state_survives_module_reload(self, monkeypatch, tmp_path):
         state_file = tmp_path / "auth_state.json"
+        key_file = tmp_path / "auth_state.key"
         monkeypatch.setenv("LANCELOT_AUTH_STATE_FILE", str(state_file))
+        monkeypatch.setenv("LANCELOT_AUTH_STATE_KEY_FILE", str(key_file))
 
         auth_module._sessions.clear()
         auth_module._oidc_pending.clear()
@@ -692,7 +727,9 @@ class TestAuthStatePersistence:
 
     def test_oidc_state_survives_module_reload(self, monkeypatch, tmp_path):
         state_file = tmp_path / "auth_state.json"
+        key_file = tmp_path / "auth_state.key"
         monkeypatch.setenv("LANCELOT_AUTH_STATE_FILE", str(state_file))
+        monkeypatch.setenv("LANCELOT_AUTH_STATE_KEY_FILE", str(key_file))
 
         auth_module._sessions.clear()
         auth_module._oidc_pending.clear()
@@ -705,6 +742,67 @@ class TestAuthStatePersistence:
 
         assert "state-1" in reloaded._oidc_pending
         assert "exchange-1" in reloaded._oidc_exchange_codes
+
+    def test_auth_state_is_encrypted_at_rest(self, monkeypatch, tmp_path):
+        state_file = tmp_path / "auth_state.json"
+        key_file = tmp_path / "auth_state.key"
+        monkeypatch.setenv("LANCELOT_AUTH_STATE_FILE", str(state_file))
+        monkeypatch.setenv("LANCELOT_AUTH_STATE_KEY_FILE", str(key_file))
+
+        auth_module._sessions.clear()
+        auth_module._oidc_pending.clear()
+        auth_module._oidc_exchange_codes.clear()
+        _insert_session("persisted-token", username="persist-user", expires_in=600)
+        auth_module._oidc_pending["state-1"] = {"created_at": time.time(), "nonce": "abc"}
+        auth_module._save_auth_state()
+
+        raw = state_file.read_text(encoding="utf-8")
+        envelope = json.loads(raw)
+
+        assert envelope["encrypted"] is True
+        assert envelope["algorithm"] == "fernet"
+        assert "persist-user" not in raw
+        assert "persisted-token" not in raw
+        assert "state-1" not in raw
+
+    def test_legacy_plaintext_auth_state_still_loads(self, monkeypatch, tmp_path):
+        state_file = tmp_path / "auth_state.json"
+        key_file = tmp_path / "auth_state.key"
+        monkeypatch.setenv("LANCELOT_AUTH_STATE_FILE", str(state_file))
+        monkeypatch.setenv("LANCELOT_AUTH_STATE_KEY_FILE", str(key_file))
+
+        identity = OperatorIdentity(
+            operator_id=resolve_operator_id("legacy-user"),
+            display_name="legacy-user",
+            session_id="legacy-session",
+            session_started_at="2026-01-01T00:00:00Z",
+            auth_method="local",
+            ip_address="127.0.0.1",
+        )
+        state_file.write_text(
+            json.dumps(
+                {
+                    "sessions": {
+                        "legacy-token": {
+                            "expires_at": time.time() + 600,
+                            "username": "legacy-user",
+                            "operator_identity": identity.to_dict(),
+                            "capabilities": ["warroom.login"],
+                        }
+                    },
+                    "oidc_pending": {"legacy-state": {"created_at": time.time()}},
+                    "oidc_exchange_codes": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        reloaded = importlib.reload(auth_module)
+
+        assert "legacy-token" in reloaded._sessions
+        assert reloaded._sessions["legacy-token"]["username"] == "legacy-user"
+        assert isinstance(reloaded._sessions["legacy-token"]["operator_identity"], OperatorIdentity)
+        assert "legacy-state" in reloaded._oidc_pending
 
 
 # ── init_auth_api ────────────────────────────────────────────────
@@ -721,3 +819,94 @@ class TestInitAuthApi:
     def test_none_audit_logger(self):
         init_auth_api(audit_logger=None)
         assert auth_module._audit_logger is None
+
+
+class TestStrictRequestBodies:
+
+    def setup_method(self):
+        auth_module._sessions.clear()
+        auth_module._login_failures.clear()
+        auth_module._oidc_exchange_codes.clear()
+
+    def _client(self):
+        app = FastAPI()
+        app.include_router(auth_module.router)
+        return TestClient(app)
+
+    @patch("src.core.auth_api._get_warroom_password", return_value="correct-pass")
+    @patch("src.core.auth_api._get_warroom_username", return_value="admin")
+    def test_login_rejects_unexpected_fields(self, mock_user, mock_pass, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "local")
+        client = self._client()
+
+        response = client.post(
+            "/auth/login",
+            json={"username": "admin", "password": "correct-pass", "operator_id": "spoofed"},
+        )
+
+        assert response.status_code == 422
+        assert "extra_forbidden" in response.text
+
+    @patch("src.core.auth_api._get_warroom_password_reset_code")
+    @patch("src.core.auth_api._get_warroom_username", return_value="admin")
+    def test_reset_password_rejects_unexpected_fields(self, mock_user, mock_reset, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "local")
+        mock_reset.return_value = bcrypt.hashpw(
+            b"reset-secret",
+            bcrypt.gensalt(),
+        ).decode("utf-8")
+        client = self._client()
+
+        response = client.post(
+            "/auth/reset-password",
+            json={
+                "username": "admin",
+                "reset_code": "reset-secret",
+                "new_password": "new-password-123",
+                "session_id": "spoofed",
+            },
+        )
+
+        assert response.status_code == 422
+        assert "extra_forbidden" in response.text
+
+    def test_oidc_exchange_rejects_unexpected_fields(self, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "oidc")
+        auth_module._oidc_exchange_codes["exchange-1"] = {
+            "token": "oidc-token",
+            "expires_in": 120,
+            "username": "Arthur",
+            "operator_id": "op-arthur",
+            "session_id": "session-1",
+            "expires_at": time.time() + 60,
+        }
+        client = self._client()
+
+        response = client.post(
+            "/auth/oidc/exchange",
+            json={"exchange_code": "exchange-1", "operator_id": "spoofed"},
+        )
+
+        assert response.status_code == 422
+        assert "extra_forbidden" in response.text
+
+    @patch("src.core.auth_api._persist_warroom_password_secret")
+    @patch("src.core.auth_api._get_warroom_password", return_value="current-pass")
+    def test_change_password_rejects_unexpected_fields(self, mock_pass, mock_persist, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "local")
+        client = self._client()
+        _insert_session("change-token", username="admin", capabilities={"warroom.login"})
+        client.cookies.set(auth_module.get_warroom_session_cookie_name(), "change-token")
+
+        response = client.post(
+            "/auth/change-password",
+            json={
+                "current_password": "current-pass",
+                "new_password": "next-password",
+                "operator_id": "spoofed",
+            },
+        )
+
+        assert response.status_code == 422
+        assert "extra_forbidden" in response.text
+        mock_persist.assert_not_called()

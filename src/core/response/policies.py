@@ -49,7 +49,7 @@ _TOOL_CODE_INLINE = re.compile(
     r"^Tool_Code\s*\n.*?(?=\n\n|\Z)",
     re.MULTILINE | re.DOTALL,
 )
-# Function call syntax: print(google_search.search(...))
+# Function call syntax: google_search.search(...)
 _FUNCTION_CALL = re.compile(
     r"print\s*\([^)]*\)",
     re.IGNORECASE,

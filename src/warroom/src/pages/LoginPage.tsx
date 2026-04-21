@@ -8,7 +8,9 @@ import {
   validateSession,
   type AuthConfigResponse,
 } from '@/api/auth'
+import { ApiClientError } from '@/api/client'
 import logo from '@/assets/logo.jpeg'
+import { getErrorMessage } from '@/utils/errors'
 
 export function LoginPage() {
   const navigate = useNavigate()
@@ -37,7 +39,13 @@ export function LoginPage() {
           navigate('/command', { replace: true })
         }
       })
-      .catch(() => {})
+      .catch((error) => {
+        if (cancelled) return
+        if (error instanceof ApiClientError && error.status === 401) {
+          return
+        }
+        setError(getErrorMessage(error, 'Failed to validate existing session'))
+      })
     return () => {
       cancelled = true
     }

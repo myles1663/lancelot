@@ -44,6 +44,7 @@ Where supported by the backend, subsystem pages now surface:
 - `runtime_degraded`
 - `degraded_reasons`
 - `runtime_errors`
+- explicit loaded-vs-ready runtime state where the subsystem supports it
 
 This is deliberate. A blank table or a default status should no longer be treated as proof that the subsystem is healthy.
 
@@ -91,14 +92,14 @@ System-wide health monitoring with subsystem-level detail.
 |--------|---------|--------|
 | **Healthy** | All checks passing | None needed |
 | **Degraded** | One or more subsystems failing | Check `degraded_reasons` for specifics |
-| **Local LLM Down** | Local model not responding | Check `lancelot_local_llm` container: `docker compose logs local-llm` |
+| **Local LLM Down** | Local model not ready for inference | Check `lancelot_local_llm` container: `docker compose logs local-llm` |
 | **Scheduler Stopped** | Scheduler not running | Verify `FEATURE_SCHEDULER=true` and system is in READY state |
 
 **What to do if degraded:**
 1. Read the `degraded_reasons` list — it tells you exactly what's wrong
 2. Check container status: `docker compose ps`
 3. Check container logs: `docker compose logs -f lancelot-core`
-4. If the local LLM is the problem, it may still be loading the model (takes up to 2 minutes on first start)
+4. If the local LLM is the problem, check whether it is merely loaded or actually ready. War Room now shows both states separately, along with the last readiness error and the last successful verification time.
 
 ---
 
@@ -205,6 +206,31 @@ Searchable audit trail of every action Lancelot has taken.
 
 ---
 
+## Skills Panel
+
+Governed skill proposal review and install lifecycle.
+
+**Displays:**
+- Proposal queue with `pending`, `review_failed`, `approved`, and `installed` states
+- Runtime permissions, derived security capabilities, target domains, and vault-key declarations
+- Stage-by-stage security pipeline evidence (manifest validation, static analysis, sandbox test, owner review)
+- Runtime/security manifests, generated implementation code, generated tests, and artifact hashes
+- Installed dynamic-skill inventory beside the proposal queue
+
+**Operator workflow:**
+1. Review the proposal contract first: permissions, capabilities, domains, vault keys, and risk.
+2. Inspect the pipeline evidence. `review_failed` means the artifact never became install-ready.
+3. Approve only proposals whose reviewed artifact hashes and stage output match the intended use.
+4. Install only after approval. Installation re-validates the same artifact package before it reaches the live registry.
+
+**What to watch for:**
+- Unexpected domains or vault keys on low-risk skills
+- Capability expansion that does not match the runtime permission list
+- Stage failures in `static_analysis` or `sandbox_test`
+- Install blocks caused by artifact hash drift after approval
+
+---
+
 ## Connector Status
 
 ![War Room — Connectors](images/war-room-connectors.png)
@@ -222,6 +248,23 @@ Per-connector health, configuration, and usage metrics.
 - Rate limit usage approaching limits — consider adjusting in `config/connectors.yaml`
 - Credential expiry warnings — rotate credentials before they expire
 - High error rates — check connector logs and external service status
+
+---
+
+## Cost Tracker
+
+Provider usage, key status, and provider-side authentication controls.
+
+**Codex access path:**
+- The OpenAI Codex card now treats mounted host Codex auth as the preferred enterprise path.
+- If `~/.codex/auth.json` is mounted into the container, the card reports `CLI AUTH` and no browser OAuth flow is required.
+- The action button performs a re-check first; browser OAuth is opened only when mounted Codex auth is not available.
+- Revoking `CLI AUTH` is done by signing out on the host machine, not by deleting vault-backed OAuth tokens inside Lancelot.
+
+**Persistence contract:**
+- The active provider should survive container restarts and rebuilds through the durable data volume, even if the container is recreated.
+- Onboarding should remain `READY` after a healthy rebuild; dropping back to incomplete because provider state was lost is a defect, not expected behavior.
+- If the Cost Tracker or onboarding regresses after a rebuild, check `/home/lancelot/data/provider_config.json` and the onboarding snapshot before assuming the provider itself is broken.
 
 ---
 
@@ -297,6 +340,8 @@ Each kill switch has a confirmation dialog before activation. Disabling a subsys
 
 **Hot-Toggle:** All feature flags are hot-toggleable via the SubsystemManager. Core subsystems (Soul, Skills, Scheduler, Health Monitor, Memory, BAL) are lazily initialized when toggled ON and gracefully shut down when toggled OFF. No container restart is ever required.
 
+The War Room kill-switch story is unified even when the underlying implementations differ. Subsystem feature flags and MCP master/per-server kills use the same shared kill-switch contract (`switch_id`, `scope`, `reason`, `allowed`), while federation kill commands remain a specialized propagation workflow on top of that operator model.
+
 | Switch | What It Controls | When to Use |
 |--------|-----------------|-------------|
 | **Tool Fabric** | All tool execution | If unexpected commands are being run |
@@ -317,11 +362,12 @@ The system administration hub — 4 tabs covering all operational and destructiv
 
 - **System Info**: Version, uptime, Python version, disk usage (polled live)
 - **Container Controls**: Restart (exit code 0 — Docker auto-restarts) and Shutdown (exit code 1 — stays stopped). Both require confirmation dialogs.
-- **Onboarding Status**: Current state, provider, credentials, local model status, cooldown info
+- **Onboarding Status**: Current state, provider, credentials, local model install status, local model runtime readiness, cooldown info. Visible only to authenticated War Room operators.
 - **Recovery Commands**: Check Status, Go Back, Restart Step, Resend Code
 
 ### Data Tab
 
+- **Connector Vault Health**: Shows non-secret connector-vault status, key source/origin, key id, encrypted file presence, and operator-facing failure details when the vault failed closed.
 - **Vault Credentials**: Lists all credential keys with type and created_at (values are never displayed). Individual keys can be deleted.
 - **Execution Tokens**: Lists active tokens with status. Active tokens can be revoked.
 - **Receipt Management**: Shows total receipt count with a Clear All button.
@@ -339,12 +385,23 @@ Red-bordered destructive operations — all require confirmation:
 
 | Action | What It Does | Confirmation |
 |--------|-------------|-------------|
+| **Reset Connector Vault** | Archives encrypted connector-vault artifacts under `data/vault/reset_backups/<timestamp>/` and restarts the container so a clean vault can be re-created | Type "RESET CONNECTOR VAULT" |
 | **Factory Reset** | Deletes all data directory contents, resets flags, clears onboarding | Type "RESET" |
 | **Purge Memory** | Deletes core_blocks.json and SQLite memory stores | Confirm dialog |
 | **Reset Feature Flags** | Deletes .flag_state.json, resets all flags to code defaults | Confirm dialog |
 | **Reset Onboarding** | Clears onboarding progress, restarts setup flow | Confirm dialog |
 
 All destructive operations are audit-logged.
+
+### Local Model Runtime Signals
+
+Setup & Recovery and the Health panel now distinguish:
+
+- **Install state** — whether the local model package and weights are present
+- **Runtime loaded** — whether the model process initialized successfully
+- **Runtime ready** — whether a recent local inference smoke passed
+
+If the model is loaded but not ready, Lancelot does not treat the local execution or local scrub lane as healthy.
 
 ---
 

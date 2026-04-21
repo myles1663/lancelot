@@ -1,5 +1,5 @@
 """
-FlagshipClient — HTTP client for flagship AI provider APIs (Prompt 16).
+Flagship client for configured frontier provider APIs.
 
 Single-owner module providing a provider-agnostic interface to Gemini,
 OpenAI, and Anthropic APIs.  Uses the REST endpoints directly via
@@ -22,6 +22,7 @@ import urllib.request
 import urllib.error
 from typing import Optional
 
+from src.core.outbound_http import assert_url_allowed
 from src.core.provider_profile import ProviderProfile, LaneConfig
 
 logger = logging.getLogger(__name__)
@@ -263,14 +264,19 @@ class FlagshipClient:
 
         req = urllib.request.Request(url, data=body, headers=headers)
         try:
+            assert_url_allowed(url, component=f"{self._provider} flagship API call")
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             error_body = ""
             try:
                 error_body = exc.read().decode("utf-8", errors="replace")
-            except Exception:
-                pass
+            except Exception as read_exc:
+                logger.debug(
+                    "Failed to read HTTP error body from %s provider response: %s",
+                    self._provider,
+                    read_exc,
+                )
             raise FlagshipError(
                 f"HTTP {exc.code} from {self._provider}: {error_body}"
             ) from exc

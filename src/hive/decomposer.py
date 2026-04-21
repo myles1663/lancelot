@@ -132,12 +132,43 @@ class TaskDecomposer:
 
         # Build execution order, filtering out indices beyond subtask count
         raw_order = parsed.get("execution_order", [[i] for i in range(len(subtasks))])
-        max_idx = len(subtasks)
         execution_order = []
-        for group in raw_order:
-            filtered = [idx for idx in group if idx < max_idx]
+        invalid_order_entries = []
+        for group_index, group in enumerate(raw_order):
+            if not isinstance(group, list):
+                invalid_order_entries.append({
+                    "group": group_index,
+                    "value": group,
+                })
+                continue
+
+            filtered = []
+            for idx in group:
+                if isinstance(idx, bool) or not isinstance(idx, int):
+                    invalid_order_entries.append({
+                        "group": group_index,
+                        "value": idx,
+                    })
+                    continue
+                if idx < 0 or idx >= len(subtasks):
+                    invalid_order_entries.append({
+                        "group": group_index,
+                        "value": idx,
+                    })
+                    continue
+                filtered.append(idx)
+
             if filtered:
                 execution_order.append(filtered)
+
+        if invalid_order_entries:
+            logger.warning(
+                "HIVE decomposition dropped invalid execution_order entries: "
+                "quest_id=%s invalid_entries=%s subtask_count=%d",
+                quest_id,
+                invalid_order_entries,
+                len(subtasks),
+            )
 
         # Validate
         self._validate(subtasks, execution_order)

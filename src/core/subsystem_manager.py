@@ -141,6 +141,10 @@ class SubsystemManager:
             return self._subsystems.get(name)
         return None
 
+    def get(self, name: str) -> Optional[_SubsystemEntry]:
+        """Return the registered subsystem entry without mutating its state."""
+        return self._subsystems.get(name)
+
     def status(self) -> dict:
         """Return a snapshot of all registered subsystems and their states."""
         return {

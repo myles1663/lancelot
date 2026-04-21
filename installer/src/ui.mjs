@@ -41,7 +41,7 @@ export function showSuccess(config) {
 
   if (config.warRoomAuthModel !== 'oidc' && config.warRoomPassword) {
     console.log(chalk.yellow.bold('  War Room Login Credentials:'));
-    console.log(chalk.white(`    Username: ${chalk.bold(config.warRoomUser || 'admin')}`));
+    console.log(chalk.white(`    Username: ${chalk.bold(config.warRoomUser || '(custom username)')}`));
     console.log(chalk.white(`    Password: ${chalk.bold(config.warRoomPassword)}`));
     if (config.warRoomPasswordResetCode) {
       console.log(chalk.white(`    Reset code: ${chalk.bold(config.warRoomPasswordResetCode)}`));

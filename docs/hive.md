@@ -182,9 +182,9 @@ class TaskSpec:
     priority: TaskPriority           # CRITICAL(0), HIGH(1), NORMAL(2), LOW(3)
     timeout_seconds: int             # Default: 300
     max_actions: int                 # Default: 50
-    allowed_apps: List[str]          # For UAB filtering
-    allowed_categories: List[str]    # For Soul scoping
-    context: Dict[str, Any]          # Task-specific context
+    allowed_apps: Tuple[str, ...]    # Frozen UAB allowlist
+    allowed_categories: Tuple[str, ...]  # Frozen canonical scope categories
+    context: FrozenDict[str, Any]    # Deep-frozen task context
     parent_task_id: Optional[str]
     execution_group: int             # Tasks in same group run in parallel
 ```
@@ -217,7 +217,7 @@ execution_order: [["0"], ["1", "2"], ["3"]]
 
 ## Scoped Soul Generation
 
-Every sub-agent gets a task-specific Soul that is always more restrictive than the parent. This is the **monotonic restriction principle** — scoped Souls can only tighten constraints, never loosen them.
+Every sub-agent gets a task-specific Soul that is always more restrictive than the parent. This is the **monotonic restriction principle** — scoped Souls can only tighten constraints, never loosen them. The live execution authority is now an **immutable spawn-time capability boundary** derived from the parent Soul plus the frozen `TaskSpec`, so a child cannot gain capability by mutating a raw scoped Soul document after spawn.
 
 ### Generation Process
 
@@ -226,7 +226,7 @@ def generate(parent_soul, task_spec, extra_risk_rules=None) -> Soul:
 ```
 
 1. **Start with parent** `allowed_autonomous` actions
-2. **Filter by task categories** — if `task_spec.allowed_categories` is set, only matching actions are kept
+2. **Filter by canonical task categories** — if `task_spec.allowed_categories` is set, only capabilities that match the canonical Hive category map are kept. Matching is exact-by-category, not fuzzy substring matching.
 3. **Apply control method** — if `MANUAL_CONFIRM`, move all actions to `requires_approval`
 4. **Preserve all parent risk rules** — add Hive-specific rules
 5. **Tighten scheduling** — `max_concurrent_jobs=1`, `no_autonomous_irreversible=True`, duration capped to task timeout
@@ -240,7 +240,8 @@ def validate_more_restrictive(scoped, parent) -> bool:
 
 Checks:
 - All parent risk rule names are preserved
-- No new `allowed_autonomous` actions beyond parent
+- No new `allowed_autonomous` actions beyond the parent's autonomous surface
+- No new `requires_approval` capabilities beyond the parent's governed surface (`allowed_autonomous ∪ requires_approval`)
 - Scheduling boundaries not loosened
 - `no_autonomous_irreversible` maintained if parent has it
 
@@ -249,8 +250,11 @@ Checks:
 The live startup path now enforces scoped-Soul guarantees at runtime rather than treating them as documentation-only intent.
 
 - **Spawn time**: `AgentLifecycleManager.spawn()` rejects a generated scoped Soul if it is not provably more restrictive than the parent.
-- **Per action**: `SubAgentRuntime` checks the task's allowed apps and scoped categories before governance and execution.
-- **Desktop actions**: `HiveUABExecutor` validates the target app boundary and governed UAB capability (`uab_click`, `uab_type`, and similar mutating steps) before calling the UAB provider.
+- **Immutable execution ceiling**: spawn also derives a frozen `ScopedCapabilityBoundary` from the parent Soul plus the task's frozen scope. Runtime execution and UAB step enforcement consult that boundary, not a caller-mutable Soul payload.
+- **Immutable task boundary**: `TaskSpec` is a frozen dataclass. Its allowlists are stored as tuples and its `context` is deep-frozen, so callers cannot widen scope in place after construction or after spawn.
+- **Per action**: `SubAgentRuntime` checks the task's allowed apps plus canonical scoped categories before governance and execution.
+- **Desktop actions**: `HiveUABExecutor` validates the target app boundary and each resolved UAB capability (`uab_query`, `uab_state`, `uab_click`, `uab_type`, and similar steps) before calling the UAB provider.
+- **Authoritative execution payload**: `SubAgentRuntime` overwrites caller-supplied `agent_id`, `scoped_soul`, `allowed_apps`, and `allowed_categories` with the registered task-record values before it invokes any executor. The stamped `scoped_soul` field is the immutable capability boundary, so action payloads and post-spawn Soul mutations cannot widen the live UAB boundary.
 - **Failure mode**: Any scoped-boundary breach collapses the agent with `SOUL_VIOLATION` instead of letting execution continue out of scope.
 
 ### Hashing
@@ -262,6 +266,8 @@ Each scoped Soul is hashed (`SHA256[:16]`) and stored on the `SubAgentRecord` fo
 ## Soul Overlay
 
 The file `soul/overlays/hive.yaml` defines Hive-specific governance rules that overlay the base Soul.
+
+The overlay also declares the capability vocabulary HIVE uses at runtime for explicit scoped enforcement, including `read_document`, `query_document`, `uab_automation`, `uab_query`, `uab_state`, and the common mutating `uab_*` step capabilities.
 
 ### Non-Negotiable Rules
 
@@ -305,11 +311,14 @@ The `GovernanceBridge` connects sub-agents to Lancelot's governance pipeline.
 def validate_action(capability, scope, target, agent_id) -> GovernanceResult:
 ```
 
-1. **RiskClassifier** — classify capability into tier (T0–T3)
+1. **HIVE kill switch** — if the live `FEATURE_HIVE` flag is off, validation returns a hard deny before any classification or execution.
+2. **RiskClassifier** — classify capability into tier (T0–T3)
    - T3 always requires approval for Hive agents
    - T2 requires supervision
-2. **TrustLedger** — check effective tier (may lower based on history)
-3. **MCPSentry** — check hard permission rules (deny takes precedence)
+3. **TrustLedger** — check effective tier (may lower based on history)
+4. **MCPSentry** — check hard permission rules (deny takes precedence)
+
+For T2/T3 Hive actions, the bridge does not treat a missing sentry backend as implicit approval. A previously approved matching MCPSentry request can allow the action to continue, but a new or still-pending high-risk action returns `requires_operator_approval=True`, preserves the approval `request_id` when available, and pauses the agent until the operator resumes it through the control plane.
 
 ### GovernanceResult
 
@@ -326,6 +335,7 @@ class GovernanceResult:
 
 - If `requires_operator_approval=True`: agent is paused, waiting for operator resume
 - If `approved=False` without operator option: agent is collapsed with `GOVERNANCE_DENIED`
+- If the HIVE kill switch is off: validation returns `approved=False`, `tier="T3"`, and reason `HIVE kill switch is active`, so direct runtime paths fail closed even if they bypass HTTP route ingress.
 
 ---
 
@@ -450,6 +460,8 @@ All endpoints are under `/api/hive` and gated by `FEATURE_HIVE`.
 | POST | `/api/hive/agents/{id}/modify` | `{"reason": str, "feedback": str}` | Kill + replan with feedback |
 | POST | `/api/hive/kill-all` | `{"reason": str}` | Emergency: collapse all agents |
 
+HIVE request models fail closed on undeclared body fields. Spoofed keys such as operator identity, receipt metadata, or synthetic result fields are rejected with request validation errors instead of being silently ignored.
+
 ### Runtime Status Contract
 
 `GET /api/hive/status` now reports both mesh state and dependency readiness.
@@ -488,9 +500,9 @@ When `FEATURE_HIVE_UAB` is enabled, Hive agents can control desktop applications
 
 Wraps the `UABProvider` with governance checks:
 
-- **Read-only** operations (enumerate, query, state): No governance gate
-- **Mutating** operations (act): Full governance check via GovernanceBridge
-- **App access validation**: Checks `allowed_apps` in scoped Soul
+- **Read-only** operations (enumerate, query, state): no risk-tier approval gate, but the live scoped boundary still checks `allowed_apps`, canonical scoped categories, and explicit scoped UAB capabilities before the provider call.
+- **Mutating** operations (act): full governance check via `GovernanceBridge`, after the same scoped app/category/capability checks.
+- **Scoped approval**: a scoped Soul can force operator approval for specific UAB capabilities such as `uab_query` or `uab_click`; in that case the bridge raises a scoped-governance denial before the desktop action reaches the provider.
 
 ### HiveUABExecutor
 
@@ -501,6 +513,10 @@ Translates subtask descriptions into real UAB commands using LLM-powered step pl
 3. **Plan steps** — LLM generates specific UAB commands from task description (max 1–5 steps)
 4. **Execute steps** sequentially
 5. **Return results** with per-step success/error details
+
+Before each resolved step executes, the executor validates the target app boundary, canonical scoped category, explicit scoped capability decision (`allow`, `requires_approval`, `deny`), and mutating-step governance result for the concrete capability (`uab_click`, `uab_type`, and similar).
+
+In the live HIVE path, those checks run against the runtime-stamped immutable capability boundary and task allowlists, not arbitrary caller-provided action payload fields or later-mutated Soul objects.
 
 **Available methods for LLM planning:**
 ```json

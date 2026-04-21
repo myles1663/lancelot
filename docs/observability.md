@@ -67,6 +67,14 @@ Configured via War Room at `/api/observability/config/otel`:
 - **Sampling rate**: T0/T1 percentage (default: 10%)
 - **Resource attributes**: `deployment_id`, `lancelot_version`, etc.
 
+Config mutations now surface live runtime application gaps explicitly. When governance receipting or receipt-bridge hot-apply fails, the API returns:
+
+- `runtime_degraded`
+- `degraded_reasons`
+- `runtime_errors`
+
+This is deliberate. Persisted config writes can still succeed while the live runtime apply path is degraded, and operators should see that distinction immediately.
+
 ### Exporter Protocol
 
 Phase 1 supports **OTLP/HTTP only**. gRPC support available on request (requires `grpcio` dependency). The HTTP exporter reaches every major platform: Datadog, Grafana Cloud, Honeycomb, Splunk, New Relic, Dynatrace.
@@ -153,10 +161,28 @@ Every response includes `soul_version` for detecting governance posture changes 
   "generated_at": "<ISO 8601>",
   "deployment_id": "<uuid>",
   "soul_version": "<hash>",
+  "runtime_degraded": false,
+  "degraded_reasons": [],
+  "runtime_errors": [],
   "data": { /* endpoint-specific */ },
   "pagination": { "cursor": "<opaque>", "has_more": true, "limit": 100 }
 }
 ```
+
+Status-style metrics endpoints now fail loudly in-band when runtime inspection breaks instead of returning healthy-looking empty defaults. In particular:
+
+- `GET /api/metrics/summary`
+- `GET /api/metrics/trust-ledger`
+- `GET /api/metrics/soul`
+- `GET /api/metrics/kill-switches`
+- `GET /api/metrics/hive`
+- `GET /api/metrics/webhooks/status`
+
+These responses surface:
+
+- `runtime_degraded`
+- `degraded_reasons`
+- `runtime_errors`
 
 ### Receipt Query Receipting
 
@@ -208,6 +234,21 @@ Individual subsystem toggles via `/api/observability/config`:
 - OTel export: enabled/disabled with endpoint, auth, interval, sampling
 - Webhooks: enabled/disabled with per-endpoint management
 - Metrics API: enabled/disabled with rate limiting
+
+### Runtime Status Surfaces
+
+`GET /api/observability/status` and `GET /api/observability/webhooks/stats` now fail loudly in-band instead of returning healthy-looking defaults when runtime inspection fails. These endpoints surface:
+
+- `runtime_degraded`
+- `degraded_reasons`
+- `runtime_errors`
+
+Typical degraded conditions include:
+
+- OTel provider status unavailable
+- receipt bridge status unavailable
+- webhook engine status unavailable
+- webhook delivery statistics unavailable
 
 ### Files
 

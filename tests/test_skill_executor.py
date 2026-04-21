@@ -5,6 +5,7 @@ Tests for src.core.skills.executor — Skill loader + execution (Prompt 8 / B3-B
 import pytest
 import yaml
 from pathlib import Path
+from unittest.mock import patch
 
 from src.core.skills.schema import SkillError
 from src.core.skills.registry import SkillRegistry, SkillOwnership
@@ -158,7 +159,8 @@ def execute(context, inputs):
         registry.install_skill(manifest_path)
 
         executor = SkillExecutor(registry)
-        result = executor.run(name, {"value": 5})
+        with patch.object(SkillExecutor, "_is_builtin", return_value=True):
+            result = executor.run(name, {"value": 5})
         assert result.success is True
         assert result.outputs["doubled"] == 10
 
@@ -172,7 +174,8 @@ def execute(context, inputs):
         registry.install_skill(manifest_path)
 
         executor = SkillExecutor(registry)
-        result = executor.run(name, {})
+        with patch.object(SkillExecutor, "_is_builtin", return_value=True):
+            result = executor.run(name, {})
         assert result.success is False
         assert "skill broke" in result.error
 
@@ -186,7 +189,8 @@ pass
         registry.install_skill(manifest_path)
 
         executor = SkillExecutor(registry)
-        result = executor.run(name, {})
+        with patch.object(SkillExecutor, "_is_builtin", return_value=True):
+            result = executor.run(name, {})
         assert result.success is False
         assert "execute" in result.error.lower()
 

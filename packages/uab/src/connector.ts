@@ -49,6 +49,7 @@ import { ElectronPlugin } from './plugins/electron/index.js';
 import { BrowserPlugin } from './plugins/browser/index.js';
 import { ChromeExtPlugin } from './plugins/chrome-ext/index.js';
 import { ExtensionWSServer } from './plugins/chrome-ext/ws-server.js';
+import { DirectApiPlugin } from './plugins/direct-api/index.js';
 import { WinUIAPlugin } from './plugins/win-uia/index.js';
 import { QtPlugin } from './plugins/qt/index.js';
 import { GtkPlugin } from './plugins/gtk/index.js';
@@ -67,10 +68,16 @@ import type {
   ActionType, ActionParams, ActionResult, AppState,
   FocusedElementInfo, PathSelector, AtomicChainDef, AtomicChainResult,
   SmartResolveResult, StateChangeEvent, StateChangeCallback,
+  FrameworkHookDescriptor,
+  ConcertoMethod,
+  ControlRoute,
+  OperationPlanContext,
 } from './types.js';
+import type { FrameworkSignature } from './detector.js';
 import { CompositeEngine } from './composite.js';
 import type { CompositeResult, CompositeOptions } from './composite.js';
 import type { SpatialMap, SpatialElement } from './spatial.js';
+import { getConcertoMethodInventory, planOperation } from './concerto.js';
 
 // ─── Options ────────────────────────────────────────────────────
 
@@ -160,6 +167,7 @@ export class UABConnector {
     }
 
     // Register plugins (priority order: specific → generic)
+    this.pluginManager.register(new DirectApiPlugin());
     if (this.extensionServer) {
       this.pluginManager.register(new ChromeExtPlugin(this.extensionServer));
     }
@@ -219,11 +227,27 @@ export class UABConnector {
   }
 
   /**
-   * List known apps from registry (no scan — instant).
+   * List known apps from registry (direct lookup, no scan).
    * Call scan() first to populate, or load() to restore saved profiles.
    */
   apps(): AppProfile[] {
     return this.registry.all();
+  }
+
+  /**
+   * List the framework hooks that are currently registered in this connector.
+   * This is the source of truth for what the standalone runtime can actually use.
+   */
+  hookInventory(): FrameworkHookDescriptor[] {
+    return this.pluginManager.getHookInventory();
+  }
+
+  signatureInventory(): FrameworkSignature[] {
+    return this.detector.getSignatureInventory();
+  }
+
+  concertoInventory() {
+    return getConcertoMethodInventory();
   }
 
   /**
@@ -324,7 +348,7 @@ export class UABConnector {
       pid: app.pid,
       name: app.name,
       framework: app.framework,
-      method: (conn as { method?: string }).method || 'uab-hook',
+      method: (conn as { method?: string }).method || 'unknown',
       elementCount: count,
     };
   }
@@ -364,9 +388,9 @@ export class UABConnector {
     const cached = this.cache.getTree(pid);
     if (cached) return cached;
 
-    const route = this.router.getRoute(pid)!;
+    const connection = this.router.getConnection(pid)!;
     const tree = await withRetry(
-      () => route.connection.enumerate(),
+      () => connection.enumerate(),
       { maxRetries: 1, label: `enumerate-${pid}` },
     );
 
@@ -381,9 +405,9 @@ export class UABConnector {
     const cached = this.cache.getQuery(pid, selector);
     if (cached) return cached;
 
-    const route = this.router.getRoute(pid)!;
+    const connection = this.router.getConnection(pid)!;
     const results = await withRetry(
-      () => route.connection.query(selector),
+      () => connection.query(selector),
       { maxRetries: 1, label: `query-${pid}` },
     );
 
@@ -396,6 +420,7 @@ export class UABConnector {
     this.ensureConnected(pid);
 
     const route = this.router.getRoute(pid)!;
+    const connection = this.router.getConnection(pid)!;
 
     // Permission check
     const check = this.permissions.check(pid, action, route.app);
@@ -405,7 +430,7 @@ export class UABConnector {
     }
 
     const result = await withRetry(
-      () => route.connection.act(elementId, action, params),
+      () => connection.act(elementId, action, params),
       { maxRetries: 1, label: `act-${pid}-${action}` },
     );
 
@@ -420,9 +445,9 @@ export class UABConnector {
     const cached = this.cache.getState(pid);
     if (cached) return cached as AppState;
 
-    const route = this.router.getRoute(pid)!;
+    const connection = this.router.getConnection(pid)!;
     const appState = await withRetry(
-      () => route.connection.state(),
+      () => connection.state(),
       { maxRetries: 1, label: `state-${pid}` },
     );
 
@@ -435,8 +460,12 @@ export class UABConnector {
   /** Send a single keypress. */
   async keypress(pid: number, key: string): Promise<ActionResult> {
     this.ensureConnected(pid);
-    const route = this.router.getRoute(pid)!;
-    const result = await route.connection.act('', 'keypress', { key });
+    const plan = this.planForPid(pid, 'keypress');
+    if (plan.primaryMethod !== 'keyboard-native') {
+      throw new Error(`Unexpected concerto plan for keypress: ${plan.primaryMethod}`);
+    }
+    const { sendKeypress } = await import('./plugins/vision/input.js');
+    const result = sendKeypress(pid, key);
     this.cache.invalidateIfNeeded(pid, 'keypress');
     return result;
   }
@@ -444,11 +473,37 @@ export class UABConnector {
   /** Send a hotkey combination (e.g., "ctrl+s" or ['ctrl', 's']). */
   async hotkey(pid: number, keys: string | string[]): Promise<ActionResult> {
     this.ensureConnected(pid);
-    const route = this.router.getRoute(pid)!;
+    const plan = this.planForPid(pid, 'hotkey');
+    if (plan.primaryMethod !== 'keyboard-native') {
+      throw new Error(`Unexpected concerto plan for hotkey: ${plan.primaryMethod}`);
+    }
     const keyArray = typeof keys === 'string' ? keys.split('+').map(k => k.trim()) : keys;
-    const result = await route.connection.act('', 'hotkey', { keys: keyArray });
+    const { sendHotkey } = await import('./plugins/vision/input.js');
+    const result = sendHotkey(pid, keyArray);
     this.cache.invalidateIfNeeded(pid, 'hotkey');
     return result;
+  }
+
+  /** P6 raw input injection — drag along a waypoint path. */
+  async drag(pid: number, path: Array<{ x: number; y: number }>, stepDelay = 10, button: 'left' | 'middle' | 'right' = 'left'): Promise<ActionResult> {
+    this.ensureConnected(pid);
+    const plan = this.planForPid(pid, 'drag');
+    if (plan.primaryMethod !== 'os-input-injection') {
+      throw new Error(`Unexpected concerto plan for drag: ${plan.primaryMethod}`);
+    }
+    const { dragPath } = await import('./plugins/vision/input.js');
+    return dragPath(pid, path, stepDelay, button);
+  }
+
+  /** P6 raw input injection — scroll at absolute coordinates. */
+  async scroll(pid: number, x: number, y: number, amount: number): Promise<ActionResult> {
+    this.ensureConnected(pid);
+    const plan = this.planForPid(pid, 'scroll');
+    if (plan.primaryMethod !== 'os-input-injection') {
+      throw new Error(`Unexpected concerto plan for scroll: ${plan.primaryMethod}`);
+    }
+    const { scrollAt } = await import('./plugins/vision/input.js');
+    return scrollAt(pid, x, y, amount);
   }
 
   /** Window management (minimize, maximize, restore, close, move, resize). */
@@ -468,7 +523,8 @@ export class UABConnector {
   /** Capture a screenshot of the app window. Returns path + base64 data. */
   async screenshot(pid: number, outputPath?: string): Promise<ActionResult> {
     this.ensureConnected(pid);
-    const route = this.router.getRoute(pid)!;
+    const connection = this.router.getConnection(pid)!;
+    void this.planForPid(pid, 'screenshot');
     const path = outputPath || `data/screenshots/uab-${pid}-${Date.now()}.png`;
 
     // Ensure directory exists
@@ -476,7 +532,7 @@ export class UABConnector {
     const { dirname } = await import('path');
     mkdirSync(dirname(path), { recursive: true });
 
-    const result = await route.connection.act('', 'screenshot', { outputPath: path });
+    const result = await connection.act('', 'screenshot', { outputPath: path });
 
     // Always include base64 in the response so remote clients (Co-work) can read it
     if (result.success && !(result as any).base64 && !(result as any).data) {
@@ -487,6 +543,73 @@ export class UABConnector {
     }
 
     return result;
+  }
+
+  planOperation(pid: number, action: ActionType | 'describe', context?: OperationPlanContext) {
+    this.ensureConnected(pid);
+    const route = this.router.getRoute(pid)!;
+    return planOperation(route.method, action, route.fallbacks, this.buildOperationPlanContext(pid, route, context));
+  }
+
+  private planForPid(pid: number, action: ActionType | 'describe', context?: OperationPlanContext) {
+    this.ensureConnected(pid);
+    const route = this.router.getRoute(pid)!;
+    return planOperation(route.method, action, route.fallbacks, this.buildOperationPlanContext(pid, route, context));
+  }
+
+  private buildOperationPlanContext(
+    pid: number,
+    route: ControlRoute,
+    context?: OperationPlanContext,
+  ): OperationPlanContext {
+    const envInfo = detectEnvironment();
+    const runtimeMethods = new Set<ConcertoMethod>([route.method, ...route.fallbacks]);
+    const visionAvailable = Boolean(process.env.ANTHROPIC_API_KEY);
+    if (visionAvailable) {
+      runtimeMethods.add('vision');
+      runtimeMethods.add('vision-analysis');
+    }
+    if (envInfo.hasDesktop) {
+      runtimeMethods.add('keyboard-native');
+      runtimeMethods.add('os-input-injection');
+    }
+
+    const directApiAvailable =
+      route.method === 'direct-api' ||
+      route.fallbacks.includes('direct-api') ||
+      Boolean((route.app.connectionInfo as Record<string, unknown> | undefined)?.directApi);
+    if (directApiAvailable) {
+      runtimeMethods.add('direct-api');
+    }
+
+    const healthEntry = this.connectionMgr?.get(pid);
+    const baseRuntime = {
+      mode: envInfo.mode,
+      hasDesktop: envInfo.hasDesktop,
+      needsBridge: envInfo.needsBridge,
+      platform: envInfo.platform,
+      framework: route.app.framework,
+      frameworkConfidence: route.app.confidence,
+      activeMethod: route.method,
+      preferredMethodOrder: [route.method, ...route.fallbacks],
+      availableMethods: Array.from(runtimeMethods),
+      directApiAvailable,
+      visionAvailable,
+      connectionHealthy: healthEntry ? healthEntry.healthFailures === 0 : true,
+      healthFailures: healthEntry?.healthFailures || 0,
+      reconnectAttempts: healthEntry?.reconnectAttempts || 0,
+    };
+    const runtimeOverride = context?.runtime || {};
+
+    return {
+      ...context,
+      runtime: {
+        ...baseRuntime,
+        ...runtimeOverride,
+        preferredMethodOrder: runtimeOverride.preferredMethodOrder || baseRuntime.preferredMethodOrder,
+        availableMethods: runtimeOverride.availableMethods || baseRuntime.availableMethods,
+      },
+    };
   }
 
   // ─── Diagnostics ────────────────────────────────────────────────
@@ -510,23 +633,26 @@ export class UABConnector {
     return this.connectionMgr.getHealthSummary();
   }
 
-  // ─── Helpers ────────────────────────────────────────────────────
-
+  /** Get active connections in a daemon-friendly summary shape. */
   getConnections(): ConnectionInfo[] {
-    if (!this.connectionMgr) return [];
-    return this.connectionMgr.getAll().map(entry => ({
-      pid: entry.pid,
-      name: entry.app.name,
-      framework: entry.app.framework,
-      method: entry.connection.method,
-      elementCount: 0,
-    }));
+    return this.connectionMgr
+      ? this.connectionMgr.getAll().map((entry) => ({
+          pid: entry.pid,
+          name: entry.app.name,
+          framework: entry.app.framework,
+          method: entry.connection.method,
+          elementCount: 0,
+        }))
+      : [];
   }
 
+  /** Force a health-check sweep in persistent mode. */
   async runHealthChecks(): Promise<void> {
     if (!this.connectionMgr) return;
     await this.connectionMgr.runHealthChecks();
   }
+
+  // ─── Helpers ────────────────────────────────────────────────────
 
   private ensureStarted(): void {
     if (!this.started) throw new Error('Connector not started. Call start() first.');
@@ -585,7 +711,7 @@ export class UABConnector {
   // ─── Feature 1: Real-time Focus Tracking ────────────────────────
 
   /**
-   * Get the currently focused element in a window — <50ms via UIA FocusedElement.
+   * Get the currently focused element in a window via UIA FocusedElement.
    * No connection required; works with any visible window.
    */
   async focused(pid: number): Promise<FocusedElementInfo> {

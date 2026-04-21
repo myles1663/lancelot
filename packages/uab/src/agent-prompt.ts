@@ -41,13 +41,13 @@ You have access to structured desktop app control tools that give you DIRECT acc
 ### CRITICAL: Do NOT default to screenshots for UI understanding.
 
 Screenshots are:
-- **Slow** (~2-5 seconds for capture + vision API processing)
+- **Slow** (capture plus vision analysis is usually materially slower than structured queries, and actual timing depends on host performance and the vision backend)
 - **Unreliable** (OCR errors, resolution issues, overlapping elements)
 - **Expensive** (vision API tokens cost 10-100x more than text)
 - **Lossy** (you can't click on pixels — you need element IDs anyway)
 
 Instead, use structured UI queries which are:
-- **Fast** (~50-200ms for full UI tree)
+- **Fast** (typically much faster than screenshot capture plus vision analysis on the same host)
 - **Accurate** (exact element types, labels, and IDs)
 - **Actionable** (element IDs map directly to actions)
 - **Cheap** (small JSON responses, no vision API needed)

@@ -4,6 +4,7 @@ Lancelot Launcher
 The desktop entry point for the Lancelot platform.
 """
 
+import logging
 import webview
 import threading
 import time
@@ -11,6 +12,9 @@ import requests
 import subprocess
 import os
 import webbrowser
+
+
+logger = logging.getLogger(__name__)
 
 # Configuration
 DOCKER_CHECK_CMD = "docker info"
@@ -24,11 +28,9 @@ class LancelotLauncher:
         self.window = None
         self.first_run = False
         
-        # Check for onboarding requirement (missing USER.md)
-        user_profile = os.path.join("lancelot_data", "USER.md")
         # Check for onboarding requirement (missing USER.md or incomplete)
         user_profile = os.path.join("lancelot_data", "USER.md")
-        self.first_run = True # Default to true
+        self.first_run = True  # Default to true
         
         if os.path.exists(user_profile):
             # Check if actually complete
@@ -37,14 +39,14 @@ class LancelotLauncher:
                     self.first_run = False
         
         if self.first_run:
-            print("User missing or incomplete. Engaging Onboarding Protocols.")
+            logger.info("User missing or incomplete. Engaging Onboarding Protocols.")
             
         # Legacy flag cleanup
         if os.path.exists("first_run.flag"):
             try:
                 os.remove("first_run.flag")
-            except:
-                pass
+            except OSError as exc:
+                logger.debug("Failed to remove legacy first_run.flag: %s", exc)
 
     def check_docker(self):
         """Verifies Docker Desktop is running."""
@@ -58,33 +60,33 @@ class LancelotLauncher:
 
     def start_engine(self):
         """Starts the backend via Docker Compose."""
-        print("Igniting Lancelot Engine...")
+        logger.info("Igniting Lancelot Engine...")
         try:
             self.process = subprocess.Popen(COMPOSE_UP_CMD, shell=True)
             # We don't wait for it to finish, it runs in background (-d)
-        except Exception as e:
-            print(f"Failed to start engine: {e}")
+        except Exception as exc:
+            logger.warning("Failed to start engine: %s", exc)
 
     def monitor_health(self):
         """Polls the Gateway until it's ready, then loads the UI."""
         max_retries = 30
         
-        # [NEW] Check for Restart Flag (Hot Reload)
+        # Honor the launcher restart flag before loading the UI.
         flags_path = os.path.join("lancelot_data", "FLAGS", "RESTART_REQUIRED")
         if os.path.exists(flags_path):
-            print("Restart Signal Detected. Rebooting Fortress...")
+            logger.info("Restart signal detected. Rebooting Fortress.")
             try:
                 os.remove(flags_path)
                 subprocess.run("docker-compose restart", shell=True)
-                time.sleep(5) # Allow shutdown
-            except Exception as e:
-                print(f"Restart failed: {e}")
+                time.sleep(5)  # Allow shutdown
+            except Exception as exc:
+                logger.warning("Restart failed: %s", exc)
 
         for _ in range(max_retries):
             try:
                 requests.get(f"{WAR_ROOM_URL}/health", timeout=2)
                 # Engine is up!
-                time.sleep(1) # Give Streamlit a breath
+                time.sleep(1)  # Give Streamlit a breath
                 
                 final_url = WAR_ROOM_URL
                 if self.first_run:
@@ -93,20 +95,24 @@ class LancelotLauncher:
                 if self.window:
                     self.window.load_url(final_url)
                 
-                # [NEW] Continuous Monitoring Loop for future restarts
+                # Keep watching for restart requests while the window stays open.
                 while True:
                     time.sleep(2)
                     if os.path.exists(flags_path):
-                        print("Runtime Restart Signal. Rebooting...")
+                        logger.info("Runtime restart signal detected. Rebooting.")
                         os.remove(flags_path)
                         if self.window:
                             # Use load_html instead of data URL for Windows compatibility
                             self.window.load_html("<html><body style='background:#1a1a2e;display:flex;justify-content:center;align-items:center;height:100vh'><h1 style='color:#007bff;font-family:sans-serif;'>Rebooting System...</h1></body></html>")
                         subprocess.run("docker-compose restart", shell=True)
-                        break # Break loop to re-enter monitor_health (wait for up)
+                        return self.monitor_health()
                         
                 return
-            except:
+            except requests.RequestException as exc:
+                logger.debug("War Room health check attempt failed: %s", exc)
+                time.sleep(2)
+            except Exception as exc:
+                logger.warning("Unexpected launcher health-monitor failure: %s", exc)
                 time.sleep(2)
         
         # If we time out

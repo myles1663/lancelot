@@ -83,6 +83,7 @@ if ($windows) {
 export class QtPlugin implements FrameworkPlugin {
   readonly framework = 'qt6' as const;
   readonly name = 'Qt (UIA Bridge)';
+  readonly controlMethod = 'qt-uia' as const;
   private uiaPlugin = new WinUIAPlugin();
 
   canHandle(app: DetectedApp): boolean {

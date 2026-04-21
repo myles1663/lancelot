@@ -1,8 +1,9 @@
-from pathlib import Path
 import importlib
 
 import pytest
+from fastapi.testclient import TestClient
 
+import gateway
 from src.core import flags_api
 
 
@@ -19,18 +20,24 @@ async def test_boot_only_flags_are_marked_restart_required():
     assert flags["FEATURE_MEMORY_VNEXT"]["restart_required"] is False
 
 
-def test_gateway_source_gates_boot_only_subsystems_and_initializes_mcp():
-    source = Path("src/core/gateway.py").read_text(encoding="utf-8")
+def test_gateway_gates_boot_only_routes_when_flags_are_disabled(monkeypatch):
+    gated_routes = [
+        ("/api/mcp/servers", "FEATURE_MCP"),
+        ("/api/metrics/summary", "FEATURE_OBSERVABILITY"),
+        ("/api/incidents", "FEATURE_INCIDENT_RESPONSE"),
+        ("/api/playbooks", "FEATURE_INCIDENT_RESPONSE"),
+        ("/api/actioncards", "FEATURE_ACTION_CARDS"),
+    ]
 
-    assert '("/api/mcp", "FEATURE_MCP")' in source
-    assert '("/api/metrics", "FEATURE_OBSERVABILITY")' in source
-    assert '("/api/incidents", "FEATURE_INCIDENT_RESPONSE")' in source
-    assert '("/api/playbooks", "FEATURE_INCIDENT_RESPONSE")' in source
-    assert '("/api/actioncards", "FEATURE_ACTION_CARDS")' in source
-    assert "init_mcp_api(" in source
-    assert "MCP subsystem initialized." in source
-    assert "from observability.metrics_api import router as metrics_api_router, init_metrics_api" in source
-    assert "Metrics API initialized." in source
+    for _, flag_name in gated_routes:
+        monkeypatch.setattr(gateway._ff, flag_name, False, raising=False)
+
+    client = TestClient(gateway.app)
+    for path, flag_name in gated_routes:
+        response = client.get(path)
+        assert response.status_code == 503
+        assert response.json()["error"] == "subsystem_disabled"
+        assert response.json()["flag"] == flag_name
 
 
 def test_feature_flags_module_is_canonical_across_import_paths():

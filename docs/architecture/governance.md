@@ -2,7 +2,7 @@
 
 ## Overview
 
-Risk-tiered governance classifies every action Lancelot takes into one of four risk tiers (T0-T3) and applies proportional governance overhead. Low-risk actions (T0) execute near-instantly via precomputed policy cache, while irreversible actions (T3) require full policy evaluation, commander approval, and synchronous verification.
+Risk-tiered governance classifies every action Lancelot takes into one of four risk tiers (T0-T3) and applies proportional governance overhead. Low-risk actions (T0) execute through a fast precomputed policy cache, while irreversible actions (T3) require full policy evaluation, commander approval, and synchronous verification.
 
 ## Risk Tiers
 

@@ -1,9 +1,10 @@
 // ============================================================
-// Main — 12-step installer flow
+// Main - installer flow
 // ============================================================
 
 import path from 'node:path';
 import { exec } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import chalk from 'chalk';
 import ora from 'ora';
 
@@ -25,29 +26,85 @@ import { loadState, saveState, clearState, isStepComplete } from './state.mjs';
 
 const TOTAL_STEPS = 8;
 
-export async function run(opts) {
-  showBanner();
+const DEFAULT_RUNTIME = {
+  chalk,
+  ora,
+  exec,
+  processRef: process,
+  PROVIDERS,
+  COMMS,
+  showBanner,
+  showStep,
+  showSuccess,
+  showError,
+  showInfo,
+  runAllChecks,
+  promptInstallDir,
+  promptOwnerName,
+  promptProvider,
+  promptAuthMethod,
+  promptApiKey,
+  promptCommsChannel,
+  promptTelegramToken,
+  promptTelegramChatId,
+  promptGoogleChatSpace,
+  promptWarRoomAuthModel,
+  promptWarRoomUsername,
+  promptWarRoomPassword,
+  promptOidcIssuerUrl,
+  promptOidcClientId,
+  promptOidcClientSecret,
+  promptOidcBaseUrl,
+  promptOidcAllowedGroups,
+  promptConfirm,
+  writeEnvFile,
+  patchDockerCompose,
+  downloadModel,
+  cloneRepo,
+  dockerBuild,
+  dockerUp,
+  waitForHealthy,
+  startHostAgent,
+  markOnboardingComplete,
+  loadState,
+  saveState,
+  clearState,
+  isStepComplete,
+};
 
-  // Handle Ctrl+C gracefully
-  process.on('SIGINT', () => {
+async function loadRuntimeOverride(processRef = process) {
+  const specifier = processRef.env?.CREATE_LANCELOT_RUNTIME_MODULE;
+  if (!specifier) {
+    return null;
+  }
+
+  const runtimeModule = specifier.includes('://')
+    ? specifier
+    : pathToFileURL(specifier).href;
+  const loaded = await import(runtimeModule);
+  return loaded.runtime || loaded.default || null;
+}
+
+function registerSigintHandler(runtime) {
+  runtime.processRef.on('SIGINT', () => {
     console.log('');
-    console.log(chalk.yellow('  Installation interrupted.'));
-    console.log(chalk.gray('  Run ') + chalk.white('npx create-lancelot --resume') + chalk.gray(' to continue.'));
+    console.log(runtime.chalk.yellow('  Installation interrupted.'));
+    console.log(runtime.chalk.gray('  Run ') + runtime.chalk.white('npx create-lancelot --resume') + runtime.chalk.gray(' to continue.'));
     console.log('');
-    console.log(chalk.gray("  If this doesn't resolve the issue, open a ticket:"));
-    console.log(chalk.cyan.underline('  https://github.com/myles1663/lancelot/issues'));
+    console.log(runtime.chalk.gray("  If this doesn't resolve the issue, open a ticket:"));
+    console.log(runtime.chalk.cyan.underline('  https://github.com/myles1663/lancelot/issues'));
     console.log('');
-    process.exit(130);
+    runtime.processRef.exit(130);
   });
+}
 
-  // ── Resume state ──
-  let completed = [];
-  let config = {
+function createInitialConfig(opts) {
+  return {
     startedAt: new Date().toISOString(),
     installDir: null,
     ownerName: null,
     provider: opts.provider || null,
-    authMode: null,  // 'api_key' or 'oauth'
+    authMode: null,
     apiKey: null,
     commsType: null,
     telegramToken: null,
@@ -63,68 +120,70 @@ export async function run(opts) {
     oidcClientSecret: null,
     oidcBaseUrl: null,
     oidcAllowedGroups: null,
+    oidcAllowAnyAuthenticated: false,
   };
+}
+
+export async function run(opts, runtime = DEFAULT_RUNTIME) {
+  runtime.showBanner();
+  registerSigintHandler(runtime);
+
+  let completed = [];
+  let config = createInitialConfig(opts);
 
   if (opts.resume) {
-    const state = await loadState();
+    const state = await runtime.loadState();
     if (state) {
       completed = state.completedSteps || [];
       config = { ...config, ...state.config, installDir: state.installDir };
-      showInfo(`Resuming installation from: ${state.installDir}`);
-      showInfo(`Completed steps: ${completed.join(', ')}`);
+      runtime.showInfo(`Resuming installation from: ${state.installDir}`);
+      runtime.showInfo(`Completed steps: ${completed.join(', ')}`);
     } else {
-      showInfo('No previous installation state found. Starting fresh.');
+      runtime.showInfo('No previous installation state found. Starting fresh.');
     }
   }
 
   try {
-    // ── Step 1: Prerequisites ──
-    if (!isStepComplete(completed, 'prereqs')) {
-      showStep(1, TOTAL_STEPS, 'Checking prerequisites');
-      const prereqResults = await runAllChecks(config.installDir || opts.directory);
+    if (!runtime.isStepComplete(completed, 'prereqs')) {
+      runtime.showStep(1, TOTAL_STEPS, 'Checking prerequisites');
+      const prereqResults = await runtime.runAllChecks(config.installDir || opts.directory);
       config.hasGpu = prereqResults.hasGpu;
       config.gpuLayers = prereqResults.gpuLayers;
       config.gpuName = prereqResults.gpuName;
       completed.push('prereqs');
-      await saveState(completed, config);
+      await runtime.saveState(completed, config);
     }
 
-    // ── Step 2: Install directory ──
-    if (!isStepComplete(completed, 'directory')) {
-      showStep(2, TOTAL_STEPS, 'Installation location');
-      const dir = await promptInstallDir(opts.directory);
+    if (!runtime.isStepComplete(completed, 'directory')) {
+      runtime.showStep(2, TOTAL_STEPS, 'Installation location');
+      const dir = await runtime.promptInstallDir(opts.directory);
       config.installDir = path.resolve(dir);
       completed.push('directory');
-      await saveState(completed, config);
+      await runtime.saveState(completed, config);
     }
 
-    // ── Step 2b: Owner name ──
     if (!config.ownerName) {
-      config.ownerName = await promptOwnerName();
-      await saveState(completed, config);
+      config.ownerName = await runtime.promptOwnerName();
+      await runtime.saveState(completed, config);
     }
 
-    // ── Step 3: Provider + API key / OAuth ──
-    if (!isStepComplete(completed, 'provider')) {
-      showStep(3, TOTAL_STEPS, 'LLM Provider');
+    if (!runtime.isStepComplete(completed, 'provider')) {
+      runtime.showStep(3, TOTAL_STEPS, 'LLM Provider');
 
       let providerSelected = false;
       while (!providerSelected) {
-        config.provider = await promptProvider(config.provider);
-
-        // Check if provider supports OAuth
-        config.authMode = await promptAuthMethod(config.provider);
+        config.provider = await runtime.promptProvider(config.provider);
+        config.authMode = await runtime.promptAuthMethod(config.provider);
 
         if (config.authMode === 'oauth') {
           console.log('');
-          console.log(chalk.gray('  OAuth selected — you\'ll sign in via browser after Lancelot starts.'));
+          console.log(runtime.chalk.gray("  OAuth selected - you'll sign in via browser after Lancelot starts."));
           console.log('');
           config.apiKey = '';
           providerSelected = true;
         } else {
-          const key = await promptApiKey(config.provider);
+          const key = await runtime.promptApiKey(config.provider);
           if (key === null) {
-            // User wants to switch provider
             config.provider = null;
             config.authMode = null;
             continue;
@@ -135,273 +194,262 @@ export async function run(opts) {
       }
 
       completed.push('provider');
-      await saveState(completed, config);
+      await runtime.saveState(completed, config);
     } else if (!config.apiKey && config.authMode !== 'oauth') {
-      // Resumed — need to re-prompt for API key (never stored, not OAuth)
-      showStep(3, TOTAL_STEPS, 'LLM Provider (re-enter API key)');
-      config.apiKey = await promptApiKey(config.provider);
+      runtime.showStep(3, TOTAL_STEPS, 'LLM Provider (re-enter API key)');
+      config.apiKey = await runtime.promptApiKey(config.provider);
     }
 
-    // ── Step 4: Communications ──
-    if (!isStepComplete(completed, 'comms')) {
-      showStep(4, TOTAL_STEPS, 'Communications');
-      config.commsType = await promptCommsChannel();
+    if (!runtime.isStepComplete(completed, 'comms')) {
+      runtime.showStep(4, TOTAL_STEPS, 'Communications');
+      config.commsType = await runtime.promptCommsChannel();
 
       if (config.commsType === 'telegram') {
-        config.telegramToken = await promptTelegramToken();
-        config.telegramChatId = await promptTelegramChatId();
+        config.telegramToken = await runtime.promptTelegramToken();
+        config.telegramChatId = await runtime.promptTelegramChatId();
       } else if (config.commsType === 'google_chat') {
-        config.chatSpaceName = await promptGoogleChatSpace();
+        config.chatSpaceName = await runtime.promptGoogleChatSpace();
       }
 
       completed.push('comms');
-      await saveState(completed, config);
+      await runtime.saveState(completed, config);
     }
 
-    // ── Step 5: War Room credentials ──
-    if (!isStepComplete(completed, 'warroom_auth')) {
-      showStep(5, TOTAL_STEPS, 'War Room Authentication');
-      console.log(chalk.gray('  The War Room is your command center for monitoring and controlling Lancelot.'));
-      config.warRoomAuthModel = await promptWarRoomAuthModel();
+    if (!runtime.isStepComplete(completed, 'warroom_auth')) {
+      runtime.showStep(5, TOTAL_STEPS, 'War Room Authentication');
+      console.log(runtime.chalk.gray('  The War Room is your command center for monitoring and controlling Lancelot.'));
+      config.warRoomAuthModel = await runtime.promptWarRoomAuthModel();
 
       if (config.warRoomAuthModel === 'oidc') {
-        config.oidcIssuerUrl = await promptOidcIssuerUrl();
-        config.oidcClientId = await promptOidcClientId();
-        config.oidcClientSecret = await promptOidcClientSecret();
-        config.oidcBaseUrl = await promptOidcBaseUrl();
-        config.oidcAllowedGroups = await promptOidcAllowedGroups();
+        config.oidcIssuerUrl = await runtime.promptOidcIssuerUrl();
+        config.oidcClientId = await runtime.promptOidcClientId();
+        config.oidcClientSecret = await runtime.promptOidcClientSecret();
+        config.oidcBaseUrl = await runtime.promptOidcBaseUrl();
+        config.oidcAllowedGroups = await runtime.promptOidcAllowedGroups();
+        config.oidcAllowAnyAuthenticated = String(config.oidcAllowedGroups || '').trim().toLowerCase() === 'open';
+        if (config.oidcAllowAnyAuthenticated) {
+          config.oidcAllowedGroups = '';
+        }
       } else {
-        config.warRoomUser = await promptWarRoomUsername();
-        config.warRoomPassword = await promptWarRoomPassword();
+        config.warRoomUser = await runtime.promptWarRoomUsername();
+        config.warRoomPassword = await runtime.promptWarRoomPassword();
       }
 
       completed.push('warroom_auth');
-      await saveState(completed, config);
+      await runtime.saveState(completed, config);
     }
 
-    // ── Confirm ──
-    const proceed = await promptConfirm(config);
+    const proceed = await runtime.promptConfirm(config);
     if (!proceed) {
-      showInfo('Installation cancelled. Run again to start over.');
-      await clearState();
-      process.exit(0);
+      runtime.showInfo('Installation cancelled. Run again to start over.');
+      await runtime.clearState();
+      runtime.processRef.exit(0);
+      return;
     }
 
-    // Re-prompt for secrets on resume (never stored in state file)
-    if (isStepComplete(completed, 'warroom_auth')) {
+    if (runtime.isStepComplete(completed, 'warroom_auth')) {
       if (config.warRoomAuthModel === 'oidc' && !config.oidcClientSecret) {
-        showStep(5, TOTAL_STEPS, 'War Room Enterprise Authentication (re-enter secret)');
-        config.oidcClientSecret = await promptOidcClientSecret();
+        runtime.showStep(5, TOTAL_STEPS, 'War Room Enterprise Authentication (re-enter secret)');
+        config.oidcClientSecret = await runtime.promptOidcClientSecret();
       } else if (config.warRoomAuthModel !== 'oidc' && !config.warRoomPassword) {
-        showStep(5, TOTAL_STEPS, 'War Room Login (re-enter credentials)');
-        config.warRoomUser = await promptWarRoomUsername();
-        config.warRoomPassword = await promptWarRoomPassword();
+        runtime.showStep(5, TOTAL_STEPS, 'War Room Login (re-enter credentials)');
+        config.warRoomUser = await runtime.promptWarRoomUsername();
+        config.warRoomPassword = await runtime.promptWarRoomPassword();
       }
     }
 
-    // ── Step 6: Clone + Configure ──
-    if (!isStepComplete(completed, 'clone')) {
-      showStep(6, TOTAL_STEPS, 'Setting up project');
-      await cloneRepo(config.installDir);
+    if (!runtime.isStepComplete(completed, 'clone')) {
+      runtime.showStep(6, TOTAL_STEPS, 'Setting up project');
+      await runtime.cloneRepo(config.installDir);
       completed.push('clone');
-      await saveState(completed, config);
+      await runtime.saveState(completed, config);
     }
 
-    if (!isStepComplete(completed, 'config')) {
-      const configSpinner = ora('  Generating configuration...').start();
-      await writeEnvFile(config.installDir, config);
-      await patchDockerCompose(config.installDir, config);
-      await markOnboardingComplete(config.installDir, config);
+    if (!runtime.isStepComplete(completed, 'config')) {
+      const configSpinner = runtime.ora('  Generating configuration...').start();
+      await runtime.writeEnvFile(config.installDir, config);
+      await runtime.patchDockerCompose(config.installDir, config);
+      await runtime.markOnboardingComplete(config.installDir, config);
       configSpinner.succeed('  Configuration generated');
       completed.push('config');
-      await saveState(completed, config);
+      await runtime.saveState(completed, config);
     }
 
-    // ── Step 7: Model download ──
-    if (!isStepComplete(completed, 'model')) {
-      showStep(7, TOTAL_STEPS, 'Downloading local AI model');
+    if (!runtime.isStepComplete(completed, 'model')) {
+      runtime.showStep(7, TOTAL_STEPS, 'Downloading local AI model');
+      const modelSpinner = runtime.ora('  Preparing model download...').start();
 
-      if (opts.skipModel) {
-        showInfo('Skipping model download (--skip-model)');
-        showInfo('The local utility model will not be available.');
-      } else {
-        const modelSpinner = ora('  Preparing model download...').start();
-        try {
-          await downloadModel(config.installDir, (progress) => {
-            if (progress.done) {
-              modelSpinner.succeed(`  ${progress.message}`);
-            } else if (progress.message) {
-              modelSpinner.text = `  ${progress.message}`;
-            } else {
-              const bar = buildProgressBar(progress.percent);
-              modelSpinner.text = `  ${bar} ${progress.percent}% — ${progress.downloaded} / ${progress.total} — ${progress.speed}`;
-            }
-          });
-        } catch (e) {
-          modelSpinner.fail(`  Model download failed: ${e.message}`);
-          showInfo('You can retry with: npx create-lancelot --resume');
-          showInfo('Or skip with: npx create-lancelot --skip-model');
-          throw e;
-        }
+      try {
+        await runtime.downloadModel(config.installDir, (progress) => {
+          if (progress.done) {
+            modelSpinner.succeed(`  ${progress.message}`);
+          } else if (progress.message) {
+            modelSpinner.text = `  ${progress.message}`;
+          } else {
+            const bar = buildProgressBar(progress.percent, runtime.chalk);
+            modelSpinner.text = `  ${bar} ${progress.percent}% - ${progress.downloaded} / ${progress.total} - ${progress.speed}`;
+          }
+        });
+      } catch (error) {
+        modelSpinner.fail(`  Model download failed: ${error.message}`);
+        runtime.showInfo('You can retry with: npx create-lancelot --resume');
+        throw error;
       }
 
       completed.push('model');
-      await saveState(completed, config);
+      await runtime.saveState(completed, config);
     }
 
-    // ── Step 8: Docker build + start ──
-    if (!isStepComplete(completed, 'docker_build')) {
-      showStep(8, TOTAL_STEPS, 'Building and starting Lancelot');
-      await dockerBuild(config.installDir);
+    if (!runtime.isStepComplete(completed, 'docker_build')) {
+      runtime.showStep(8, TOTAL_STEPS, 'Building and starting Lancelot');
+      await runtime.dockerBuild(config.installDir);
       completed.push('docker_build');
-      await saveState(completed, config);
+      await runtime.saveState(completed, config);
     }
 
-    if (!isStepComplete(completed, 'docker_up')) {
-      await dockerUp(config.installDir);
+    if (!runtime.isStepComplete(completed, 'docker_up')) {
+      await runtime.dockerUp(config.installDir);
       completed.push('docker_up');
-      await saveState(completed, config);
+      await runtime.saveState(completed, config);
     }
 
-    if (!isStepComplete(completed, 'health_check')) {
-      await waitForHealthy();
+    if (!runtime.isStepComplete(completed, 'health_check')) {
+      await runtime.waitForHealthy();
       completed.push('health_check');
-      await saveState(completed, config);
+      await runtime.saveState(completed, config);
     }
 
-    // ── Start Host Agent (runs on host, bridges Docker ↔ host OS) ──
-    if (!isStepComplete(completed, 'host_agent')) {
-      await startHostAgent(config.installDir);
+    if (!runtime.isStepComplete(completed, 'host_agent')) {
+      await runtime.startHostAgent(config.installDir);
       completed.push('host_agent');
-      await saveState(completed, config);
+      await runtime.saveState(completed, config);
     }
 
-    // ── OAuth flow (after Docker is running) ──
-    if (config.authMode === 'oauth' && !isStepComplete(completed, 'oauth')) {
-      await runOAuthFlow(config);
+    if (config.authMode === 'oauth' && !runtime.isStepComplete(completed, 'oauth')) {
+      await runOAuthFlow(config, runtime);
       completed.push('oauth');
-      await saveState(completed, config);
+      await runtime.saveState(completed, config);
     }
 
-    // ── Done! ──
     completed.push('done');
-    await clearState();
+    await runtime.clearState();
 
-    showSuccess({
+    runtime.showSuccess({
       directory: config.installDir,
-      providerName: PROVIDERS[config.provider]?.name || config.provider,
-      commsName: config.commsType === 'skip' ? 'Not configured' : (COMMS[config.commsType]?.name || config.commsType),
+      providerName: runtime.PROVIDERS[config.provider]?.name || config.provider,
+      commsName: config.commsType === 'skip' ? 'Not configured' : (runtime.COMMS[config.commsType]?.name || config.commsType),
       warRoomAuthModel: config.warRoomAuthModel || 'local',
-      warRoomUser: config.warRoomUser || 'admin',
+      warRoomUser: config.warRoomUser || '',
       warRoomPassword: config.warRoomPassword,
       warRoomPasswordResetCode: config.warRoomPasswordResetCode,
       oidcIssuerUrl: config.oidcIssuerUrl,
     });
 
-    // Auto-open War Room in the default browser
     const warRoomUrl = 'http://localhost:8000';
-    const platform = process.platform;
+    const platform = runtime.processRef.platform;
     const openCmd = platform === 'win32' ? `start ${warRoomUrl}`
-                  : platform === 'darwin' ? `open ${warRoomUrl}`
-                  : `xdg-open ${warRoomUrl}`;
-    exec(openCmd, () => {}); // Fire and forget — don't block on failure
-
-  } catch (e) {
-    showError(e.message);
-    showInfo('Run ' + chalk.white('npx create-lancelot --resume') + ' to continue from where you left off.');
-    process.exit(1);
+      : platform === 'darwin' ? `open ${warRoomUrl}`
+        : `xdg-open ${warRoomUrl}`;
+    runtime.exec(openCmd, () => {});
+  } catch (error) {
+    runtime.showError(error.message);
+    runtime.showInfo(`Run ${runtime.chalk.white('npx create-lancelot --resume')} to continue from where you left off.`);
+    runtime.processRef.exit(1);
   }
 }
 
-async function runOAuthFlow(config) {
+export async function runCli(opts, processRef = process) {
+  const override = await loadRuntimeOverride(processRef);
+  return run(opts, override || DEFAULT_RUNTIME);
+}
+
+async function runOAuthFlow(config, runtime = DEFAULT_RUNTIME) {
   const baseUrl = 'http://localhost:8000';
   const apiToken = config._generatedApiToken;
 
   console.log('');
-  console.log(chalk.white.bold('  Anthropic OAuth Setup'));
-  console.log(chalk.gray('  Opening your browser to sign in with Anthropic...'));
+  console.log(runtime.chalk.white.bold('  Anthropic OAuth Setup'));
+  console.log(runtime.chalk.gray('  Opening your browser to sign in with Anthropic...'));
   console.log('');
 
-  // Step 1: Initiate OAuth — get the auth URL
-  const spinner = ora('  Initiating OAuth flow...').start();
+  const spinner = runtime.ora('  Initiating OAuth flow...').start();
   let authUrl;
+
   try {
-    const resp = await fetch(`${baseUrl}/api/v1/providers/oauth/initiate`, {
+    const response = await fetch(`${baseUrl}/api/v1/providers/oauth/initiate`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${apiToken}`,
+        Authorization: `Bearer ${apiToken}`,
         'Content-Type': 'application/json',
       },
     });
-    const data = await resp.json();
+    const data = await response.json();
     if (data.status !== 'ok' || !data.auth_url) {
       throw new Error(data.message || 'Failed to generate OAuth URL');
     }
     authUrl = data.auth_url;
     spinner.succeed('  OAuth flow initiated');
-  } catch (e) {
-    spinner.fail(`  OAuth initiation failed: ${e.message}`);
+  } catch (error) {
+    spinner.fail(`  OAuth initiation failed: ${error.message}`);
     console.log('');
-    console.log(chalk.yellow('  You can complete OAuth setup later in the War Room.'));
-    console.log(chalk.gray('  Go to: http://localhost:8000 → Settings → Provider → Anthropic OAuth'));
+    console.log(runtime.chalk.yellow('  You can complete OAuth setup later in the War Room.'));
+    console.log(runtime.chalk.gray('  Go to: http://localhost:8000 -> Settings -> Provider -> Anthropic OAuth'));
     return;
   }
 
-  // Step 2: Open browser
-  const platform = process.platform;
+  const platform = runtime.processRef.platform;
   const openCmd = platform === 'win32' ? `start "" "${authUrl}"`
-                : platform === 'darwin' ? `open "${authUrl}"`
-                : `xdg-open "${authUrl}"`;
-  exec(openCmd, (err) => {
+    : platform === 'darwin' ? `open "${authUrl}"`
+      : `xdg-open "${authUrl}"`;
+  runtime.exec(openCmd, (err) => {
     if (err) {
-      console.log(chalk.yellow('  Could not open browser automatically.'));
-      console.log(chalk.yellow('  Please open the URL above manually.'));
+      console.log(runtime.chalk.yellow('  Could not open browser automatically.'));
+      console.log(runtime.chalk.yellow('  Please open the URL above manually.'));
     }
   });
 
-  console.log(chalk.cyan('  Browser opened — sign in with your Anthropic account.'));
+  console.log(runtime.chalk.cyan('  Browser opened - sign in with your Anthropic account.'));
   console.log('');
-  console.log(chalk.white('  If the browser did not open, visit this URL manually:'));
-  console.log(chalk.underline.cyan(`  ${authUrl}`));
+  console.log(runtime.chalk.white('  If the browser did not open, visit this URL manually:'));
+  console.log(runtime.chalk.underline.cyan(`  ${authUrl}`));
   console.log('');
-  console.log(chalk.gray('  Waiting for authorization... (press Ctrl+C to skip — you can finish in War Room)'));
+  console.log(runtime.chalk.gray('  Waiting for authorization... (press Ctrl+C to skip - you can finish in War Room)'));
   console.log('');
 
-  // Step 3: Poll for completion
-  const pollSpinner = ora('  Waiting for OAuth authorization...').start();
-  const maxAttempts = 60; // 2 minutes
+  const pollSpinner = runtime.ora('  Waiting for OAuth authorization...').start();
+  const maxAttempts = 60;
   const pollInterval = 2000;
 
-  for (let i = 0; i < maxAttempts; i++) {
-    await new Promise(r => setTimeout(r, pollInterval));
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, pollInterval));
 
     try {
-      const resp = await fetch(`${baseUrl}/api/v1/providers/oauth/status`, {
-        headers: { 'Authorization': `Bearer ${apiToken}` },
+      const response = await fetch(`${baseUrl}/api/v1/providers/oauth/status`, {
+        headers: { Authorization: `Bearer ${apiToken}` },
       });
-      const status = await resp.json();
+      const status = await response.json();
 
       if (status.configured && status.status === 'CONNECTED') {
-        pollSpinner.succeed('  OAuth connected — Anthropic account linked!');
+        pollSpinner.succeed('  OAuth connected - Anthropic account linked!');
         return;
       }
       if (status.status === 'EXPIRED' || status.status === 'error') {
         pollSpinner.fail(`  OAuth failed: ${status.error || status.status}`);
-        console.log(chalk.yellow('  You can retry OAuth setup in the War Room.'));
+        console.log(runtime.chalk.yellow('  You can retry OAuth setup in the War Room.'));
         return;
       }
     } catch {
-      // Server might be busy — keep polling
+      // Server might still be starting; keep polling.
     }
   }
 
   pollSpinner.warn('  OAuth authorization timed out.');
-  console.log(chalk.yellow('  You can complete OAuth setup in the War Room settings.'));
+  console.log(runtime.chalk.yellow('  You can complete OAuth setup in the War Room settings.'));
 }
 
-function buildProgressBar(percent) {
+function buildProgressBar(percent, runtimeChalk = chalk) {
   const width = 20;
   const filled = Math.round(width * (percent / 100));
   const empty = width - filled;
-  return chalk.green('█'.repeat(filled)) + chalk.gray('░'.repeat(empty));
+  return runtimeChalk.green('*'.repeat(filled)) + runtimeChalk.gray('.'.repeat(empty));
 }

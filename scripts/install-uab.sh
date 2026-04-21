@@ -2,7 +2,8 @@
 # ── install-uab.sh ──────────────────────────────────────────────────
 # Installs and builds the Universal App Bridge (UAB) daemon.
 #
-# UAB is licensed under BSL 1.1 (see packages/uab/LICENSE).
+# UAB is licensed under the Business Source License 1.1 (BSL 1.1)
+# (see packages/uab/LICENSE).
 # It ships with Lancelot and is free for personal use and the
 # Lancelot ecosystem. Commercial use requires a separate license.
 #
@@ -23,7 +24,7 @@ UAB_DIR="$ROOT_DIR/packages/uab"
 
 echo "================================================"
 echo "  Universal App Bridge (UAB) — Installer"
-echo "  Licensed under BSL 1.1"
+echo "  Licensed under Business Source License 1.1 (BSL 1.1)"
 echo "================================================"
 echo ""
 

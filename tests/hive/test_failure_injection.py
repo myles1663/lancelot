@@ -727,6 +727,7 @@ class TestReceiptIntegrity:
             metadata={"hive_subsystem": "agent"},
         )
         service.create(receipt)
+        service.update(receipt.complete({"agent_id": "test-123"}, duration_ms=1))
 
         loaded = service.get(receipt.id)
         assert loaded is not None
@@ -778,6 +779,7 @@ class TestReceiptIntegrity:
             quest_id=quest,
         )
         service.create(parent)
+        service.update(parent.complete({"goal": "test"}, duration_ms=1))
 
         child = create_receipt(
             action_type=ActionType.HIVE_AGENT_EVENT,
@@ -788,6 +790,7 @@ class TestReceiptIntegrity:
             quest_id=quest,
         )
         service.create(child)
+        service.update(child.complete({"agent_id": "a1"}, duration_ms=1))
 
         # Verify chain
         loaded_child = service.get(child.id)
@@ -810,6 +813,7 @@ class TestReceiptIntegrity:
             parent_id="nonexistent-parent-id",
         )
         service.create(orphan)
+        service.update(orphan.complete({}, duration_ms=1))
 
         loaded = service.get(orphan.id)
         assert loaded.parent_id == "nonexistent-parent-id"
@@ -838,6 +842,7 @@ class TestReceiptIntegrity:
             quest_id=quest,
         )
         service.create(parent)
+        service.update(parent.complete({}, duration_ms=1))
         child = create_receipt(
             action_type=ActionType.HIVE_AGENT_EVENT,
             action_name="agent",
@@ -847,6 +852,7 @@ class TestReceiptIntegrity:
             quest_id=quest,
         )
         service.create(child)
+        service.update(child.complete({}, duration_ms=1))
 
         orphans = service.validate_parent_chain(quest_id=quest)
         assert orphans == []
@@ -860,20 +866,24 @@ class TestReceiptIntegrity:
         quest_b = str(uuid.uuid4())
 
         for i in range(3):
-            service.create(create_receipt(
+            receipt = create_receipt(
                 action_type=ActionType.HIVE_AGENT_EVENT,
                 action_name=f"action_{i}",
                 inputs={},
                 tier=CognitionTier.DETERMINISTIC,
                 quest_id=quest_a,
-            ))
-        service.create(create_receipt(
+            )
+            service.create(receipt)
+            service.update(receipt.complete({}, duration_ms=1))
+        other = create_receipt(
             action_type=ActionType.HIVE_AGENT_EVENT,
             action_name="other_quest",
             inputs={},
             tier=CognitionTier.DETERMINISTIC,
             quest_id=quest_b,
-        ))
+        )
+        service.create(other)
+        service.update(other.complete({}, duration_ms=1))
 
         results_a = service.list(quest_id=quest_a)
         results_b = service.list(quest_id=quest_b)

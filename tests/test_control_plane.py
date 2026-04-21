@@ -13,6 +13,7 @@ from src.core.onboarding_snapshot import OnboardingSnapshot, OnboardingState
 from src.core import control_plane
 from src.core.operator_identity import OperatorIdentity
 from src.core.runtime_pause import get_runtime_pause_status
+from src.core.model_usage_policy import set_local_model_availability
 
 
 @pytest.fixture
@@ -37,6 +38,7 @@ def app(tmp_data_dir):
     }
     test_app = FastAPI()
     control_plane.init_control_plane(str(tmp_data_dir))
+    set_local_model_availability(False, "Local model not initialized", loaded=False, ready=False)
     control_plane.set_runtime_control_hooks(
         emergency_stop_handler=lambda **kwargs: {
             "stopped_hive_agents": 2,
@@ -79,6 +81,11 @@ class TestSystemStatus:
         assert "flagship_provider" in ob
         assert "credential_status" in ob
         assert "local_model_status" in ob
+        assert "local_model_runtime_status" in ob
+        assert "local_model_runtime_ready" in ob
+        assert "local_model_runtime_loaded" in ob
+        assert "local_model_last_verified_at" in ob
+        assert "local_model_last_error" in ob
         assert "is_ready" in ob
 
     def test_contains_cooldown_section(self, client):
@@ -97,6 +104,14 @@ class TestSystemStatus:
         data = client.get("/system/status").json()
         assert "runtime_pause" in data
         assert data["runtime_pause"]["paused"] is False
+
+    def test_contains_model_usage_policy(self, client):
+        data = client.get("/system/status").json()
+        assert "model_usage_policy" in data
+        assert data["model_usage_policy"]["local_execution_mode"] == "low_risk_only"
+        assert data["model_usage_policy"]["local_model_ready"] is False
+        assert data["model_usage_policy"]["local_model_loaded"] is False
+        assert data["model_usage_policy"]["local_model_status"] == "unavailable"
 
     def test_reflects_state_changes(self, client, snap):
         snap.transition(OnboardingState.CREDENTIALS_CAPTURE,
@@ -134,6 +149,10 @@ class TestOnboardingStatus:
             "state", "flagship_provider", "credential_status",
             "local_model_status", "is_ready", "cooldown_active",
             "cooldown_remaining", "last_error", "resend_count", "updated_at",
+            "local_model_runtime_status", "local_model_runtime_ready",
+            "local_model_runtime_loaded", "local_model_last_verified_at",
+            "local_model_last_checked_at", "local_model_consecutive_failures",
+            "local_model_last_smoke_elapsed_ms",
         }
         assert expected.issubset(set(data.keys()))
 
@@ -182,6 +201,13 @@ class TestOnboardingCommand:
         resp = client.post("/onboarding/command", json={"command": "RESET ONBOARDING"})
         data = resp.json()
         assert data["state"] == "WELCOME"
+
+    def test_command_rejects_undeclared_fields(self, client):
+        resp = client.post(
+            "/onboarding/command",
+            json={"command": "STATUS", "operator_id": "Mallory"},
+        )
+        assert resp.status_code == 422
 
 
 # ==================================================================
@@ -282,6 +308,13 @@ class TestRuntimePause:
         assert paused.status_code == 400
         assert paused.json()["error"] == "Missing pause reason"
 
+    def test_pause_rejects_undeclared_fields(self, client):
+        paused = client.post(
+            "/system/pause",
+            json={"reason": "Maintenance window", "scope": "global"},
+        )
+        assert paused.status_code == 422
+
     def test_emergency_stop_runtime(self, client):
         stopped = client.post("/system/emergency-stop", json={"reason": "Emergency maintenance"})
         assert stopped.status_code == 200
@@ -294,6 +327,47 @@ class TestRuntimePause:
         stopped = client.post("/system/emergency-stop")
         assert stopped.status_code == 400
         assert stopped.json()["error"] == "Missing emergency stop reason"
+
+    def test_emergency_stop_rejects_undeclared_fields(self, client):
+        stopped = client.post(
+            "/system/emergency-stop",
+            json={"reason": "Emergency maintenance", "force": True},
+        )
+        assert stopped.status_code == 422
+
+
+class TestModelUsagePolicy:
+    def test_get_model_policy(self, client):
+        resp = client.get("/system/model-policy")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["local_execution_mode"] == "low_risk_only"
+        assert data["frontier_scrub_mode"] == "required"
+
+    def test_update_model_policy(self, client):
+        resp = client.put(
+            "/system/model-policy",
+            json={
+                "local_execution_mode": "disabled",
+                "frontier_scrub_mode": "preferred",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["local_execution_mode"] == "disabled"
+        assert data["frontier_scrub_mode"] == "preferred"
+
+    def test_update_model_policy_requires_changes(self, client):
+        resp = client.put("/system/model-policy", json={})
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "No model usage policy changes supplied"
+
+    def test_update_model_policy_rejects_undeclared_fields(self, client):
+        resp = client.put(
+            "/system/model-policy",
+            json={"local_execution_mode": "disabled", "operator_id": "Mallory"},
+        )
+        assert resp.status_code == 422
 
 
 # ==================================================================
@@ -323,7 +397,6 @@ class TestSafeErrors:
 class TestWarRoomArtifacts:
 
     def test_store_artifact_normalizes_server_side_fields(self, client):
-        session_cookie = {auth_api.get_warroom_session_cookie_name(): "test-session"}
         resp = client.post(
             "/warroom/artifacts",
             json={
@@ -332,11 +405,10 @@ class TestWarRoomArtifacts:
                 "content": {"message": "hello"},
                 "session_id": "foreign-session",
             },
-            cookies=session_cookie,
         )
         assert resp.status_code == 200
 
-        listing = client.get("/warroom/artifacts", cookies=session_cookie).json()
+        listing = client.get("/warroom/artifacts").json()
         artifact = listing["artifacts"][0]
         assert artifact["id"] != "client-id"
         assert artifact["session_id"] == "session-1"
@@ -344,23 +416,40 @@ class TestWarRoomArtifacts:
         assert artifact["source"] == "api"
 
     def test_store_artifact_rejects_unknown_type(self, client):
-        session_cookie = {auth_api.get_warroom_session_cookie_name(): "test-session"}
         resp = client.post(
             "/warroom/artifacts",
             json={"type": "ARBITRARY_FAKE", "content": {"message": "x"}},
-            cookies=session_cookie,
         )
         assert resp.status_code == 400
 
+    def test_store_artifact_rejects_undeclared_fields(self, client):
+        resp = client.post(
+            "/warroom/artifacts",
+            json={
+                "type": "TOOL_TRACE",
+                "content": {"message": "hello"},
+                "debug": True,
+            },
+        )
+        assert resp.status_code == 422
+
     def test_artifact_store_is_bounded(self, client):
-        session_cookie = {auth_api.get_warroom_session_cookie_name(): "test-session"}
         for idx in range(205):
             resp = client.post(
                 "/warroom/artifacts",
                 json={"type": "TOOL_TRACE", "content": {"idx": idx}},
-                cookies=session_cookie,
             )
             assert resp.status_code == 200
 
-        listing = client.get("/warroom/artifacts", cookies=session_cookie).json()
+        listing = client.get("/warroom/artifacts").json()
         assert listing["total"] == 200
+
+
+class TestTokens:
+
+    def test_revoke_rejects_undeclared_fields(self, client):
+        resp = client.post(
+            "/tokens/token-1/revoke",
+            json={"reason": "Manual revocation", "operator_id": "Mallory"},
+        )
+        assert resp.status_code == 422

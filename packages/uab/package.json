@@ -1,7 +1,7 @@
 {
   "name": "universal-app-bridge",
   "version": "1.3.0",
-  "description": "Smart function discovery and framework-level desktop app control for AI agents. Desktop + server dual-mode with Vision fallback. Hook into Chrome, Electron, Qt, GTK, WPF, Flutter, Java, and Office apps with a unified API.",
+  "description": "Framework detection and desktop app control for AI agents. Desktop + server dual-mode with vision fallback. Hook into Chrome, Electron, Qt, GTK, WPF, Flutter, Java, and Office apps with a unified API.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -29,22 +29,27 @@
     "./environment": {
       "types": "./dist/environment.d.ts",
       "import": "./dist/environment.js"
+    },
+    "./hooks": {
+      "types": "./dist/hooks.d.ts",
+      "import": "./dist/hooks.js"
     }
   },
   "files": [
     "dist",
+    "data/action-risk.json",
     "data/chrome-extension",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "npx tsc",
+    "build": "node scripts/build.js",
     "daemon": "node dist/daemon.js",
-    "test": "node tests/daemon.test.js",
+    "test": "npm run build && node --test tests/*.test.mjs && node tests/daemon.test.js",
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {
-    "@types/node": "^20.19.35",
+    "@types/node": "^25.3.3",
     "@types/ws": "^8.18.1",
     "typescript": "^5.9.3"
   },
@@ -69,7 +74,7 @@
     "chrome-extension",
     "browser-automation"
   ],
-  "author": "ClaudeClaw",
+  "author": "myles1663",
   "license": "BUSL-1.1",
   "engines": {
     "node": ">=18.0.0"
@@ -83,6 +88,7 @@
   },
   "homepage": "https://github.com/myles1663/UAB#readme",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "ws": "^8.19.0"
   }
 }

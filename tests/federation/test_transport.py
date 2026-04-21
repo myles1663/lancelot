@@ -11,6 +11,7 @@ import pytest
 
 from src.federation.identity import generate_identity
 from src.federation.auth import FederationAuth
+from src.core.outbound_http import OutboundNetworkError
 from src.federation.transport import (
     FederationTransport,
     PeerCircuitBreaker,
@@ -91,6 +92,11 @@ def identity():
 @pytest.fixture
 def auth(identity):
     return FederationAuth(identity=identity)
+
+
+@pytest.fixture(autouse=True)
+def allow_outbound_requests(monkeypatch):
+    monkeypatch.setattr("src.federation.transport.assert_url_allowed", lambda url, **kwargs: url)
 
 
 class TestTransportLifecycle:
@@ -198,6 +204,24 @@ class TestTransportSend:
             assert states["reset-peer"]["state"] == "closed"
         finally:
             await transport.stop()
+
+    @pytest.mark.asyncio
+    async def test_send_returns_failed_result_when_network_allowlist_blocks(self, auth, monkeypatch):
+        monkeypatch.setattr(
+            "src.federation.transport.assert_url_allowed",
+            lambda url, **kwargs: (_ for _ in ()).throw(
+                OutboundNetworkError("Federation transport blocked by network allowlist")
+            ),
+        )
+        transport = FederationTransport(auth=auth)
+        await transport.start()
+        try:
+            result = await transport.send("https://blocked.example.com", "GET", "/test", peer_id="peer-1")
+        finally:
+            await transport.stop()
+
+        assert result.success is False
+        assert result.error == "Federation transport blocked by network allowlist"
 
 
 class TestTransportBroadcast:

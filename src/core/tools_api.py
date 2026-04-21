@@ -48,7 +48,9 @@ async def tools_health():
     if _fabric is None:
         return {"providers": {}, "summary": {"total_providers": 0}, "enabled": False}
     try:
-        health_data = _fabric.get_health()
+        # Re-probe on each API request so the War Room reflects current provider
+        # availability instead of a startup-time cache snapshot.
+        health_data = _fabric.probe_health()
         summary = {
             "total_providers": len(health_data),
             "healthy": sum(1 for h in health_data.values() if h.state.value == "healthy"),

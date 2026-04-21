@@ -16,7 +16,7 @@ function createConnector(overrides = {}) {
         pid: typeof target === 'number' ? target : 4242,
         name: typeof target === 'string' ? target : 'Fake App',
         framework: 'browser',
-        method: 'uab-hook',
+        method: 'browser-cdp',
         elementCount: 12,
       };
     },
@@ -24,7 +24,7 @@ function createConnector(overrides = {}) {
     async disconnectAll() {},
     isConnected() { return true; },
     getConnections() {
-      return [{ pid: 4242, name: 'Fake App', framework: 'browser', method: 'uab-hook', elementCount: 0 }];
+      return [{ pid: 4242, name: 'Fake App', framework: 'browser', method: 'browser-cdp', elementCount: 0 }];
     },
     async enumerate() { return []; },
     async query() { return []; },
@@ -36,7 +36,7 @@ function createConnector(overrides = {}) {
     async screenshot() { return { success: true, path: 'fake.png' }; },
     cacheStats() { return { hits: 1, misses: 0, hitRate: 1 }; },
     auditLog() { return []; },
-    healthSummary() { return [{ pid: 4242, name: 'Fake App', healthy: true, uptimeMs: 1000, failures: 0, method: 'uab-hook' }]; },
+    healthSummary() { return [{ pid: 4242, name: 'Fake App', healthy: true, uptimeMs: 1000, failures: 0, method: 'browser-cdp' }]; },
     async runHealthChecks() {},
     async spatialMap() { return { rows: [] }; },
     async textMap() { return 'Window: Fake'; },
@@ -89,7 +89,7 @@ async function run() {
       pid: 4242,
       name: 'Notepad',
       framework: 'browser',
-      connectionMethod: 'uab-hook',
+      connectionMethod: 'browser-cdp',
       elementCount: 12,
     });
   }

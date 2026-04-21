@@ -1,5 +1,5 @@
 """
-Skill Registry — install, enable, disable, and persist skills (Prompt 7 / B2).
+Skill registry for installed skill lifecycle and persistence.
 
 Single-owner module managing the skill lifecycle.  Persists state to
 data/skills_registry.json.
@@ -110,8 +110,8 @@ class SkillRegistry:
                         for entry_dict in data:
                             entry = SkillEntry(**entry_dict)
                             self._skills[entry.name] = entry
-                except (json.JSONDecodeError, OSError):
-                    pass
+                except (json.JSONDecodeError, OSError) as backup_exc:
+                    logger.warning("Failed to load backup skill registry: %s", backup_exc)
 
     def _save(self) -> None:
         """Persist registry to disk atomically."""
@@ -124,8 +124,8 @@ class SkillRegistry:
             bak = Path(str(self._registry_path) + ".bak")
             try:
                 os.replace(str(self._registry_path), str(bak))
-            except OSError:
-                pass
+            except OSError as exc:
+                logger.warning("Failed to create skill registry backup %s: %s", bak, exc)
         os.replace(str(tmp_path), str(self._registry_path))
 
     def install_skill(

@@ -3,7 +3,7 @@
 import pytest
 
 from src.core.soul.store import Soul, AutonomyPosture, RiskRule, SchedulingBoundaries
-from src.hive.scoped_soul import ScopedSoulGenerator
+from src.hive.scoped_soul import ScopedCapabilityBoundary, ScopedSoulGenerator
 from src.hive.types import TaskSpec, ControlMethod
 
 
@@ -16,7 +16,15 @@ def _make_parent_soul() -> Soul:
         autonomy_posture=AutonomyPosture(
             level="governed",
             description="Test posture",
-            allowed_autonomous=["classify_intent", "summarize", "health_check"],
+            allowed_autonomous=[
+                "classify_intent",
+                "summarize",
+                "health_check",
+                "read_document",
+                "query_document",
+                "uab_automation",
+                "thread_review",
+            ],
             requires_approval=["deploy", "delete", "financial_transaction"],
         ),
         risk_rules=[
@@ -32,6 +40,18 @@ def _make_parent_soul() -> Soul:
             require_ready_state=True,
             description="Test boundaries",
         ),
+        mcp_permissions=[
+            {
+                "server_id": "github-mcp",
+                "allowed_tools": ["read_repo"],
+                "risk_tier": "T2",
+            },
+            {
+                "server_id": "database-mcp",
+                "allowed_tools": ["read_rows"],
+                "risk_tier": "T2",
+            },
+        ],
     )
 
 
@@ -88,6 +108,16 @@ class TestScopedSoulGeneration:
         # Only "health_check" should remain
         assert "health_check" in scoped.autonomy_posture.allowed_autonomous
         assert "classify_intent" not in scoped.autonomy_posture.allowed_autonomous
+        assert "thread_review" not in scoped.autonomy_posture.allowed_autonomous
+
+    def test_allowed_categories_use_exact_capability_mapping(self):
+        gen = ScopedSoulGenerator()
+        parent = _make_parent_soul()
+        spec = TaskSpec(allowed_categories=["read"])
+        scoped = gen.generate(parent, spec)
+        assert "read_document" in scoped.autonomy_posture.allowed_autonomous
+        assert "query_document" in scoped.autonomy_posture.allowed_autonomous
+        assert "thread_review" not in scoped.autonomy_posture.allowed_autonomous
 
     def test_scheduling_boundaries_tightened(self):
         gen = ScopedSoulGenerator()
@@ -152,6 +182,23 @@ class TestValidateMoreRestrictive:
         scoped.autonomy_posture.allowed_autonomous.append("new_dangerous_action")
         assert gen.validate_more_restrictive(scoped, parent) is False
 
+    def test_new_requires_approval_capability_fails(self):
+        gen = ScopedSoulGenerator()
+        parent = _make_parent_soul()
+        spec = TaskSpec()
+        scoped = gen.generate(parent, spec)
+        scoped.autonomy_posture.requires_approval.append("new_dangerous_action")
+        assert gen.validate_more_restrictive(scoped, parent) is False
+
+    def test_requires_approval_may_tighten_parent_autonomous_capability(self):
+        gen = ScopedSoulGenerator()
+        parent = _make_parent_soul()
+        spec = TaskSpec()
+        scoped = gen.generate(parent, spec)
+        scoped.autonomy_posture.allowed_autonomous.remove("summarize")
+        scoped.autonomy_posture.requires_approval.append("summarize")
+        assert gen.validate_more_restrictive(scoped, parent) is True
+
     def test_loosened_scheduling_fails(self):
         gen = ScopedSoulGenerator()
         parent = _make_parent_soul()
@@ -160,6 +207,95 @@ class TestValidateMoreRestrictive:
         # Loosen scheduling beyond parent
         scoped.scheduling_boundaries.max_job_duration_seconds = 9999
         assert gen.validate_more_restrictive(scoped, parent) is False
+
+    def test_mcp_tool_escalation_fails(self):
+        gen = ScopedSoulGenerator()
+        parent = _make_parent_soul()
+        spec = TaskSpec()
+        scoped = gen.generate(parent, spec)
+        scoped.mcp_permissions = [
+            {
+                "server_id": "github-mcp",
+                "allowed_tools": ["read_repo", "write_repo"],
+                "risk_tier": "T2",
+            }
+        ]
+        assert gen.validate_more_restrictive(scoped, parent) is False
+
+    def test_mcp_wildcard_escalation_fails(self):
+        gen = ScopedSoulGenerator()
+        parent = _make_parent_soul()
+        spec = TaskSpec()
+        scoped = gen.generate(parent, spec)
+        scoped.mcp_permissions = [
+            {
+                "server_id": "github-mcp",
+                "allowed_tools": ["*"],
+                "risk_tier": "T2",
+            }
+        ]
+        assert gen.validate_more_restrictive(scoped, parent) is False
+
+    def test_mcp_lower_risk_tier_fails(self):
+        gen = ScopedSoulGenerator()
+        parent = _make_parent_soul()
+        spec = TaskSpec()
+        scoped = gen.generate(parent, spec)
+        scoped.mcp_permissions = [
+            {
+                "server_id": "github-mcp",
+                "allowed_tools": ["read_repo"],
+                "risk_tier": "T1",
+            }
+        ]
+        assert gen.validate_more_restrictive(scoped, parent) is False
+
+    def test_categories_do_not_fuzzily_narrow_mcp_permissions(self):
+        gen = ScopedSoulGenerator()
+        parent = _make_parent_soul()
+        spec = TaskSpec(allowed_categories=["hub"])
+        scoped = gen.generate(parent, spec)
+        assert scoped.mcp_permissions == parent.mcp_permissions
+
+    def test_explicit_mcp_server_selector_narrows_mcp_permissions(self):
+        gen = ScopedSoulGenerator()
+        parent = _make_parent_soul()
+        spec = TaskSpec(allowed_categories=["mcp:github-mcp"])
+        scoped = gen.generate(parent, spec)
+        assert scoped.mcp_permissions == [
+            {
+                "server_id": "github-mcp",
+                "allowed_tools": ["read_repo"],
+                "risk_tier": "T2",
+            }
+        ]
+
+
+class TestExecutionBoundary:
+    def test_boundary_is_derived_from_parent_and_task(self):
+        gen = ScopedSoulGenerator()
+        parent = _make_parent_soul()
+        spec = TaskSpec(allowed_categories=["read"])
+
+        boundary = gen.build_execution_boundary(parent, spec)
+
+        assert boundary == ScopedCapabilityBoundary(
+            allowed_autonomous=("summarize", "health_check", "read_document", "query_document"),
+            requires_approval=(),
+        )
+
+    def test_boundary_manual_confirm_downgrades_all_named_capabilities_to_approval(self):
+        gen = ScopedSoulGenerator()
+        parent = _make_parent_soul()
+        spec = TaskSpec(
+            allowed_categories=["health"],
+            control_method=ControlMethod.MANUAL_CONFIRM,
+        )
+
+        boundary = gen.build_execution_boundary(parent, spec)
+
+        assert boundary.allowed_autonomous == ()
+        assert boundary.requires_approval == ("health_check",)
 
 
 class TestHashSoul:

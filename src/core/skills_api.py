@@ -11,7 +11,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability, resolve_authenticated_identity
 
@@ -34,10 +34,12 @@ _actioncard_factory = None
 
 
 class ApproveRequest(BaseModel):
-    pass
+    model_config = ConfigDict(extra="forbid")
+    approved_by: Optional[str] = None
 
 
 class RejectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     reason: Optional[str] = None
 
 
@@ -69,7 +71,14 @@ async def list_proposals():
                 "name": p.name,
                 "description": p.description,
                 "permissions": p.permissions,
+                "risk": p.risk,
+                "source": p.source,
+                "target_domains": p.target_domains,
+                "credential_keys": p.credential_keys,
+                "approved_capabilities": p.approved_capabilities,
                 "status": p.status.value if hasattr(p.status, 'value') else str(p.status),
+                "pipeline_passed": p.pipeline_passed,
+                "pipeline_failed_at_stage": p.pipeline_failed_at_stage,
                 "created_at": p.created_at,
                 "approved_by": p.approved_by,
             }
@@ -94,13 +103,29 @@ async def get_proposal(proposal_id: str):
         "name": proposal.name,
         "description": proposal.description,
         "permissions": proposal.permissions,
+        "risk": proposal.risk,
+        "source": proposal.source,
+        "author": proposal.author,
+        "target_domains": proposal.target_domains,
+        "credentials": proposal.credentials,
+        "credential_keys": proposal.credential_keys,
+        "approved_capabilities": proposal.approved_capabilities,
         "manifest_yaml": proposal.manifest_yaml,
+        "security_manifest_yaml": proposal.security_manifest_yaml,
         "execute_code": proposal.execute_code,
         "test_code": proposal.test_code,
         "tests_status": proposal.tests_status,
         "status": proposal.status.value if hasattr(proposal.status, 'value') else str(proposal.status),
+        "pipeline_passed": proposal.pipeline_passed,
+        "pipeline_failed_at_stage": proposal.pipeline_failed_at_stage,
+        "pipeline_stage_results": proposal.pipeline_stage_results,
+        "artifact_hashes": proposal.artifact_hashes,
         "created_at": proposal.created_at,
         "approved_by": proposal.approved_by,
+        "approved_at": proposal.approved_at,
+        "rejected_reason": proposal.rejected_reason,
+        "rejected_at": proposal.rejected_at,
+        "installed_at": proposal.installed_at,
     }
 
 
@@ -123,6 +148,7 @@ async def approve_proposal(
             "proposal_id": proposal.id,
             "name": proposal.name,
             "approved_by": proposal.approved_by,
+            "approved_at": getattr(proposal, "approved_at", None),
         }
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -135,11 +161,12 @@ async def reject_proposal(proposal_id: str, body: RejectRequest = RejectRequest(
         raise HTTPException(status_code=503, detail="SkillFactory not initialized")
 
     try:
-        proposal = _skill_factory.reject_proposal(proposal_id)
+        proposal = _skill_factory.reject_proposal(proposal_id, reason=body.reason)
         return {
             "status": "rejected",
             "proposal_id": proposal.id,
             "name": proposal.name,
+            "rejected_reason": getattr(proposal, "rejected_reason", None),
         }
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -157,6 +184,11 @@ async def install_proposal(proposal_id: str):
             "status": "installed",
             "proposal_id": proposal_id,
             "name": entry.name if hasattr(entry, 'name') else str(entry),
+            "validated_capabilities": (
+                getattr(proposal, "approved_capabilities", [])
+                if (proposal := _skill_factory.get_proposal(proposal_id))
+                else []
+            ),
             "message": f"Skill installed and registered. It can now be run via skill_manager.",
         }
     except Exception as exc:

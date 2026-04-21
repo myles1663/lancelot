@@ -8,7 +8,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
-import { REPO_URL, HEALTH_CHECK_URL, HEALTH_CHECK_INTERVAL_MS, HEALTH_CHECK_MAX_ATTEMPTS } from './constants.mjs';
+import {
+  REPO_URL,
+  HEALTH_CHECK_URL,
+  HEALTH_CHECK_INTERVAL_MS,
+  HEALTH_CHECK_MAX_ATTEMPTS,
+  HOST_AGENT_HEALTH_URL,
+} from './constants.mjs';
 
 export async function cloneRepo(targetDir) {
   // If directory exists with a .git folder, do a pull instead
@@ -126,8 +132,8 @@ export async function startHostAgent(projectDir) {
     return;
   }
 
-  // Read token from .env if available, otherwise use default
-  let token = 'lancelot-host-agent';
+  // Read the explicit token from .env. The legacy default is rejected.
+  let token = '';
   try {
     const envPath = path.join(projectDir, '.env');
     if (fs.existsSync(envPath)) {
@@ -136,7 +142,12 @@ export async function startHostAgent(projectDir) {
       if (match) token = match[1].trim();
     }
   } catch {
-    // Use default token
+    // Fall through to validation below
+  }
+
+  if (!token || token === 'lancelot-host-agent') {
+    spinner.warn('  Host Agent token missing or still using the legacy default — skipping auto-start');
+    return;
   }
 
   try {
@@ -174,7 +185,7 @@ export async function startHostAgent(projectDir) {
     await new Promise(r => setTimeout(r, 2000));
 
     try {
-      const res = await fetch('http://127.0.0.1:9111/health', {
+      const res = await fetch(HOST_AGENT_HEALTH_URL, {
         signal: AbortSignal.timeout(3000),
       });
       if (res.ok) {
@@ -188,7 +199,7 @@ export async function startHostAgent(projectDir) {
     // Second attempt after another second
     await new Promise(r => setTimeout(r, 1500));
     try {
-      const res = await fetch('http://127.0.0.1:9111/health', {
+      const res = await fetch(HOST_AGENT_HEALTH_URL, {
         signal: AbortSignal.timeout(3000),
       });
       if (res.ok) {

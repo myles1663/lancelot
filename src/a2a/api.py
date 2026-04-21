@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import get_api_key_identity, require_operator_capability, resolve_operator_identity
 
@@ -89,6 +89,7 @@ def init_a2a_api(
 # ── Request Models ───────────────────────────────────────────
 
 class RegisterAgentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     agent_id: str
     display_name: str
     agent_card_url: str = ""
@@ -99,6 +100,7 @@ class RegisterAgentRequest(BaseModel):
 
 
 class DelegateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     target_agent_id: str
     content: str
     task_type: str = "general"

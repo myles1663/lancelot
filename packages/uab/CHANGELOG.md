@@ -2,6 +2,24 @@
 
 All notable changes to Universal App Bridge will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- First-class framework hook inventory via `src/hooks.ts`, plus public connector and server exposure through `hookInventory()`, `signatureInventory()`, `concertoInventory()`, and `/info`.
+- Real `direct-api` plugin support and explicit operation planning via `src/concerto.ts` and the `/plan` endpoint.
+- Proof tests for hook inventory, detection signatures, router fallback behavior, connector/server inventories, direct API control, Concerto planning, and Office capability claims.
+- Runtime plan context overrides for Concerto, so `/plan` and `planOperation()` can bias weights, role/control preferences, and method penalties from live task constraints instead of relying only on the action name.
+- First-class Excel automation readiness probe surfaces via `uab excel-probe` and `POST /excel/probe`.
+
+### Changed
+- Router and plugin-manager selection now prioritize exact runtime control methods instead of generic `uab-hook` and `accessibility` labels.
+- Concerto planning now derives live runtime evidence from the connected route instead of only scoring static method descriptors. The planner folds in active transport, fallback order, environment mode, Session 0 bridge requirements, direct-API availability, vision availability, and connection-health failures/reconnect attempts, and the returned plan now includes a `runtimeEvidence` trace explaining those adjustments.
+- Office automation now includes explicit script builders and action support for pivot tables, charts, and conditional formatting.
+- Public connector and service operations now execute through `RoutedConnection` wrappers instead of bypassing them for the active raw plugin connection, so enumerate/query/state/act/screenshot calls inherit the same cascade fallback behavior proven by the router tests.
+- The Excel benchmark now saves a real workbook artifact and verifies the saved `.xlsx` package directly on disk, so success requires the persisted file itself to contain the expected pivot table, chart, and conditional-formatting structure instead of trusting only the live Excel session.
+- The Excel benchmark now also persists a JSON proof manifest with the local COM probe result, host metadata, workbook SHA-256, and artifact verification details so successful runs leave durable evidence instead of only console output.
+- Product docs now describe the exact runtime control methods and discovery surfaces exposed by the embedded engine.
+
 ## v1.3.0 — The Concerto (P6 Raw Input Injection)
 
 ### Added
@@ -29,7 +47,7 @@ All notable changes to Universal App Bridge will be documented in this file.
 - **MCP Server** (`mcp-server.ts`) — 15-tool MCP server over stdio for native tool integration with Claude Desktop and any MCP-compatible agent
 - **Agent SDK** (`sdk.ts`) — Simple wrapper: `desktop.click('Notepad', 'File')`, `desktop.look('Notepad')`
 - **Agent Prompt Templates** (`agent-prompt.ts`) — System prompts teaching agents to prefer structured data over screenshots
-- **`/focused` endpoint** — Real-time focus tracking via UIA FocusedElement (<50ms), includes tree path
+- **`/focused` endpoint** — Real-time focus tracking via UIA FocusedElement, includes tree path
 - **`/find-by-path` endpoint** — Address elements by tree path or parent context (solves "5 elements named Close" problem)
 - **`/watch` endpoint** — State change detection by polling focus and element tree
 - **`/atomic` endpoint** — Execute multi-step action chains in single PowerShell session (no focus loss)
@@ -149,7 +167,7 @@ All notable changes to Universal App Bridge will be documented in this file.
 ### Added
 
 - **Smart Function Discovery Pipeline** — Five-phase process: Scan → Identify → Register → Connect → Learn. The core intelligence of UAB.
-- **UABConnector** — Framework-independent connector class. Instantiable (not singleton), zero dependencies on any agent framework. Primary API for all consumers.
+- **UABConnector** — Framework-independent connector class. Instantiable (not singleton), with no dependency on any specific agent framework. Primary API for all consumers.
   - `scan()` — Full system detection with batch DLL scanning, framework identification, and registry population
   - `apps()` — Instant recall from registry (no scan needed)
   - `find()` — Smart lookup: checks registry first (O(1)), falls back to live detection
@@ -161,7 +179,7 @@ All notable changes to Universal App Bridge will be documented in this file.
   - Auto-save on mutation with deferred save for bulk operations
   - Cross-session survival — remembers apps, frameworks, and preferred methods
 - **Learning Loop** — After successful connection, registry is updated with the method that worked. Next connection to the same app is faster.
-- **Batch Processing** — DLL module scanning batched (50 PIDs per PowerShell call). Window title scanning via single P/Invoke call. Full system scan in 2-5 seconds.
+- **Batch Processing** — DLL module scanning batched (50 PIDs per PowerShell call). Window title scanning via single P/Invoke call. Full-system scan timing is host-dependent, and on current Windows test rigs can complete in a few seconds when batched discovery is healthy.
 - **CLI smart discovery commands:** `scan`, `apps`, `find`, `profiles`
 - **Comprehensive documentation** reflecting Smart Function Discovery architecture:
   - `README.md` — Smart discovery front and center

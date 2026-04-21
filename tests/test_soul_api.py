@@ -171,13 +171,26 @@ class TestProposeAmendment:
         resp = c.post(
             "/soul/propose",
             headers=_owner_headers(),
-            json={"proposed_yaml": proposed_yaml, "author": "Spoofed User"},
+            json={"proposed_yaml": proposed_yaml},
         )
 
         assert resp.status_code == 200
         proposal_id = resp.json()["proposal_id"]
         proposal = next(p for p in list_proposals(soul_dir) if p.id == proposal_id)
         assert proposal.author == "Operator One"
+
+    def test_propose_rejects_unexpected_fields(self, client):
+        c, _ = client
+        proposed_yaml = yaml.dump(_soul_dict("v2"))
+
+        resp = c.post(
+            "/soul/propose",
+            headers=_owner_headers(),
+            json={"proposed_yaml": proposed_yaml, "author": "Spoofed User"},
+        )
+
+        assert resp.status_code == 422
+        assert "extra_forbidden" in resp.text
 
 
 # ===================================================================

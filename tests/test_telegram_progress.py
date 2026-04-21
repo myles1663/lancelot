@@ -20,8 +20,22 @@ from src.core.toolflow.telegram_bridge import (
 
 def _run(coro):
     """Helper to run an async coroutine synchronously."""
-    loop = asyncio.get_event_loop()
-    return loop.run_until_complete(coro)
+    created = False
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError("Event loop is closed")
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        created = True
+
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        if created:
+            loop.close()
+            asyncio.set_event_loop(None)
 
 
 # ---------------------------------------------------------------------------

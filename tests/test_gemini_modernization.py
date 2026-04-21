@@ -8,6 +8,8 @@ import unittest
 import os
 import json
 import asyncio
+import re
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, AsyncMock, PropertyMock
 
 
@@ -27,6 +29,32 @@ def _make_mock_provider(provider_name="gemini"):
     return mock_provider
 
 
+def _fake_frontier_redact(text):
+    if not isinstance(text, str):
+        return text
+
+    text = re.sub(r"\b\d{3}-\d{2}-\d{4}\b", "[SSN]", text)
+    text = re.sub(
+        r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
+        "[EMAIL]",
+        text,
+    )
+    text = re.sub(
+        r"\b(?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]\d{3}[-.\s]\d{4}\b",
+        "[PHONE]",
+        text,
+    )
+    text = re.sub(
+        r"\b(?:dob|date of birth|birth date)\s*[:\-]?\s*"
+        r"(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+        "[DATE_OF_BIRTH]",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\b(?:\d[ -]*?){13,19}\b", "[CREDIT_CARD]", text)
+    return text
+
+
 def _build_orchestrator(mock_provider=None):
     """Build an orchestrator with provider and cache init mocked out."""
     import importlib
@@ -41,7 +69,37 @@ def _build_orchestrator(mock_provider=None):
          patch.object(orch_mod.LancelotOrchestrator, '_init_context_cache') as mock_init_cache:
         orch = orch_mod.LancelotOrchestrator()
         orch.provider = mock_provider
+        scrub_router = MagicMock()
+        scrub_router.route.side_effect = (
+            lambda *_args, **_kwargs: SimpleNamespace(
+                executed=True,
+                output=_fake_frontier_redact(
+                    _args[1] if len(_args) > 1 else _kwargs.get("text", "")
+                ),
+            )
+        )
+        orch.model_router = scrub_router
     return orch
+
+
+def _run_async(coro):
+    """Run async tests safely even if another suite closed the default event loop."""
+    created = False
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError("Event loop is closed")
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        created = True
+
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        if created:
+            loop.close()
+            asyncio.set_event_loop(None)
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +136,63 @@ class TestSDKMigration(unittest.TestCase):
             importlib.reload(orch_mod)
             orch = orch_mod.LancelotOrchestrator()
             self.assertIsNone(orch.provider)
+
+    @patch.dict(
+        os.environ,
+        {
+            "LANCELOT_PROVIDER": "gemini",
+            "LANCELOT_PROVIDER_MODE": "sdk",
+        },
+        clear=True,
+    )
+    def test_orchestrator_skips_adc_without_explicit_oauth_mode(self):
+        """Ambient ADC must not trigger Gemini OAuth bootstrap unless explicitly selected."""
+        import importlib
+        import google.auth
+        import orchestrator as orch_mod
+
+        importlib.reload(orch_mod)
+        orch = orch_mod.LancelotOrchestrator.__new__(orch_mod.LancelotOrchestrator)
+        orch.provider = None
+        orch.model_name = "gemini-3-flash-preview"
+
+        def _unexpected_default(*args, **kwargs):
+            raise AssertionError("google.auth.default should not be called")
+
+        with patch.object(google.auth, "default", side_effect=_unexpected_default):
+            orch._init_provider()
+
+        self.assertIsNone(orch.provider)
+
+    @patch.dict(
+        os.environ,
+        {
+            "LANCELOT_PROVIDER": "gemini",
+            "LANCELOT_PROVIDER_MODE": "sdk",
+            "LANCELOT_AUTH_MODE": "OAUTH",
+        },
+        clear=True,
+    )
+    def test_orchestrator_explicit_oauth_uses_adc_without_refreshing(self):
+        """Explicit Gemini OAuth mode should use ADC but avoid refresh-side network during init."""
+        import importlib
+        import google.auth
+        import orchestrator as orch_mod
+
+        importlib.reload(orch_mod)
+        fake_creds = MagicMock(expired=True, refresh_token="refresh-token")
+        mock_provider = _make_mock_provider()
+        orch = orch_mod.LancelotOrchestrator.__new__(orch_mod.LancelotOrchestrator)
+        orch.provider = None
+        orch.model_name = "gemini-3-flash-preview"
+
+        with patch.object(google.auth, "default", return_value=(fake_creds, "proj")), \
+             patch("providers.factory.create_provider", return_value=mock_provider) as mock_create:
+            orch._init_provider()
+
+        mock_create.assert_called_once_with("gemini", "", credentials=fake_creds)
+        fake_creds.refresh.assert_not_called()
+        self.assertIs(orch.provider, mock_provider)
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key", "GEMINI_MODEL": "gemini-3-pro"})
     def test_model_name_configurable(self):
@@ -322,7 +437,7 @@ class TestLiveSession(unittest.TestCase):
                 async for _ in mgr.send_text("hello"):
                     pass
 
-        asyncio.get_event_loop().run_until_complete(run())
+        _run_async(run())
 
     def test_close_when_not_connected(self):
         """close() should be safe to call when session is None."""
@@ -333,7 +448,7 @@ class TestLiveSession(unittest.TestCase):
             await mgr.close()
             self.assertFalse(mgr.is_connected)
 
-        asyncio.get_event_loop().run_until_complete(run())
+        _run_async(run())
 
 
 class TestLiveWebSocket(unittest.TestCase):
@@ -363,8 +478,9 @@ class TestUCPConnector(unittest.TestCase):
         """SSRF-blocked URLs should raise ValueError."""
         from ucp_connector import UCPConnector
         connector = UCPConnector()
-        with self.assertRaises(ValueError):
-            connector.discover_merchant("http://127.0.0.1:8080")
+        with patch.object(connector._net_interceptor, "check_url", return_value=False):
+            with self.assertRaises(ValueError):
+                connector.discover_merchant("http://127.0.0.1:8080")
 
     def test_initiate_transaction_creates_pending(self):
         """initiate_transaction should create a pending transaction."""
@@ -468,17 +584,53 @@ class TestUCPGatewayEndpoints(unittest.TestCase):
         resp = self.client.post("/ucp/discover", json={}, headers=self.headers)
         self.assertEqual(resp.status_code, 400)
 
+    def test_ucp_discover_rejects_undeclared_fields(self):
+        resp = self.client.post(
+            "/ucp/discover",
+            json={"merchant_url": "https://x.com", "operator_id": "spoofed"},
+            headers=self.headers,
+        )
+        self.assertEqual(resp.status_code, 422)
+
     def test_ucp_search_missing_field(self):
         resp = self.client.post("/ucp/search", json={"merchant_url": "https://x.com"}, headers=self.headers)
         self.assertEqual(resp.status_code, 400)
+
+    def test_ucp_search_rejects_undeclared_fields(self):
+        resp = self.client.post(
+            "/ucp/search",
+            json={"merchant_url": "https://x.com", "query": "test", "operator_id": "spoofed"},
+            headers=self.headers,
+        )
+        self.assertEqual(resp.status_code, 422)
 
     def test_ucp_transact_missing_field(self):
         resp = self.client.post("/ucp/transact", json={"merchant_url": "https://x.com"}, headers=self.headers)
         self.assertEqual(resp.status_code, 400)
 
+    def test_ucp_transact_rejects_undeclared_fields(self):
+        resp = self.client.post(
+            "/ucp/transact",
+            json={
+                "merchant_url": "https://x.com",
+                "product_id": "1",
+                "operator_id": "spoofed",
+            },
+            headers=self.headers,
+        )
+        self.assertEqual(resp.status_code, 422)
+
     def test_ucp_confirm_missing_field(self):
         resp = self.client.post("/ucp/confirm", json={}, headers=self.headers)
         self.assertEqual(resp.status_code, 400)
+
+    def test_ucp_confirm_rejects_undeclared_fields(self):
+        resp = self.client.post(
+            "/ucp/confirm",
+            json={"transaction_id": "abc", "operator_id": "spoofed"},
+            headers=self.headers,
+        )
+        self.assertEqual(resp.status_code, 422)
 
 
 # ---------------------------------------------------------------------------

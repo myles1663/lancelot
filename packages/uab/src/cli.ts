@@ -10,7 +10,7 @@
  *
  * New commands (connector layer):
  *   node dist/uab/cli.js scan              — Detect apps + save to registry
- *   node dist/uab/cli.js apps              — List known apps from registry (instant)
+ *   node dist/uab/cli.js apps              — List known apps from registry (direct lookup, no scan)
  *   node dist/uab/cli.js find <name>       — Search registry, fallback to live detect
  *   node dist/uab/cli.js profiles          — Show registry file info
  *
@@ -28,6 +28,12 @@
 
 import { UABConnector } from './connector.js';
 import type { ActionType, ElementType } from './types.js';
+import {
+  buildExcelWorkbookBenchmarkScript,
+  probeExcelAutomation,
+  resolveExcelWorkbookBenchmarkPaths,
+  runExcelWorkbookBenchmark,
+} from './plugins/office/index.js';
 
 function parseArgs(argv: string[]): { command: string; args: string[]; flags: Record<string, string> } {
   const command = argv[0] || 'help';
@@ -290,6 +296,40 @@ async function main() {
         const state = await connector.state(pid);
         output({ pid, ...state });
         await connector.disconnectAll();
+        break;
+      }
+
+      case 'excel-benchmark': {
+        const rowCount = flags.rows ? parseInt(flags.rows, 10) : undefined;
+        if (flags.rows && (rowCount === undefined || Number.isNaN(rowCount))) {
+          error('Usage: excel-benchmark [--rows N] [--output file.xlsx] [--manifest file.json] [--visible] [--keep-open] [--dry-run]');
+        }
+
+        const options = {
+          rowCount,
+          outputPath: flags.output,
+          manifestPath: flags.manifest,
+          visible: flags.visible === 'true',
+          keepOpen: flags['keep-open'] === 'true',
+        };
+        const paths = resolveExcelWorkbookBenchmarkPaths(options);
+
+        if (flags['dry-run'] === 'true') {
+          output({
+            dryRun: true,
+            options,
+            resolvedPaths: paths,
+            script: buildExcelWorkbookBenchmarkScript(options),
+          });
+          break;
+        }
+
+        output(runExcelWorkbookBenchmark(options));
+        break;
+      }
+
+      case 'excel-probe': {
+        output(probeExcelAutomation());
         break;
       }
 
@@ -690,7 +730,7 @@ async function main() {
       // ─── Feature 1: Focus Tracking ─────────────────────────────
       case 'focused': {
         const pidStr = args[0];
-        if (!pidStr) error('Usage: focused <pid>  — Get the currently focused UI element (<50ms)');
+        if (!pidStr) error('Usage: focused <pid>  — Get the currently focused UI element via UIA FocusedElement');
         const pid = parseInt(pidStr, 10);
         const result = await connector.focused(pid);
         output(result);
@@ -812,7 +852,7 @@ async function main() {
           description: 'Framework-independent desktop app control for AI agents (desktop + server)',
           connectorCommands: {
             scan: 'Detect apps + save to registry (persists across invocations) [--electron]',
-            apps: 'List known apps from registry (instant, no scanning) [--framework electron]',
+            apps: 'List known apps from registry (direct lookup, no scanning) [--framework electron]',
             find: 'Search registry by name, fallback to live detect: find <name>',
             profiles: 'Show registry file info and stats',
           },
@@ -823,6 +863,8 @@ async function main() {
             query: 'Search UI elements: query <pid> [--type button] [--label "text"]',
             act: 'Perform action: act <pid> <elementId> <action> [--text "..."]',
             state: 'Get app state: state <pid>',
+            'excel-benchmark': 'Build a reproducible Excel workbook benchmark: excel-benchmark [--rows 2000] [--output file.xlsx] [--manifest file.json] [--visible] [--keep-open] [--dry-run]',
+            'excel-probe': 'Check whether local Excel COM automation is available: excel-probe',
             keypress: 'Send keypress: keypress <pid> <key>  (Enter, Tab, F5, a, etc.)',
             hotkey: 'Send hotkey: hotkey <pid> ctrl+s',
             window: 'Window control: window <pid> <min|max|restore|close|move|resize> [--x N --y N --width N --height N]',
@@ -865,7 +907,7 @@ async function main() {
             near: 'Find elements near a point: near <pid> <x> <y> [--radius N]',
           },
           advancedCommands: {
-            focused: 'Get focused element (<50ms): focused <pid>',
+            focused: 'Get focused element via UIA FocusedElement: focused <pid>',
             'find-path': 'Find by tree path: find-path <pid> --path "File,Save" OR --name "Close" --parent "Dialog"',
             watch: 'Watch for state changes: watch <pid> [--duration 3000] [--poll 200]',
             atomic: 'Atomic action chain (single PS session): atomic \'{"pid":N,"steps":[...]}\'',

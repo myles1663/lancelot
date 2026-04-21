@@ -27,7 +27,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.a2a.types import (
     A2ATask, A2AMessage, A2AMessagePart, A2ATaskStatus,
@@ -125,14 +125,15 @@ def _check_a2a_kill_switch() -> bool:
         # Check runtime A2A_ALL kill switch via persisted state
         if not flags.get("FEATURE_A2A", False):
             return False
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to inspect A2A feature flags; leaving A2A enabled: %s", exc)
     return True
 
 
 # ── Request Models ───────────────────────────────────────────
 
 class TaskSendRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     message: Dict[str, Any] = Field(..., description="A2A message with role and parts")
     metadata: Dict[str, Any] = Field(default_factory=dict)
     context: Optional[Dict[str, Any]] = None

@@ -63,6 +63,16 @@ Host Machine                           Docker Container (lancelot-core)
 
 **Current runtime shape:** Lancelot now embeds the standalone UAB 1.3.0 core inside `packages/uab`, but keeps the host contract stable through a JSON-RPC compatibility daemon on `:7900`. That lets the newer standalone connector and server internals evolve without breaking the existing Python governance bridge.
 
+The source tree currently contains **11 runtime adapter directories** under `packages/uab/src/plugins/`, but the two host entrypoints do not register the same set:
+- **`UABConnector`** — the path Lancelot embeds behind the governed bridge — always registers `direct-api`, conditionally adds `chrome-extension`, then falls through `browser-cdp`, `electron-cdp`, `office-com+uia`, `qt-uia`, `gtk-uia`, `java-jab-uia`, `flutter-uia`, and `win-uia`.
+- **`UABService`** — the standalone singleton/server path — registers the structured framework hooks plus `vision` as the universal fallback, and does not host the `direct-api` or extension bridge paths itself.
+
+The embedded engine now exposes the same first-class discovery surfaces as the standalone package:
+- framework hook inventory
+- framework-detection signature inventory
+- Concerto method inventory
+- per-operation control planning
+
 ### JSON-RPC 2.0 Protocol
 
 **Request:**
@@ -105,33 +115,33 @@ Host Machine                           Docker Container (lancelot-core)
 
 ---
 
-## Supported Frameworks (10 Plugins)
+## Supported Runtime Adapters
 
-| Framework | Plugin | Connection Method | Detection |
-|-----------|--------|-------------------|-----------|
-| **Electron** | ElectronPlugin | Chrome DevTools Protocol (CDP) | Process binary inspection, `--remote-debugging-port` |
-| **Browser** | BrowserPlugin | Chrome DevTools Protocol (CDP) | Chrome, Edge, Brave, Vivaldi, Opera process detection |
-| **Chrome Extension** | ChromeExtPlugin | WebSocket bridge | No browser relaunch needed — extension connects via WS |
-| **Qt 5/6** | QtPlugin | Windows UI Automation (MOC bridge) | Process binary/DLL inspection |
-| **GTK 3/4** | GtkPlugin | Windows UI Automation (GIR bridge) | Process binary/DLL inspection |
-| **WPF/.NET** | WinUIAPlugin | Native Windows UI Automation | .NET runtime detection |
-| **Flutter** | FlutterPlugin | Windows UI Automation (semantics) | Flutter engine DLL detection |
-| **Java Swing/FX** | JavaPlugin | Java Accessibility Bridge → UIA | JVM process detection |
-| **Office** | OfficePlugin | COM Automation | Process name matching (WINWORD, EXCEL, etc.) |
-| **Win32** | WinUIAPlugin | Universal UIA fallback | Fallback for all unmatched processes |
-| **Vision** | VisionPlugin | Screenshot + Claude Vision API | Universal fallback — works with any application |
+| Runtime Route | Available In | Plugin | Connection Method | Detection / Use |
+|---------------|--------------|--------|-------------------|-----------------|
+| **Direct API apps** | Connector | DirectApiPlugin | `direct-api` | Apps that expose a local control endpoint |
+| **Chrome Extension** | Connector (optional) | ChromeExtPlugin | `chrome-extension` | No browser relaunch needed — extension connects via WS |
+| **Browser** | Connector + Service | BrowserPlugin | `browser-cdp` | Chrome, Edge, Brave, Vivaldi, Opera process detection |
+| **Electron** | Connector + Service | ElectronPlugin | `electron-cdp` | Process binary inspection, `--remote-debugging-port` |
+| **Office** | Connector + Service | OfficePlugin | `office-com+uia` | Process name matching (WINWORD, EXCEL, etc.) |
+| **Qt 5/6** | Connector + Service | QtPlugin | `qt-uia` | Process binary/DLL inspection |
+| **GTK 3/4** | Connector + Service | GtkPlugin | `gtk-uia` | Process binary/DLL inspection |
+| **Java Swing/FX** | Connector + Service | JavaPlugin | `java-jab-uia` | JVM process detection |
+| **Flutter** | Connector + Service | FlutterPlugin | `flutter-uia` | Flutter engine DLL detection |
+| **WPF/.NET / Win32** | Connector + Service | WinUIAPlugin | `win-uia` | .NET runtime detection and universal Windows UIA fallback |
+| **Vision** | Service | VisionPlugin | `vision` | Universal fallback — works with any application |
 
 Each plugin implements the same `PluginConnection` interface: `enumerate()`, `query()`, `act()`, `state()`, `subscribe()`, `disconnect()`.
 
-### Browser Plugin (v0.6.0)
+### Browser Plugin
 
 The `BrowserPlugin` (`packages/uab/src/plugins/browser/index.ts`) enables native CDP control of standard web browsers — Chrome, Edge, Brave, Vivaldi, and Opera — without requiring Electron. It auto-detects browser processes and attaches via their remote debugging port.
 
 **Supported browsers:** Chrome, Edge, Brave, Vivaldi, Opera (any Chromium-based browser).
 
-**Connection method:** CDP over HTTP. The plugin discovers the browser's debug port via process inspection and connects to the DevTools WebSocket endpoint.
+**Connection method:** `browser-cdp`. The plugin discovers the browser's debug port via process inspection and connects to the DevTools WebSocket endpoint.
 
-### Chrome Extension Plugin (v0.6.0)
+### Chrome Extension Plugin
 
 The `ChromeExtPlugin` (`packages/uab/src/plugins/chrome-ext/index.ts`) provides zero-relaunch browser control via a companion Chrome extension. Unlike the Browser plugin, it does not require the browser to be launched with `--remote-debugging-port` — the extension acts as a bridge.
 
@@ -140,9 +150,9 @@ The `ChromeExtPlugin` (`packages/uab/src/plugins/chrome-ext/index.ts`) provides 
 - `ws-server.ts` — `ExtensionWSServer`, WebSocket server that the extension connects to
 - `installer.ts` — Automated extension installation helper
 
-**How it works:** The Chrome extension connects to UAB's `ExtensionWSServer` via WebSocket. UAB sends commands through this channel and receives DOM/accessibility data back.
+**How it works:** The Chrome extension connects to UAB's `ExtensionWSServer` via WebSocket. UAB sends commands through this channel and receives DOM/accessibility data back. The runtime reports this as the `chrome-extension` control method and prefers it ahead of `browser-cdp` when available.
 
-### Vision Plugin (v0.6.0)
+### Vision Plugin
 
 The `VisionPlugin` (`packages/uab/src/plugins/vision/`) is a universal fallback that works with any application — no accessibility API, no framework hooks, no special setup. It operates like Anthropic's computer use tool:
 
@@ -157,7 +167,7 @@ The `VisionPlugin` (`packages/uab/src/plugins/vision/`) is a universal fallback 
 - Less precise than native accessibility APIs
 - But **universal** — works when nothing else does
 
-**Priority:** Last resort (priority 4) in the `ControlRouter`. Only used when no native framework plugin can handle the application.
+**Priority:** Last resort in the `ControlRouter`. Native hooks, keyboard-native operations, and raw-input injection are considered first; `vision` is the universal fallback when those paths are unavailable.
 
 **Components:**
 - `index.ts` — VisionPlugin, implements `FrameworkPlugin` interface
@@ -239,7 +249,7 @@ class ConnectionResult:
     success: bool
     pid: int
     framework: Optional[str]
-    connection_method: Optional[str]       # cdp, moc, gir, clr, dart_vm, jvm, com
+    connection_method: Optional[str]       # direct-api, chrome-extension, browser-cdp, electron-cdp, office-com+uia, qt-uia, gtk-uia, java-jab-uia, flutter-uia, win-uia, vision
     error_message: Optional[str]
 ```
 
@@ -552,12 +562,12 @@ class UABProvider(BaseProvider):
     def compose_email(pid: int, to: str, subject: str, body: str, cc: str = "") -> AppActionResult
     def send_email(pid: int, to: str, subject: str, body: str, cc: str = "") -> AppActionResult
 
-    # Spatial Map / Composite Engine (v0.6.0)
+    # Spatial Map / Composite Engine
     def spatial_map(pid: int, format: str = "detailed") -> Dict[str, Any]
     def text_map(pid: int, format: str = "detailed") -> Dict[str, Any]
     def find_by_description(pid: int, description: str) -> List[Dict[str, Any]]
 
-    # Browser Operations (v0.6.0)
+    # Browser Operations
     def navigate(pid: int, url: str) -> AppActionResult
     def get_tabs(pid: int) -> AppActionResult
     def switch_tab(pid: int, tab_id: str) -> AppActionResult
@@ -691,7 +701,7 @@ The panel polls every 5 seconds for live status updates.
 
 ---
 
-## Spatial Map Engine (v0.6.0)
+## Spatial Map Engine
 
 The Spatial Map (`packages/uab/src/spatial.ts`) converts flat `UIElement[]` with bounding rects into a spatial index that enables fast positional queries, row/column detection, and compact text-based maps for AI consumption.
 
@@ -725,12 +735,12 @@ The Spatial Map (`packages/uab/src/spatial.ts`) converts flat `UIElement[]` with
 
 ---
 
-## Composite Engine (v0.6.0)
+## Composite Engine
 
 The `CompositeEngine` (`packages/uab/src/composite.ts`) is UAB's fastest query mode. It combines all available data sources in speed-priority order:
 
-1. **UIA Tree** (instant) — element IDs, types, states, structure
-2. **Bounding Rects** (instant) — spatial positions, sizes, builds spatial map
+1. **UIA Tree** (direct) — element IDs, types, states, structure
+2. **Bounding Rects** (direct) — spatial positions, sizes, builds spatial map
 3. **Text Reading** (fast) — `TextPattern`/`ValuePattern` content extraction
 4. **Vision** (slow) — screenshot + Claude Vision (ONLY when needed)
 
@@ -749,7 +759,7 @@ interface CompositeResult {
 
 ---
 
-## UABConnector (v0.6.0)
+## UABConnector
 
 The `UABConnector` (`packages/uab/src/connector.ts`) is a framework-independent, instantiable (non-singleton) desktop control API designed for use by ANY agent framework:
 
@@ -782,7 +792,7 @@ await uab.stop();
 
 ---
 
-## App Registry (v0.6.0)
+## App Registry
 
 The `AppRegistry` (`packages/uab/src/registry.ts`) is an in-memory knowledge base with optional JSON profile persistence. It remembers apps across sessions without requiring a database.
 
@@ -800,7 +810,7 @@ Each registered app has an `AppProfile` with:
 
 ---
 
-## MCP Server (v0.6.0)
+## MCP Server
 
 The UAB MCP Server (`packages/uab/src/mcp-server.ts`) exposes UAB as Model Context Protocol tools over stdio. When an MCP-compatible AI agent connects, it discovers UAB tools natively — no need to decide to use UAB over screenshots.
 
@@ -821,7 +831,7 @@ The server implements JSON-RPC over stdio with no external dependencies. It incl
 
 ---
 
-## Agent SDK (v0.6.0)
+## Agent SDK
 
 The `AgentSDK` (`packages/uab/src/sdk.ts`) provides a dead-simple wrapper that makes UAB easier to use than screenshots, so agents naturally prefer structured control.
 
@@ -858,7 +868,7 @@ await desktop.do('Notepad', [
 
 ---
 
-## Agent Prompts (v0.6.0)
+## Agent Prompts
 
 The `agent-prompt.ts` module (`packages/uab/src/agent-prompt.ts`) provides drop-in system prompt templates that teach ANY AI agent to prefer UAB's structured APIs over screenshots.
 
@@ -872,11 +882,11 @@ import { getAgentPrompt } from './agent-prompt.js';
 const prompt = getAgentPrompt('mcp');
 ```
 
-The prompts override agents' default screenshot-taking behavior by explaining that structured UI queries are faster (~50-200ms), more reliable, cheaper, and provide element IDs directly.
+The prompts override agents' default screenshot-taking behavior by explaining that structured UI queries are typically much faster than screenshot capture plus vision analysis on the same host, more reliable, cheaper, and provide element IDs directly.
 
 ---
 
-## Environment Detection (v0.6.0)
+## Environment Detection
 
 The `environment.ts` module (`packages/uab/src/environment.ts`) auto-detects the runtime context and adapts UAB behavior accordingly.
 
@@ -938,9 +948,9 @@ All methods available on the daemon's JSON-RPC 2.0 endpoint (`http://host.docker
 | `cacheStats` | Diagnostics | Cache statistics |
 | `auditLog` | Diagnostics | Recent audit entries |
 | `checkHealth` | Diagnostics | Force health check cycle |
-| `spatialMap` | Composite (v0.6.0) | Get spatial map of an app's UI |
-| `textMap` | Composite (v0.6.0) | Get text-based UI map |
-| `findByDescription` | Composite (v0.6.0) | Find elements by natural language |
+| `spatialMap` | Composite | Get spatial map of an app's UI |
+| `textMap` | Composite | Get text-based UI map |
+| `findByDescription` | Composite | Find elements by natural language |
 | `scan` | Connector | Connector-backed app discovery alias |
 | `apps` | Connector | List active connector-managed applications |
 | `find` | Connector | High-level element lookup helper |
@@ -960,7 +970,7 @@ All methods available on the daemon's JSON-RPC 2.0 endpoint (`http://host.docker
 | `packages/uab/src/types.ts` | Unified type definitions (61 action types) |
 | `packages/uab/src/service.ts` | UABService singleton |
 | `packages/uab/src/detector.ts` | Framework detection |
-| `packages/uab/src/plugins/` | 10 framework plugin implementations |
+| `packages/uab/src/plugins/` | 11 runtime adapter directories used by the connector and service entrypoints |
 | `packages/uab/src/plugins/browser/` | Browser plugin (CDP for Chrome, Edge, Brave, etc.) |
 | `packages/uab/src/plugins/chrome-ext/` | Chrome Extension plugin (WebSocket bridge, installer) |
 | `packages/uab/src/plugins/vision/` | Vision plugin (Claude AI screenshot analysis + input injection) |
@@ -968,18 +978,18 @@ All methods available on the daemon's JSON-RPC 2.0 endpoint (`http://host.docker
 | `packages/uab/src/permissions.ts` | Risk-based access control |
 | `packages/uab/src/chains.ts` | Multi-step action workflows |
 | `packages/uab/src/connection-manager.ts` | Health monitoring and auto-reconnect |
-| `packages/uab/src/composite.ts` | CompositeEngine — multi-source query (v0.6.0) |
-| `packages/uab/src/spatial.ts` | SpatialMap/SpatialIndex — positional queries (v0.6.0) |
-| `packages/uab/src/connector.ts` | UABConnector — framework-independent public API (v0.6.0) |
-| `packages/uab/src/registry.ts` | AppRegistry — in-memory app knowledge base (v0.6.0) |
-| `packages/uab/src/mcp-server.ts` | MCP Server — UAB as MCP tools over stdio (v0.6.0) |
-| `packages/uab/src/sdk.ts` | AgentSDK — dead-simple wrapper for agents (v0.6.0) |
-| `packages/uab/src/agent-prompt.ts` | Agent Prompts — system prompts for AI agents (v0.6.0) |
-| `packages/uab/src/environment.ts` | Environment Detection — desktop/server/container (v0.6.0) |
+| `packages/uab/src/composite.ts` | CompositeEngine — multi-source query |
+| `packages/uab/src/spatial.ts` | SpatialMap/SpatialIndex — positional queries |
+| `packages/uab/src/connector.ts` | UABConnector — framework-independent public API |
+| `packages/uab/src/registry.ts` | AppRegistry — in-memory app knowledge base |
+| `packages/uab/src/mcp-server.ts` | MCP Server — UAB as MCP tools over stdio |
+| `packages/uab/src/sdk.ts` | AgentSDK — dead-simple wrapper for agents |
+| `packages/uab/src/agent-prompt.ts` | Agent Prompts — system prompts for AI agents |
+| `packages/uab/src/environment.ts` | Environment Detection — desktop/server/container |
 | `packages/uab/src/router.ts` | ControlRouter — plugin selection and priority |
 | `packages/uab/src/cli.ts` | CLI interface for any agent framework |
 | `packages/uab/src/commands.ts` | Telegram bot commands for UAB |
-| `src/tools/providers/uab_bridge.py` | Python JSON-RPC 2.0 bridge (extended in v0.6.0) |
+| `src/tools/providers/uab_bridge.py` | Python JSON-RPC 2.0 bridge |
 | `src/tools/receipts_uab.py` | Receipt types and storage |
 | `src/tools/contracts.py` | AppControlCapability protocol and data types |
 | `scripts/install-uab.sh` | Linux/macOS install script |

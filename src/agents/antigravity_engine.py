@@ -148,8 +148,8 @@ class AntigravityEngine:
         if self._browser_use_session:
             try:
                 await self._browser_use_session.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to close browser-use session cleanly: %s", exc)
             self._browser_use_session = None
 
         if self.mode == EngineMode.ISOLATED:
@@ -469,7 +469,7 @@ if __name__ == "__main__":
         try:
             await engine.start()
             res = await engine.navigate("https://example.com")
-            print(res)
+            logger.info("Antigravity quick test result: %s", res)
         finally:
             await engine.stop()
 

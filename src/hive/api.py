@@ -11,7 +11,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability
 from src.core.runtime_pause import get_runtime_pause_status, is_runtime_paused
@@ -50,8 +50,8 @@ def _resolve_operator_context(request: Request):
         if identity:
             actor = identity.display_name or identity.operator_id
             return identity.operator_id, identity.session_id, actor
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to resolve HIVE operator context from request: %s", exc)
     return None, None, None
 
 
@@ -59,6 +59,15 @@ def _resolve_operator_ids(request: Request):
     """Backward-compatible helper for existing tests/callers."""
     operator_id, session_id, _actor = _resolve_operator_context(request)
     return operator_id, session_id
+
+
+def _soul_payload(soul: Any) -> Any:
+    """Serialize Soul models across Pydantic versions."""
+    if hasattr(soul, "model_dump"):
+        return soul.model_dump()
+    if hasattr(soul, "dict"):
+        return soul.dict()
+    return str(soul)
 
 
 def init_hive_api(architect, lifecycle, registry, receipt_mgr, config, audit_logger=None):
@@ -85,25 +94,30 @@ def shutdown_hive_api():
 # ── Request Models ───────────────────────────────────────────────────
 
 class TaskSubmitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     goal: str = Field(..., min_length=1, description="High-level goal")
     context: Optional[Dict[str, Any]] = None
 
 
 class PauseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     reason: str = Field(..., min_length=1, description="Reason for pause (required)")
 
 
 class KillRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     reason: str = Field(..., min_length=1, description="Reason for kill (required)")
 
 
 class ModifyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     reason: str = Field(..., min_length=1, description="Reason for modification")
     feedback: Optional[str] = None
     constraints: Optional[Dict[str, Any]] = None
 
 
 class KillAllRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     reason: str = Field(..., min_length=1, description="Reason for kill all (required)")
 
 
@@ -215,7 +229,7 @@ async def get_agent_soul(agent_id: str):
     soul = getattr(runtime, "_scoped_soul", None)
     if soul is None:
         return {"agent_id": agent_id, "soul": None}
-    return {"agent_id": agent_id, "soul": soul.dict() if hasattr(soul, "dict") else str(soul)}
+    return {"agent_id": agent_id, "soul": _soul_payload(soul)}
 
 
 # ── Task Endpoints ───────────────────────────────────────────────────

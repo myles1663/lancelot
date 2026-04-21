@@ -11,7 +11,7 @@
  * - Spatial map eliminates the need for screenshots in most cases
  * - Vision becomes complementary, not primary
  *
- * SPDX-License-Identifier: BSL-1.0
+ * SPDX-License-Identifier: BUSL-1.1
  * Licensor: Myles Russell Hamilton
  */
 

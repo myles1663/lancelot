@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from src.connectors.google_feature_gate import (
     google_connector_disabled_reason,
     is_google_connector_enabled,
@@ -206,6 +206,7 @@ class ConnectorToggleResponse(BaseModel):
 
 
 class BackendSetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     backend: str
 
 

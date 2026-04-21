@@ -229,8 +229,8 @@ class WhatsAppConnector(ConnectorBase):
                 import json
                 try:
                     template["components"] = json.loads(params["components"])
-                except (json.JSONDecodeError, TypeError):
-                    pass
+                except (json.JSONDecodeError, TypeError) as exc:
+                    logger.debug("Ignoring malformed WhatsApp template components payload: %s", exc)
             return ConnectorResult(
                 operation_id=operation_id,
                 connector_id="whatsapp",

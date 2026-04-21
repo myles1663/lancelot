@@ -9,7 +9,7 @@ Future development plans for Universal App Bridge.
 ### Phase 1 — Core Framework (v0.5.0)
 - ✅ Smart Function Discovery pipeline (scan → identify → register → connect → learn)
 - ✅ Framework detection via DLL module scanning (10 framework signatures)
-- ✅ Plugin architecture with ordered priority cascade (9 plugins)
+- ✅ Plugin architecture with ordered priority cascade
 - ✅ Unified API (detect, enumerate, query, act, state)
 - ✅ Electron CDP plugin (full DevTools Protocol integration)
 - ✅ Windows UIA universal fallback (1500+ LOC)
@@ -33,7 +33,7 @@ Future development plans for Universal App Bridge.
 - ✅ Extension auto-reconnect (25s keepalive)
 
 ### Phase 3 — Smart Connector & Registry (v0.7.0)
-- ✅ `UABConnector` — Framework-independent, instantiable API (zero dependencies)
+- ✅ `UABConnector` — Framework-independent, instantiable API with no agent-runtime coupling
 - ✅ `AppRegistry` — In-memory knowledge base with JSON persistence
 - ✅ Dual-indexed Maps (O(1) lookup by PID and executable name)
 - ✅ Smart lookup: registry first, live detection fallback

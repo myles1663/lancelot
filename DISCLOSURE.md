@@ -42,6 +42,14 @@ architectural reference and methodology documentation.
 This approach demonstrates that the core value of Lancelot lies in its architectural
 design and governance philosophy — not in any particular code implementation.
 
+## Proof Points
+
+The strongest guarantees are backed by named contract tests rather than stale test counts:
+
+- Receipt immutability and integrity chain: `tests/test_receipts.py`
+- HIVE scope enforcement and ceiling validation: `tests/hive/test_runtime.py`
+- Kill switch propagation and fail-closed behavior: `tests/test_kill_switch_contract.py`
+
 ## Inventor & Maintainer
 
 Lancelot was created by **Myles Russell Hamilton**.
@@ -69,7 +77,7 @@ Lancelot is in active early-stage development. Current known limitations include
   Calendar, Teams, Discord, WhatsApp, and SMS connectors are implemented but have
   limited production hours.
 - **Community:** This is a new project. Community support resources are being established.
-- **Production hours:** While the test suite is comprehensive (1900+ tests), real-world
+- **Production hours:** While automated coverage is broad, real-world
   production runtime hours are limited. Please report issues via GitHub Issues.
 - **Single maintainer:** Lancelot is currently maintained by a single developer.
   Response times on issues may vary.

@@ -1,16 +1,41 @@
 import unittest
 from unittest.mock import MagicMock, patch
 import os
+from pathlib import Path
+import shutil
+import tempfile
 from crusader import (
     CrusaderMode, CrusaderAdapter, CrusaderPromptModifier,
     ACTIVATION_RESPONSE, DEACTIVATION_RESPONSE,
 )
 
 
+def _copy_test_soul_dir() -> tuple[str, str]:
+    temp_root = tempfile.mkdtemp(prefix="lancelot_crusader_soul_")
+    source_soul_dir = Path(__file__).resolve().parents[1] / "soul"
+    target_soul_dir = Path(temp_root) / "soul"
+    shutil.copytree(source_soul_dir, target_soul_dir)
+    return temp_root, str(target_soul_dir)
+
+
 class TestCrusaderModeState(unittest.TestCase):
 
     def setUp(self):
+        self._original_soul_dir = os.environ.get("SOUL_DIR")
+        self._temp_root, self._test_soul_dir = _copy_test_soul_dir()
+        os.environ["SOUL_DIR"] = self._test_soul_dir
         self.mode = CrusaderMode()
+
+    def tearDown(self):
+        try:
+            self.mode.deactivate()
+        except Exception:
+            pass
+        if self._original_soul_dir is None:
+            os.environ.pop("SOUL_DIR", None)
+        else:
+            os.environ["SOUL_DIR"] = self._original_soul_dir
+        shutil.rmtree(self._temp_root, ignore_errors=True)
 
     def test_default_inactive(self):
         self.assertFalse(self.mode.is_active)
@@ -217,6 +242,9 @@ class TestCrusaderSecurityPreservation(unittest.TestCase):
 class TestCrusaderGatewayIntegration(unittest.TestCase):
 
     def setUp(self):
+        self._original_soul_dir = os.environ.get("SOUL_DIR")
+        self._temp_root, self._test_soul_dir = _copy_test_soul_dir()
+        os.environ["SOUL_DIR"] = self._test_soul_dir
         from fastapi.testclient import TestClient
         from gateway import app, crusader_mode, onboarding_orch, main_orchestrator
 
@@ -311,6 +339,11 @@ class TestCrusaderGatewayIntegration(unittest.TestCase):
         self.crusader_mode.deactivate()
         self._state_patcher.stop()
         self._audit_patcher.stop()
+        if self._original_soul_dir is None:
+            os.environ.pop("SOUL_DIR", None)
+        else:
+            os.environ["SOUL_DIR"] = self._original_soul_dir
+        shutil.rmtree(self._temp_root, ignore_errors=True)
         # Restore dev mode setting
         os.environ.pop("LANCELOT_DEV_MODE", None)
         import gateway

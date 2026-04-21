@@ -14,6 +14,7 @@ from src.core.usage_tracker import (
     _COST_PER_1K,
     _AVG_TOKENS,
 )
+from src.core import api_auth
 from src.core.model_router import ModelRouter, RouterDecision, RouterResult
 from src.core.provider_profile import ProfileRegistry
 from src.core.local_model_client import LocalModelClient, LocalModelError
@@ -387,6 +388,7 @@ class TestUsageEndpoints:
             set_model_router,
         )
 
+        api_auth.init_api_auth(lambda request: True)
         init_control_plane(str(tmp_data_dir))
         set_model_router(router)
 
@@ -403,6 +405,7 @@ class TestUsageEndpoints:
         yield
 
         set_model_router(None)
+        api_auth.init_api_auth(None)
 
     def test_summary_endpoint_200(self):
         resp = self.client.get("/usage/summary")
@@ -455,6 +458,7 @@ class TestUsageEndpoints:
             set_model_router,
         )
 
+        api_auth.init_api_auth(lambda request: True)
         set_model_router(None)
         app = FastAPI()
         app.include_router(cp_router)
@@ -465,6 +469,7 @@ class TestUsageEndpoints:
         data = resp.json()
         assert data["usage"] == {}
         assert "not initialised" in data["message"]
+        api_auth.init_api_auth(None)
 
     def test_lanes_without_router(self, tmp_data_dir):
         from fastapi import FastAPI
@@ -474,6 +479,7 @@ class TestUsageEndpoints:
             set_model_router,
         )
 
+        api_auth.init_api_auth(lambda request: True)
         set_model_router(None)
         app = FastAPI()
         app.include_router(cp_router)
@@ -482,6 +488,7 @@ class TestUsageEndpoints:
         resp = client.get("/usage/lanes")
         assert resp.status_code == 200
         assert resp.json()["lanes"] == {}
+        api_auth.init_api_auth(None)
 
     def test_savings_without_router(self, tmp_data_dir):
         from fastapi import FastAPI
@@ -491,6 +498,7 @@ class TestUsageEndpoints:
             set_model_router,
         )
 
+        api_auth.init_api_auth(lambda request: True)
         set_model_router(None)
         app = FastAPI()
         app.include_router(cp_router)
@@ -499,6 +507,7 @@ class TestUsageEndpoints:
         resp = client.get("/usage/savings")
         assert resp.status_code == 200
         assert resp.json()["savings"] == {}
+        api_auth.init_api_auth(None)
 
     def test_reset_without_router(self, tmp_data_dir):
         from fastapi import FastAPI
@@ -508,6 +517,7 @@ class TestUsageEndpoints:
             set_model_router,
         )
 
+        api_auth.init_api_auth(lambda request: True)
         set_model_router(None)
         app = FastAPI()
         app.include_router(cp_router)
@@ -515,6 +525,7 @@ class TestUsageEndpoints:
 
         resp = client.post("/usage/reset")
         assert resp.status_code == 400
+        api_auth.init_api_auth(None)
 
 
 # ===================================================================

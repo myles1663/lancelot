@@ -10,6 +10,10 @@ For how to get the system running, see the [Quickstart](quickstart.md). For the 
 
 Lancelot is composed of independent, kill-switchable subsystems coordinated by a central orchestrator. Every subsystem can be disabled via feature flags without breaking the rest of the system.
 
+The network allowlist is a first-class governance subsystem with a single canonical evaluator. Core outbound checks, Tool Fabric network policy, and the War Room allowlist editor all route through the same loader, matcher, and config path rather than maintaining separate interpretations of `config/network_allowlist.yaml`.
+
+Not every named governance concept is implemented as a single top-level package. Operator-critical controls such as the network allowlist and kill-switch contract are now centralized, while some supporting concepts remain intentionally clustered across a small set of focused modules. The plan artifact is implemented that way today: builder, renderer, and type modules form one bounded planning artifact cluster rather than a standalone API service.
+
 **V30 Orchestrator Decomposition — Phase 1** (v0.2.30): The monolithic `orchestrator.py` has been decomposed into the orchestrator proper plus a `src/core/orch_helpers/` package containing 13 extracted pure functions across three modules: `intent_helpers.py` (6 functions), `safety_helpers.py` (5 functions), and `response_helpers.py` (2 functions). The orchestrator retains thin delegator methods that call the extracted helpers, preserving the existing call-site interface. Phase 1 is conservative — only stateless pure functions were extracted; stateful methods and anything touching `self` remain in `orchestrator.py`.
 
 <p align="center">
@@ -70,7 +74,7 @@ The Model Router selects the appropriate LLM lane based on task type, risk level
 
 | Priority | Lane | Models | When Used |
 |----------|------|--------|-----------|
-| 1 | `local_redaction` | Qwen3-8B (local) | PII redaction — always runs locally first |
+| 1 | `local_redaction` | Qwen3-8B (local) | Local scrub lane used when frontier scrub policy requires or prefers local redaction |
 | 2 | `local_utility` | Qwen3-8B (local) | Intent classification, summarization, JSON extraction |
 | 3 | `flagship_fast` | Gemini Flash / GPT-4o-mini / Claude Sonnet 4.5 / Grok-3-mini / Nemotron Nano | Standard reasoning, tool calls, orchestration |
 | 4 | `flagship_deep` | Gemini Pro / GPT-4o / Claude Opus 4 / Grok-3 / Nemotron Super | Complex planning, high-risk decisions |
@@ -85,7 +89,9 @@ The Model Router selects the appropriate LLM lane based on task type, risk level
 
 The `ProviderProfile` dataclass carries a `mode` field (`"sdk"` | `"api"`) and each `LaneConfig` now accepts an optional `thinking` dict (see Extended Thinking below). A new onboarding state, `PROVIDER_MODE_SELECTION`, appears between `HANDSHAKE` and `LOCAL_UTILITY_SETUP` to let the owner choose the provider mode at first run.
 
-When a frontier provider is selected, user prompts and tool-result payloads are scrubbed through the local redaction lane before they are sent to `ProviderClient.generate()` / `generate_with_tools()`. The local model therefore serves two roles in the live runtime: low-grade/low-risk execution and privacy-preserving redaction before frontier egress.
+When a frontier provider is selected, user prompts and tool-result payloads are governed by the frontier scrub policy before they are sent to `ProviderClient.generate()` / `generate_with_tools()`. In `required` or `preferred` mode, the runtime uses the local redaction lane when local scrubbing is available. In `required` mode, frontier egress is blocked if local scrubbing is unavailable or if the local scrub output still contains detectable structured PII. That residual-PII check now normalizes zero-width characters and common Unicode separator variants before matching, so obfuscated emails, SSNs, phone numbers, DOBs, and card numbers still fail closed. In `preferred` mode, direct frontier fallback is allowed and written as an immutable `pii_scrub_fallback` receipt, while successful structured scrubs and fail-closed blocks emit `pii_scrub_applied` and `pii_scrub_blocked` receipts respectively. The local model therefore serves two distinct runtime roles: low-grade/low-risk execution and privacy-preserving redaction before frontier egress.
+
+That privacy boundary now exists as a dedicated subsystem: `src/core/frontier_scrubber.py`. `LocalPIIScrubber.scrub_text()` is the canonical frontier-bound text API, `scrub_payload()` handles recursive provider payload sanitization, and `status()` exposes the persisted scrub policy plus live fallback state for operators and tests.
 
 ### 4. Planning Pipeline (for complex requests)
 
@@ -138,7 +144,7 @@ Every action is classified into one of four risk tiers:
 | **T2** | Controlled | Shell execution, network fetch | Sync verification, tier boundary flush |
 | **T3** | Irreversible | Network POST, deploy, delete | Approval gate, sync verification |
 
-The governance overhead scales with risk. T0 actions are near-instant (precomputed policy lookup). T3 actions require explicit owner approval before execution.
+The governance overhead scales with risk. T0 actions use a fast precomputed policy lookup. T3 actions require explicit owner approval before execution.
 
 ### Runtime Pause and Emergency Stop
 
@@ -172,7 +178,7 @@ Tool Request
   → ToolReceipt (sanitized inputs/outputs, policy decisions)
 ```
 
-Eight capability types are available: `ShellExec`, `RepoOps`, `FileOps`, `WebOps`, `UIBuilder`, `DeployOps`, `VisionControl`, `AppControl` (UAB — 10 plugins, 61 action types). Each has explicit security constraints.
+Eight capability types are available: `ShellExec`, `RepoOps`, `FileOps`, `WebOps`, `UIBuilder`, `DeployOps`, `VisionControl`, `AppControl` (UAB — CDP, direct-API, COM, UIA, extension, and vision-backed control with 61 action types). Each has explicit security constraints.
 
 ### 8. Receipt Generation
 
@@ -290,7 +296,7 @@ Skills are Lancelot's extensibility mechanism — modular capabilities with decl
 
 **V24 — `github_search`** (`FEATURE_GITHUB_SEARCH`, default `true`): Queries the GitHub REST API for repositories, commits, issues, and releases. Returns structured results with source URLs, enabling sourced intelligence in research responses.
 
-**Skill Factory:** A proposal pipeline for creating new skills. `generate_skeleton()` creates a complete skill directory (manifest, execute.py, tests). Proposals require owner approval before installation.
+**Skill Factory:** A governed proposal pipeline for creating new skills. The factory writes a review package (`skill.yaml`, `security_manifest.yaml`, `execute.py`, generated tests, README), evaluates that package through the shared Skill Security Pipeline, persists artifact hashes, and requires owner approval before the exact reviewed artifact can be installed.
 
 ### Tool Fabric (Provider-Agnostic Execution)
 
@@ -318,7 +324,7 @@ The Tool Fabric provides sandboxed tool execution with seven capability protocol
 
 Lancelot now embeds the standalone UAB 1.3.0 core, but preserves the existing host-side JSON-RPC contract on port `7900` through a compatibility daemon so the Python bridge and governance path do not change.
 
-The Universal Application Bridge enables Lancelot to interact with desktop applications through native UI automation frameworks — not brittle vision+mouse simulation. UAB runs as a host-side daemon (Node.js, port 7900) that communicates with the Lancelot container via JSON-RPC 2.0. As of v0.6.0, UAB also provides a standalone `UABConnector` library, MCP Server, Agent SDK, and CLI for use by any agent framework.
+The Universal Application Bridge enables Lancelot to interact with desktop applications through native UI automation frameworks — not brittle vision+mouse simulation. UAB runs as a host-side daemon (Node.js, port 7900) that communicates with the Lancelot container via JSON-RPC 2.0. The embedded standalone package also provides a `UABConnector` library, MCP Server, Agent SDK, and CLI for use by other agent frameworks.
 
 **Architecture:**
 
@@ -345,11 +351,11 @@ Lancelot Core (Docker)               Host Machine
                                      └──────────────────────────┘
 ```
 
-**Supported frameworks (10 plugins):** Each framework has a dedicated plugin that hooks into the application's native accessibility or debug protocol. The daemon auto-detects which framework an application uses and selects the appropriate plugin via the `ControlRouter`. New in v0.6.0: Browser (CDP for Chrome/Edge/Brave/Vivaldi/Opera), Chrome Extension (WebSocket bridge, no relaunch needed), and Vision (Claude AI fallback for any application).
+**Supported runtime adapters:** The embedded `UABConnector` path that Lancelot governs now registers `direct-api`, optional `chrome-extension`, `browser-cdp`, `electron-cdp`, `office-com+uia`, `qt-uia`, `gtk-uia`, `java-jab-uia`, `flutter-uia`, and `win-uia`. The standalone `UABService` swaps the connector-only `direct-api` / extension bridge paths for the `vision` fallback. The daemon auto-detects which route an application can support and selects the appropriate adapter via the `ControlRouter`.
 
 **Unified element model:** All framework interactions are normalized into a common set of dataclasses — `UIElement`, `DetectedApp`, `AppActionResult`, `AppState`, `ConnectionResult` — so the rest of Lancelot sees a single interface regardless of the underlying framework. 61 action types (up from 34), including browser session/cookie/storage/navigation/tab operations.
 
-**Spatial Map Engine (v0.6.0):** The `CompositeEngine` combines UIA tree, bounding rects, text reading, and optional Vision into a `SpatialMap` that replaces screenshots for most use cases. Structured data is faster and more accurate for AI processing. The Python bridge exposes `spatial_map()`, `text_map()`, and `find_by_description()` methods.
+**Spatial Map Engine:** The `CompositeEngine` combines UIA tree, bounding rects, text reading, and optional Vision into a `SpatialMap` that replaces screenshots for most use cases. Structured data is faster and more accurate for AI processing. The Python bridge exposes `spatial_map()`, `text_map()`, and `find_by_description()` methods.
 
 **Compatibility bridge:** The host daemon now fronts the newer `UABConnector` and standalone server runtime while still answering the legacy JSON-RPC methods Lancelot expects. New connector-backed methods such as `scan`, `apps`, `find`, `focused`, `findByPath`, `watchChanges`, `atomicChain`, and `smartInvoke` are available without changing the container-side governance flow.
 
@@ -396,7 +402,7 @@ Transitions are driven by: lifecycle events (spawn complete), operator intervent
 - **SUPERVISED** — operator notified of actions but doesn't need to confirm
 - **MANUAL_CONFIRM** — every action requires operator approval
 
-**Scoped Soul governance:** Each sub-agent receives a scoped Soul derived from the parent with the **monotonic restriction principle** — scoped Souls can only be more restrictive, never less. The Soul overlay (`soul/overlays/hive.yaml`) adds five non-negotiable rules:
+**Scoped Soul governance:** Each sub-agent receives a scoped Soul derived from the parent with the **monotonic restriction principle** — scoped Souls can only be more restrictive, never less. Category narrowing now uses a canonical capability map instead of substring matching, `TaskSpec` is frozen at the type boundary (tuple allowlists plus deep-frozen context) so post-construction mutation cannot widen scope, spawn derives an immutable `ScopedCapabilityBoundary` from the parent Soul plus that frozen task scope, live UAB steps are checked against that immutable boundary before execution, and the runtime overwrites caller-supplied action scope fields with the task record's authoritative boundary and allowlists before execution. The Soul overlay (`soul/overlays/hive.yaml`) adds five non-negotiable rules:
 
 1. `hive_no_autonomous_t3` — Sub-agents may NEVER autonomously execute T3 actions
 2. `hive_collapse_on_governance_violation` — Governance failure collapses the agent immediately
@@ -466,7 +472,7 @@ Agent requests MCP tool call
 
 **Transport restriction:** HTTP+SSE only. Stdio process spawning is explicitly excluded as an attack surface in a containerized governance system.
 
-**Argument screening:** 6 injection pattern categories (SQL, path traversal, command injection, prompt injection, NoSQL, size limits). Compound attack detection: 2+ categories = critical severity hard block.
+**Argument screening:** 6 injection pattern categories (SQL, path traversal, command injection, prompt injection, NoSQL, size limits). Any Gate 5 hit blocks the invocation; compound attack detection (2+ categories) escalates severity to critical.
 
 **Response guard:** Scrubs 13 credential patterns and 6 prompt injection markers from MCP server responses before agent context. 500KB size limit.
 
@@ -506,7 +512,7 @@ SQLite-backed job scheduler supporting cron and interval triggers.
 
 **Gating pipeline:** Before any scheduled job executes:
 1. System must be in READY state (onboarding complete)
-2. Local LLM must be healthy
+2. Local LLM must be ready for inference (recent smoke check passed)
 3. Job-specific gates must pass
 4. Owner-gated jobs require explicit approval
 
@@ -535,7 +541,7 @@ SQLite-backed job scheduler supporting cron and interval triggers.
 **Token lifecycle:**
 1. **Initiation** — `POST /api/v1/providers/oauth/openai-codex/initiate` starts the PKCE flow: generates `code_verifier` + `code_challenge`, builds the OpenAI authorization URL (`auth.openai.com/oauth/authorize`), and returns it to the owner.
 2. **Callback** — `GET /auth/callback` (Gateway) receives the authorization code, exchanges it for access + refresh tokens via `auth.openai.com/oauth/token`, and stores tokens in the encrypted vault (`openai.codex.access_token`, `openai.codex.refresh_token`, `openai.codex.token_expiry`, `openai.codex.account_id`).
-3. **CLI auth source** — The official Codex CLI reads the mounted host session from `~/.codex/auth.json` inside the container (`/home/lancelot/.codex/auth.json`) so non-interactive `codex exec` calls can authenticate without an API key.
+3. **CLI auth source** — The official Codex CLI reads the mounted host session from `~/.codex/auth.json` inside the container (`/home/lancelot/.codex/auth.json`) so non-interactive `codex exec` calls can authenticate without an API key. The runtime resolves that mounted auth path explicitly instead of assuming the process home directory matches the mount target.
 4. **Background refresh** — A daemon thread (`codex-oauth-refresh`) wakes every 2 minutes, checks token expiry, and proactively refreshes 5 minutes before the access token expires.
 5. **Revocation** — `POST /api/v1/providers/oauth/openai-codex/revoke` clears all stored tokens from the vault.
 6. **Status** — `GET /api/v1/providers/oauth/openai-codex/status` returns current token validity, expiry time, and account binding.
@@ -546,7 +552,7 @@ SQLite-backed job scheduler supporting cron and interval triggers.
 
 **Governed tool execution:** Codex is the planner, not the executor. Tool requests returned by `CodexCLIProviderClient.generate_with_tools()` are fed into the orchestrator's standard agentic loop, which applies the same declared-tool validation, safety classification, approval/Sentry checks, receipt emission, and `SkillExecutor` runtime used by other providers. Codex never executes shell/filesystem/network actions directly in this integration.
 
-**Onboarding:** Option [6] in provider selection. Selecting Codex goes directly to browser OAuth (no API key step). Sets `LANCELOT_PROVIDER=openai-codex` and `LANCELOT_AUTH_MODE=OAUTH`.
+**Onboarding:** Option [6] in provider selection. Selecting Codex now checks for mounted host Codex auth first; when `~/.codex/auth.json` is already present on the host, onboarding marks credentials verified immediately and advances without requiring browser OAuth. Browser OAuth remains the fallback only when mounted CLI auth is unavailable, and successful fallback still sets `LANCELOT_PROVIDER=openai-codex` and `LANCELOT_AUTH_MODE=OAUTH`.
 
 ### Google OAuth Manager (Gmail + Calendar)
 
@@ -647,7 +653,7 @@ A core architectural principle: **any subsystem can be disabled without breaking
 | Anthropic OAuth | Falls back to API key authentication for Anthropic; all other providers unaffected |
 | Google OAuth | Gmail and Calendar connectors unavailable; all other providers and subsystems unaffected |
 | Tool Fabric | No tool execution, conversation-only mode |
-| UAB | No desktop app control (10 framework plugins, Composite Engine, Spatial Map, MCP Server, Agent SDK all unavailable); all other tool capabilities still available |
+| UAB | No desktop app control (embedded connector/service adapters, Composite Engine, Spatial Map, MCP Server, Agent SDK all unavailable); all other tool capabilities still available |
 | Hive | No sub-agent decomposition; single-agent execution still works |
 | Hive UAB | No UAB actions within Hive agents; standalone UAB and Hive still work independently |
 | Federation | No multi-instance coordination; standalone operation only |
@@ -681,7 +687,7 @@ This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FE
 | Encryption | cryptography library |
 | Containerization | Docker + Docker Compose |
 | Dependency Management | uv (deterministic lockfile via `pyproject.toml` + `uv.lock`) |
-| Testing | pytest (1900+ tests) |
+| Testing | pytest (thousands of tests in the current private-dev gate) |
 
 ---
 
@@ -689,11 +695,11 @@ This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FE
 
 1. **Context over retrieval.** Lancelot uses long-context windows (128k+ tokens) with deterministic context loading instead of vector-based RAG. This eliminates the information loss inherent in embedding similarity search.
 
-2. **Lane-based routing for cost optimization.** The local model handles 60-80% of tasks (classification, redaction, summarization) at zero API cost. Only complex reasoning escalates to cloud providers.
+2. **Lane-based routing for cost optimization.** When local execution is enabled and the local lane is healthy, the local model can absorb a large share of low-risk utility work (classification, redaction, summarization) at zero API cost. Complex reasoning and higher-capability work escalate to frontier providers.
 
 3. **Constitutional governance, not prompt engineering.** The Soul is a data structure enforced by code, not a system prompt that the model might ignore. If the Soul forbids an action, the code blocks it before the model is consulted.
 
-4. **Proportional governance overhead.** T0 actions (reads, status checks) get near-instant policy lookup. T3 actions (irreversible operations) get full approval gates and sync verification. The overhead matches the risk.
+4. **Proportional governance overhead.** T0 actions (reads, status checks) use fast policy-cache decisions. T3 actions (irreversible operations) get full approval gates and sync verification. The overhead matches the risk.
 
 5. **Receipts as ground truth.** Every action produces a durable record. This enables post-hoc auditing, decision chain reconstruction, and trust scoring based on observed outcomes rather than model confidence.
 

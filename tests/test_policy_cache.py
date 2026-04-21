@@ -78,6 +78,26 @@ def test_fs_write_decision_allow(cache):
     assert decision.tier == RiskTier.T1_REVERSIBLE
 
 
+def test_policy_engine_exception_compiles_deny(gov_config, classifier):
+    class ExplodingPolicyEngine:
+        def evaluate_path(self, capability):
+            if capability == "fs.write":
+                raise RuntimeError("policy boom")
+            return type("Snapshot", (), {"allowed": True, "reasons": ["ok"]})()
+
+    cache = PolicyCache(
+        config=gov_config.policy_cache,
+        risk_classifier=classifier,
+        policy_engine=ExplodingPolicyEngine(),
+        soul_version="test_v1",
+    )
+
+    decision = cache.lookup("fs.write", "workspace")
+    assert decision is not None
+    assert decision.decision == "deny"
+    assert "policy boom" in decision.reason
+
+
 def test_total_entries_count(cache):
     """Total entries match expected T0 + T1 count."""
     # T0: fs.read, fs.list, git.status, git.log, git.diff, memory.read = 6

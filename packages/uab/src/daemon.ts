@@ -12,6 +12,7 @@ import { pathToFileURL } from 'node:url';
 
 import { UABConnector, type ConnectionInfo } from './connector.js';
 import { detectEnvironment } from './environment.js';
+import { createLogger } from './logger.js';
 import type { AppProfile } from './registry.js';
 import { uab } from './service.js';
 import type { SpatialElement } from './spatial.js';
@@ -28,6 +29,8 @@ import type {
   PathSelector,
   UIElement,
 } from './types.js';
+
+const log = createLogger('uab-daemon');
 
 const VERSION = '1.3.0';
 const HOST = '0.0.0.0';
@@ -504,14 +507,11 @@ const server = http.createServer((req, res) => {
 });
 
 async function startup(): Promise<void> {
-  console.log('====================================================');
-  console.log(`  Universal App Bridge (UAB) v${VERSION} - Daemon Mode`);
-  console.log('====================================================');
-  console.log();
-  console.log('Starting connector runtime...');
+  log.info('starting_uab_daemon', { version: VERSION, host: HOST, port: PORT });
+  log.info('starting_connector_runtime');
   await connector.start();
   try {
-    console.log('Starting legacy compatibility service...');
+    log.info('starting_legacy_compatibility_service');
     await uab.start();
   } catch (err) {
     await connector.stop();
@@ -519,17 +519,16 @@ async function startup(): Promise<void> {
   }
 
   server.listen(PORT, HOST, () => {
-    console.log(`UAB daemon listening on http://${HOST}:${PORT}`);
-    console.log('Accepting JSON-RPC 2.0 POST requests.');
-    console.log();
+    log.info('uab_daemon_listening', { url: `http://${HOST}:${PORT}` });
+    log.info('accepting_json_rpc_requests');
   });
 }
 
 async function shutdown(signal: string): Promise<void> {
-  console.log(`\n${signal} received - shutting down UAB daemon...`);
+  log.info('shutting_down_uab_daemon', { signal });
   server.close();
   await Promise.allSettled([connector.stop(), uab.stop()]);
-  console.log('UAB daemon stopped.');
+  log.info('uab_daemon_stopped');
   process.exit(0);
 }
 
@@ -547,7 +546,9 @@ if (isEntrypoint()) {
   });
 
   startup().catch((err) => {
-    console.error('Failed to start UAB daemon:', err);
+    log.error('failed_to_start_uab_daemon', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     process.exit(1);
   });
 }

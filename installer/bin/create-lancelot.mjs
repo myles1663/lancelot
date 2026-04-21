@@ -7,7 +7,7 @@
 
 import { readFileSync } from 'node:fs';
 import { Command } from 'commander';
-import { run } from '../src/index.mjs';
+import { runCli } from '../src/index.mjs';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
@@ -17,8 +17,7 @@ const program = new Command()
   .version(pkg.version)
   .option('-d, --directory <path>', 'Installation directory', './lancelot')
   .option('--provider <name>', 'LLM provider (gemini|openai|anthropic|xai|nvidia)')
-  .option('--skip-model', 'Skip local model download')
   .option('--resume', 'Resume a previously interrupted install')
   .parse(process.argv);
 
-run(program.opts());
+await runCli(program.opts(), process);

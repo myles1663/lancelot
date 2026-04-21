@@ -22,7 +22,7 @@ from typing import Optional
 
 import yaml
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability
 
@@ -57,9 +57,23 @@ def clear_auth_error(provider: str) -> None:
     """Clear a previously recorded auth error (e.g. after successful key rotation)."""
     _auth_errors.pop(provider, None)
 
-# Persistence path (inside Docker volume)
-_DATA_DIR = Path(os.getenv("LANCELOT_DATA_DIR", "lancelot_data"))
+def _resolve_data_dir() -> Path:
+    """Resolve the durable provider-config directory."""
+    configured = os.getenv("LANCELOT_DATA_DIR", "").strip()
+    if configured:
+        return Path(configured)
+
+    docker_data_dir = Path("/home/lancelot/data")
+    if docker_data_dir.exists():
+        return docker_data_dir
+
+    return Path("lancelot_data")
+
+
+# Persistence path (prefer durable runtime data volume, fall back to legacy local path)
+_DATA_DIR = _resolve_data_dir()
 _CONFIG_FILE = _DATA_DIR / "provider_config.json"
+_LEGACY_CONFIG_FILE = Path("lancelot_data") / "provider_config.json"
 
 # Models config (for provider display names)
 _MODELS_YAML = "config/models.yaml"
@@ -70,15 +84,18 @@ _MODELS_YAML = "config/models.yaml"
 # ---------------------------------------------------------------------------
 
 class SwitchProviderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     provider: str
 
 
 class LaneOverrideRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     lane: str
     model_id: str
 
 
 class RotateKeyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     provider: str
     api_key: str
 
@@ -103,6 +120,15 @@ def load_persisted_config() -> dict:
                 data = json.load(f)
             logger.info("Loaded persisted provider config: %s", data)
             return data
+
+        if _LEGACY_CONFIG_FILE.exists():
+            with open(_LEGACY_CONFIG_FILE, "r") as f:
+                data = json.load(f)
+            logger.info("Loaded legacy provider config from %s: %s", _LEGACY_CONFIG_FILE, data)
+            if _CONFIG_FILE != _LEGACY_CONFIG_FILE:
+                _save_config(data)
+                logger.info("Migrated provider config to durable path: %s", _CONFIG_FILE)
+            return data
     except Exception as e:
         logger.warning("Failed to load provider_config.json: %s", e)
     return {}
@@ -125,8 +151,12 @@ def _save_config(data: dict) -> None:
             # Clean up temp file on failure
             try:
                 os.unlink(tmp_path)
-            except OSError:
-                pass
+            except OSError as exc:
+                logger.debug(
+                    "Failed to remove temporary provider config '%s' after write error: %s",
+                    tmp_path,
+                    exc,
+                )
             raise
     except Exception as e:
         logger.warning("Failed to save provider_config.json: %s", e)
@@ -135,6 +165,21 @@ def _save_config(data: dict) -> None:
 def _read_current_config() -> dict:
     """Read the current persisted config (or empty dict)."""
     return load_persisted_config()
+
+
+def ensure_persisted_active_provider(provider_name: str) -> bool:
+    """Persist the active provider when runtime state is healthy but config is missing/stale."""
+    provider_name = (provider_name or "").strip()
+    if not provider_name:
+        return False
+
+    config = _read_current_config()
+    if config.get("active_provider") == provider_name:
+        return False
+
+    config["active_provider"] = provider_name
+    _save_config(config)
+    return True
 
 
 def _get_provider_display_names() -> dict:
@@ -154,6 +199,97 @@ def _get_provider_display_names() -> dict:
             "anthropic": "Anthropic",
             "xai": "xAI (Grok)",
         }
+
+
+def _anthropic_oauth_status() -> Optional[dict]:
+    try:
+        from oauth_token_manager import get_oauth_manager
+
+        mgr = get_oauth_manager()
+        if mgr:
+            return mgr.get_token_status()
+    except Exception as exc:
+        logger.warning("Failed to inspect Anthropic OAuth status: %s", exc)
+    return None
+
+
+def _anthropic_oauth_token() -> str:
+    try:
+        from oauth_token_manager import get_oauth_manager
+
+        mgr = get_oauth_manager()
+        if mgr:
+            return mgr.get_valid_token() or ""
+    except Exception as exc:
+        logger.warning("Failed to retrieve Anthropic OAuth token: %s", exc)
+    return ""
+
+
+def _codex_oauth_status() -> Optional[dict]:
+    manager_status: Optional[dict] = None
+    try:
+        from openai_codex_oauth_manager import get_openai_codex_manager
+
+        mgr = get_openai_codex_manager()
+        if mgr:
+            manager_status = mgr.get_token_status()
+    except Exception as exc:
+        logger.warning("Failed to inspect Codex OAuth status: %s", exc)
+    if manager_status and manager_status.get("configured"):
+        return manager_status
+    if _codex_cli_auth_available():
+        return {
+            "configured": True,
+            "valid": True,
+            "status": "cli_auth",
+            "provider": "openai-codex",
+        }
+    return manager_status
+
+
+def _codex_oauth_token() -> str:
+    try:
+        from openai_codex_oauth_manager import get_openai_codex_manager
+
+        mgr = get_openai_codex_manager()
+        if mgr:
+            return mgr.get_valid_token() or ""
+    except Exception as exc:
+        logger.warning("Failed to retrieve Codex OAuth token: %s", exc)
+    return ""
+
+
+def _codex_cli_auth_available() -> bool:
+    try:
+        from providers.codex_cli_client import has_codex_cli_auth
+
+        return has_codex_cli_auth()
+    except Exception as exc:
+        logger.warning("Failed to inspect Codex CLI auth availability: %s", exc)
+        return False
+
+
+def _provider_profile_lane_overrides(provider_name: str) -> dict:
+    try:
+        from provider_profile import ProfileRegistry
+
+        registry = ProfileRegistry()
+        if registry.has_provider(provider_name):
+            profile = registry.get_profile(provider_name)
+            lane_overrides = {
+                "fast": profile.fast.model,
+                "deep": profile.deep.model,
+            }
+            if profile.cache:
+                lane_overrides["cache"] = profile.cache.model
+            return lane_overrides
+    except Exception as exc:
+        logger.warning(
+            "Failed to seed provider lane overrides from profile '%s': %s",
+            provider_name,
+            exc,
+        )
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -184,22 +320,14 @@ def get_provider_stack():
     has_key = bool(os.getenv(env_var, "").strip()) if env_var else False
     # V28: Anthropic OAuth counts as having credentials
     if not has_key and provider_name == "anthropic":
-        try:
-            from oauth_token_manager import get_oauth_manager
-            mgr = get_oauth_manager()
-            if mgr and mgr.get_token_status().get("configured"):
-                has_key = True
-        except Exception:
-            pass
+        status = _anthropic_oauth_status()
+        if status and status.get("configured"):
+            has_key = True
     # Codex OAuth counts as having credentials
     if not has_key and provider_name == "openai-codex":
-        try:
-            from openai_codex_oauth_manager import get_openai_codex_manager
-            mgr = get_openai_codex_manager()
-            if mgr and mgr.get_token_status().get("configured"):
-                has_key = True
-        except Exception:
-            pass
+        status = _codex_oauth_status()
+        if status and status.get("configured"):
+            has_key = True
 
     if provider_name in _auth_errors:
         stack["status"] = "auth_error"
@@ -282,22 +410,14 @@ def get_available_providers():
         has_key = bool(os.getenv(env_var, "").strip()) if env_var else False
         # V28: Anthropic OAuth counts as having credentials
         if not has_key and name == "anthropic":
-            try:
-                from oauth_token_manager import get_oauth_manager
-                mgr = get_oauth_manager()
-                if mgr and mgr.get_token_status().get("configured"):
-                    has_key = True
-            except Exception:
-                pass
+            status = _anthropic_oauth_status()
+            if status and status.get("configured"):
+                has_key = True
         # Codex OAuth counts as having credentials
         if not has_key and name == "openai-codex":
-            try:
-                from openai_codex_oauth_manager import get_openai_codex_manager
-                mgr = get_openai_codex_manager()
-                if mgr and mgr.get_token_status().get("configured"):
-                    has_key = True
-            except Exception:
-                pass
+            status = _codex_oauth_status()
+            if status and status.get("configured"):
+                has_key = True
         providers.append({
             "name": name,
             "display_name": display_names.get(name, name.title()),
@@ -329,22 +449,10 @@ def switch_provider(req: SwitchProviderRequest):
         _has_oauth = False
         # V28: Check for OAuth token as alternative for Anthropic
         if provider_name == "anthropic":
-            try:
-                from oauth_token_manager import get_oauth_manager
-                mgr = get_oauth_manager()
-                if mgr:
-                    _has_oauth = bool(mgr.get_valid_token())
-            except Exception:
-                pass
+            _has_oauth = bool(_anthropic_oauth_token())
         # Codex OAuth: ChatGPT Pro subscription
         elif provider_name == "openai-codex":
-            try:
-                from openai_codex_oauth_manager import get_openai_codex_manager
-                mgr = get_openai_codex_manager()
-                if mgr:
-                    _has_oauth = bool(mgr.get_valid_token())
-            except Exception:
-                pass
+            _has_oauth = bool(_codex_oauth_token()) or _codex_cli_auth_available()
         if not _has_oauth:
             return {
                 "status": "error",
@@ -362,22 +470,10 @@ def switch_provider(req: SwitchProviderRequest):
         _auth_token = ""
         # V28: pass OAuth token for Anthropic when no API key
         if not api_key and provider_name == "anthropic":
-            try:
-                from oauth_token_manager import get_oauth_manager
-                mgr = get_oauth_manager()
-                if mgr:
-                    _auth_token = mgr.get_valid_token() or ""
-            except Exception:
-                pass
+            _auth_token = _anthropic_oauth_token()
         # Codex OAuth token
         elif provider_name == "openai-codex":
-            try:
-                from openai_codex_oauth_manager import get_openai_codex_manager
-                mgr = get_openai_codex_manager()
-                if mgr:
-                    _auth_token = mgr.get_valid_token() or ""
-            except Exception:
-                pass
+            _auth_token = _codex_oauth_token()
         new_provider = create_provider(provider_name, api_key, auth_token=_auth_token)
 
         # Read existing config to preserve lane overrides if desired
@@ -386,19 +482,7 @@ def switch_provider(req: SwitchProviderRequest):
 
         # If no lane overrides, seed from models.yaml profile
         if not lane_overrides:
-            try:
-                from provider_profile import ProfileRegistry
-                registry = ProfileRegistry()
-                if registry.has_provider(provider_name):
-                    profile = registry.get_profile(provider_name)
-                    lane_overrides = {
-                        "fast": profile.fast.model,
-                        "deep": profile.deep.model,
-                    }
-                    if profile.cache:
-                        lane_overrides["cache"] = profile.cache.model
-            except Exception:
-                pass
+            lane_overrides = _provider_profile_lane_overrides(provider_name)
 
         # Replace provider in discovery and re-run
         global _discovery
@@ -575,16 +659,11 @@ def get_provider_keys():
                 "oauth_configured": False,
                 "oauth_status": None,
             }
-            try:
-                from openai_codex_oauth_manager import get_openai_codex_manager
-                mgr = get_openai_codex_manager()
-                if mgr:
-                    status = mgr.get_token_status()
-                    entry["oauth_configured"] = status.get("configured", False)
-                    entry["oauth_status"] = status.get("status")
-                    entry["has_key"] = entry["oauth_configured"]  # treat OAuth as "has credentials"
-            except Exception:
-                pass
+            status = _codex_oauth_status()
+            if status:
+                entry["oauth_configured"] = status.get("configured", False)
+                entry["oauth_status"] = status.get("status")
+                entry["has_key"] = entry["oauth_configured"]  # treat OAuth as "has credentials"
             keys.append(entry)
             continue
 
@@ -601,15 +680,10 @@ def get_provider_keys():
         }
         # V28: Append OAuth status for Anthropic
         if name == "anthropic":
-            try:
-                from oauth_token_manager import get_oauth_manager
-                mgr = get_oauth_manager()
-                if mgr:
-                    status = mgr.get_token_status()
-                    entry["oauth_configured"] = status.get("configured", False)
-                    entry["oauth_status"] = status.get("status")
-            except Exception:
-                pass
+            status = _anthropic_oauth_status()
+            if status:
+                entry["oauth_configured"] = status.get("configured", False)
+                entry["oauth_status"] = status.get("status")
         keys.append(entry)
 
     return {"keys": keys}
@@ -746,6 +820,12 @@ def oauth_revoke():
 def oauth_codex_initiate():
     """Generate OpenAI Codex OAuth authorization URL with PKCE for browser flow."""
     try:
+        if _codex_cli_auth_available():
+            return {
+                "status": "ok",
+                "message": "Codex CLI auth is already available via mounted ~/.codex/auth.json. No browser OAuth flow is required.",
+                "provider": "openai-codex",
+            }
         from openai_codex_oauth_manager import get_openai_codex_manager
         manager = get_openai_codex_manager()
         if manager is None:
@@ -761,11 +841,10 @@ def oauth_codex_initiate():
 def oauth_codex_status():
     """Get current OpenAI Codex OAuth token status for the War Room."""
     try:
-        from openai_codex_oauth_manager import get_openai_codex_manager
-        manager = get_openai_codex_manager()
-        if manager is None:
+        status = _codex_oauth_status()
+        if status is None:
             return {"configured": False, "status": "not_available", "provider": "openai-codex"}
-        return manager.get_token_status()
+        return status
     except Exception as e:
         return {"configured": False, "status": "error", "provider": "openai-codex", "error": str(e)}
 
@@ -778,6 +857,12 @@ def oauth_codex_revoke():
         manager = get_openai_codex_manager()
         if manager:
             manager.revoke()
+            return {"status": "ok", "message": "Codex OAuth tokens revoked"}
+        if _codex_cli_auth_available():
+            return {
+                "status": "ok",
+                "message": "Codex CLI auth is sourced from mounted ~/.codex/auth.json. Sign out on the host to revoke it.",
+            }
         return {"status": "ok", "message": "Codex OAuth tokens revoked"}
     except Exception as e:
         return {"status": "error", "message": str(e)}

@@ -54,6 +54,7 @@ import {
 
 export class VisionPlugin implements FrameworkPlugin {
   readonly framework = 'unknown' as const;
+  readonly controlMethod = 'vision' as const;
   readonly name = 'Vision (Screenshot + Coordinates)';
 
   private analyzerOptions?: VisionAnalyzerOptions;

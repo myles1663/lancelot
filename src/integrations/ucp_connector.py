@@ -9,6 +9,7 @@ import uuid
 import time
 import datetime
 import os
+import logging
 from pathlib import Path
 from typing import Optional
 from urllib.request import urlopen, Request
@@ -16,6 +17,9 @@ from urllib.error import URLError
 from urllib.parse import urljoin
 
 from security import NetworkInterceptor, AuditLogger
+
+
+logger = logging.getLogger(__name__)
 
 
 class UCPConnector:
@@ -269,7 +273,8 @@ class UCPConnector:
                 return
             data = json.loads(raw)
             self._pending_transactions = data if isinstance(data, dict) else {}
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to load pending UCP transactions; starting empty: %s", exc)
             self._pending_transactions = {}
 
     def _save_pending_transactions(self) -> None:
@@ -278,5 +283,5 @@ class UCPConnector:
                 json.dumps(self._pending_transactions, indent=2, sort_keys=True),
                 encoding="utf-8",
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to persist pending UCP transactions: %s", exc)

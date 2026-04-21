@@ -7,7 +7,11 @@ and governance efficiency for the business automation system.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict
+
+
+logger = logging.getLogger(__name__)
 
 
 def render_business_panel(
@@ -83,7 +87,7 @@ def render_business_panel(
                     "operations": len(entry.connector.get_operations())
                     if hasattr(entry.connector, "get_operations") else 0,
                 }
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to inspect business connector health: %s", exc)
 
     return result

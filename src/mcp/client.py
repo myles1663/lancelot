@@ -38,6 +38,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from src.core.outbound_http import assert_url_allowed
+
 logger = logging.getLogger(__name__)
 
 
@@ -100,11 +102,13 @@ class MCPClient:
         endpoint: str,
         auth_headers: Optional[Dict[str, str]] = None,
         timeout_s: float = 30.0,
+        network_interceptor=None,
     ):
         self._endpoint = endpoint.rstrip("/")
         self._auth_headers = auth_headers or {}
         self._timeout_s = timeout_s
         self._request_id = 0
+        self._network_interceptor = network_interceptor
 
     def _next_request_id(self) -> int:
         self._request_id += 1
@@ -128,6 +132,11 @@ class MCPClient:
         }
 
         try:
+            assert_url_allowed(
+                self._endpoint,
+                component="MCP tools/list",
+                network_interceptor=self._network_interceptor,
+            )
             async with httpx.AsyncClient(timeout=self._timeout_s) as client:
                 response = await client.post(
                     self._endpoint,
@@ -196,6 +205,11 @@ class MCPClient:
         start_ms = int(time.time() * 1000)
 
         try:
+            assert_url_allowed(
+                self._endpoint,
+                component="MCP tools/call",
+                network_interceptor=self._network_interceptor,
+            )
             async with httpx.AsyncClient(timeout=self._timeout_s) as client:
                 response = await client.post(
                     self._endpoint,

@@ -1,6 +1,7 @@
 """Tests for HIVE Agent Registry — state machine, capacity, thread safety."""
 
 import threading
+from dataclasses import FrozenInstanceError
 import pytest
 
 from src.hive.types import (
@@ -33,6 +34,26 @@ class TestAgentRegistration:
         spec = TaskSpec()
         record = reg.register(spec, scoped_soul_hash="abc123")
         assert record.scoped_soul_hash == "abc123"
+
+    def test_register_keeps_task_spec_immutably_sealed(self):
+        reg = AgentRegistry()
+        spec = TaskSpec(
+            description="Original",
+            allowed_apps=["notepad"],
+            allowed_categories=["query"],
+        )
+
+        record = reg.register(spec)
+        with pytest.raises(FrozenInstanceError):
+            spec.description = "Mutated"
+        with pytest.raises(FrozenInstanceError):
+            spec.allowed_apps = ("chrome",)
+        with pytest.raises(FrozenInstanceError):
+            record.task_spec.allowed_categories = ("uab",)
+
+        assert record.task_spec.description == "Original"
+        assert record.task_spec.allowed_apps == ("notepad",)
+        assert record.task_spec.allowed_categories == ("query",)
 
     def test_register_adds_initial_history(self):
         reg = AgentRegistry()

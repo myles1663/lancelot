@@ -179,7 +179,8 @@ def _load_model(models_dir=None, lockfile_data=None):
     except ImportError:
         raise RuntimeError(
             "llama-cpp-python is not installed. "
-            "Install it with: pip install llama-cpp-python"
+            "Install the local-model runtime first. "
+            "See docs/installation.md -> Bare-Metal Python Installation -> Start the local LLM server."
         )
 
     path = model_path(models_dir=models_dir, lockfile_data=lockfile_data)

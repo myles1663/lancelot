@@ -1,8 +1,7 @@
-"""
-Lancelot vNext4: Governance Configuration Loader
+"""Governance configuration loader.
 
 Loads and validates governance.yaml using Pydantic v2.
-Provides sensible defaults when config file is missing.
+Missing config files use defaults; malformed config files fail explicitly.
 """
 
 from __future__ import annotations
@@ -15,6 +14,10 @@ import yaml
 from pydantic import BaseModel, field_validator
 
 logger = logging.getLogger(__name__)
+
+
+class GovernanceConfigError(RuntimeError):
+    """Raised when an existing governance config cannot be parsed or validated."""
 
 
 # ── Config Models ────────────────────────────────────────────────
@@ -135,7 +138,11 @@ def load_governance_config(config_path: Optional[str] = None) -> GovernanceConfi
         config_path: Path to governance.yaml. If None, searches standard locations.
 
     Returns:
-        Parsed GovernanceConfig. Returns defaults if file is missing.
+        Parsed GovernanceConfig. Returns defaults if no config file exists.
+
+    Raises:
+        GovernanceConfigError: If an existing config file is empty, malformed,
+            unreadable, or fails schema validation.
     """
     if config_path is None:
         # Search standard locations
@@ -156,12 +163,23 @@ def load_governance_config(config_path: Optional[str] = None) -> GovernanceConfi
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             raw = yaml.safe_load(f)
+    except OSError as exc:
+        raise GovernanceConfigError(
+            f"Governance config could not be read at {config_path}: {exc}"
+        ) from exc
+    except yaml.YAMLError as exc:
+        raise GovernanceConfigError(
+            f"Governance config YAML is invalid at {config_path}: {exc}"
+        ) from exc
 
-        if raw is None:
-            logger.warning("Governance config is empty, using defaults")
-            return GovernanceConfig()
+    if raw is None:
+        raise GovernanceConfigError(
+            f"Governance config is empty at {config_path}"
+        )
 
+    try:
         return GovernanceConfig.model_validate(raw)
-    except Exception as e:
-        logger.error("Failed to load governance config: %s", e)
-        return GovernanceConfig()
+    except Exception as exc:
+        raise GovernanceConfigError(
+            f"Governance config failed validation at {config_path}: {exc}"
+        ) from exc

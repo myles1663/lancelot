@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability, resolve_authenticated_identity
 
@@ -70,10 +70,16 @@ def _get_store() -> TopologyStore:
 # ═══════════════════════════════════════════════════════════════
 
 class CreateTopologyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     topology_name: str = "New Topology"
+    created_by: Optional[str] = Field(
+        default=None,
+        description="Deprecated client field. Operator identity is derived server-side.",
+    )
 
 
 class AddNodeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     node_id: str
     instance_name: str = ""
     endpoint: str = ""
@@ -93,6 +99,7 @@ class AddNodeRequest(BaseModel):
 
 
 class AddEdgeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     source_node_id: str
     target_node_id: str
     relationship_type: str = "federated_handoff"
@@ -101,11 +108,17 @@ class AddEdgeRequest(BaseModel):
 
 
 class AcknowledgeYellowRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     condition: str = ""
     note: str = ""
+    operator: Optional[str] = Field(
+        default=None,
+        description="Deprecated client field. Operator identity is derived server-side.",
+    )
 
 
 class UpdateContractRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     success_criteria: List[str] = Field(default_factory=list)
     data_payload_schema: Dict[str, Any] = Field(default_factory=dict)
     soul_context_constraints: Dict[str, Any] = Field(default_factory=dict)

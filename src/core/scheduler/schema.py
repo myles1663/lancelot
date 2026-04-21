@@ -1,5 +1,5 @@
 """
-Scheduler Schema — JobSpec model and config loader (Prompt 11 / D1).
+Scheduler schema models and configuration loading.
 
 Defines the JobSpec Pydantic model and loads scheduler.yaml configuration.
 

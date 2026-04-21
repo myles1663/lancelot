@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from src.a2a.outbound_pipeline import OutboundPipeline
@@ -91,6 +92,7 @@ def _make_pipeline(
     vault=None,
     client=None,
     receipt_service=None,
+    frontier_scrubber=None,
 ):
     return OutboundPipeline(
         registry=_make_registry([agent or _make_agent()]),
@@ -98,6 +100,7 @@ def _make_pipeline(
         soul=soul or _make_mock_soul(),
         vault=vault or _make_vault(),
         a2a_client=client or _make_client(),
+        frontier_scrubber=frontier_scrubber,
     )
 
 
@@ -279,3 +282,54 @@ class TestReceiptsAndTrust:
         assert receipts
         assert all(r.operator_id == "op-123" for r in receipts)
         assert all(r.session_id == "sess-456" for r in receipts)
+
+
+class TestOutboundScrubbing:
+    def test_outbound_prefers_injected_frontier_scrubber_for_task_content(self):
+        client = _make_client()
+        scrubber = MagicMock()
+        scrubber.scrub_text.return_value = SimpleNamespace(output="Contact [EMAIL]")
+        pipeline = _make_pipeline(
+            client=client,
+            frontier_scrubber=scrubber,
+        )
+
+        result = pipeline.delegate("target-1", "Contact alice@example.com")
+
+        assert result.success
+        assert client.send_task.call_args.args[1] == "Contact [EMAIL]"
+        scrubber.scrub_text.assert_called()
+
+    def test_outbound_falls_back_to_regex_when_injected_scrubber_fails(self):
+        client = _make_client()
+        scrubber = MagicMock()
+        scrubber.scrub_text.side_effect = RuntimeError("router offline")
+        pipeline = _make_pipeline(
+            client=client,
+            frontier_scrubber=scrubber,
+        )
+
+        result = pipeline.delegate("target-1", "Contact alice@example.com")
+
+        assert result.success
+        assert client.send_task.call_args.args[1] == "Contact [REDACTED]"
+
+    def test_response_artifacts_use_injected_frontier_scrubber_when_available(self):
+        scrubber = MagicMock()
+        scrubber.scrub_text.return_value = SimpleNamespace(output="[EMAIL]")
+        client = _make_client(
+            send_response={
+                "id": "remote-task",
+                "status": A2ATaskStatus.COMPLETED.value,
+                "artifacts": [{"parts": [{"text": "alice@example.com"}]}],
+            }
+        )
+        pipeline = _make_pipeline(
+            client=client,
+            frontier_scrubber=scrubber,
+        )
+
+        result = pipeline.delegate("target-1", "Do something")
+
+        assert result.success
+        assert result.artifacts[0]["parts"][0]["text"] == "[EMAIL]"

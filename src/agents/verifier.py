@@ -1,10 +1,13 @@
 
 import os
 import json
+import logging
 from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict
 from google import genai
 from google.genai import types
+
+logger = logging.getLogger(__name__)
 
 class VerificationResult(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -69,4 +72,5 @@ class Verifier:
             return VerificationResult(**data)
             
         except Exception as e:
+            logger.warning("Verifier Error: %s", e)
             return VerificationResult(success=False, reason=f"Verification Error: {e}")

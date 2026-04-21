@@ -19,6 +19,28 @@ Connectors never make network calls directly. The proxy pattern ensures all exte
 
 ---
 
+## Built-In First-Party Connectors
+
+The repo currently ships the following first-party connector implementations under `src/connectors/connectors/`:
+
+| Connector ID | Runtime Target | Notes |
+|--------------|----------------|-------|
+| `calendar` | Google Calendar API | OAuth/Bearer flow behind the Google connector feature gate |
+| `discord` | Discord REST API | Bot-token auth for guild, channel, message, and reaction operations |
+| `email` | Gmail / Outlook / SMTP / IMAP | Multi-backend email connector selected by config rather than a single hardcoded provider |
+| `generic_rest` | Operator-defined REST target | Config-driven manifest for custom governed HTTP endpoints |
+| `shared_workspace` | Localhost shared workspace | Local-only connector for governed shared-workspace operations |
+| `slack` | Slack Web API | Bot-token auth for channels, threads, reactions, uploads, and posting |
+| `sms` | Twilio SMS/MMS | Twilio REST API with composed Basic auth |
+| `teams` | Microsoft Graph API | Teams chat/channel operations via Graph bearer tokens |
+| `telegram` | Telegram Bot API | URL-token auth for bot messaging and file operations |
+| `whatsapp` | WhatsApp Business Cloud API | Meta Graph-based business messaging connector |
+| `x` | X API v2 | OAuth 1.0a-signed tweet/account operations |
+
+`test_echo` also exists in-tree as an integration-test connector targeting `httpbin.org`, but it is test-only and not part of the normal operator-facing connector surface.
+
+---
+
 ## Connector Manifest
 
 Every connector declares an immutable manifest:

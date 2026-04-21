@@ -3,8 +3,13 @@
 Manages async WebSocket sessions with Gemini's Live API, enabling
 low-latency text streaming with session memory.
 """
+import logging
+
 from google import genai
 from google.genai import types
+
+
+logger = logging.getLogger(__name__)
 
 
 class LiveSessionManager:
@@ -60,6 +65,6 @@ class LiveSessionManager:
         if self._session:
             try:
                 await self._session.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to close live session cleanly: %s", exc)
             self._session = None

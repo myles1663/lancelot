@@ -45,6 +45,7 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlencode
 
 import requests
+from src.core.outbound_http import assert_url_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -102,9 +103,10 @@ def _generate_code_challenge(verifier: str) -> str:
 class OpenAICodexOAuthManager:
     """Manages the full OpenAI Codex OAuth lifecycle: PKCE, exchange, vault storage, refresh."""
 
-    def __init__(self, vault: Any, port: int = DEFAULT_CALLBACK_PORT):
+    def __init__(self, vault: Any, port: int = DEFAULT_CALLBACK_PORT, network_interceptor=None):
         self._vault = vault
         self._port = port
+        self._network_interceptor = network_interceptor
         self._pending_flows: Dict[str, Dict[str, Any]] = {}  # state -> {code_verifier, created_at}
         self._lock = threading.Lock()
         self._refresh_thread: Optional[threading.Thread] = None
@@ -163,8 +165,13 @@ class OpenAICodexOAuthManager:
 
         redirect_uri = f"http://localhost:{self._port}/auth/callback"
         try:
-            resp = requests.post(
+            token_url = assert_url_allowed(
                 OPENAI_TOKEN_URL,
+                component="Codex OAuth token exchange",
+                network_interceptor=self._network_interceptor,
+            )
+            resp = requests.post(
+                token_url,
                 data={
                     "grant_type": "authorization_code",
                     "client_id": CLIENT_ID,
@@ -253,8 +260,8 @@ class OpenAICodexOAuthManager:
         try:
             if self._vault.exists(VAULT_ACCOUNT_ID):
                 result["account_id"] = self._vault.retrieve(VAULT_ACCOUNT_ID, accessor_id="")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to read Codex OAuth account ID from vault: %s", exc)
 
         return result
 
@@ -266,8 +273,8 @@ class OpenAICodexOAuthManager:
             try:
                 if self._vault.exists(key):
                     self._vault.delete(key)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to delete Codex OAuth vault key %s: %s", key, exc)
         _codex_token_cache.pop("access_token", None)
         logger.info("Codex OAuth tokens revoked")
 
@@ -332,8 +339,13 @@ class OpenAICodexOAuthManager:
                 return False
 
             try:
-                resp = requests.post(
+                token_url = assert_url_allowed(
                     OPENAI_TOKEN_URL,
+                    component="Codex OAuth token refresh",
+                    network_interceptor=self._network_interceptor,
+                )
+                resp = requests.post(
+                    token_url,
                     data={
                         "grant_type": "refresh_token",
                         "client_id": CLIENT_ID,
@@ -383,8 +395,8 @@ class OpenAICodexOAuthManager:
                 import json
                 claims = json.loads(decoded)
                 return claims.get("sub", "") or claims.get("account_id", "")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to extract Codex OAuth account ID from token: %s", exc)
         return ""
 
     def _cleanup_pending_flows(self) -> None:

@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability, resolve_authenticated_identity
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +79,7 @@ class JobDeleteResponse(BaseModel):
 
 
 class JobTimezoneRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     timezone: str
 
 

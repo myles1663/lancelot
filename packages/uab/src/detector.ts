@@ -23,7 +23,7 @@ interface ProcessInfo {
   windowTitle: string;
 }
 
-interface FrameworkSignature {
+export interface FrameworkSignature {
   framework: FrameworkType;
   modules: string[];
   commandLine: string[];
@@ -46,7 +46,7 @@ const SYSTEM_PROCESSES = new Set([
 
 // ─── Framework signatures ──────────────────────────────────────
 
-const SIGNATURES: FrameworkSignature[] = [
+export const DETECTION_SIGNATURES: FrameworkSignature[] = [
   {
     framework: 'electron',
     modules: ['electron.exe', 'libcef.dll', 'chrome_elf.dll', 'v8.dll', 'electron.dll'],
@@ -422,7 +422,7 @@ function detectFramework(proc: ProcessInfo): { framework: FrameworkType; confide
     return { framework: 'office', confidence: 0.95 };
   }
 
-  for (const sig of SIGNATURES) {
+  for (const sig of DETECTION_SIGNATURES) {
     let score = 0;
     let matches = 0;
 
@@ -472,6 +472,16 @@ function detectFramework(proc: ProcessInfo): { framework: FrameworkType; confide
 
 export class FrameworkDetector {
   private cache: Map<number, DetectedApp> = new Map();
+
+  getSignatureInventory(): FrameworkSignature[] {
+    return DETECTION_SIGNATURES.map(signature => ({
+      framework: signature.framework,
+      modules: [...signature.modules],
+      commandLine: [...signature.commandLine],
+      filePatterns: [...signature.filePatterns],
+      baseConfidence: signature.baseConfidence,
+    }));
+  }
 
   /**
    * Detect all controllable apps with enhanced DLL module scanning.

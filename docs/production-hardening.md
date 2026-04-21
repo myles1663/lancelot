@@ -19,7 +19,7 @@ It means:
 - operator controls are real and tested
 - disabled or degraded subsystems are visible as such
 - external peers are treated as hostile unless explicitly governed
-- compliance exports are reproducible, attributable, and tamper-evident
+- compliance exports are reproducible, attributable, and integrity-verifiable
 - rollout is staged and reversible
 
 If any of those are missing, the instance is not production ready even if `/health/ready` is green.
@@ -62,7 +62,7 @@ Required:
 
 ```env
 LANCELOT_AUTH_PROVIDER=local
-WARROOM_USERNAME=admin
+WARROOM_USERNAME=choose-an-operator-username
 WARROOM_PASSWORD=choose-a-strong-password
 WARROOM_PASSWORD_RESET_CODE=store-this-reset-code-securely
 ```
@@ -124,12 +124,24 @@ Requirements:
 - set it explicitly
 - back it up separately from the server
 - document who can recover it
+- prefer a Docker secret or external secret manager over a long-lived production `.env` copy
 
 If the vault key is missing, credentials will not survive restart correctly. That is acceptable for development, not for production.
+
+### Vault mismatch response
+
+Treat vault key continuity loss as a fail-closed security event, not as data corruption to be bypassed.
+
+- The runtime now writes non-secret vault metadata at `data/vault/credentials.meta.json` with a stable key id so operators can distinguish a missing key from a key mismatch without decrypting the vault.
+- Use War Room Setup or `GET /api/setup/vault/status` to inspect connector-vault health before deleting anything. The status payload reports key source/origin, whether encrypted files exist, and whether the configured key id disagrees with the stored vault metadata.
+- If the original key cannot be recovered, use the audited connector-vault reset flow instead of manual file deletion. `POST /api/setup/vault/reset` archives the existing encrypted artifacts under `data/vault/reset_backups/<timestamp>/` and restarts the container to clear stale in-memory state before a clean vault is re-created.
+- A reset is not recovery. Archived ciphertext remains unreadable without the original key, so plan to re-enroll connector credentials and OAuth grants after the reset.
 
 ### Data-at-rest protection
 
 Lancelot persists operational state, receipts, audit data, sessions, approvals, and control-plane state on disk. Protect the host volume with filesystem or disk encryption.
+
+War Room session state and persisted OIDC pending/exchange data are stored as an encrypted Fernet envelope on disk, with the encryption key kept separately (`LANCELOT_AUTH_STATE_KEY_FILE` or `LANCELOT_AUTH_STATE_ENCRYPTION_KEY`). Treat both the state file and its key material as sensitive runtime assets when designing backups, secret mounts, and host-volume access controls.
 
 Recommended:
 
@@ -213,6 +225,16 @@ False
 ```
 
 Production tool execution should stay inside the governed sandbox path.
+
+When Host Bridge is enabled for an intentional desktop/host workflow, keep `HOST_AGENT_URL` on `host.docker.internal` or loopback only. The runtime now rejects public host-agent URLs before it opens the control connection, but operators should still treat any deviation from local-only host-agent routing as a misconfiguration.
+
+### Local utility model boundary
+
+`LOCAL_LLM_URL` is also treated as a local control-plane path, not a generic model endpoint. Production expectation:
+
+- keep it on loopback, `host.docker.internal`, or an internal single-label service name such as `local-llm`
+- do not point it at a public provider or general-purpose remote hostname
+- treat a fail-closed local-only URL error as a configuration issue, not as a transient model outage
 
 ### Network egress
 

@@ -29,6 +29,9 @@ from src.observability.metrics_api import (
     _check_rate_limit,
     _envelope,
 )
+from src.core.api_auth import init_api_auth, require_authenticated_request
+import src.core.auth_api as auth_api
+from types import SimpleNamespace
 
 
 # ── Fixtures ─────────────────────────────────────────────────────
@@ -40,6 +43,25 @@ def app():
     _app = FastAPI()
     _app.include_router(router)
     return _app
+
+
+@pytest.fixture(autouse=True)
+def patch_auth():
+    init_api_auth(lambda request: True)
+    original_request_has_capability = auth_api.request_has_capability
+    original_load_config = metrics_module.load_config
+    auth_api.request_has_capability = lambda request, capability: True
+    metrics_module.load_config = lambda: SimpleNamespace(
+        metrics_api=SimpleNamespace(
+            enabled=True,
+            rate_limit_per_minute=1000,
+            receipt_queries=False,
+        )
+    )
+    yield
+    auth_api.request_has_capability = original_request_has_capability
+    metrics_module.load_config = original_load_config
+    init_api_auth(None)
 
 
 @pytest.fixture
@@ -132,6 +154,25 @@ class TestMetricsSummary:
         body = resp.json()
         assert body["soul_version"] == "test-soul-v1"
         assert body["deployment_id"] == "test-deploy"
+
+    def test_summary_surfaces_runtime_degradation(self, client):
+        with patch("src.core.feature_flags.get_all_flags", side_effect=RuntimeError("flags exploded")), \
+             patch("src.observability.metrics_api._get_pending_t3_approvals_count", side_effect=RuntimeError("approvals exploded")), \
+             patch("src.observability.metrics_api._get_active_hive_agents_count", side_effect=RuntimeError("hive exploded")), \
+             patch("src.core.control_plane.get_usage_tracker", side_effect=RuntimeError("tracker exploded")):
+            resp = client.get("/api/metrics/summary")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["runtime_degraded"] is True
+        assert "Kill switch status unavailable" in body["degraded_reasons"]
+        assert "Pending approval status unavailable" in body["degraded_reasons"]
+        assert "HIVE runtime status unavailable" in body["degraded_reasons"]
+        assert "Cost tracker status unavailable" in body["degraded_reasons"]
+        assert any("flags exploded" in err for err in body["runtime_errors"])
+        assert any("approvals exploded" in err for err in body["runtime_errors"])
+        assert any("hive exploded" in err for err in body["runtime_errors"])
+        assert any("tracker exploded" in err for err in body["runtime_errors"])
 
 
 # ── GET /metrics/receipts ────────────────────────────────────────
@@ -265,6 +306,16 @@ class TestMetricsSoul:
         body = resp.json()
         assert "version" in body["data"]
 
+    def test_surfaces_soul_runtime_failure(self, client):
+        with patch("src.core.soul.store.load_active_soul", side_effect=RuntimeError("soul exploded")):
+            resp = client.get("/api/metrics/soul")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["runtime_degraded"] is True
+        assert "Soul status unavailable" in body["degraded_reasons"]
+        assert any("soul exploded" in err for err in body["runtime_errors"])
+
 
 # ── GET /metrics/kill-switches ───────────────────────────────────
 
@@ -276,6 +327,28 @@ class TestMetricsKillSwitches:
         body = resp.json()
         assert "switches" in body["data"]
         assert "total" in body["data"]
+
+    def test_surfaces_kill_switch_failure(self, client):
+        with patch("src.core.feature_flags.get_all_flags", side_effect=RuntimeError("flags exploded")):
+            resp = client.get("/api/metrics/kill-switches")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["runtime_degraded"] is True
+        assert "Kill switch status unavailable" in body["degraded_reasons"]
+        assert any("flags exploded" in err for err in body["runtime_errors"])
+
+
+class TestMetricsWebhookStatus:
+    def test_surfaces_webhook_engine_failure(self, client):
+        with patch("src.observability.webhook_engine.get_webhook_engine", side_effect=RuntimeError("engine exploded")):
+            resp = client.get("/api/metrics/webhooks/status")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["runtime_degraded"] is True
+        assert "Webhook engine status unavailable" in body["degraded_reasons"]
+        assert any("engine exploded" in err for err in body["runtime_errors"])
 
 
 # ── Cursor Encoding / Decoding ───────────────────────────────────

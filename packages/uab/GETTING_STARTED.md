@@ -123,7 +123,7 @@ Now that UAB has scanned once, it remembers everything:
 node dist/uab/cli.js apps
 ```
 
-This returns the full registry **instantly** (no scan needed). The data comes from the in-memory Map, backed by `registry.json`.
+This returns the full registry **without rescanning**. The data comes from the in-memory Map, backed by `registry.json`, so it is typically much faster than a fresh scan.
 
 ### Step 5: Smart Find
 
@@ -155,7 +155,7 @@ Output:
 1. Check registry (O(1) Map lookup) → **Found!** → Return immediately
 2. If not in registry → live detect → register → return
 
-First `find()` after a `scan()` is always instant. If you search for an app UAB hasn't seen before, it live-detects it and registers it for next time.
+First `find()` after a `scan()` uses the saved registry first. If you search for an app UAB hasn't seen before, it live-detects it and registers it for next time.
 
 ### Step 6: Connect
 
@@ -177,7 +177,7 @@ Output:
   "pid": 12340,
   "name": "notepad",
   "framework": "unknown",
-  "method": "accessibility",
+  "method": "win-uia",
   "elementCount": 15
 }
 ```
@@ -186,8 +186,8 @@ Output:
 1. Registry lookup for "notepad" → found profile
 2. Plugin cascade: tried each plugin in order
 3. No framework-specific plugin matched (framework: "unknown")
-4. Win-UIA fallback succeeded → `method: "accessibility"`
-5. Registry updated with `preferredMethod: "accessibility"` → **learning!**
+4. Win-UIA fallback succeeded → `method: "win-uia"`
+5. Registry updated with `preferredMethod: "win-uia"` → **learning!**
 6. Element tree enumerated → 15 elements found
 
 ### Step 7: Explore the UI Tree
@@ -215,7 +215,7 @@ node dist/uab/cli.js query 12340 --type textarea
 node dist/uab/cli.js query 12340 --label "File"
 ```
 
-Results are cached for 3 seconds — repeated queries are instant.
+Results are cached for 3 seconds — repeated queries avoid a fresh lookup during that window.
 
 ### Step 9: Take Action
 
@@ -327,7 +327,7 @@ UAB CLI: node dist/uab/cli.js <command>
 
 Smart Discovery Commands:
   scan                    Scan system, identify all apps and frameworks
-  apps                    List known apps (instant, from registry)
+  apps                    List known apps (from registry, no scan)
   find <name>             Smart lookup (registry first, live detection fallback)
   profiles                Show full registry with metadata
 
@@ -350,7 +350,7 @@ All output is JSON. Use scan first, then find/connect for subsequent interaction
 The recommended pattern for AI agents:
 
 1. **First interaction:** `scan` → discover all apps, register in registry
-2. **Subsequent interactions:** `find <name>` → instant lookup from registry
+2. **Subsequent interactions:** `find <name>` → registry-backed lookup without a fresh scan
 3. **Control:** `connect` → `query` → `act` → `state` (verify)
 4. **Repeat:** Registry remembers everything — no re-scanning needed
 
@@ -450,8 +450,8 @@ UAB auto-tunes for desktop, server (SSH/service), and container environments —
 - The desktop session must be logged in and not locked
 
 ### Slow first scan
-- First scan takes 2-5 seconds (PowerShell startup + WMI + DLL scanning)
-- Subsequent `find()` calls are instant (registry hit)
+- First scan can take several seconds; actual timing depends on host performance, process count, and PowerShell responsiveness
+- Subsequent `find()` calls use the persisted registry path and are typically much faster than a fresh scan
 - Use `scan --electron` for faster Electron-only scans
 
 ### Stale PIDs in registry

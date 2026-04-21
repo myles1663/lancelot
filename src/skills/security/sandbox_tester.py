@@ -105,7 +105,7 @@ class SandboxTester:
                 self._docker_image,
                 "python", "-c",
                 "import sys; sys.path.insert(0, '/skill'); "
-                "print('sandbox_test: ok')",
+                "sys.stdout.write('sandbox_test: ok\\n')",
             ]
 
             result = subprocess.run(
@@ -217,5 +217,5 @@ class SandboxTester:
                 capture_output=True,
                 timeout=10,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to clean up sandbox test container %s: %s", name, exc)

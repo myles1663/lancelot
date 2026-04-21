@@ -1,6 +1,7 @@
 """Tests for HIVE types — enums, dataclasses, state transitions."""
 
 import uuid
+from dataclasses import FrozenInstanceError
 import pytest
 
 from src.hive.types import (
@@ -124,7 +125,9 @@ class TestTaskSpec:
         assert spec.priority == TaskPriority.NORMAL
         assert spec.timeout_seconds == 300
         assert spec.max_actions == 50
-        assert spec.allowed_apps == []
+        assert spec.allowed_apps == ()
+        assert spec.allowed_categories == ()
+        assert spec.context == {}
         assert spec.execution_group == 0
 
     def test_custom_construction(self):
@@ -141,13 +144,32 @@ class TestTaskSpec:
         assert spec.control_method == ControlMethod.FULLY_AUTONOMOUS
         assert spec.priority == TaskPriority.CRITICAL
         assert spec.timeout_seconds == 60
-        assert spec.allowed_apps == ["notepad"]
+        assert spec.allowed_apps == ("notepad",)
         assert spec.execution_group == 1
 
     def test_task_id_is_unique(self):
         specs = [TaskSpec() for _ in range(10)]
         ids = {s.task_id for s in specs}
         assert len(ids) == 10
+
+    def test_freezes_allowlists_and_context(self):
+        spec = TaskSpec(
+            allowed_apps=["notepad", "chrome"],
+            allowed_categories=["uab", "query"],
+            context={"target": {"pid": 42}, "tags": ["desktop", "urgent"]},
+        )
+
+        assert spec.allowed_apps == ("notepad", "chrome")
+        assert spec.allowed_categories == ("uab", "query")
+        assert spec.context["target"]["pid"] == 42
+        assert spec.context["tags"] == ("desktop", "urgent")
+
+        with pytest.raises(FrozenInstanceError):
+            spec.description = "mutated"
+        with pytest.raises(TypeError):
+            spec.context["target"] = {}
+        with pytest.raises(TypeError):
+            spec.context["target"]["pid"] = 100
 
 
 # ── DecomposedTask Dataclass ─────────────────────────────────────────

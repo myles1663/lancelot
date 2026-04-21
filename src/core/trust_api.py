@@ -8,6 +8,7 @@ import logging
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability
 
@@ -20,6 +21,14 @@ router = APIRouter(
 )
 
 _trust_ledger = None
+
+
+class ProposalDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str | None = Field(
+        default=None,
+        description="Optional operator-supplied approval or decline reason.",
+    )
 
 
 def init_trust_api(trust_ledger=None) -> None:
@@ -125,6 +134,7 @@ async def trust_timeline():
 async def approve_proposal(
     proposal_id: str,
     request: Request,
+    body: ProposalDecisionRequest | None = None,
     _authz: None = Depends(require_operator_capability("trust.admin")),
 ):
     """Approve a graduation proposal."""
@@ -132,8 +142,7 @@ async def approve_proposal(
         if _trust_ledger is None:
             return _safe_error(400, "Trust ledger not initialised")
 
-        data = await request.json() if request.headers.get("content-type") else {}
-        reason = data.get("reason", "Approved via War Room")
+        reason = body.reason if body and body.reason else "Approved via War Room"
         _trust_ledger.apply_graduation(proposal_id, approved=True, reason=reason)
 
         # Governance receipt
@@ -155,6 +164,7 @@ async def approve_proposal(
 async def decline_proposal(
     proposal_id: str,
     request: Request,
+    body: ProposalDecisionRequest | None = None,
     _authz: None = Depends(require_operator_capability("trust.admin")),
 ):
     """Decline a graduation proposal."""
@@ -162,8 +172,7 @@ async def decline_proposal(
         if _trust_ledger is None:
             return _safe_error(400, "Trust ledger not initialised")
 
-        data = await request.json() if request.headers.get("content-type") else {}
-        reason = data.get("reason", "Declined via War Room")
+        reason = body.reason if body and body.reason else "Declined via War Room"
         _trust_ledger.apply_graduation(proposal_id, approved=False, reason=reason)
 
         # Governance receipt

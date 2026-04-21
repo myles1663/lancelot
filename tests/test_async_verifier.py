@@ -23,7 +23,7 @@ def config():
 
 @pytest.fixture
 def queue(config):
-    return AsyncVerificationQueue(config=config)
+    return AsyncVerificationQueue(config=config, verify_fn=lambda cap, out: True)
 
 
 def make_job(**kwargs):
@@ -50,12 +50,34 @@ def test_process_pending_clears_queue(queue):
     assert queue.depth == 0
 
 
-def test_verify_fn_none_auto_passes(queue):
-    """No verify_fn means all verifications pass."""
-    queue.submit(make_job())
-    results = queue.process_pending()
+def test_verify_fn_none_fails_closed(config):
+    """Missing verify_fn denies verification rather than auto-passing it."""
+    q = AsyncVerificationQueue(config=config)
+    q.submit(make_job())
+    results = q.process_pending()
+    assert results[0].passed is False
+    assert results[0].status == VerificationStatus.ASYNC_FAILED
+    assert "requires a verify_fn callback" in results[0].error
+
+
+def test_verify_fn_can_accept_job_object():
+    seen = {}
+
+    def verify(job):
+        seen["capability"] = job.capability
+        seen["goal"] = job.goal
+        seen["output"] = job.output
+        return True
+
+    q = AsyncVerificationQueue(verify_fn=verify)
+    q.submit(make_job(output="good", goal="verify the file write"))
+    results = q.process_pending()
     assert results[0].passed is True
-    assert results[0].status == VerificationStatus.ASYNC_PASSED
+    assert seen == {
+        "capability": "fs.write",
+        "goal": "verify the file write",
+        "output": "good",
+    }
 
 
 def test_verify_fn_returns_true():
@@ -87,7 +109,7 @@ def test_verify_fn_raises():
 
 def test_queue_full_sync_fallback():
     config = AsyncVerificationConfig(queue_max_depth=2, fallback_to_sync_on_full=True)
-    q = AsyncVerificationQueue(config=config)
+    q = AsyncVerificationQueue(config=config, verify_fn=lambda cap, out: True)
     q.submit(make_job())
     q.submit(make_job())
     # Queue is now full, 3rd should run synchronously

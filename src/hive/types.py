@@ -11,7 +11,48 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, IntEnum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+
+
+class FrozenDict(dict):
+    """Minimal immutable mapping used to seal HIVE task context."""
+
+    def _immutable(self, *_args, **_kwargs):
+        raise TypeError("FrozenDict is immutable")
+
+    __setitem__ = _immutable
+    __delitem__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    popitem = _immutable
+    setdefault = _immutable
+    update = _immutable
+
+    def copy(self):
+        return FrozenDict(super().copy())
+
+
+def _freeze_value(value: Any) -> Any:
+    if isinstance(value, FrozenDict):
+        return value
+    if isinstance(value, Mapping):
+        return FrozenDict({key: _freeze_value(inner) for key, inner in value.items()})
+    if isinstance(value, tuple):
+        return tuple(_freeze_value(inner) for inner in value)
+    if isinstance(value, list):
+        return tuple(_freeze_value(inner) for inner in value)
+    if isinstance(value, set):
+        return tuple(sorted(_freeze_value(inner) for inner in value))
+    return value
+
+
+def _freeze_strings(values: Optional[Iterable[Any]]) -> Tuple[str, ...]:
+    frozen: List[str] = []
+    for raw in values or ():
+        text = str(raw or "").strip()
+        if text:
+            frozen.append(text)
+    return tuple(frozen)
 
 
 # ── Agent State Machine ──────────────────────────────────────────────
@@ -81,7 +122,7 @@ class CollapseReason(str, Enum):
 
 # ── Task Specification ───────────────────────────────────────────────
 
-@dataclass
+@dataclass(frozen=True)
 class TaskSpec:
     """Specification for a single sub-agent task."""
     task_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -90,17 +131,21 @@ class TaskSpec:
     priority: TaskPriority = TaskPriority.NORMAL
     timeout_seconds: float = 300
     max_actions: int = 50
-    allowed_apps: List[str] = field(default_factory=list)
-    allowed_categories: List[str] = field(default_factory=list)
-    context: Dict[str, Any] = field(default_factory=dict)
+    allowed_apps: Tuple[str, ...] = field(default_factory=tuple)
+    allowed_categories: Tuple[str, ...] = field(default_factory=tuple)
+    context: Mapping[str, Any] = field(default_factory=FrozenDict)
     parent_task_id: Optional[str] = None
     execution_group: int = 0  # Tasks in same group run concurrently
 
     def __post_init__(self):
-        if self.timeout_seconds < 1:
-            self.timeout_seconds = 1
-        if self.max_actions < 1:
-            self.max_actions = 1
+        object.__setattr__(self, "timeout_seconds", max(1, self.timeout_seconds))
+        object.__setattr__(self, "max_actions", max(1, self.max_actions))
+        object.__setattr__(self, "allowed_apps", _freeze_strings(self.allowed_apps))
+        object.__setattr__(self, "allowed_categories", _freeze_strings(self.allowed_categories))
+        raw_context = self.context or {}
+        if not isinstance(raw_context, Mapping):
+            raise TypeError("TaskSpec.context must be a mapping")
+        object.__setattr__(self, "context", _freeze_value(raw_context))
 
 
 @dataclass

@@ -75,12 +75,14 @@ class OutboundPipeline:
         soul: Any,
         vault: Any = None,
         a2a_client: Any = None,
+        frontier_scrubber: Any = None,
     ):
         self._registry = registry
         self._receipt_service = receipt_service
         self._soul = soul
         self._vault = vault
         self._a2a_client = a2a_client
+        self._frontier_scrubber = frontier_scrubber
 
     def _get_soul(self) -> Any:
         """Resolve the live Soul object."""
@@ -342,13 +344,45 @@ class OutboundPipeline:
                 return {"allowed": True}
         return {"allowed": False}
 
-    def _scrub_outbound(self, content: str) -> str:
+    def _get_frontier_scrubber(self) -> Any:
+        scrubber = self._frontier_scrubber
+        if scrubber is None:
+            return None
+        if hasattr(scrubber, "scrub_text"):
+            return scrubber
+        try:
+            return scrubber() if callable(scrubber) else scrubber
+        except Exception as exc:
+            logger.warning("A2A outbound scrubber resolution failed: %s", exc)
+            return None
+
+    def _regex_scrub_text(self, content: str) -> str:
         import re
 
         scrubbed = content
         for pattern in self.PII_PATTERNS:
             scrubbed = re.sub(pattern, "[REDACTED]", scrubbed)
         return scrubbed
+
+    def _scrub_text_for_egress(self, content: str) -> str:
+        scrubber = self._get_frontier_scrubber()
+        if scrubber is None or not content:
+            return self._regex_scrub_text(content)
+
+        try:
+            result = scrubber.scrub_text(content)
+            output = getattr(result, "output", None)
+            if isinstance(output, str):
+                return output
+        except Exception as exc:
+            logger.warning(
+                "A2A outbound frontier scrub failed; falling back to deterministic redaction: %s",
+                exc,
+            )
+        return self._regex_scrub_text(content)
+
+    def _scrub_outbound(self, content: str) -> str:
+        return self._scrub_text_for_egress(content)
 
     def _classify_risk(self, agent: RemoteAgent, task_type: str) -> int:
         risk = agent.outbound_trust_tier
@@ -450,15 +484,12 @@ class OutboundPipeline:
         return {"type": "api_key", "key": key} if key else None
 
     def _scrub_response_artifacts(self, artifacts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        import re
-
         scrubbed = []
         for artifact in artifacts:
             item = dict(artifact)
             for part in item.get("parts", []):
                 if isinstance(part, dict) and part.get("text"):
-                    for pattern in self.PII_PATTERNS:
-                        part["text"] = re.sub(pattern, "[REDACTED]", part["text"])
+                    part["text"] = self._scrub_text_for_egress(part["text"])
             scrubbed.append(item)
         return scrubbed
 

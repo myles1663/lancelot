@@ -1,5 +1,5 @@
 """
-Skill Schema — manifest model and validator (Prompt 6 / B1).
+Skill schema models and validation helpers.
 
 Defines the SkillManifest Pydantic model representing a skill.yaml file,
 plus a loader/validator function.

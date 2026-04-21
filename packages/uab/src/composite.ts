@@ -4,8 +4,8 @@
  * The fastest, most capable method of computer use.
  *
  * Combines ALL available data sources in speed-priority order:
- *   1. UIA Tree     (⚡ instant) — element IDs, types, states, structure
- *   2. Bounding Rects (⚡ instant) — spatial positions, sizes → spatial map
+ *   1. UIA Tree     (⚡ direct) — element IDs, types, states, structure
+ *   2. Bounding Rects (⚡ direct) — spatial positions, sizes → spatial map
  *   3. Text Reading  (⚡ fast) — TextPattern/ValuePattern content extraction
  *   4. Vision        (🐌 slow) — screenshot + Claude Vision (ONLY when needed)
  *
@@ -15,7 +15,7 @@
  *   - Vision is complementary (verification, complex visuals), not primary
  *   - Every extra tool closes another gap — use ALL of them
  *
- * SPDX-License-Identifier: BSL-1.0
+ * SPDX-License-Identifier: BUSL-1.1
  * Licensor: Myles Russell Hamilton
  */
 
@@ -321,7 +321,7 @@ export class CompositeEngine {
     textContent: Map<string, string>,
     opts: { textTypes: string[]; textReadLimit: number },
   ): Promise<void> {
-    // Step 1: Labels as text (instant — no API calls)
+    // Step 1: Labels as text (direct — no API calls)
     for (const el of index.all()) {
       if (el.label && el.label.length > 0) {
         textContent.set(el.id, el.label);

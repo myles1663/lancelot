@@ -1,5 +1,5 @@
 """
-Skill Governance — marketplace hooks, packaging, and signing (Prompt 16 / G1-G5).
+Skill governance helpers for packaging, signing, and marketplace checks.
 
 Provides skill packaging, signing interface contracts, and marketplace
 permission policies.

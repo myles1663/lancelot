@@ -185,8 +185,8 @@ def _build_cover_page(
     try:
         from update_checker import read_current_version
         version = read_current_version()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to read current version for forensic timeline PDF: %s", exc)
 
     meta_rows = [
         ["Export Period", f"{period_start[:10]}  to  {period_end[:10]}"],

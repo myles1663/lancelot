@@ -834,11 +834,11 @@ class TestToolFabricFeatureFlags:
             os.environ.pop(key, None)
 
         # Clear persisted state so defaults are used
-        old_persisted = dict(ff._persisted_state)
+        old_persisted = ff.persisted_flag_state_snapshot()
         for key in ["FEATURE_TOOLS_FABRIC", "FEATURE_TOOLS_CLI_PROVIDERS",
                     "FEATURE_TOOLS_ANTIGRAVITY", "FEATURE_TOOLS_NETWORK",
                     "FEATURE_TOOLS_HOST_EXECUTION"]:
-            ff._persisted_state.pop(key, None)
+            ff.clear_persisted_flag_state(key)
 
         ff.reload_flags()
 
@@ -853,7 +853,7 @@ class TestToolFabricFeatureFlags:
             assert ff.FEATURE_TOOLS_HOST_EXECUTION is False
         finally:
             # Restore persisted state
-            ff._persisted_state.update(old_persisted)
+            ff.replace_persisted_flag_state(old_persisted)
 
 
 # =============================================================================

@@ -1,5 +1,4 @@
-# V30: Orchestrator sub-modules — extracted pure functions
-# See architecture docs for decomposition rationale (EGOS audit Phase 1)
+# Orchestrator helper modules extracted for focused intent, safety, and response logic.
 
 from orch_helpers.intent_helpers import (
     is_conversational,

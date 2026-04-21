@@ -6,6 +6,9 @@
 .env
 *.env
 .env.*
+!.env.example
+.claude/
+.codex_smoketest.txt
 secrets/
 *.key
 *.pem
@@ -22,6 +25,7 @@ logs/
 *.log
 tmp/
 temp/
+test_data/
 !packages/uab/data/
 !packages/uab/data/chrome-extension/
 !packages/uab/data/chrome-extension/**
@@ -84,6 +88,10 @@ htmlcov/
 
 # Demo seed script (local use only)
 scripts/seed-demo.*
+
+# Local federation topology (use tracked example instead)
+config/federation_topology.json
+!config/federation_topology.example.json
 
 # War Room React SPA
 src/warroom/node_modules/

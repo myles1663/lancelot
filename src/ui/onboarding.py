@@ -1,10 +1,54 @@
 import os
 import json
 import secrets
+import logging
+from pathlib import Path
 
 from src.core.onboarding_snapshot import OnboardingSnapshot, OnboardingState
 from src.core import recovery_commands
+from src.core.outbound_http import OutboundNetworkError, assert_url_allowed
 from src.core.local_utility_setup import handle_local_utility_setup
+
+
+logger = logging.getLogger(__name__)
+
+
+def _has_codex_cli_auth() -> bool:
+    """Return True when mounted Codex CLI auth is available during onboarding."""
+    try:
+        from src.core.providers.codex_cli_client import has_codex_cli_auth
+        return has_codex_cli_auth()
+    except Exception as exc:
+        logger.warning("Onboarding failed to inspect Codex CLI auth: %s", exc)
+        return False
+
+
+def _load_persisted_provider() -> str:
+    """Return the durable active provider when provider persistence is available."""
+    candidates = []
+    configured_data_dir = os.getenv("LANCELOT_DATA_DIR", "").strip()
+    if configured_data_dir:
+        candidates.append(Path(configured_data_dir) / "provider_config.json")
+
+    candidates.append(Path("/home/lancelot/data/provider_config.json"))
+    candidates.append(Path("lancelot_data/provider_config.json"))
+
+    seen = set()
+    for path in candidates:
+        normalized = str(path)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        try:
+            if path.exists():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                provider = (data.get("active_provider") or "").strip()
+                if provider:
+                    return provider
+        except Exception as exc:
+            logger.warning("Onboarding failed to read persisted provider from %s: %s", path, exc)
+
+    return ""
 
 # ---------------------------------------------------------------------------
 # V16: Provider configuration — mirrors installer/src/constants.mjs
@@ -368,11 +412,9 @@ class OnboardingOrchestrator:
             return "WELCOME"
 
         # Step 2: V16 — Provider must be selected
-        provider = self._get_env_value("LANCELOT_PROVIDER")
+        provider = self._get_selected_provider()
         if not provider:
-            provider = self._infer_provider_from_keys()
-            if not provider:
-                return "FLAGSHIP_SELECTION"
+            return "FLAGSHIP_SELECTION"
 
         # Step 3: API key (or ADC for Gemini) must exist for selected provider
         provider_info = PROVIDERS.get(provider, {})
@@ -386,8 +428,8 @@ class OnboardingOrchestrator:
                 import secret_cache
                 if secret_cache.is_bootstrapped():
                     api_key = secret_cache.get(env_var, "")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Onboarding failed to read provider credential %s from secret cache: %s", env_var, exc)
 
         adc_exists = False
         if provider == "gemini":
@@ -398,21 +440,31 @@ class OnboardingOrchestrator:
                 if os.path.exists(default_adc):
                     adc_exists = True
 
-        # V28: Check for OAuth token as alternative for Anthropic
-        oauth_configured = False
+        # OAuth or mounted CLI auth can satisfy credential capture for some providers.
+        credential_source_ready = False
         if provider == "anthropic":
             try:
                 from oauth_token_manager import get_oauth_manager
                 mgr = get_oauth_manager()
                 if mgr and mgr.get_token_status().get("configured"):
-                    oauth_configured = True
-            except Exception:
-                pass
+                    credential_source_ready = True
+            except Exception as exc:
+                logger.warning("Onboarding failed to inspect Anthropic OAuth status: %s", exc)
+        elif provider == "openai-codex":
+            credential_source_ready = _has_codex_cli_auth()
+            if not credential_source_ready:
+                try:
+                    from openai_codex_oauth_manager import get_openai_codex_manager
+                    mgr = get_openai_codex_manager()
+                    if mgr and mgr.get_token_status().get("configured"):
+                        credential_source_ready = True
+                except Exception as exc:
+                    logger.warning("Onboarding failed to inspect Codex OAuth status: %s", exc)
 
         # If snapshot already records credentials as verified, trust it
         # (key may be in Vault which isn't bootstrapped during __init__)
         snapshot_verified = self.snapshot.credential_status == "verified"
-        if not api_key and not adc_exists and not oauth_configured and not snapshot_verified:
+        if not api_key and not adc_exists and not credential_source_ready and not snapshot_verified:
             return "HANDSHAKE"
 
         # Step 3.5: V27 — Provider mode (SDK/API) must be selected
@@ -474,8 +526,8 @@ class OnboardingOrchestrator:
                         line = line.strip()
                         if line.startswith(f"{key}="):
                             return line.split("=", 1)[1].strip()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Onboarding failed to read %s from %s: %s", key, self.env_file, exc)
         return None
 
     def _infer_provider_from_keys(self):
@@ -506,20 +558,54 @@ class OnboardingOrchestrator:
 
         return ""
 
+    def _get_selected_provider(self) -> str:
+        """Resolve the active provider with durable runtime state preferred over stale env."""
+        persisted_provider = _load_persisted_provider()
+        if persisted_provider:
+            return persisted_provider
+
+        snapshot_provider = (self.snapshot.flagship_provider or "").strip()
+        if snapshot_provider:
+            return snapshot_provider
+
+        env_provider = self._get_env_value("LANCELOT_PROVIDER")
+        if env_provider:
+            return env_provider
+
+        return self._infer_provider_from_keys()
+
+    def _has_vault_key_configured(self) -> bool:
+        """Return True when the connector vault key is available from env or Docker secret."""
+        if self._get_env_value("LANCELOT_VAULT_KEY"):
+            return True
+
+        try:
+            from src.connectors.vault import CredentialVault
+
+            config = CredentialVault._load_config("config/vault.yaml")
+            enc = config.get("encryption", {})
+            key_env_var = enc.get("key_env_var", "LANCELOT_VAULT_KEY")
+            docker_secret_name = enc.get("docker_secret", "lancelot_vault_key")
+            key, _origin = CredentialVault._resolve_key_with_origin(key_env_var, docker_secret_name)
+            return bool(key)
+        except Exception as exc:
+            logger.warning("Onboarding failed to inspect vault-key configuration: %s", exc)
+            return False
+
     def _has_security_tokens(self):
-        """Check if all three security tokens exist in vault, .env, or env."""
-        for key in ("LANCELOT_OWNER_TOKEN", "LANCELOT_API_TOKEN", "LANCELOT_VAULT_KEY"):
+        """Check if management secrets and the vault key exist in a durable source."""
+        for key in ("LANCELOT_OWNER_TOKEN", "LANCELOT_API_TOKEN"):
             # Check secret_cache first (vault-backed), then env
             found = False
             try:
                 import secret_cache
                 if secret_cache.is_bootstrapped() and secret_cache.get(key, ""):
                     found = True
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Onboarding failed to read security token %s from secret cache: %s", key, exc)
             if not found and not self._get_env_value(key):
                 return False
-        return True
+        return self._has_vault_key_configured()
 
     def _write_env_values(self, values: dict, section_comment: str = None):
         """Append key=value pairs to .env file. Only writes keys not already present."""
@@ -538,8 +624,8 @@ class OnboardingOrchestrator:
                 for key, val in to_write.items():
                     f.write(f"{key}={val}\n")
                     os.environ[key] = val
-        except Exception as e:
-            print(f"Error writing to .env: {e}")
+        except Exception as exc:
+            logger.warning("Onboarding failed to write .env values: %s", exc)
 
     # ------------------------------------------------------------------
     # Cooldown
@@ -585,8 +671,8 @@ class OnboardingOrchestrator:
             "    Get a key at: https://console.x.ai/\n\n"
             "[5] NVIDIA Nemotron — Nemotron models via NIM, free tier available\n"
             "    Get a key at: https://build.nvidia.com/\n\n"
-            "[6] OpenAI Codex (Pro) — ChatGPT Plus/Pro subscription via OAuth\n"
-            "    No API key needed — uses your existing subscription at flat rate\n\n"
+            "[6] OpenAI Codex (Pro) — ChatGPT Plus/Pro subscription via Codex CLI auth\n"
+            "    Preferred: sign in on the host so ~/.codex/auth.json is mounted; browser OAuth is fallback only\n\n"
             "Enter the number of your choice:"
         )
 
@@ -610,9 +696,9 @@ class OnboardingOrchestrator:
         self.temp_data["provider"] = provider_id
         provider = PROVIDERS[provider_id]
 
-        # OpenAI Codex is OAuth-only — go straight to OAuth flow
+        # OpenAI Codex prefers mounted CLI auth and only falls back to browser OAuth.
         if provider.get("oauth_only"):
-            return self._initiate_openai_codex_oauth()
+            return self._initiate_openai_codex_setup()
 
         self.state = "HANDSHAKE"
 
@@ -782,6 +868,31 @@ class OnboardingOrchestrator:
     # OpenAI Codex OAuth flow
     # ------------------------------------------------------------------
 
+    def _complete_openai_codex_cli_setup(self) -> str:
+        """Persist provider selection when mounted Codex CLI auth is already available."""
+        self._write_env_values({
+            "LANCELOT_AUTH_MODE": "OAUTH",
+            "LANCELOT_PROVIDER": "openai-codex",
+        }, section_comment="OpenAI Codex CLI Auth")
+        self.fail_count = 0
+        self.snapshot.credential_status = "verified"
+        self.snapshot.flagship_provider = "openai-codex"
+        self.snapshot.save()
+        self.state = "PROVIDER_MODE_SELECTION"
+        return (
+            "**Codex CLI Auth Detected.** (OpenAI Codex)\n\n"
+            "Lancelot found mounted host auth at `~/.codex/auth.json` and will use your ChatGPT Plus/Pro "
+            "subscription through the official Codex CLI.\n"
+            "No browser OAuth is required on this machine.\n\n"
+            + self._provider_mode_prompt()
+        )
+
+    def _initiate_openai_codex_setup(self) -> str:
+        """Prefer mounted Codex CLI auth before starting browser OAuth."""
+        if _has_codex_cli_auth():
+            return self._complete_openai_codex_cli_setup()
+        return self._initiate_openai_codex_oauth()
+
     def _initiate_openai_codex_oauth(self) -> str:
         """Start OpenAI Codex OAuth PKCE flow — generate auth URL for browser."""
         try:
@@ -798,6 +909,8 @@ class OnboardingOrchestrator:
 
             return (
                 "**OpenAI Codex OAuth Setup**\n\n"
+                "Preferred enterprise path: sign in on the host first so `~/.codex/auth.json` is mounted into the container.\n"
+                "Use browser OAuth only when mounted Codex CLI auth is not available.\n\n"
                 "Please open this URL in your browser to sign in with your ChatGPT account:\n\n"
                 f"{auth_url}\n\n"
                 "After you authorize, the browser will redirect back to Lancelot.\n"
@@ -818,6 +931,8 @@ class OnboardingOrchestrator:
 
         if cmd == "done":
             try:
+                if _has_codex_cli_auth():
+                    return self._complete_openai_codex_cli_setup()
                 from openai_codex_oauth_manager import get_openai_codex_manager
                 manager = get_openai_codex_manager()
                 if manager and manager.get_token_status().get("configured"):
@@ -835,8 +950,8 @@ class OnboardingOrchestrator:
                     )
                 else:
                     return (
-                        "OAuth tokens not detected yet. Make sure you completed "
-                        "the browser authorization.\n\n"
+                        "Codex credentials not detected yet. Either complete the browser authorization "
+                        "or sign in on the host so `~/.codex/auth.json` is mounted.\n\n"
                         "Type **'done'** to check again, or **'cancel'** to choose "
                         "a different provider."
                     )
@@ -851,8 +966,12 @@ class OnboardingOrchestrator:
         import requests
         try:
             if provider == "gemini":
-                r = requests.get(
+                url = assert_url_allowed(
                     f"https://generativelanguage.googleapis.com/v1beta/models?key={key}",
+                    component="Onboarding Gemini API key validation",
+                )
+                r = requests.get(
+                    url,
                     timeout=10,
                 )
                 if r.ok:
@@ -862,8 +981,12 @@ class OnboardingOrchestrator:
                 return {"valid": False, "error": f"Unexpected response (HTTP {r.status_code})"}
 
             elif provider == "openai":
-                r = requests.get(
+                url = assert_url_allowed(
                     "https://api.openai.com/v1/models",
+                    component="Onboarding OpenAI API key validation",
+                )
+                r = requests.get(
+                    url,
                     headers={"Authorization": f"Bearer {key}"},
                     timeout=10,
                 )
@@ -874,8 +997,12 @@ class OnboardingOrchestrator:
                 return {"valid": False, "error": f"Unexpected response (HTTP {r.status_code})"}
 
             elif provider == "anthropic":
-                r = requests.post(
+                url = assert_url_allowed(
                     "https://api.anthropic.com/v1/messages",
+                    component="Onboarding Anthropic API key validation",
+                )
+                r = requests.post(
+                    url,
                     headers={
                         "x-api-key": key,
                         "anthropic-version": "2023-06-01",
@@ -893,8 +1020,12 @@ class OnboardingOrchestrator:
                 return {"valid": True}
 
             elif provider == "xai":
-                r = requests.get(
+                url = assert_url_allowed(
                     "https://api.x.ai/v1/models",
+                    component="Onboarding xAI API key validation",
+                )
+                r = requests.get(
+                    url,
                     headers={"Authorization": f"Bearer {key}"},
                     timeout=10,
                 )
@@ -905,8 +1036,12 @@ class OnboardingOrchestrator:
                 return {"valid": False, "error": f"Unexpected response (HTTP {r.status_code})"}
 
             elif provider == "nvidia":
-                r = requests.get(
+                url = assert_url_allowed(
                     "https://integrate.api.nvidia.com/v1/models",
+                    component="Onboarding NVIDIA API key validation",
+                )
+                r = requests.get(
+                    url,
                     headers={"Authorization": f"Bearer {key}"},
                     timeout=10,
                 )
@@ -918,6 +1053,8 @@ class OnboardingOrchestrator:
 
             return {"valid": False, "error": f"Unknown provider: {provider}"}
 
+        except OutboundNetworkError as exc:
+            return {"valid": False, "error": str(exc)}
         except Exception as e:
             return {"valid": True, "warning": f"Could not reach {provider} API to validate: {e}"}
 
@@ -1318,7 +1455,10 @@ class OnboardingOrchestrator:
             elif provider == "telegram":
                 token = self.temp_data["telegram_token"]
                 chat_id = self.temp_data["telegram_chat_id"]
-                url = f"https://api.telegram.org/bot{token}/sendMessage"
+                url = assert_url_allowed(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    component="Onboarding Telegram handshake",
+                )
                 resp = requests.post(url, json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}, timeout=10)
 
                 if resp.status_code != 200:
@@ -1337,6 +1477,8 @@ class OnboardingOrchestrator:
                     f"I have sent a code to your {provider} ({self.temp_data.get('chat_display_name', self.temp_data.get('telegram_chat_id', ''))}).\n"
                     "Please enter the 6-character code here to verify the link.")
 
+        except OutboundNetworkError as exc:
+            return f"**Connection Blocked:** {exc}"
         except requests.exceptions.Timeout:
             return "**Connection Timeout** - Could not reach service. Check internet connection."
         except Exception as e:
@@ -1492,11 +1634,17 @@ class OnboardingOrchestrator:
             self.temp_data["oidc_client_secret"] = value
             self.temp_data["enterprise_auth_stage"] = "allowed_groups"
             return (
-                "Enter allowed OIDC groups separated by commas, or type `skip` to allow any authenticated enterprise user:"
+                "Enter allowed OIDC groups separated by commas, or type `open` to explicitly allow any authenticated enterprise user:"
             )
 
         if stage == "allowed_groups":
-            allowed_groups = "" if value.lower() == "skip" else value
+            if not value:
+                return (
+                    "At least one allowed OIDC group is required unless you explicitly type `open`.\n\n"
+                    "Enter allowed OIDC groups separated by commas, or type `open` to explicitly allow any authenticated enterprise user:"
+                )
+            allow_any_authenticated = "true" if value.lower() in {"open", "skip"} else "false"
+            allowed_groups = "" if allow_any_authenticated == "true" else value
             self._write_env_values(
                 {
                     "LANCELOT_AUTH_PROVIDER": "oidc",
@@ -1504,6 +1652,7 @@ class OnboardingOrchestrator:
                     "OIDC_CLIENT_ID": self.temp_data.get("oidc_client_id", ""),
                     "OIDC_CLIENT_SECRET": self.temp_data.get("oidc_client_secret", ""),
                     "OIDC_ALLOWED_GROUPS": allowed_groups,
+                    "OIDC_ALLOW_ANY_AUTHENTICATED": allow_any_authenticated,
                 },
                 "War Room Enterprise Authentication",
             )
@@ -1564,7 +1713,7 @@ class OnboardingOrchestrator:
                             _onb_vault.store(_vault_map[_tk], _tv, type="system_secret")
                     secret_cache.bootstrap(_onb_vault)
             except Exception:
-                pass
+                logger.warning("Onboarding failed to bootstrap generated security tokens into secret cache", exc_info=True)
 
         # 2. Generate local-auth recovery code if missing
         warroom_username = self._get_env_value("WARROOM_USERNAME")
@@ -1616,8 +1765,8 @@ class OnboardingOrchestrator:
             with urllib.request.urlopen(req, timeout=3) as resp:
                 uab_data = json.loads(resp.read().decode("utf-8"))
             uab_running = "result" in uab_data
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Onboarding could not reach UAB daemon for final summary: %s", exc)
 
         msg = "**Final Configuration Complete**\n\n"
         msg += "**System Summary:**\n"
@@ -1667,8 +1816,8 @@ class OnboardingOrchestrator:
             with open(self.user_file, "a") as f:
                 f.write("\n- OnboardingComplete: True")
             self.state = "READY"
-        except Exception as e:
-            print(f"Error marking complete: {e}")
+        except Exception as exc:
+            logger.warning("Onboarding failed to mark onboarding complete: %s", exc)
 
     # ------------------------------------------------------------------
     # Main state machine

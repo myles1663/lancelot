@@ -4,7 +4,7 @@
 # Patent Pending: US Provisional Application #63/982,183
 
 """
-Soul Linter — validates Soul invariants beyond schema (Prompt 2 / A2).
+Soul linter for invariants that extend beyond schema validation.
 
 The linter enforces constitutional invariants that the Pydantic schema
 cannot express (e.g. "destructive actions *must* appear in requires_approval").
@@ -26,6 +26,51 @@ from typing import List
 from src.core.soul.store import Soul, SoulStoreError
 
 logger = logging.getLogger(__name__)
+
+
+DESTRUCTIVE_CAPABILITIES = frozenset({
+    "data.delete",
+    "deploy.release",
+    "storage.drop",
+    "config.reset",
+    "agent.terminate",
+})
+DESTRUCTIVE_CAPABILITY_ALIASES = frozenset({
+    "delete",
+    "deploy",
+    "destroy",
+    "drop",
+})
+REQUIRED_GOVERNANCE_INVARIANTS = frozenset({
+    "error_handling.explicit",
+    "failure_reporting.required",
+    "audit_trail.mandatory",
+})
+GOVERNANCE_INVARIANT_ALIASES = {
+    "error_handling.explicit": frozenset({"error", "errors"}),
+    "failure_reporting.required": frozenset({
+        "failure",
+        "failures",
+        "report",
+        "reporting",
+        "suppress",
+        "silent",
+        "degrade",
+    }),
+    "audit_trail.mandatory": frozenset({"audit", "receipt", "trace", "log"}),
+}
+
+
+def _normalize_capability_id(value: str) -> str:
+    """Normalize free-form entries toward capability-id style matching.
+
+    Soul documents still carry some legacy free-text entries, so the linter
+    matches exact capability ids first and falls back to legacy token checks.
+    """
+    normalized = value.strip().lower()
+    for old, new in (("_", "."), (" ", "."), ("-", "."), ("/", ".")):
+        normalized = normalized.replace(old, new)
+    return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -51,13 +96,15 @@ class LintIssue:
 
 def _check_destructive_actions_require_approval(soul: Soul) -> List[LintIssue]:
     """Destructive action categories must appear in requires_approval."""
-    required_keywords = {"delete", "deploy", "destroy", "drop"}
-    approval_set = {a.lower() for a in soul.autonomy_posture.requires_approval}
+    approval_entries = {
+        _normalize_capability_id(entry)
+        for entry in soul.autonomy_posture.requires_approval
+    }
 
-    # Check that at least one destructive keyword appears
     has_destructive_coverage = any(
-        any(kw in entry for kw in required_keywords)
-        for entry in approval_set
+        entry in DESTRUCTIVE_CAPABILITIES
+        or any(alias in entry for alias in DESTRUCTIVE_CAPABILITY_ALIASES)
+        for entry in approval_entries
     )
 
     if not has_destructive_coverage:
@@ -67,7 +114,8 @@ def _check_destructive_actions_require_approval(soul: Soul) -> List[LintIssue]:
                 severity=LintSeverity.CRITICAL,
                 message=(
                     "autonomy_posture.requires_approval must include at least "
-                    "one destructive action keyword (delete, deploy, destroy, drop)."
+                    "one destructive capability entry such as data.delete, "
+                    "deploy.release, storage.drop, config.reset, or agent.terminate."
                 ),
             )
         ]
@@ -95,9 +143,17 @@ def _check_destructive_actions_require_approval(soul: Soul) -> List[LintIssue]:
 def _check_no_silent_degradation(soul: Soul) -> List[LintIssue]:
     """Tone invariants must prohibit silent degradation / suppressed errors."""
     combined = " ".join(soul.tone_invariants).lower()
+    normalized = _normalize_capability_id(combined)
 
-    silence_keywords = {"suppress", "silent", "degrade", "error", "failure"}
-    has_coverage = sum(1 for kw in silence_keywords if kw in combined) >= 2
+    has_structured_coverage = any(
+        invariant in normalized for invariant in REQUIRED_GOVERNANCE_INVARIANTS
+    )
+    legacy_signal_count = sum(
+        1
+        for tokens in GOVERNANCE_INVARIANT_ALIASES.values()
+        if any(token in combined for token in tokens)
+    )
+    has_coverage = has_structured_coverage or legacy_signal_count >= 1
 
     if not has_coverage:
         return [

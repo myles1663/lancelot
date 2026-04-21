@@ -19,6 +19,7 @@ import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 
 from src.observability.config import WebhookEndpoint
+from src.core.outbound_http import OutboundNetworkError
 from src.observability.webhook_engine import (
     WebhookEngine,
     WebhookDelivery,
@@ -80,6 +81,11 @@ def isolated_webhook_pending_file(tmp_path, monkeypatch):
         "LANCELOT_WEBHOOK_PENDING_FILE",
         str(tmp_path / "webhook-pending.json"),
     )
+
+
+@pytest.fixture(autouse=True)
+def allow_outbound_requests(monkeypatch):
+    monkeypatch.setattr("src.observability.webhook_engine.assert_url_allowed", lambda url, **kwargs: url)
 
 
 # ── Lifecycle ────────────────────────────────────────────────────
@@ -159,6 +165,21 @@ class TestOnReceipt:
         engine.on_receipt(_make_receipt())
 
         assert len(engine._pending) == 1
+
+    def test_delivery_blocked_by_network_allowlist_queues_retry(self, mock_httpx_client, monkeypatch):
+        monkeypatch.setattr(
+            "src.observability.webhook_engine.assert_url_allowed",
+            lambda url, **kwargs: (_ for _ in ()).throw(
+                OutboundNetworkError("Webhook delivery blocked by network allowlist")
+            ),
+        )
+
+        engine = WebhookEngine(endpoints=[_make_endpoint()])
+        engine.on_receipt(_make_receipt())
+
+        assert len(engine._pending) == 1
+        assert "network allowlist" in engine._pending[0].last_error
+        mock_httpx_client.post.assert_not_called()
 
     def test_empty_endpoint_list(self, mock_httpx_client):
         """No endpoints means no deliveries."""

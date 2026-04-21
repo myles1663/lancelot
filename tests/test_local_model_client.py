@@ -147,7 +147,8 @@ class TestHealth:
     @patch("urllib.request.urlopen")
     def test_health_returns_data(self, mock_open, client):
         mock_open.return_value = _mock_urlopen({
-            "status": "ok", "model": "test-model", "uptime_seconds": 42.0,
+            "status": "ok", "ready": True, "loaded": True,
+            "model": "test-model", "uptime_seconds": 42.0,
         })
         data = client.health()
         assert data["status"] == "ok"
@@ -156,7 +157,7 @@ class TestHealth:
 
     @patch("urllib.request.urlopen")
     def test_is_healthy_true(self, mock_open, client):
-        mock_open.return_value = _mock_urlopen({"status": "ok"})
+        mock_open.return_value = _mock_urlopen({"status": "ok", "ready": True})
         assert client.is_healthy() is True
 
     @patch("urllib.request.urlopen")
@@ -166,17 +167,30 @@ class TestHealth:
 
     @patch("urllib.request.urlopen")
     def test_is_healthy_false_on_bad_status(self, mock_open, client):
-        mock_open.return_value = _mock_urlopen({"status": "degraded"})
+        mock_open.return_value = _mock_urlopen({"status": "degraded", "ready": False})
         assert client.is_healthy() is False
 
     @patch("urllib.request.urlopen")
-    def test_health_raises_on_503(self, mock_open, client):
+    def test_health_returns_payload_on_503(self, mock_open, client):
         mock_open.side_effect = HTTPError(
-            "http://test-llm:8080/health", 503, "Model not loaded",
-            {}, MagicMock(read=lambda: b"Model not loaded"),
+            "http://test-llm:8080/health", 503, "Model not ready",
+            {}, MagicMock(read=lambda: b'{\"status\":\"degraded\",\"ready\":false,\"loaded\":true,\"last_error\":\"GPU crash\"}'),
         )
-        with pytest.raises(LocalModelError, match="503"):
-            client.health()
+        data = client.health()
+        assert data["ready"] is False
+        assert data["loaded"] is True
+        assert data["last_error"] == "GPU crash"
+
+    @patch("urllib.request.urlopen")
+    def test_health_logs_warning_for_non_json_http_error_body(self, mock_open, client, caplog):
+        mock_open.side_effect = HTTPError(
+            "http://test-llm:8080/health", 503, "Model not ready",
+            {}, MagicMock(read=lambda: b"gpu failure"),
+        )
+        with caplog.at_level("WARNING"):
+            with pytest.raises(LocalModelError, match="503"):
+                client.health()
+        assert "non-JSON HTTP error body" in caplog.text
 
 
 # ===================================================================
@@ -470,6 +484,14 @@ class TestRagRewrite:
 class TestErrorHandling:
 
     @patch("urllib.request.urlopen")
+    def test_remote_control_plane_url_blocked_before_request(self, mock_open):
+        with patch("src.core.local_model_client.load_all_prompts", return_value={}):
+            client = LocalModelClient(base_url="https://api.openai.com")
+        with pytest.raises(LocalModelError, match="local-only URL policy"):
+            client.complete("hello")
+        mock_open.assert_not_called()
+
+    @patch("urllib.request.urlopen")
     def test_connection_refused_raises_local_model_error(self, mock_open, client):
         mock_open.side_effect = URLError("Connection refused")
         with pytest.raises(LocalModelError, match="Connection failed"):
@@ -499,6 +521,19 @@ class TestErrorHandling:
         mock_open.side_effect = URLError(socket.timeout("timed out"))
         with pytest.raises(LocalModelError, match="Connection failed"):
             client.rag_rewrite("query")
+
+    @patch("urllib.request.urlopen")
+    def test_http_error_body_decode_failure_logs_warning(self, mock_open, client, caplog):
+        err = HTTPError(
+            "http://test-llm:8080/v1/completions", 500, "Server Error",
+            {}, MagicMock(),
+        )
+        err.read = MagicMock(side_effect=RuntimeError("read failed"))
+        mock_open.side_effect = err
+        with caplog.at_level("WARNING"):
+            with pytest.raises(LocalModelError, match="500"):
+                client.complete("test")
+        assert "Failed to decode local model HTTP error body" in caplog.text
 
 
 # ===================================================================
@@ -559,6 +594,7 @@ class TestLiveLocalModelClient:
     def _check_container(self):
         import shutil
         import subprocess
+        import urllib.request
         if shutil.which("docker") is None:
             pytest.skip("Docker not available")
         result = subprocess.run(
@@ -568,10 +604,23 @@ class TestLiveLocalModelClient:
         )
         if result.returncode != 0 or "true" not in result.stdout:
             pytest.skip("lancelot_local_llm container not running")
+        try:
+            resp = urllib.request.urlopen("http://localhost:8080/health", timeout=5)
+            if resp.status != 200:
+                pytest.skip("lancelot_local_llm not ready for inference")
+        except Exception:
+            pytest.skip("lancelot_local_llm not ready for inference")
 
     @pytest.fixture
     def live_client(self):
-        return LocalModelClient(base_url="http://localhost:8080")
+        client = LocalModelClient(base_url="http://localhost:8080")
+        if not client.is_healthy():
+            pytest.skip("lancelot_local_llm not ready for inference")
+        try:
+            client.complete("Health check", max_tokens=4, temperature=0.0, timeout=10)
+        except Exception:
+            pytest.skip("lancelot_local_llm completion smoke failed")
+        return client
 
     def test_health(self, live_client):
         data = live_client.health()

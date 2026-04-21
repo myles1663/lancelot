@@ -10,6 +10,10 @@ Lancelot runs inside a Docker container (Debian Linux). When you enable the **Ho
 
 ### 1. Start the Agent
 
+Set a strong shared token first. If you installed Lancelot with the CLI installer,
+the repo `.env` already contains `HOST_AGENT_TOKEN` and `start_agent.bat` /
+`install_service.bat` will load it automatically.
+
 **Windows:**
 ```
 double-click start_agent.bat
@@ -18,6 +22,7 @@ double-click start_agent.bat
 **Or from terminal:**
 ```bash
 cd host_agent
+set HOST_AGENT_TOKEN=my-secret-token
 python agent.py
 ```
 
@@ -34,7 +39,7 @@ Ask Lancelot: *"What's my OS version?"* — it should now report your actual OS 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | Port | `HOST_AGENT_PORT` | `9111` | Port the agent listens on |
-| Token | `HOST_AGENT_TOKEN` | `lancelot-host-agent` | Shared auth token |
+| Token | `HOST_AGENT_TOKEN` | Required | Shared auth token |
 
 ### Custom Token
 

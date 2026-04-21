@@ -3,20 +3,7 @@
 # Licensed under BUSL-1.1. See LICENSE for details.
 # Patent Pending: US Provisional Application #63/982,183
 
-"""
-Soul Store — loads, validates, and manages Soul versions (Prompt 1 / A1).
-
-Single-owner module responsible for reading the soul directory,
-validating YAML against the Soul schema, and resolving the active version.
-
-Public API:
-    Soul              — Pydantic model for a validated soul document
-    SoulStoreError    — raised on load/validation failures
-    load_active_soul(soul_dir) → Soul
-    list_versions(soul_dir)    → list[str]
-    get_active_version(soul_dir) → str
-    set_active_version(version, soul_dir) → None
-"""
+"""Soul Store: loads, validates, and activates versioned Soul documents."""
 
 import logging
 import os
@@ -61,6 +48,53 @@ class SchedulingBoundaries(BaseModel):
     no_autonomous_irreversible: bool = True
     require_ready_state: bool = True
     description: str = ""
+
+
+class MCPPermission(BaseModel):
+    """Typed permission entry for one governed MCP server."""
+
+    server_id: str
+    allowed_tools: List[str] = Field(default_factory=list)
+    risk_tier: str = Field(default="T2")
+
+    @field_validator("risk_tier", mode="before")
+    @classmethod
+    def normalize_risk_tier(cls, value: Any) -> str:
+        if isinstance(value, int):
+            return f"T{value}"
+        text = str(value).strip()
+        if text.isdigit():
+            return f"T{text}"
+        return text
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, dict):
+            return self.model_dump() == other
+        return super().__eq__(other)
+
+
+class ToolPermission(BaseModel):
+    """Typed permission entry for an individual governed tool."""
+
+    tool_name: str
+    allowed: bool = True
+    requires_approval: bool = False
+    risk_tier: str = Field(default="T1")
+
+    @field_validator("risk_tier", mode="before")
+    @classmethod
+    def normalize_risk_tier(cls, value: Any) -> str:
+        if isinstance(value, int):
+            return f"T{value}"
+        text = str(value).strip()
+        if text.isdigit():
+            return f"T{text}"
+        return text
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, dict):
+            return self.model_dump() == other
+        return super().__eq__(other)
 
 
 class SpawnBudgetGovernance(BaseModel):
@@ -190,7 +224,7 @@ class Soul(BaseModel):
     spawn_budget: SpawnBudgetGovernance = Field(
         default_factory=SpawnBudgetGovernance,
     )
-    mcp_permissions: List[Dict[str, Any]] = Field(
+    mcp_permissions: List[MCPPermission] = Field(
         default_factory=list,
         description=(
             "MCP server/tool permissions. Each entry: "
@@ -260,6 +294,9 @@ def _resolve_soul_dir(soul_dir: Optional[str] = None) -> Path:
     """Resolve the soul directory path."""
     if soul_dir:
         return Path(soul_dir)
+    env_soul_dir = os.getenv("SOUL_DIR")
+    if env_soul_dir:
+        return Path(env_soul_dir).resolve()
     return Path(_DEFAULT_SOUL_DIR).resolve()
 
 
@@ -327,12 +364,12 @@ def list_versions(soul_dir: Optional[str] = None) -> list[str]:
         return []
 
     versions = []
-    for f in sorted(versions_dir.iterdir()):
+    for f in versions_dir.iterdir():
         m = re.match(r"^soul_(v\d+)\.yaml$", f.name)
         if m:
             versions.append(m.group(1))
 
-    return versions
+    return sorted(versions, key=lambda version: int(version[1:]))
 
 
 def _load_yaml(path: Path) -> dict:

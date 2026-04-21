@@ -1,8 +1,12 @@
 # V30: Safety gate helper functions extracted from orchestrator.py
 # These are pure functions — no instance state (some have stdout logging).
-# EGOS audit Phase 1: orchestrator decomposition (conservative)
+# Kept separate so safety checks stay readable and testable.
 
+import logging
 import re
+
+
+logger = logging.getLogger(__name__)
 
 
 def classify_tool_call_safety(skill_name: str, inputs: dict) -> str:
@@ -152,7 +156,11 @@ def strip_failure_narration(text: str) -> str:
     cleaned = cleaned.strip()
 
     if cleaned != text:
-        print(f"V22: Stripped failure narration ({len(text)} -> {len(cleaned)} chars)")
+        logger.info(
+            "V22: Stripped failure narration (%d -> %d chars)",
+            len(text),
+            len(cleaned),
+        )
 
     return cleaned if cleaned else text  # Never return empty
 
@@ -187,7 +195,7 @@ def generate_honest_replacement(original_text: str, reason: str) -> str:
     remnants), this produces a complete honest response acknowledging
     what the user asked for and what Lancelot can and cannot do.
     """
-    print(f"HONESTY GATE BLOCKED: {reason}")
+    logger.warning("HONESTY GATE BLOCKED: %s", reason)
 
     # Try to extract the core topic from the original text
     sentences = re.split(r'[.!?\n]', original_text)

@@ -315,5 +315,5 @@ def update_metrics_from_receipt(receipt_dict: Dict[str, Any]) -> None:
                     provider=str(outputs.get("provider", "")),
                     model=str(outputs.get("model", "")),
                 )
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as exc:
+                logger.debug("Ignoring malformed receipt cost_usd value %r: %s", cost, exc)

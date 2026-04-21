@@ -44,7 +44,7 @@ Lancelot uses hot-toggleable feature flags as kill switches for every high-risk 
 | `FEATURE_TOOLS_HOST_EXECUTION` | false | Docker Linux access. *Requires: FEATURE_TOOLS_FABRIC* |
 | `FEATURE_TOOLS_HOST_BRIDGE` | false | **DANGEROUS:** Direct host OS bridge. *Requires: FEATURE_TOOLS_FABRIC* |
 | `FEATURE_HOST_WRITE_COMMANDS` | false | **EXTREME DANGER:** rm, del, kill on host. *Requires: FEATURE_TOOLS_HOST_BRIDGE* |
-| `FEATURE_TOOLS_UAB` | false | Universal App Bridge for desktop control (10 plugins, Composite Engine, Spatial Map, MCP Server, Agent SDK). *Requires: FEATURE_TOOLS_FABRIC + FEATURE_TOOLS_HOST_BRIDGE* |
+| `FEATURE_TOOLS_UAB` | false | Universal App Bridge for desktop control (embedded connector/service adapters, Composite Engine, Spatial Map, MCP Server, Agent SDK). *Requires: FEATURE_TOOLS_FABRIC + FEATURE_TOOLS_HOST_BRIDGE* |
 
 ### Execution & Runtime
 

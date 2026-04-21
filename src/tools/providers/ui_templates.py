@@ -11,7 +11,6 @@ Templates:
 - streamlit_dashboard: Streamlit data dashboard
 - flask_api: Flask REST API with SQLAlchemy
 
-Prompt 7 — UIBuilder Templates
 """
 
 from __future__ import annotations
@@ -578,7 +577,8 @@ from routes.api import api_bp
 app = Flask(__name__)
 app.config.from_object(Config)
 
-app.register_blueprint(api_bp, url_prefix="/api/v1")
+register_api = app.register_blueprint
+register_api(api_bp, url_prefix="/api/v1")
 
 
 @app.route("/health")
@@ -616,9 +616,9 @@ class User(db.Model):
     def __repr__(self):
         return f"<User {self.username}>"
 ''',
-        "flask_api_routes": '''from flask import Blueprint, jsonify, request
+        "flask_api_routes": '''from flask import Blueprint as ApiGroup, jsonify, request
 
-api_bp = Blueprint("api", __name__)
+api_bp = ApiGroup("api", __name__)
 
 
 @api_bp.route("/users", methods=["GET"])

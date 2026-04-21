@@ -26,15 +26,46 @@ from typing import Optional
 from urllib.parse import urlencode
 
 import bcrypt
+from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, ValidationError
 from starlette.responses import RedirectResponse
 
+from src.core.outbound_http import assert_url_allowed
 from src.core.operator_identity import OperatorIdentity, resolve_operator_id
 
 logger = logging.getLogger("lancelot.auth")
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = ""
+    password: str = ""
+
+
+class ResetPasswordRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = ""
+    reset_code: str = ""
+    new_password: str = ""
+
+
+class OidcExchangeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    exchange_code: str = ""
+
+
+class ChangePasswordRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str = ""
+    new_password: str = ""
 
 # Session store: {token: {"expires_at": float, "username": str,
 #                          "operator_identity": OperatorIdentity}}
@@ -81,8 +112,75 @@ _ADMIN_CAPABILITIES = {
 }
 
 
+async def _parse_request_model(request: Request, model_cls: type[BaseModel]) -> BaseModel:
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Request body must be valid JSON") from exc
+    try:
+        return model_cls.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+
+
 def _get_auth_state_file() -> Path:
     return Path(os.getenv("LANCELOT_AUTH_STATE_FILE", "/home/lancelot/data/auth_state.json"))
+
+
+def _get_auth_state_key_file() -> Path:
+    configured = os.getenv("LANCELOT_AUTH_STATE_KEY_FILE", "").strip()
+    if configured:
+        return Path(configured)
+    return _get_auth_state_file().with_suffix(".key")
+
+
+def _restrict_auth_state_key_file_permissions(path: Path) -> None:
+    if os.name != "nt":
+        try:
+            os.chmod(path, 0o600)
+        except OSError as exc:
+            logger.warning("Failed to restrict auth state key permissions on %s: %s", path, exc)
+
+
+def _load_or_create_auth_state_key() -> bytes:
+    configured = os.getenv("LANCELOT_AUTH_STATE_ENCRYPTION_KEY", "").strip()
+    if configured:
+        return configured.encode("utf-8")
+
+    key_file = _get_auth_state_key_file()
+    if key_file.exists():
+        return key_file.read_bytes()
+
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    key = Fernet.generate_key()
+    key_file.write_bytes(key)
+    _restrict_auth_state_key_file_permissions(key_file)
+    return key
+
+
+def _get_auth_state_cipher() -> Fernet:
+    return Fernet(_load_or_create_auth_state_key())
+
+
+def _encrypt_auth_state_payload(payload: dict) -> str:
+    plaintext = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return _get_auth_state_cipher().encrypt(plaintext).decode("utf-8")
+
+
+def _deserialize_auth_state_payload(raw_text: str) -> dict:
+    text = (raw_text or "").strip()
+    if not text:
+        return {}
+
+    outer = json.loads(text)
+    if isinstance(outer, dict) and outer.get("encrypted") is True:
+        ciphertext = outer.get("ciphertext", "")
+        try:
+            decrypted = _get_auth_state_cipher().decrypt(ciphertext.encode("utf-8"))
+        except InvalidToken as exc:
+            raise RuntimeError("Encrypted auth state could not be decrypted with the configured key") from exc
+        return json.loads(decrypted.decode("utf-8"))
+    return outer if isinstance(outer, dict) else {}
 
 
 def _serialize_session(session: dict) -> dict:
@@ -111,7 +209,13 @@ def _save_auth_state() -> None:
         try:
             state_file = _get_auth_state_file()
             state_file.parent.mkdir(parents=True, exist_ok=True)
-            state_file.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+            envelope = {
+                "version": 2,
+                "encrypted": True,
+                "algorithm": "fernet",
+                "ciphertext": _encrypt_auth_state_payload(payload),
+            }
+            state_file.write_text(json.dumps(envelope, indent=2, sort_keys=True), encoding="utf-8")
         except Exception as exc:
             logger.warning("Failed to persist auth state: %s", exc)
 
@@ -126,7 +230,7 @@ def _load_auth_state() -> None:
                 _oidc_pending = {}
                 _oidc_exchange_codes = {}
                 return
-            payload = json.loads(state_file.read_text(encoding="utf-8"))
+            payload = _deserialize_auth_state_payload(state_file.read_text(encoding="utf-8"))
             _sessions = {
                 token: _deserialize_session(session)
                 for token, session in dict(payload.get("sessions", {})).items()
@@ -219,6 +323,11 @@ def _get_oidc_groups_claim() -> str:
 def _get_oidc_allowed_groups() -> set[str]:
     raw = os.getenv("OIDC_ALLOWED_GROUPS", "")
     return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def _oidc_allow_any_authenticated() -> bool:
+    raw = os.getenv("OIDC_ALLOW_ANY_AUTHENTICATED", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def _get_oidc_admin_groups() -> set[str]:
@@ -545,6 +654,7 @@ def _get_oidc_metadata() -> dict:
     import httpx
 
     well_known = issuer + "/.well-known/openid-configuration"
+    assert_url_allowed(well_known, component="OIDC metadata fetch")
     response = httpx.get(well_known, timeout=10.0)
     response.raise_for_status()
     metadata = response.json()
@@ -596,7 +706,16 @@ def _extract_claims_profile(claims: dict) -> tuple[str, str, list[str]]:
 
 def _enforce_allowed_groups(groups: list[str]) -> None:
     allowed = _get_oidc_allowed_groups()
-    if allowed and not (allowed & set(groups)):
+    if not allowed:
+        if _oidc_allow_any_authenticated():
+            logger.warning(
+                "OIDC_ALLOW_ANY_AUTHENTICATED is enabled; granting War Room access to any authenticated OIDC user"
+            )
+            return
+        raise PermissionError(
+            "OIDC_ALLOWED_GROUPS must be configured unless OIDC_ALLOW_ANY_AUTHENTICATED=true is explicitly set"
+        )
+    if not (allowed & set(groups)):
         raise PermissionError("User is not a member of an allowed enterprise group")
 
 
@@ -608,8 +727,12 @@ async def _complete_oidc_auth(request: Request, code: str, state: str) -> dict:
     metadata = _get_oidc_metadata()
     import httpx
 
-    token_response = httpx.post(
+    token_endpoint = assert_url_allowed(
         metadata["token_endpoint"],
+        component="OIDC token exchange",
+    )
+    token_response = httpx.post(
+        token_endpoint,
         data={
             "grant_type": "authorization_code",
             "code": code,
@@ -627,6 +750,10 @@ async def _complete_oidc_auth(request: Request, code: str, state: str) -> dict:
     userinfo_endpoint = metadata.get("userinfo_endpoint")
     access_token = token_data.get("access_token", "")
     if userinfo_endpoint and access_token:
+        userinfo_endpoint = assert_url_allowed(
+            userinfo_endpoint,
+            component="OIDC userinfo fetch",
+        )
         userinfo_response = httpx.get(
             userinfo_endpoint,
             headers={"Authorization": f"Bearer {access_token}"},
@@ -678,9 +805,9 @@ async def login(request: Request):
             )
         return JSONResponse(status_code=429, content={"error": "Too many login attempts. Try again later."})
 
-    data = await request.json()
-    username = data.get("username", "")
-    password = data.get("password", "")
+    body = await _parse_request_model(request, LoginRequest)
+    username = body.username
+    password = body.password
 
     wr_user = _get_warroom_username()
     wr_pass = _get_warroom_password()
@@ -725,6 +852,8 @@ async def login(request: Request):
 @router.get("/config")
 async def auth_config():
     provider = _get_auth_provider()
+    allowed_groups = _get_oidc_allowed_groups()
+    open_access = _oidc_allow_any_authenticated()
     data = {
         "provider": provider,
         "local": {
@@ -733,9 +862,11 @@ async def auth_config():
         },
         "oidc": {
             "enabled": provider == "oidc",
-            "configured": _require_oidc_config() is None,
+            "configured": _require_oidc_config() is None and (bool(allowed_groups) or open_access),
             "display_name": os.getenv("OIDC_LOGIN_BUTTON_TEXT", "Continue with Enterprise SSO"),
             "login_path": "/auth/oidc/login",
+            "allowed_groups_configured": bool(allowed_groups),
+            "allow_any_authenticated": open_access,
         },
     }
     if provider == "local":
@@ -751,10 +882,10 @@ async def reset_password(request: Request):
             content={"error": "Password reset is only available in local authentication mode"},
         )
 
-    data = await request.json()
-    username = data.get("username", "")
-    reset_code = data.get("reset_code", "")
-    new_password = data.get("new_password", "")
+    body = await _parse_request_model(request, ResetPasswordRequest)
+    username = body.username
+    reset_code = body.reset_code
+    new_password = body.new_password
 
     if not username or not reset_code or not new_password:
         return JSONResponse(status_code=400, content={"error": "Username, reset code, and new password are required"})
@@ -833,8 +964,8 @@ async def oidc_exchange(request: Request):
     if not _oidc_auth_enabled():
         return JSONResponse(status_code=400, content={"error": "Enterprise OIDC login is not enabled"})
 
-    data = await request.json()
-    exchange_code = data.get("exchange_code", "")
+    body = await _parse_request_model(request, OidcExchangeRequest)
+    exchange_code = body.exchange_code
     if not exchange_code:
         return JSONResponse(status_code=400, content={"error": "exchange_code is required"})
 
@@ -905,9 +1036,9 @@ async def change_password(request: Request):
     if not session or session["expires_at"] < time.time():
         return JSONResponse(status_code=401, content={"error": "Session expired"})
 
-    data = await request.json()
-    current_password = data.get("current_password", "")
-    new_password = data.get("new_password", "")
+    body = await _parse_request_model(request, ChangePasswordRequest)
+    current_password = body.current_password
+    new_password = body.new_password
 
     if not current_password or not new_password:
         return JSONResponse(status_code=400, content={"error": "Both current and new password are required"})

@@ -126,8 +126,8 @@ def _parse_date(date_str: str) -> Optional[datetime]:
     # RFC 2822 (common in RSS: "Thu, 20 Feb 2026 10:30:00 +0000")
     try:
         return parsedate_to_datetime(date_str)
-    except (ValueError, TypeError):
-        pass
+    except (ValueError, TypeError) as exc:
+        logger.debug("daily_news_brief: failed RFC2822 date parse for %r: %s", date_str, exc)
 
     # ISO 8601 (common in Atom: "2026-02-20T10:30:00Z")
     try:
@@ -136,8 +136,8 @@ def _parse_date(date_str: str) -> Optional[datetime]:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt
-    except (ValueError, TypeError):
-        pass
+    except (ValueError, TypeError) as exc:
+        logger.debug("daily_news_brief: failed ISO8601 date parse for %r: %s", date_str, exc)
 
     return None
 
@@ -161,7 +161,7 @@ def _is_ai_relevant(title: str, summary: str) -> bool:
     return any(kw in text for kw in _AI_KEYWORDS)
 
 
-def _title_fingerprint(title: str) -> str:
+def _title_dedup_key(title: str) -> str:
     """Normalize a title for deduplication. Strips punctuation and lowercases."""
     return re.sub(r"[^a-z0-9 ]", "", title.lower()).strip()
 
@@ -427,7 +427,7 @@ def execute(context: Any, inputs: Dict[str, Any]) -> Dict[str, Any]:
     seen: set = set()
     unique: List[Dict[str, Any]] = []
     for a in all_articles:
-        fp = _title_fingerprint(a["title"])
+        fp = _title_dedup_key(a["title"])
         if fp and fp not in seen:
             seen.add(fp)
             unique.append(a)

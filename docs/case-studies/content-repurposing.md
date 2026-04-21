@@ -62,7 +62,7 @@ Each generation step produced a receipt with:
 - The model used and lane selected
 - Token count and latency
 
-**Total generation time:** ~12 seconds across all platforms.
+**Example recorded generation time for this walkthrough:** ~12 seconds across all platforms.
 
 ### Step 3: Verification
 
@@ -237,7 +237,7 @@ After running the pipeline for a week (5 blog posts processed), the War Room sho
 | Verification pass rate | 100% (3 regenerations on first attempts) |
 | Total deliveries | 40 (5 Instagram posts scheduled) |
 | Delivery success rate | 100% |
-| Average pipeline time | 18 seconds (generation + verification) |
+| Average pipeline time | Example run: 18 seconds (generation + verification) |
 | Owner interventions | 1 (edited a tweet for tone) |
 
 ### Trust Graduation

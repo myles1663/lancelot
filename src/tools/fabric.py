@@ -124,7 +124,7 @@ class ToolFabric:
     Example usage:
         fabric = ToolFabric()
         result = fabric.run_command("git status", workspace="/project")
-        print(result.stdout)
+        logger.info("%s", result.stdout)
     """
 
     def __init__(self, config: Optional[ToolFabricConfig] = None):

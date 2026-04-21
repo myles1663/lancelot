@@ -62,6 +62,11 @@ function ArmorPopover({ armorPct, degradedReasons }: ArmorPopoverProps) {
   const [open, setOpen] = useState(false)
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>()
 
+  const openHealthDashboard = () => {
+    setOpen(false)
+    navigate('/health')
+  }
+
   const handleMouseEnter = () => {
     clearTimeout(timeoutRef.current)
     setOpen(true)
@@ -80,7 +85,7 @@ function ArmorPopover({ armorPct, degradedReasons }: ArmorPopoverProps) {
       className="flex flex-col min-w-[120px] group relative cursor-pointer"
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      onClick={() => navigate('/health')}
+      onClick={openHealthDashboard}
     >
       <span className="text-[10px] uppercase tracking-wider text-text-muted mb-0.5">
         Armor
@@ -111,9 +116,16 @@ function ArmorPopover({ armorPct, degradedReasons }: ArmorPopoverProps) {
               ))}
             </ul>
           )}
-          <p className="text-[10px] text-text-muted mt-2 pt-2 border-t border-border-default">
+          <button
+            type="button"
+            className="text-[10px] text-text-muted mt-2 pt-2 border-t border-border-default w-full text-left hover:text-text-primary transition-colors"
+            onClick={(event) => {
+              event.stopPropagation()
+              openHealthDashboard()
+            }}
+          >
             Click to open Health Dashboard
-          </p>
+          </button>
         </div>
       )}
     </div>

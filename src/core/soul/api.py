@@ -4,7 +4,7 @@
 # Patent Pending: US Provisional Application #63/982,183
 
 """
-Soul API — REST endpoints for soul status, proposals, and activation (Prompt 5 / A5).
+Soul API endpoints for soul status, proposals, and activation.
 
 Endpoints:
     GET  /soul/status                    — active version + pending proposals
@@ -24,6 +24,7 @@ from typing import Optional
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, ValidationError
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import get_api_key_identity, request_has_capability, resolve_operator_identity
 
@@ -58,6 +59,12 @@ _proposals_lock = threading.Lock()
 # V31: ActionCard factory — set by gateway.py during startup
 _actioncard_factory = None
 _runtime_reload_callback = None
+
+
+class ProposeAmendmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    proposed_yaml: str = ""
 
 
 def init_soul_actioncards(factory) -> None:
@@ -146,6 +153,17 @@ def _set_soul_dir(soul_dir: str) -> None:
     """Set the soul directory (used in tests)."""
     global _SOUL_DIR
     _SOUL_DIR = soul_dir
+
+
+async def _parse_request_model(request: Request, model_cls: type[BaseModel]) -> BaseModel:
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Request body must be valid JSON") from exc
+    try:
+        return model_cls.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
 
 
 def _verify_owner(request: Request) -> bool:
@@ -265,8 +283,8 @@ async def propose_amendment(request: Request):
         raise HTTPException(status_code=403, detail="Owner identity required")
 
     try:
-        body = await request.json()
-        proposed_yaml = body.get("proposed_yaml", "")
+        body = await _parse_request_model(request, ProposeAmendmentRequest)
+        proposed_yaml = body.proposed_yaml
         identity = resolve_operator_identity(request)
         if identity is None:
             identity = get_api_key_identity(request)

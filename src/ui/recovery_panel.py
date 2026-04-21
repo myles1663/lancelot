@@ -1,5 +1,5 @@
 """
-War Room Setup & Recovery Panel (v4 Upgrade — Prompt 7)
+War Room setup and recovery panel helpers.
 
 Provides a Streamlit-renderable recovery panel that reads from
 the OnboardingSnapshot directly (same process, no HTTP).

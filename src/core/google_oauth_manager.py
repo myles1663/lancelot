@@ -43,6 +43,7 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlencode
 
 import requests
+from src.core.outbound_http import assert_url_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -96,9 +97,10 @@ def _generate_code_challenge(verifier: str) -> str:
 class GoogleOAuthManager:
     """Manages the full Google OAuth lifecycle: PKCE, exchange, vault storage, refresh, fan-out."""
 
-    def __init__(self, vault: Any, port: int = 8000):
+    def __init__(self, vault: Any, port: int = 8000, network_interceptor=None):
         self._vault = vault
         self._port = port
+        self._network_interceptor = network_interceptor
         self._pending_flows: Dict[str, Dict[str, Any]] = {}  # state -> {code_verifier, created_at}
         self._lock = threading.Lock()
         self._refresh_thread: Optional[threading.Thread] = None
@@ -108,6 +110,14 @@ class GoogleOAuthManager:
         )
         self._state_file.parent.mkdir(parents=True, exist_ok=True)
         self._load_pending_flows()
+
+    def _delete_vault_key(self, key: str) -> None:
+        """Delete a vault key with explicit failure visibility."""
+        try:
+            if self._vault.exists(key):
+                self._vault.delete(key)
+        except Exception as exc:
+            logger.warning("Failed to delete Google OAuth vault key %s: %s", key, exc)
 
     # ── Auth URL Generation ──────────────────────────────────────
 
@@ -170,8 +180,13 @@ class GoogleOAuthManager:
 
         redirect_uri = f"http://localhost:{self._port}/google/callback"
         try:
-            resp = requests.post(
+            token_url = assert_url_allowed(
                 GOOGLE_TOKEN_URL,
+                component="Google OAuth token exchange",
+                network_interceptor=self._network_interceptor,
+            )
+            resp = requests.post(
+                token_url,
                 data={
                     "grant_type": "authorization_code",
                     "client_id": client_id,
@@ -291,13 +306,18 @@ class GoogleOAuthManager:
         try:
             if self._vault.exists(VAULT_ACCESS_TOKEN):
                 access_token = self._vault.retrieve(VAULT_ACCESS_TOKEN, accessor_id="")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to retrieve Google OAuth access token for revocation: %s", exc)
 
         if access_token:
             try:
-                requests.post(
+                revoke_url = assert_url_allowed(
                     GOOGLE_REVOKE_URL,
+                    component="Google OAuth token revocation",
+                    network_interceptor=self._network_interceptor,
+                )
+                requests.post(
+                    revoke_url,
                     data={"token": access_token},
                     headers={"Content-Type": "application/x-www-form-urlencoded"},
                     timeout=10,
@@ -311,11 +331,7 @@ class GoogleOAuthManager:
             VAULT_CLIENT_ID, VAULT_CLIENT_SECRET,
             VAULT_GMAIL_TOKEN, VAULT_CALENDAR_TOKEN,
         ):
-            try:
-                if self._vault.exists(key):
-                    self._vault.delete(key)
-            except Exception:
-                pass
+            self._delete_vault_key(key)
 
         logger.info("Google OAuth tokens revoked and vault cleared")
 
@@ -405,8 +421,13 @@ class GoogleOAuthManager:
                 return False
 
             try:
-                resp = requests.post(
+                token_url = assert_url_allowed(
                     GOOGLE_TOKEN_URL,
+                    component="Google OAuth token refresh",
+                    network_interceptor=self._network_interceptor,
+                )
+                resp = requests.post(
+                    token_url,
                     data={
                         "grant_type": "refresh_token",
                         "client_id": client_id,

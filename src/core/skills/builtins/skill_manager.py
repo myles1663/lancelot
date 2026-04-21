@@ -81,11 +81,17 @@ def _get_executor():
 
 
 def _propose_skill(inputs: Dict[str, Any]) -> Dict[str, Any]:
-    """Create a skill proposal with real implementation code."""
+    """Create a governed skill proposal with explicit implementation artifacts."""
     name = inputs.get("name", "").strip()
     description = inputs.get("description", "")
     permissions = inputs.get("permissions")
     execute_code = inputs.get("execute_code", "")
+    test_code = inputs.get("test_code")
+    target_domains = inputs.get("target_domains")
+    credentials = inputs.get("credentials")
+    risk = str(inputs.get("risk", "low")).lower()
+    source = str(inputs.get("source", "first-party"))
+    author = str(inputs.get("author", "Lancelot"))
 
     if not name:
         raise ValueError("Missing required input: 'name'")
@@ -99,25 +105,31 @@ def _propose_skill(inputs: Dict[str, Any]) -> Dict[str, Any]:
         except json.JSONDecodeError:
             permissions = [p.strip() for p in permissions.split(",") if p.strip()]
 
-    factory = _get_factory()
+    if isinstance(target_domains, str):
+        try:
+            target_domains = json.loads(target_domains)
+        except json.JSONDecodeError:
+            target_domains = [p.strip() for p in target_domains.split(",") if p.strip()]
 
-    # Generate the skeleton proposal
-    proposal = factory.generate_skeleton(
+    if isinstance(credentials, str):
+        try:
+            credentials = json.loads(credentials)
+        except json.JSONDecodeError:
+            credentials = [p.strip() for p in credentials.split(",") if p.strip()]
+
+    factory = _get_factory()
+    proposal = factory.create_proposal(
         name=name,
         description=description,
         permissions=permissions,
+        execute_code=execute_code,
+        test_code=test_code,
+        target_domains=target_domains,
+        credentials=credentials,
+        risk=risk,
+        source=source,
+        author=author,
     )
-
-    # Override the TODO stub with real implementation code
-    proposal.execute_code = execute_code
-
-    # Save the updated proposal
-    proposals = factory._load_proposals()
-    for i, p in enumerate(proposals):
-        if p.id == proposal.id:
-            proposals[i] = proposal
-            break
-    factory._save_proposals(proposals)
 
     logger.info("Skill proposed: name=%s, id=%s", name, proposal.id)
 
@@ -126,9 +138,12 @@ def _propose_skill(inputs: Dict[str, Any]) -> Dict[str, Any]:
         "proposal_id": proposal.id,
         "name": name,
         "description": description,
+        "proposal_status": proposal.status.value if hasattr(proposal.status, "value") else str(proposal.status),
+        "pipeline_passed": proposal.pipeline_passed,
+        "pipeline_failed_at_stage": proposal.pipeline_failed_at_stage,
         "message": (
             f"Skill '{name}' proposed (id: {proposal.id}). "
-            "Awaiting owner approval in the War Room before installation."
+            "Review the governed proposal in the War Room before installation."
         ),
     }
 

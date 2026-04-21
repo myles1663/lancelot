@@ -18,9 +18,11 @@ import json
 import time
 import uuid
 import logging
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 
@@ -33,6 +35,23 @@ logger = logging.getLogger("local-llm")
 _llm = None
 _model_name = ""
 _loaded_at = None
+_llm_lock = threading.Lock()
+_readiness_lock = threading.Lock()
+_readiness_stop = threading.Event()
+_readiness_thread = None
+_readiness = {
+    "loaded": False,
+    "ready": False,
+    "status": "starting",
+    "last_verified_at": None,
+    "last_checked_at": None,
+    "last_error": None,
+    "consecutive_failures": 0,
+    "last_smoke_elapsed_ms": None,
+}
+_READINESS_PROMPT = "Classify: hello\nCategory:"
+_READINESS_MAX_TOKENS = 12
+_READINESS_INTERVAL_S = int(os.environ.get("LOCAL_MODEL_READINESS_INTERVAL_S", "30"))
 
 
 class CompletionRequest(BaseModel):
@@ -87,7 +106,10 @@ def _do_load_model():
         from llama_cpp import Llama
     except ImportError:
         logger.error("llama-cpp-python not installed")
-        raise RuntimeError("llama-cpp-python is required")
+        raise RuntimeError(
+            "llama-cpp-python is required for the local model service. "
+            "Install the local-model runtime described in docs/installation.md."
+        )
 
     model_path = os.environ.get("LOCAL_MODEL_PATH")
     if not model_path:
@@ -109,7 +131,7 @@ def _do_load_model():
 
     n_ctx = int(os.environ.get("LOCAL_MODEL_CTX", "4096"))
     n_threads = int(os.environ.get("LOCAL_MODEL_THREADS", "4"))
-    n_gpu = int(os.environ.get("LOCAL_MODEL_GPU_LAYERS", "15"))
+    n_gpu = int(os.environ.get("LOCAL_MODEL_GPU_LAYERS", "0"))
 
     logger.info(f"Loading model: {model_path}")
     logger.info(f"Config: ctx={n_ctx}, threads={n_threads}, gpu_layers={n_gpu}")
@@ -122,13 +144,135 @@ def _do_load_model():
         verbose=False,
     )
     _loaded_at = time.time()
+    with _readiness_lock:
+        _readiness["loaded"] = True
+        _readiness["status"] = "loaded"
     logger.info(f"Model loaded: {_model_name or model_path}")
+
+
+def _update_readiness(
+    *,
+    ready: bool,
+    checked_at: str,
+    error: str | None = None,
+    elapsed_ms: float | None = None,
+) -> None:
+    with _readiness_lock:
+        _readiness["last_checked_at"] = checked_at
+        _readiness["last_smoke_elapsed_ms"] = elapsed_ms
+        _readiness["ready"] = bool(ready)
+        if ready:
+            _readiness["status"] = "ready"
+            _readiness["last_verified_at"] = checked_at
+            _readiness["last_error"] = None
+            _readiness["consecutive_failures"] = 0
+        else:
+            _readiness["status"] = "loaded_not_ready" if _readiness["loaded"] else "unavailable"
+            _readiness["last_error"] = error or "Inference smoke failed"
+            _readiness["consecutive_failures"] += 1
+
+
+def _run_readiness_smoke() -> bool:
+    if _llm is None:
+        raise RuntimeError("Model not loaded")
+    start = time.monotonic()
+    with _llm_lock:
+        result = _llm(
+            _READINESS_PROMPT,
+            max_tokens=_READINESS_MAX_TOKENS,
+            temperature=0.0,
+            stop=["\n\n"],
+            echo=False,
+        )
+    text = result["choices"][0]["text"].strip()
+    checked_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    elapsed_ms = round((time.monotonic() - start) * 1000, 1)
+    if not text:
+        _update_readiness(
+            ready=False,
+            checked_at=checked_at,
+            error="Inference smoke returned empty output",
+            elapsed_ms=elapsed_ms,
+        )
+        return False
+    _update_readiness(ready=True, checked_at=checked_at, elapsed_ms=elapsed_ms)
+    return True
+
+
+def _readiness_loop() -> None:
+    while not _readiness_stop.wait(_READINESS_INTERVAL_S):
+        try:
+            _run_readiness_smoke()
+        except Exception as exc:
+            checked_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            logger.error("Local readiness smoke failed: %s", exc)
+            _update_readiness(
+                ready=False,
+                checked_at=checked_at,
+                error=str(exc),
+            )
+
+
+def _start_readiness_monitor() -> None:
+    global _readiness_thread
+    if _readiness_thread is not None and _readiness_thread.is_alive():
+        return
+    _readiness_stop.clear()
+    _readiness_thread = threading.Thread(
+        target=_readiness_loop,
+        daemon=True,
+        name="local-llm-readiness",
+    )
+    _readiness_thread.start()
+
+
+def _stop_readiness_monitor() -> None:
+    global _readiness_thread
+    _readiness_stop.set()
+    if _readiness_thread is not None:
+        _readiness_thread.join(timeout=5)
+        _readiness_thread = None
+
+
+def _readiness_payload() -> dict:
+    with _readiness_lock:
+        payload = dict(_readiness)
+    uptime = time.time() - _loaded_at if _loaded_at else 0
+    payload.update({
+        "model": _model_name,
+        "uptime_seconds": round(uptime, 1),
+        "capabilities": ["completions", "chat_completions", "tool_calling"],
+    })
+    if payload["ready"]:
+        payload["status"] = "ok"
+    elif payload["loaded"]:
+        payload["status"] = "degraded"
+    else:
+        payload["status"] = "unavailable"
+    return payload
+
+
+def _ensure_ready_for_inference() -> None:
+    if _llm is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+    payload = _readiness_payload()
+    if not payload["ready"]:
+        detail = payload.get("last_error") or "Local model not ready for inference"
+        raise HTTPException(status_code=503, detail=detail)
 
 
 @asynccontextmanager
 async def lifespan(a):
     _do_load_model()
+    try:
+        _run_readiness_smoke()
+    except Exception as exc:
+        checked_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        logger.error("Initial local readiness smoke failed: %s", exc)
+        _update_readiness(ready=False, checked_at=checked_at, error=str(exc))
+    _start_readiness_monitor()
     yield
+    _stop_readiness_monitor()
 
 
 app = FastAPI(title="Lancelot local-llm", version="2.0.0", lifespan=lifespan)
@@ -140,33 +284,28 @@ app = FastAPI(title="Lancelot local-llm", version="2.0.0", lifespan=lifespan)
 
 @app.get("/health")
 def health():
-    """Liveness + readiness probe for Docker HEALTHCHECK."""
-    if _llm is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
-    uptime = time.time() - _loaded_at if _loaded_at else 0
-    return {
-        "status": "ok",
-        "model": _model_name,
-        "uptime_seconds": round(uptime, 1),
-        "capabilities": ["completions", "chat_completions", "tool_calling"],
-    }
+    """Readiness probe backed by real inference smoke, not just model load state."""
+    payload = _readiness_payload()
+    if not payload["ready"]:
+        return JSONResponse(status_code=503, content=payload)
+    return payload
 
 
 @app.post("/v1/completions", response_model=CompletionResponse)
 def completions(req: CompletionRequest):
     """Run text completion against the local model."""
-    if _llm is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+    _ensure_ready_for_inference()
 
     start = time.monotonic()
     try:
-        result = _llm(
-            req.prompt,
-            max_tokens=req.max_tokens,
-            temperature=req.temperature,
-            stop=req.stop or ["\n\n"],
-            echo=False,
-        )
+        with _llm_lock:
+            result = _llm(
+                req.prompt,
+                max_tokens=req.max_tokens,
+                temperature=req.temperature,
+                stop=req.stop or ["\n\n"],
+                echo=False,
+            )
     except Exception as exc:
         logger.error("Inference error: %s", exc)
         raise HTTPException(status_code=500, detail="Model inference failed")
@@ -259,8 +398,7 @@ def chat_completions(req: ChatCompletionRequest):
     reasoning as <think> tags. This endpoint post-processes the output to
     convert to standard OpenAI format.
     """
-    if _llm is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+    _ensure_ready_for_inference()
 
     start = time.monotonic()
 
@@ -295,7 +433,8 @@ def chat_completions(req: ChatCompletionRequest):
         kwargs["tool_choice"] = req.tool_choice
 
     try:
-        result = _llm.create_chat_completion(**kwargs)
+        with _llm_lock:
+            result = _llm.create_chat_completion(**kwargs)
     except Exception as exc:
         logger.error("Chat completion error: %s", exc)
         raise HTTPException(

@@ -1,10 +1,4 @@
 #!/usr/bin/env node
-/**
- * UAB Build Script (Lancelot standalone)
- *
- * Compiles TypeScript from src/ to dist/ directly using the
- * local tsconfig.json.  No parent repo dependency.
- */
 
 import { execSync } from 'child_process';
 import fs from 'fs';
@@ -13,23 +7,52 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = path.resolve(__dirname, '..');
+const DIST_DIR = path.join(PKG_ROOT, 'dist');
 
-console.log('Building Universal App Bridge...');
+console.log('Building Universal App Bridge...\n');
+
 try {
-  execSync('npx tsc', { cwd: PKG_ROOT, stdio: 'inherit' });
+  execSync('npx tsc -p tsconfig.json', {
+    cwd: PKG_ROOT,
+    stdio: 'inherit',
+  });
 } catch {
-  console.error('Build failed.');
+  console.error('\nTypeScript compilation failed');
   process.exit(1);
 }
 
-// Verify key outputs
-const required = ['dist/index.js', 'dist/service.js', 'dist/daemon.js', 'dist/cli.js'];
-for (const file of required) {
-  if (!fs.existsSync(path.join(PKG_ROOT, file))) {
-    console.error(`Missing: ${file}`);
-    process.exit(1);
-  }
+const requiredFiles = [
+  'dist/index.js',
+  'dist/cli.js',
+  'dist/daemon.js',
+  'dist/connector.js',
+  'dist/server.js',
+  'dist/service.js',
+  'dist/router.js',
+  'dist/hooks.js',
+  'dist/plugins/browser/index.js',
+  'dist/plugins/chrome-ext/index.js',
+  'dist/plugins/electron/index.js',
+  'dist/plugins/office/index.js',
+  'dist/plugins/qt/index.js',
+  'dist/plugins/gtk/index.js',
+  'dist/plugins/java/index.js',
+  'dist/plugins/flutter/index.js',
+  'dist/plugins/win-uia/index.js',
+  'dist/plugins/vision/index.js',
+  'data/action-risk.json',
+];
+
+const missing = requiredFiles.filter(file => !fs.existsSync(path.join(PKG_ROOT, file)));
+if (missing.length > 0) {
+  console.error('\nMissing build outputs:');
+  for (const file of missing) console.error(` - ${file}`);
+  process.exit(1);
 }
 
-const pkg = JSON.parse(fs.readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8'));
-console.log(`${pkg.name}@${pkg.version} built successfully.`);
+let fileCount = 0;
+for (const _entry of fs.readdirSync(DIST_DIR, { recursive: true })) {
+  fileCount += 1;
+}
+
+console.log(`\nBuilt successfully. Verified ${requiredFiles.length} required outputs across ${fileCount} dist entries.`);

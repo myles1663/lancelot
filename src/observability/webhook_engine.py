@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Set
 
 import httpx
 
+from src.core.outbound_http import OutboundNetworkError, assert_url_allowed
 from src.observability.webhook_categories import (
     should_deliver,
     is_governance_critical,
@@ -81,6 +82,7 @@ class WebhookEngine:
         delivery_timeout_s: int = 10,
         max_retries: int = MAX_ATTEMPTS,
         data_dir: str = "/home/lancelot/data",
+        network_interceptor=None,
     ):
         self._endpoints = {ep.id: ep for ep in endpoints if ep.enabled}
         self._deployment_id = deployment_id or os.getenv("LANCELOT_DEPLOYMENT_ID", "")
@@ -91,6 +93,7 @@ class WebhookEngine:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._client = httpx.Client(timeout=delivery_timeout_s, verify=True)
+        self._network_interceptor = network_interceptor
         pending_file_override = os.getenv("LANCELOT_WEBHOOK_PENDING_FILE", "").strip()
         if pending_file_override:
             self._pending_file = Path(pending_file_override)
@@ -250,8 +253,12 @@ class WebhookEngine:
             import secret_cache
             if secret_cache.is_bootstrapped():
                 return secret_cache.get(endpoint.secret_vault_key) or ""
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(
+                "Failed to read webhook secret '%s' from secret cache: %s",
+                endpoint.secret_vault_key,
+                exc,
+            )
         return os.getenv(endpoint.secret_vault_key, "")
 
     def _deliver(self, delivery: WebhookDelivery) -> bool:
@@ -261,6 +268,11 @@ class WebhookEngine:
         envelope["delivery_attempt"] = delivery.attempt
 
         try:
+            assert_url_allowed(
+                ep.url,
+                component="Webhook delivery",
+                network_interceptor=self._network_interceptor,
+            )
             response = self._client.post(
                 ep.url,
                 json=envelope,
@@ -277,6 +289,10 @@ class WebhookEngine:
                     ep.id, response.status_code, delivery.attempt,
                 )
                 return False
+        except OutboundNetworkError as exc:
+            delivery.last_error = str(exc)
+            logger.warning("Webhook delivery blocked: endpoint=%s, error=%s", ep.id, exc)
+            return False
         except Exception as exc:
             delivery.last_error = str(exc)
             logger.warning(

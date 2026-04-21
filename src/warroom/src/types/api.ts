@@ -22,6 +22,16 @@ export interface HealthCheckResponse {
   status: string
   version: string
   components: Record<string, string>
+  local_llm?: {
+    loaded: boolean
+    ready: boolean
+    status: string
+    last_error: string | null
+    last_verified_at: string | null
+    last_checked_at: string | null
+    consecutive_failures: number
+    last_smoke_elapsed_ms: number | null
+  }
   crusader_mode: boolean
   uptime_seconds: number
   error_count: number
@@ -33,6 +43,13 @@ export interface HealthReadyResponse {
   ready: boolean
   onboarding_state: string
   local_llm_ready: boolean
+  local_llm_loaded: boolean
+  local_llm_status: string
+  local_llm_last_verified_at: string | null
+  local_llm_last_checked_at: string | null
+  local_llm_last_error: string | null
+  local_llm_consecutive_failures: number
+  local_llm_last_smoke_elapsed_ms: number | null
   scheduler_running: boolean
   last_health_tick_at: string | null
   last_scheduler_tick_at: string | null
@@ -59,6 +76,11 @@ export interface SystemStatusResponse {
     flagship_provider: string
     credential_status: string
     local_model_status: string
+    local_model_runtime_status: string
+    local_model_runtime_ready: boolean
+    local_model_runtime_loaded: boolean
+    local_model_last_verified_at: string | null
+    local_model_last_error: string | null
     is_ready: boolean
   }
   cooldown: {
@@ -67,6 +89,7 @@ export interface SystemStatusResponse {
     reason: string | null
   }
   runtime_pause: RuntimePauseStatusResponse
+  model_usage_policy: ModelUsagePolicyResponse
   uptime_seconds: number
 }
 
@@ -89,6 +112,27 @@ export interface RuntimeEmergencyStopResponse extends RuntimePauseStatusResponse
   stopped_hive_agents: number
   stopped_agent_ids: string[]
   execution_state: string
+}
+
+export interface ModelUsagePolicyResponse {
+  local_execution_mode: string
+  frontier_scrub_mode: string
+  updated_at: number | null
+  local_execution_available: boolean
+  local_scrub_available: boolean
+  availability_reason: string | null
+  local_model_loaded: boolean
+  local_model_ready: boolean
+  local_model_status: string
+  local_model_last_verified_at: string | null
+  local_model_last_checked_at: string | null
+  local_model_last_error: string | null
+  local_model_consecutive_failures: number
+  local_model_last_smoke_elapsed_ms: number | null
+  frontier_scrub_fallback_active: boolean
+  frontier_scrub_fallback_count: number
+  last_frontier_scrub_fallback_at: number | null
+  last_frontier_scrub_fallback_reason: string | null
 }
 
 // ------------------------------------------------------------------
@@ -132,6 +176,14 @@ export interface OnboardingStatusResponse {
   provider_mode: string
   credential_status: string
   local_model_status: string
+  local_model_runtime_status: string
+  local_model_runtime_ready: boolean
+  local_model_runtime_loaded: boolean
+  local_model_last_verified_at: string | null
+  local_model_last_checked_at: string | null
+  local_model_last_error: string | null
+  local_model_consecutive_failures: number
+  local_model_last_smoke_elapsed_ms: number | null
   is_ready: boolean
   cooldown_active: boolean
   cooldown_remaining: number
@@ -524,6 +576,9 @@ export interface SystemInfoResponse {
   platform: string
   hostname: string
   data_dir: { path: string; total_mb: number; used_mb: number }
+  runtime_degraded?: boolean
+  degraded_reasons?: string[]
+  runtime_errors?: string[]
 }
 
 export interface VaultKeyEntry {
@@ -551,6 +606,30 @@ export interface VaultMaskedResponse {
   message?: string
 }
 
+export interface VaultStatusResponse {
+  status: string
+  message: string
+  available: boolean
+  key_configured: boolean
+  key_source: string
+  key_origin: string
+  key_id: string | null
+  metadata_present: boolean
+  metadata_key_id: string | null
+  suspected_key_mismatch: boolean
+  has_primary: boolean
+  has_backup: boolean
+  primary_path: string
+  backup_path: string
+  metadata_path: string
+  reset_backups_path: string
+  entry_count: number
+  primary_last_modified: string | null
+  backup_last_modified: string | null
+  metadata_last_modified: string | null
+  last_error: string | null
+}
+
 export interface LogsResponse {
   lines: string[]
   file: string
@@ -560,6 +639,16 @@ export interface LogsResponse {
 export interface SetupActionResponse {
   status: string
   message?: string
+  runtime_degraded?: boolean
+  degraded_reasons?: string[]
+  runtime_errors?: string[]
+}
+
+export interface VaultResetResponse extends SetupActionResponse {
+  archived_files: string[]
+  archive_dir: string
+  restart_required: boolean
+  vault_status: VaultStatusResponse
 }
 
 export interface ConfigReloadResponse {
@@ -598,16 +687,36 @@ export interface SkillProposalSummary {
   name: string
   description: string
   permissions: string[]
+  risk: string
+  source: string
+  target_domains: string[]
+  credential_keys: string[]
+  approved_capabilities: string[]
   status: string
+  pipeline_passed: boolean
+  pipeline_failed_at_stage: string | null
   created_at: string
   approved_by: string | null
 }
 
 export interface SkillProposalDetail extends SkillProposalSummary {
+  author: string
+  credentials: Array<{
+    vault_key: string
+    type: string
+    purpose: string
+  }>
   manifest_yaml: string
+  security_manifest_yaml: string
   execute_code: string
   test_code: string
   tests_status: string | null
+  pipeline_stage_results: Record<string, unknown>
+  artifact_hashes: Record<string, string>
+  approved_at: string | null
+  rejected_reason: string | null
+  rejected_at: string | null
+  installed_at: string | null
 }
 
 export interface SkillProposalsResponse {

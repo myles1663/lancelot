@@ -1,8 +1,11 @@
 """Tests for HIVE Governance Bridge."""
 
+import sys
+
 import pytest
 
 from src.hive.integration.governance_bridge import GovernanceBridge, GovernanceResult
+from src.integrations.mcp_sentry import MCPSentry
 
 
 class MockRiskClassifier:
@@ -43,8 +46,13 @@ class MockMCPSentry:
     def __init__(self, allow_all=True):
         self._allow_all = allow_all
 
-    def check_permission(self, capability):
+    def check_permission(self, capability, payload=None):
         return self._allow_all
+
+
+class ExplodingMCPSentry:
+    def check_permission(self, capability, payload=None):
+        raise RuntimeError("mcp sentry offline")
 
 
 class TestValidateAction:
@@ -105,6 +113,37 @@ class TestValidateAction:
         result = bridge.validate_action("allowed_capability")
         assert result.approved is True
 
+    def test_mcp_sentry_exception_fails_closed(self):
+        bridge = GovernanceBridge(
+            risk_classifier=MockRiskClassifier(default_tier=0),
+            mcp_sentry=ExplodingMCPSentry(),
+        )
+        result = bridge.validate_action("allowed_capability")
+        assert result.approved is False
+        assert result.requires_operator_approval is False
+        assert result.tier == "T0"
+        assert "MCP Sentry check failed" in result.reason
+
+    def test_trust_ledger_cannot_autoapprove_t2_action(self):
+        bridge = GovernanceBridge(
+            risk_classifier=MockRiskClassifier(default_tier=2),
+            trust_ledger=MockTrustLedger(effective_tier=type("Tier", (), {"value": 0})()),
+        )
+        result = bridge.validate_action("shell_exec")
+        assert result.approved is False
+        assert result.requires_operator_approval is True
+        assert result.tier == "T2"
+
+    def test_trust_ledger_cannot_autoapprove_t3_action(self):
+        bridge = GovernanceBridge(
+            risk_classifier=MockRiskClassifier(default_tier=3),
+            trust_ledger=MockTrustLedger(effective_tier=type("Tier", (), {"value": 0})()),
+        )
+        result = bridge.validate_action("deploy")
+        assert result.approved is False
+        assert result.requires_operator_approval is True
+        assert result.tier == "T3"
+
 
 class TestKillSwitches:
     def test_kill_switch_reads_feature_flag(self, monkeypatch):
@@ -112,6 +151,23 @@ class TestKillSwitches:
         # When flag module isn't available, returns False
         result = bridge.check_kill_switches()
         assert isinstance(result, bool)
+
+    def test_validate_action_denied_when_kill_switch_enforced(self, monkeypatch):
+        bridge = GovernanceBridge(
+            risk_classifier=MockRiskClassifier(default_tier=0),
+            enforce_kill_switches=True,
+        )
+        monkeypatch.setitem(
+            sys.modules,
+            "src.core.feature_flags",
+            type("Flags", (), {"FEATURE_HIVE": False})(),
+        )
+        monkeypatch.delitem(sys.modules, "feature_flags", raising=False)
+
+        result = bridge.validate_action("classify_intent")
+        assert result.approved is False
+        assert result.requires_operator_approval is False
+        assert result.reason == "HIVE kill switch is active"
 
 
 class TestUpdateTrust:
@@ -138,3 +194,64 @@ class TestRequestApproval:
         bridge = GovernanceBridge()
         result = bridge.request_approval("deploy", "agent-1")
         assert result is False
+
+    def test_high_risk_action_creates_pending_request_in_mcp_sentry(self, tmp_path):
+        sentry = MCPSentry(data_dir=str(tmp_path))
+        bridge = GovernanceBridge(
+            risk_classifier=MockRiskClassifier(default_tier=3),
+            mcp_sentry=sentry,
+        )
+
+        result = bridge.validate_action("deploy", agent_id="agent-1")
+
+        assert result.approved is False
+        assert result.requires_operator_approval is True
+        assert result.approval_request_id is not None
+        pending = sentry.pending_requests[result.approval_request_id]
+        assert pending["tool"] == "deploy"
+        assert pending["params"]["agent_id"] == "agent-1"
+        assert pending["params"]["source"] == "hive"
+
+    def test_high_risk_action_is_allowed_after_sentry_approval(self, tmp_path):
+        sentry = MCPSentry(data_dir=str(tmp_path))
+        bridge = GovernanceBridge(
+            risk_classifier=MockRiskClassifier(default_tier=3),
+            mcp_sentry=sentry,
+        )
+
+        first = bridge.validate_action("deploy", agent_id="agent-1")
+        assert sentry.approve_request(first.approval_request_id) is True
+
+        second = bridge.validate_action("deploy", agent_id="agent-1")
+
+        assert second.approved is True
+        assert second.requires_operator_approval is False
+        assert second.approval_request_id == first.approval_request_id
+
+    def test_request_approval_queues_pending_request_via_mcp_sentry(self, tmp_path):
+        sentry = MCPSentry(data_dir=str(tmp_path))
+        bridge = GovernanceBridge(mcp_sentry=sentry)
+
+        result = bridge.request_approval("deploy", "agent-1", context={"action": "ship"})
+
+        assert result is False
+        assert len(sentry.pending_requests) == 1
+        request_id, pending = next(iter(sentry.pending_requests.items()))
+        assert pending["tool"] == "deploy"
+        assert pending["params"]["agent_id"] == "agent-1"
+        assert pending["params"]["context"] == {"action": "ship"}
+        assert pending["status"] == "PENDING"
+        assert request_id
+
+    def test_request_approval_returns_true_after_existing_request_is_approved(self, tmp_path):
+        sentry = MCPSentry(data_dir=str(tmp_path))
+        bridge = GovernanceBridge(mcp_sentry=sentry)
+
+        initial = bridge.request_approval("deploy", "agent-1", context={"action": "ship"})
+        assert initial is False
+        request_id = next(iter(sentry.pending_requests))
+        assert sentry.approve_request(request_id) is True
+
+        result = bridge.request_approval("deploy", "agent-1", context={"action": "ship"})
+
+        assert result is True

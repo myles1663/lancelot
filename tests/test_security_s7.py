@@ -7,6 +7,7 @@ import sys
 import os
 import tempfile
 import json
+import logging
 from unittest.mock import patch, MagicMock
 from cryptography.fernet import Fernet
 
@@ -85,7 +86,7 @@ class TestFileKeyFallback(unittest.TestCase):
                 encrypted = vault.fernet.encrypt(b"test")
                 self.assertEqual(vault.fernet.decrypt(encrypted), b"test")
 
-    def test_warning_printed_on_file_fallback(self):
+    def test_warning_logged_on_file_fallback(self):
         file_key = Fernet.generate_key()
         with tempfile.TemporaryDirectory() as tmpdir:
             key_file = os.path.join(tmpdir, "vault.key")
@@ -93,12 +94,11 @@ class TestFileKeyFallback(unittest.TestCase):
                 f.write(file_key)
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("VAULT_ENCRYPTION_KEY", None)
-                with patch("builtins.print") as mock_print:
+                with self.assertLogs("vault", level="WARNING") as captured:
                     from vault import SecretVault
-                    vault = SecretVault(data_dir=tmpdir)
-                    # Should have printed a warning
-                    printed = " ".join(str(c) for c in mock_print.call_args_list)
-                    self.assertIn("WARNING", printed)
+                    SecretVault(data_dir=tmpdir)
+                logged = " ".join(captured.output)
+                self.assertIn("Loading vault key from file", logged)
 
 
 class TestAuditLogging(unittest.TestCase):

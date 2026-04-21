@@ -169,10 +169,10 @@ class TestFeatureFlags:
 
         from src.core import feature_flags
         # Clear persisted state so it doesn't override defaults
-        old_persisted = dict(feature_flags._persisted_state)
-        feature_flags._persisted_state.pop("FEATURE_CONNECTORS", None)
-        feature_flags._persisted_state.pop("FEATURE_TRUST_LEDGER", None)
-        feature_flags._persisted_state.pop("FEATURE_SKILL_SECURITY_PIPELINE", None)
+        old_persisted = feature_flags.persisted_flag_state_snapshot()
+        feature_flags.clear_persisted_flag_state("FEATURE_CONNECTORS")
+        feature_flags.clear_persisted_flag_state("FEATURE_TRUST_LEDGER")
+        feature_flags.clear_persisted_flag_state("FEATURE_SKILL_SECURITY_PIPELINE")
         feature_flags.reload_flags()
 
         assert feature_flags.FEATURE_CONNECTORS is False
@@ -180,7 +180,7 @@ class TestFeatureFlags:
         assert feature_flags.FEATURE_SKILL_SECURITY_PIPELINE is False
 
         # Restore persisted state
-        feature_flags._persisted_state.update(old_persisted)
+        feature_flags.replace_persisted_flag_state(old_persisted)
 
     def test_connector_flags_enable(self):
         os.environ["FEATURE_CONNECTORS"] = "true"

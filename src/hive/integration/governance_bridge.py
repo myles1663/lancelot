@@ -22,6 +22,7 @@ class GovernanceResult:
     tier: Optional[str] = None
     reason: str = ""
     requires_operator_approval: bool = False
+    approval_request_id: Optional[str] = None
 
 
 class GovernanceBridge:
@@ -37,11 +38,78 @@ class GovernanceBridge:
         trust_ledger=None,
         decision_log=None,
         mcp_sentry=None,
+        enforce_kill_switches: bool = False,
     ):
         self._risk_classifier = risk_classifier
         self._trust_ledger = trust_ledger
         self._decision_log = decision_log
         self._mcp_sentry = mcp_sentry
+        self._enforce_kill_switches = enforce_kill_switches
+
+    def _sentry_context(
+        self,
+        capability: str,
+        scope: str,
+        target: Optional[str],
+        agent_id: Optional[str],
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload = {
+            "capability": capability,
+            "scope": scope,
+            "target": target or "",
+            "agent_id": agent_id or "",
+            "source": "hive",
+        }
+        if context:
+            payload["context"] = context
+        return payload
+
+    def _check_sentry_permission(
+        self,
+        capability: str,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if not self._mcp_sentry:
+            return {
+                "status": "NOT_CONFIGURED",
+                "message": "No MCP Sentry configured",
+                "request_id": None,
+            }
+        try:
+            try:
+                result = self._mcp_sentry.check_permission(capability, payload)
+            except TypeError:
+                result = self._mcp_sentry.check_permission(capability)
+        except Exception as exc:
+            logger.warning("MCP Sentry check failed: %s", exc)
+            return {
+                "status": "DENIED",
+                "message": f"MCP Sentry check failed: {exc}",
+                "request_id": None,
+            }
+
+        if isinstance(result, bool):
+            return {
+                "status": "APPROVED" if result else "DENIED",
+                "message": "MCP Sentry approved" if result else f"MCP Sentry denied: {capability}",
+                "request_id": None,
+            }
+
+        if not isinstance(result, dict):
+            approved = bool(result)
+            return {
+                "status": "APPROVED" if approved else "DENIED",
+                "message": str(result),
+                "request_id": None,
+            }
+
+        status = str(result.get("status", "APPROVED")).upper()
+        return {
+            "status": status,
+            "message": result.get("message", ""),
+            "request_id": result.get("request_id"),
+        }
 
     def validate_action(
         self,
@@ -62,6 +130,15 @@ class GovernanceBridge:
         """
         tier_str = "T0"
         requires_approval = False
+        sentry_payload = self._sentry_context(capability, scope, target, agent_id)
+
+        if self._enforce_kill_switches and not self.check_kill_switches():
+            return GovernanceResult(
+                approved=False,
+                tier="T3",
+                reason="HIVE kill switch is active",
+                requires_operator_approval=False,
+            )
 
         # Step 1: Risk classification
         if self._risk_classifier:
@@ -99,32 +176,46 @@ class GovernanceBridge:
             except Exception as exc:
                 logger.warning("Trust ledger check failed: %s", exc)
 
-        # Step 3: MCP Sentry permission check
-        if self._mcp_sentry:
-            try:
-                allowed = self._mcp_sentry.check_permission(capability)
-                if not allowed:
-                    return GovernanceResult(
-                        approved=False,
-                        tier=tier_str,
-                        reason=f"MCP Sentry denied: {capability}",
-                        requires_operator_approval=False,
-                    )
-            except Exception as exc:
-                logger.warning("MCP Sentry check failed: %s", exc)
-
-        if requires_approval:
+        # Step 3: MCP Sentry permission check / approval queue
+        sentry_result = self._check_sentry_permission(capability, sentry_payload)
+        if sentry_result["status"] == "DENIED":
             return GovernanceResult(
                 approved=False,
                 tier=tier_str,
-                reason=f"Tier {tier_str} requires operator approval",
+                reason=sentry_result["message"] or f"MCP Sentry denied: {capability}",
+                requires_operator_approval=False,
+                approval_request_id=sentry_result["request_id"],
+            )
+
+        if requires_approval:
+            if sentry_result["status"] == "APPROVED":
+                return GovernanceResult(
+                    approved=True,
+                    tier=tier_str,
+                    reason=sentry_result["message"] or "Previously approved by governance",
+                    approval_request_id=sentry_result["request_id"],
+                )
+            return GovernanceResult(
+                approved=False,
+                tier=tier_str,
+                reason=sentry_result["message"] or f"Tier {tier_str} requires operator approval",
                 requires_operator_approval=True,
+                approval_request_id=sentry_result["request_id"],
+            )
+
+        if sentry_result["status"] == "PENDING":
+            return GovernanceResult(
+                approved=False,
+                tier=tier_str,
+                reason=sentry_result["message"] or f"MCP Sentry queued approval for {capability}",
+                requires_operator_approval=True,
+                approval_request_id=sentry_result["request_id"],
             )
 
         return GovernanceResult(
             approved=True,
             tier=tier_str,
-            reason="Governance check passed",
+            reason=sentry_result["message"] or "Governance check passed",
         )
 
     def check_kill_switches(self) -> bool:
@@ -167,12 +258,22 @@ class GovernanceBridge:
     ) -> bool:
         """Request operator approval for a high-tier action.
 
-        Currently returns False (requires manual approval via War Room).
-        Future: integrate with ActionCard system.
+        Returns True only when an already-approved matching sentry request exists.
+        Otherwise this queues or preserves a pending approval request.
         """
-        logger.info(
-            "HIVE approval requested: capability=%s, agent=%s",
-            capability, agent_id,
+        payload = self._sentry_context(
+            capability=capability,
+            scope="workspace",
+            target=None,
+            agent_id=agent_id,
+            context=context,
         )
-        # For now, T2/T3 actions need War Room approval
-        return False
+        sentry_result = self._check_sentry_permission(capability, payload)
+        logger.info(
+            "HIVE approval requested: capability=%s, agent=%s, status=%s, request_id=%s",
+            capability,
+            agent_id,
+            sentry_result["status"],
+            sentry_result["request_id"],
+        )
+        return sentry_result["status"] == "APPROVED"

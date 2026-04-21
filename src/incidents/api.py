@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability, resolve_authenticated_identity
 
@@ -63,28 +63,37 @@ def init_incidents_api(receipt_service, data_dir: str) -> None:
 # ── Request Models ────────────────────────────────────────────────────
 
 class AcknowledgeRequest(BaseModel):
-    pass
+    model_config = ConfigDict(extra="forbid")
+    operator_id: Optional[str] = Field(
+        default=None,
+        description="Deprecated client field. Operator identity is derived server-side.",
+    )
 
 
 class StatusUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     status: str
     note: str = ""
 
 
 class TimelineEntryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     entry_text: str
 
 
 class LinkReceiptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     receipt_id: str
 
 
 class EscalateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     new_severity: str
     reason: str
 
 
 class CloseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     root_cause: Optional[str] = None
     false_positive: bool = False
     false_positive_reason: Optional[str] = None

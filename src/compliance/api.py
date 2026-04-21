@@ -20,7 +20,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability
 
@@ -53,6 +53,7 @@ def init_compliance_api(receipt_service: ReceiptService, data_dir: str) -> None:
 # ── Request / Response Models ─────────────────────────────────────────
 
 class ExportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     format: str = Field(
         ...,
         description="Export format: PDF, SOC2_JSON, ISO27001_JSON, GDPR_JSON",
@@ -256,7 +257,7 @@ async def export_history():
             generated_at=r.timestamp,
             operator_id=r.operator_id,
             filename=Path(outputs.get("output_path", "")).name,
-        ).dict())
+        ).model_dump())
 
     return {"exports": entries, "total": len(entries)}
 

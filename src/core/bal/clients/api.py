@@ -11,7 +11,7 @@ import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability
 
@@ -58,13 +58,20 @@ def _check_bal_enabled() -> None:
         import feature_flags
         if not feature_flags.FEATURE_BAL:
             raise HTTPException(status_code=503, detail="BAL is not enabled")
-    except ImportError:
+        return
+    except ImportError as primary_exc:
         try:
             from src.core.feature_flags import FEATURE_BAL
             if not FEATURE_BAL:
                 raise HTTPException(status_code=503, detail="BAL is not enabled")
-        except ImportError:
-            pass
+            return
+        except ImportError as fallback_exc:
+            logger.warning(
+                "BAL feature-flag lookup unavailable; failing closed: primary=%s fallback=%s",
+                primary_exc,
+                fallback_exc,
+            )
+            raise HTTPException(status_code=503, detail="BAL feature flags unavailable")
 
 
 def _get_repo():
@@ -79,6 +86,7 @@ def _get_repo():
 # ---------------------------------------------------------------------------
 
 class PauseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     reason: str = ""
 
 

@@ -191,8 +191,12 @@ class GovernedConnectorProxy:
                     self._trust_ledger.record_success(cap_id, "external")
                 else:
                     self._trust_ledger.record_failure(cap_id, "external")
-            except KeyError:
-                pass  # No trust record for this capability yet
+            except KeyError as exc:
+                logger.debug(
+                    "No trust record found for connector capability %s during trust update: %s",
+                    cap_id,
+                    exc,
+                )
 
         # 6. Emit receipt
         receipt = {
@@ -257,5 +261,10 @@ class GovernedConnectorProxy:
             op = self._registry.get_operation(connector_id, operation_id)
             cap_id = op.full_capability_id
             self._trust_ledger.record_failure(cap_id, scope, is_rollback=True)
-        except KeyError:
-            pass
+        except KeyError as exc:
+            logger.debug(
+                "No trust record found for connector rollback %s.%s: %s",
+                connector_id,
+                operation_id,
+                exc,
+            )

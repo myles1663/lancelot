@@ -1424,13 +1424,14 @@ if ($sorted.Count -gt 0) {
 
 export class WinUIAPlugin implements FrameworkPlugin {
   readonly framework = 'wpf' as const;
+  readonly controlMethod = 'win-uia' as const;
   readonly name = 'Windows UI Automation';
 
   canHandle(app: DetectedApp): boolean {
     // Accept all Windows GUI apps — UIA works as universal fallback
     // including Electron apps when CDP is unavailable
     return ['wpf', 'winui', 'dotnet', 'qt5', 'qt6', 'gtk3', 'gtk4',
-            'java-swing', 'javafx', 'flutter', 'electron', 'browser', 'unknown'].includes(app.framework);
+            'java-swing', 'javafx', 'flutter', 'electron', 'browser', 'office', 'unknown'].includes(app.framework);
   }
 
   async connect(app: DetectedApp): Promise<PluginConnection> {

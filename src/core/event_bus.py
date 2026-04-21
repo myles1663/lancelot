@@ -78,8 +78,8 @@ class EventBus:
             loop = asyncio.get_running_loop()
             loop.create_task(self.publish(event))
             return
-        except RuntimeError:
-            pass
+        except RuntimeError as exc:
+            logger.debug("Falling back to captured event loop for sync publish of %s: %s", event.type, exc)
 
         # Try 2: use the captured main loop (cross-thread safe)
         if self._loop and self._loop.is_running():

@@ -129,6 +129,7 @@ class AgentLifecycleManager:
 
         # Generate scoped soul
         scoped_soul = None
+        scope_boundary = None
         soul_hash = None
         if self._parent_soul:
             scoped_soul = self._soul_gen.generate(self._parent_soul, task_spec)
@@ -136,6 +137,10 @@ class AgentLifecycleManager:
                 raise AgentSpawnDeniedError(
                     "Generated scoped Soul is not more restrictive than parent"
                 )
+            scope_boundary = self._soul_gen.build_execution_boundary(
+                self._parent_soul,
+                task_spec,
+            )
             soul_hash = ScopedSoulGenerator.hash_soul(scoped_soul)
 
         # Register
@@ -162,7 +167,10 @@ class AgentLifecycleManager:
                         collapse_message=str(exc),
                     )
                 except (AgentCollapsedError, ValueError, KeyError):
-                    pass
+                    logger.warning(
+                        "Agent %s could not be force-collapsed after spawn record failure",
+                        record.agent_id,
+                    )
                 raise AgentSpawnDeniedError(
                     f"Federation spawn governance recording failed: {exc}"
                 ) from exc
@@ -174,6 +182,7 @@ class AgentLifecycleManager:
             receipt_manager=self._receipts,
             governance_bridge=self._governance,
             scoped_soul=scoped_soul,
+            scope_boundary=scope_boundary,
             action_executor=self._action_executor,
         )
 
@@ -217,6 +226,7 @@ class AgentLifecycleManager:
             runtime = self._runtimes.get(agent_id)
         if runtime is None:
             raise KeyError(f"No runtime for agent {agent_id}")
+        record = runtime.get_record()
 
         self._registry.transition(agent_id, AgentState.EXECUTING)
         transition_receipt_id = self._receipts.record_agent_state_transition(
@@ -224,12 +234,12 @@ class AgentLifecycleManager:
             from_state=AgentState.READY,
             to_state=AgentState.EXECUTING,
             quest_id=self._get_quest_id(agent_id),
-            parent_receipt_id=getattr(runtime._record, "latest_receipt_id", None),
-            operator_id=runtime._record.operator_id,
-            session_id=runtime._record.session_id,
-            operator_name=runtime._record.operator_name,
+            parent_receipt_id=runtime.latest_receipt_id(),
+            operator_id=record.operator_id,
+            session_id=record.session_id,
+            operator_name=record.operator_name,
         )
-        runtime._record.latest_receipt_id = transition_receipt_id
+        runtime.set_latest_receipt_id(transition_receipt_id)
 
         def _run():
             try:
@@ -238,7 +248,7 @@ class AgentLifecycleManager:
                 try:
                     self._registry.transition(agent_id, AgentState.COMPLETING)
                 except (AgentCollapsedError, ValueError, KeyError):
-                    pass
+                    logger.warning("Agent %s could not transition to COMPLETING after runtime success", agent_id)
                 collapse_reason = result.collapse_reason or CollapseReason.COMPLETED
                 try:
                     self._registry.transition(
@@ -248,22 +258,22 @@ class AgentLifecycleManager:
                         collapse_message=result.error_message,
                     )
                 except (AgentCollapsedError, ValueError, KeyError):
-                    pass
+                    logger.warning("Agent %s could not transition to COLLAPSED after runtime success", agent_id)
 
                 collapse_receipt_id = self._receipts.record_agent_collapsed(
                     agent_id=agent_id,
                     reason=collapse_reason,
                     message=result.error_message,
                     quest_id=self._get_quest_id(agent_id),
-                    parent_receipt_id=getattr(runtime._record, "latest_receipt_id", None),
-                    operator_id=runtime._record.operator_id,
-                    session_id=runtime._record.session_id,
-                    operator_name=runtime._record.operator_name,
+                    parent_receipt_id=runtime.latest_receipt_id(),
+                    operator_id=record.operator_id,
+                    session_id=record.session_id,
+                    operator_name=record.operator_name,
                 )
-                runtime._record.latest_receipt_id = collapse_receipt_id
+                runtime.set_latest_receipt_id(collapse_receipt_id)
                 if self._collapse_record_hook:
                     try:
-                        self._collapse_record_hook(runtime._record, result)
+                        self._collapse_record_hook(record, result)
                     except Exception as exc:
                         logger.warning(
                             "Agent %s federation collapse recording failed: %s",
@@ -281,9 +291,9 @@ class AgentLifecycleManager:
                         collapse_message=str(exc),
                     )
                 except (AgentCollapsedError, ValueError, KeyError):
-                    pass
+                    logger.warning("Agent %s could not transition to COLLAPSED after runtime error", agent_id)
                 result = TaskResult(
-                    task_id=runtime._record.task_spec.task_id,
+                    task_id=record.task_spec.task_id,
                     agent_id=agent_id,
                     success=False,
                     error_message=str(exc),
@@ -291,7 +301,7 @@ class AgentLifecycleManager:
                 )
                 if self._collapse_record_hook:
                     try:
-                        self._collapse_record_hook(runtime._record, result)
+                        self._collapse_record_hook(record, result)
                     except Exception as hook_exc:
                         logger.warning(
                             "Agent %s federation collapse recording failed: %s",
@@ -331,7 +341,7 @@ class AgentLifecycleManager:
         try:
             self._registry.transition(agent_id, AgentState.PAUSED)
         except (ValueError, AgentCollapsedError):
-            pass
+            logger.warning("Agent %s could not transition to PAUSED during operator pause", agent_id)
 
         self._registry.record_intervention(agent_id, {
             "type": InterventionType.PAUSE.value,
@@ -354,14 +364,15 @@ class AgentLifecycleManager:
         try:
             self._registry.transition(agent_id, AgentState.EXECUTING)
         except (ValueError, AgentCollapsedError):
-            pass
+            logger.warning("Agent %s could not transition back to EXECUTING during operator resume", agent_id)
+        record = runtime.get_record()
         self._receipts.record_agent_resumed(
             agent_id=agent_id,
             quest_id=self._get_quest_id(agent_id),
-            parent_receipt_id=getattr(runtime._record, "latest_receipt_id", None),
-            operator_id=runtime._record.operator_id,
-            session_id=runtime._record.session_id,
-            operator_name=runtime._record.operator_name,
+            parent_receipt_id=runtime.latest_receipt_id(),
+            operator_id=record.operator_id,
+            session_id=record.session_id,
+            operator_name=record.operator_name,
         )
 
     def kill(
@@ -390,7 +401,7 @@ class AgentLifecycleManager:
                     collapse_message=reason,
                 )
             except (AgentCollapsedError, ValueError, KeyError):
-                pass
+                logger.warning("Agent %s could not be force-collapsed during operator kill", agent_id)
 
         self._registry.record_intervention(agent_id, {
             "type": InterventionType.KILL.value,

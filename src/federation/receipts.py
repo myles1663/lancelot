@@ -20,7 +20,7 @@ try:
         ActionType,
         CognitionTier,
         Receipt,
-        create_receipt,
+        create_finalized_receipt,
         get_receipt_service,
     )
 except ImportError:
@@ -28,7 +28,7 @@ except ImportError:
         ActionType,
         CognitionTier,
         Receipt,
-        create_receipt,
+        create_finalized_receipt,
         get_receipt_service,
     )
 
@@ -96,7 +96,7 @@ def emit_federation_receipt(
     if metadata:
         fed_metadata.update(metadata)
 
-    receipt = create_receipt(
+    receipt = create_finalized_receipt(
         action_type=action_type,
         action_name=action_name,
         inputs=inputs,

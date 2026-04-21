@@ -13,6 +13,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability
 from src.core.operator_identity import OperatorIdentity
@@ -29,6 +30,14 @@ _trust_ledger = None
 _rule_engine = None
 _decision_log = None
 _mcp_sentry = None
+
+
+class ApprovalDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: Optional[str] = Field(
+        default=None,
+        description="Optional operator-supplied approval or denial reason.",
+    )
 
 
 def init_governance_api(trust_ledger=None, rule_engine=None, decision_log=None, mcp_sentry=None) -> None:
@@ -303,12 +312,12 @@ async def governance_approvals():
 async def approve_item(
     approval_id: str,
     request: Request,
+    body: ApprovalDecisionRequest | None = None,
     _authz: None = Depends(require_operator_capability("governance.admin")),
 ):
     """Approve a T3 action, graduation proposal, or APL rule."""
     try:
-        data = await request.json() if request.headers.get("content-type") else {}
-        reason = data.get("reason", "Approved via War Room")
+        reason = body.reason if body and body.reason else "Approved via War Room"
 
         from src.core.governance_receipts import emit_governance_receipt
         from src.shared.receipts import ActionType
@@ -366,12 +375,12 @@ async def approve_item(
 async def deny_item(
     approval_id: str,
     request: Request,
+    body: ApprovalDecisionRequest | None = None,
     _authz: None = Depends(require_operator_capability("governance.admin")),
 ):
     """Deny a T3 action, graduation proposal, or APL rule."""
     try:
-        data = await request.json() if request.headers.get("content-type") else {}
-        reason = data.get("reason", "Denied via War Room")
+        reason = body.reason if body and body.reason else "Denied via War Room"
 
         from src.core.governance_receipts import emit_governance_receipt
         from src.shared.receipts import ActionType

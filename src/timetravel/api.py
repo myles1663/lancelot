@@ -23,7 +23,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import get_api_key_identity, require_operator_capability, resolve_operator_identity
 
@@ -50,6 +50,8 @@ def init_timetravel_api(
     soul: Any,
     soul_dir: Optional[str] = None,
     quest_executor: Any = None,
+    trust_ledger: Any = None,
+    data_dir: Optional[str] = None,
 ) -> None:
     """Initialize the Time-Travel API with required dependencies."""
     global _receipt_service, _soul, _resume_engine, _snapshot_reader
@@ -59,12 +61,19 @@ def init_timetravel_api(
 
     _receipt_service = receipt_service
     _soul = soul
-    _snapshot_reader = StateSnapshotReader(receipt_service, soul_dir)
+    _snapshot_reader = StateSnapshotReader(
+        receipt_service,
+        soul_dir,
+        trust_ledger=trust_ledger,
+        data_dir=data_dir,
+    )
     _resume_engine = ResumeEngine(
         receipt_service,
         soul,
         _snapshot_reader,
         quest_executor=quest_executor,
+        trust_ledger=trust_ledger,
+        data_dir=data_dir,
     )
 
     logger.info("Time-Travel Debugging API initialized")
@@ -97,14 +106,17 @@ def update_timetravel_executor(quest_executor: Any) -> None:
 # ── Request Models ───────────────────────────────────────────────
 
 class InspectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     receipt_id: str = Field(..., description="Receipt ID to inspect")
 
 
 class ReplayRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     source_quest_id: str = Field(..., description="Quest ID to replay")
 
 
 class ForkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     source_quest_id: str = Field(..., description="Quest ID to fork")
     modifications: Dict[str, Any] = Field(
         default_factory=dict,

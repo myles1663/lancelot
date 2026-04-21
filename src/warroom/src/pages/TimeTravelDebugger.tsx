@@ -13,6 +13,7 @@ import {
   type StateSnapshot,
   type QuestReceiptsResponse,
 } from '@/api/timetravel'
+import { emitWarRoomNotification } from '@/utils/notifications'
 
 // ── Status Badge ────────────────────────────────────────────
 
@@ -469,7 +470,8 @@ export function TimeTravelDebugger() {
       setSnapshot(snap)
     } catch (e) {
       // Snapshot may fail but selection still works
-      console.warn('Snapshot fetch failed:', e)
+      const reason = e instanceof Error ? e.message : 'Unknown error'
+      emitWarRoomNotification(`Snapshot fetch failed: ${reason}`, 'normal')
     } finally {
       setLoadingSnapshot(false)
     }

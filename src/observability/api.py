@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability
 
@@ -44,6 +44,7 @@ router = APIRouter(
 # ── Request / Response Models ─────────────────────────────────────
 
 class OTelConfigUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     enabled: Optional[bool] = None
     endpoint: Optional[str] = None
     auth_header: Optional[str] = None
@@ -53,15 +54,102 @@ class OTelConfigUpdate(BaseModel):
 
 
 class WebhookConfigUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     enabled: Optional[bool] = None
     delivery_timeout_s: Optional[int] = None
     max_retries: Optional[int] = None
 
 
 class MetricsApiConfigUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     enabled: Optional[bool] = None
     rate_limit_per_minute: Optional[int] = None
     receipt_queries: Optional[bool] = None
+
+
+def _append_runtime_issue(
+    degraded_reasons: list[str],
+    runtime_errors: list[str],
+    reason: str,
+    exc: Exception,
+) -> None:
+    logger.warning("%s: %s", reason, exc)
+    degraded_reasons.append(reason)
+    runtime_errors.append(str(exc))
+
+
+def _emit_governance_receipt_safe(
+    request: Request,
+    config: ObservabilityConfig,
+) -> tuple[list[str], list[str]]:
+    degraded_reasons: list[str] = []
+    runtime_errors: list[str] = []
+    try:
+        from src.core.governance_receipts import emit_governance_receipt
+        from src.shared.receipts import ActionType
+
+        emit_governance_receipt(
+            request,
+            ActionType.SYSTEM,
+            action_name="observability_otel_config_updated",
+            inputs={"endpoint": config.otel.endpoint, "enabled": config.otel.enabled},
+        )
+    except Exception as exc:
+        _append_runtime_issue(
+            degraded_reasons,
+            runtime_errors,
+            "Governance receipt emission unavailable",
+            exc,
+        )
+    return degraded_reasons, runtime_errors
+
+
+def _configure_bridge_safe(config: ObservabilityConfig) -> tuple[list[str], list[str]]:
+    degraded_reasons: list[str] = []
+    runtime_errors: list[str] = []
+    try:
+        from src.observability.receipt_bridge import configure_bridge
+        from src.observability.otel_provider import is_initialized
+
+        configure_bridge(
+            enabled=config.otel.enabled and is_initialized(),
+            sampling_rate=config.otel.sampling_rate_t0_t1,
+        )
+    except Exception as exc:
+        _append_runtime_issue(
+            degraded_reasons,
+            runtime_errors,
+            "Receipt bridge live apply unavailable",
+            exc,
+        )
+    return degraded_reasons, runtime_errors
+
+
+def _get_otel_initialized_status() -> tuple[bool, Optional[str]]:
+    try:
+        from src.observability.otel_provider import is_initialized
+
+        return is_initialized(), None
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _get_bridge_enabled_status() -> tuple[bool, Optional[str]]:
+    try:
+        from src.observability.receipt_bridge import _enabled
+
+        return _enabled, None
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _get_webhook_engine_safe() -> tuple[Any | None, Optional[str]]:
+    try:
+        from src.observability.webhook_engine import get_webhook_engine
+
+        return get_webhook_engine(), None
+    except Exception as exc:
+        return None, str(exc)
 
 
 # ── Endpoints ─────────────────────────────────────────────────────
@@ -97,31 +185,18 @@ async def update_otel_config(body: OTelConfigUpdate, request: Request):
 
     save_config(config)
 
-    # Emit governance receipt for config change
-    try:
-        from src.core.governance_receipts import emit_governance_receipt
-        from src.shared.receipts import ActionType
-        emit_governance_receipt(
-            request,
-            ActionType.SYSTEM,
-            action_name="observability_otel_config_updated",
-            inputs={"endpoint": config.otel.endpoint, "enabled": config.otel.enabled},
-        )
-    except Exception:
-        pass
+    degraded_reasons, runtime_errors = _emit_governance_receipt_safe(request, config)
+    bridge_reasons, bridge_errors = _configure_bridge_safe(config)
+    degraded_reasons.extend(bridge_reasons)
+    runtime_errors.extend(bridge_errors)
 
-    # Apply changes to the live bridge if OTel is initialized
-    try:
-        from src.observability.receipt_bridge import configure_bridge
-        from src.observability.otel_provider import is_initialized
-        configure_bridge(
-            enabled=config.otel.enabled and is_initialized(),
-            sampling_rate=config.otel.sampling_rate_t0_t1,
-        )
-    except Exception:
-        pass
-
-    return {"status": "updated", "otel": config.otel.__dict__}
+    return {
+        "status": "updated",
+        "otel": config.otel.__dict__,
+        "runtime_degraded": bool(degraded_reasons),
+        "degraded_reasons": degraded_reasons,
+        "runtime_errors": runtime_errors,
+    }
 
 
 @router.patch("/config/webhooks")
@@ -160,22 +235,23 @@ async def update_metrics_api_config(body: MetricsApiConfigUpdate, request: Reque
 async def otel_status():
     """Check OTel exporter status."""
     config = load_config()
+    degraded_reasons: list[str] = []
+    runtime_errors: list[str] = []
 
-    otel_initialized = False
-    try:
-        from src.observability.otel_provider import is_initialized
-        otel_initialized = is_initialized()
-    except Exception:
-        pass
+    otel_initialized, otel_error = _get_otel_initialized_status()
+    if otel_error:
+        degraded_reasons.append("OTel status unavailable")
+        runtime_errors.append(otel_error)
 
-    bridge_enabled = False
-    try:
-        from src.observability.receipt_bridge import _enabled
-        bridge_enabled = _enabled
-    except Exception:
-        pass
+    bridge_enabled, bridge_error = _get_bridge_enabled_status()
+    if bridge_error:
+        degraded_reasons.append("Receipt bridge status unavailable")
+        runtime_errors.append(bridge_error)
 
     return {
+        "runtime_degraded": bool(degraded_reasons),
+        "degraded_reasons": degraded_reasons,
+        "runtime_errors": runtime_errors,
         "feature_flag": _get_feature_flag(),
         "otel": {
             "configured": bool(config.otel.endpoint),
@@ -216,6 +292,7 @@ async def list_webhook_endpoints():
 
 
 class WebhookEndpointCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     url: str = Field(..., description="HTTPS webhook target URL")
     categories: list = Field(default_factory=list, description="Subscribed event categories")
     secret: str = Field("", description="HMAC shared secret (stored in vault)")
@@ -254,8 +331,8 @@ async def register_webhook_endpoint(body: WebhookEndpointCreate, request: Reques
                 # Store in environment for secret_cache access
                 import os
                 os.environ[vault_key] = body.secret
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to stage webhook secret %s: %s", vault_key, exc)
 
     from src.observability.config import WebhookEndpoint as WEP
     new_ep = WEP(
@@ -269,16 +346,30 @@ async def register_webhook_endpoint(body: WebhookEndpointCreate, request: Reques
     config.webhooks.endpoints.append(new_ep)
     save_config(config)
 
-    # Hot-update the engine if running
-    try:
-        from src.observability.webhook_engine import get_webhook_engine
-        engine = get_webhook_engine()
-        if engine:
+    degraded_reasons: list[str] = []
+    runtime_errors: list[str] = []
+    engine, engine_error = _get_webhook_engine_safe()
+    if engine_error:
+        degraded_reasons.append("Webhook engine status unavailable")
+        runtime_errors.append(engine_error)
+    elif engine:
+        try:
             engine.update_endpoints(config.webhooks.endpoints)
-    except Exception:
-        pass
+        except Exception as exc:
+            _append_runtime_issue(
+                degraded_reasons,
+                runtime_errors,
+                "Webhook engine hot-update failed",
+                exc,
+            )
 
-    return {"status": "registered", "endpoint_id": ep_id}
+    return {
+        "status": "registered",
+        "endpoint_id": ep_id,
+        "runtime_degraded": bool(degraded_reasons),
+        "degraded_reasons": degraded_reasons,
+        "runtime_errors": runtime_errors,
+    }
 
 
 @router.delete("/webhooks/endpoints/{endpoint_id}")
@@ -294,29 +385,62 @@ async def remove_webhook_endpoint(endpoint_id: str):
 
     save_config(config)
 
-    # Hot-update
-    try:
-        from src.observability.webhook_engine import get_webhook_engine
-        engine = get_webhook_engine()
-        if engine:
+    degraded_reasons: list[str] = []
+    runtime_errors: list[str] = []
+    engine, engine_error = _get_webhook_engine_safe()
+    if engine_error:
+        degraded_reasons.append("Webhook engine status unavailable")
+        runtime_errors.append(engine_error)
+    elif engine:
+        try:
             engine.update_endpoints(config.webhooks.endpoints)
-    except Exception:
-        pass
+        except Exception as exc:
+            _append_runtime_issue(
+                degraded_reasons,
+                runtime_errors,
+                "Webhook engine hot-update failed",
+                exc,
+            )
 
-    return {"status": "removed", "endpoint_id": endpoint_id}
+    return {
+        "status": "removed",
+        "endpoint_id": endpoint_id,
+        "runtime_degraded": bool(degraded_reasons),
+        "degraded_reasons": degraded_reasons,
+        "runtime_errors": runtime_errors,
+    }
 
 
 @router.get("/webhooks/stats")
 async def webhook_delivery_stats():
     """Get webhook delivery statistics per endpoint."""
-    try:
-        from src.observability.webhook_engine import get_webhook_engine
-        engine = get_webhook_engine()
-        if engine:
-            return {"stats": engine.get_stats()}
-    except Exception:
-        pass
-    return {"stats": {}}
+    degraded_reasons: list[str] = []
+    runtime_errors: list[str] = []
+    engine, engine_error = _get_webhook_engine_safe()
+    if engine_error:
+        degraded_reasons.append("Webhook engine status unavailable")
+        runtime_errors.append(engine_error)
+    elif engine:
+        try:
+            return {
+                "stats": engine.get_stats(),
+                "runtime_degraded": False,
+                "degraded_reasons": [],
+                "runtime_errors": [],
+            }
+        except Exception as exc:
+            _append_runtime_issue(
+                degraded_reasons,
+                runtime_errors,
+                "Webhook delivery stats unavailable",
+                exc,
+            )
+    return {
+        "stats": {},
+        "runtime_degraded": bool(degraded_reasons),
+        "degraded_reasons": degraded_reasons,
+        "runtime_errors": runtime_errors,
+    }
 
 
 def _get_feature_flag() -> bool:

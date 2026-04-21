@@ -31,6 +31,7 @@ Required:
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import logging
 import os
@@ -43,6 +44,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from src.core import outbound_http
 from src.tools.contracts import (
     BaseProvider,
     Capability,
@@ -56,16 +58,33 @@ from src.tools.contracts import (
 logger = logging.getLogger(__name__)
 
 INSECURE_DEFAULT_TOKEN = "lancelot-host-agent"
+_HOST_AGENT_ALLOWED_HOSTNAMES = frozenset({
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "host.docker.internal",
+})
 
 
-def _normalize_agent_token(token: Optional[str]) -> str:
-    """Reject missing and legacy default host-agent tokens."""
+def _classify_agent_token(token: Optional[str]) -> Tuple[str, str]:
+    """Classify host-agent token state and return the normalized token."""
     if not token:
-        return ""
+        return "", "missing"
     token = token.strip()
-    if not token or token == INSECURE_DEFAULT_TOKEN:
+    if not token:
+        return "", "missing"
+    if token == INSECURE_DEFAULT_TOKEN:
+        return "", "legacy_default"
+    return token, "configured"
+
+
+def _read_http_error_body(error: urllib.error.HTTPError, source: str) -> str:
+    """Read a bounded HTTP error body without silently swallowing decode errors."""
+    try:
+        return error.read().decode("utf-8", errors="replace")
+    except Exception as exc:
+        logger.warning("%s error body could not be decoded: %s", source, exc)
         return ""
-    return token
 
 
 # =============================================================================
@@ -80,6 +99,7 @@ class HostBridgeConfig:
     # Agent connection
     agent_url: str = ""  # Set from env in __post_init__
     agent_token: str = ""  # Set from env in __post_init__
+    agent_token_state: str = "missing"
     connect_timeout_s: int = 5
     read_timeout_s: int = 300
 
@@ -107,7 +127,9 @@ class HostBridgeConfig:
             )
         if not self.agent_token:
             self.agent_token = os.environ.get("HOST_AGENT_TOKEN", "")
-        self.agent_token = _normalize_agent_token(self.agent_token)
+        self.agent_token, self.agent_token_state = _classify_agent_token(
+            self.agent_token
+        )
 
 
 # =============================================================================
@@ -157,32 +179,35 @@ class HostBridgeProvider(BaseProvider):
     ) -> dict:
         """Make an HTTP request to the host agent."""
         if not self.config.agent_token:
-            raise ConnectionError(
-                "HOST_AGENT_TOKEN is not configured for host_bridge."
-            )
-        url = f"{self.config.agent_url}{path}"
-        headers = {
-            "Authorization": f"Bearer {self.config.agent_token}",
-            "Content-Type": "application/json",
-        }
-
-        data = None
-        if body is not None:
-            data = json.dumps(body).encode("utf-8")
-
-        req = urllib.request.Request(url, data=data, headers=headers, method=method)
-
-        effective_timeout = timeout or self.config.read_timeout_s
-
+            if self.config.agent_token_state == "legacy_default":
+                raise ConnectionError(
+                    "HOST_AGENT_TOKEN is still using the rejected legacy default value."
+                )
+            raise ConnectionError("HOST_AGENT_TOKEN is not configured for host_bridge.")
         try:
+            url = outbound_http.assert_local_control_url(
+                f"{self.config.agent_url}{path}",
+                component="Host agent request",
+                allowed_hostnames=_HOST_AGENT_ALLOWED_HOSTNAMES,
+            )
+            headers = {
+                "Authorization": f"Bearer {self.config.agent_token}",
+                "Content-Type": "application/json",
+            }
+
+            data = None
+            if body is not None:
+                data = json.dumps(body).encode("utf-8")
+
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
+
+            effective_timeout = timeout or self.config.read_timeout_s
             with urllib.request.urlopen(req, timeout=effective_timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
+        except outbound_http.LocalControlPlaneError as e:
+            raise ConnectionError(str(e)) from e
         except urllib.error.HTTPError as e:
-            error_body = ""
-            try:
-                error_body = e.read().decode("utf-8", errors="replace")
-            except Exception:
-                pass
+            error_body = _read_http_error_body(e, "Host agent HTTP response")
             raise ConnectionError(
                 f"Host agent returned {e.code}: {error_body[:200]}"
             ) from e
@@ -202,6 +227,27 @@ class HostBridgeProvider(BaseProvider):
     def health_check(self) -> ProviderHealth:
         """Check if the host agent is reachable."""
         if not self.config.agent_token:
+            if self.config.agent_token_state == "legacy_default":
+                return ProviderHealth(
+                    provider_id=self.provider_id,
+                    state=ProviderState.OFFLINE,
+                    version="host_bridge",
+                    last_check=datetime.now(timezone.utc).isoformat(),
+                    capabilities=[c.value for c in self.capabilities],
+                    degraded_reasons=[
+                        "HOST_AGENT_TOKEN is still set to the rejected legacy default value."
+                    ],
+                    error_message=(
+                        "Host bridge misconfigured: HOST_AGENT_TOKEN is using the "
+                        "rejected legacy default"
+                    ),
+                    metadata={
+                        "mode": "host_bridge",
+                        "agent_url": self.config.agent_url,
+                        "auth_configured": False,
+                        "auth_state": "legacy_default",
+                    },
+                )
             return ProviderHealth(
                 provider_id=self.provider_id,
                 state=ProviderState.OFFLINE,
@@ -209,11 +255,12 @@ class HostBridgeProvider(BaseProvider):
                 last_check=datetime.now(timezone.utc).isoformat(),
                 capabilities=[c.value for c in self.capabilities],
                 degraded_reasons=["HOST_AGENT_TOKEN is not configured."],
-                error_message="Host bridge misconfigured: missing HOST_AGENT_TOKEN",
+                error_message="Host bridge misconfigured: HOST_AGENT_TOKEN is missing",
                 metadata={
                     "mode": "host_bridge",
                     "agent_url": self.config.agent_url,
                     "auth_configured": False,
+                    "auth_state": "missing",
                 },
             )
         try:
@@ -229,6 +276,7 @@ class HostBridgeProvider(BaseProvider):
                 metadata={
                     "mode": "host_bridge",
                     "auth_configured": True,
+                    "auth_state": "configured",
                     "host_platform": info.get("platform", "unknown"),
                     "host_hostname": info.get("hostname", "unknown"),
                     "agent_version": info.get("agent_version", "unknown"),
@@ -247,6 +295,7 @@ class HostBridgeProvider(BaseProvider):
                     "mode": "host_bridge",
                     "agent_url": self.config.agent_url,
                     "auth_configured": True,
+                    "auth_state": "configured",
                 },
             )
 
@@ -442,17 +491,29 @@ class HostBridgeProvider(BaseProvider):
 
     def read(self, path: str) -> str:
         """Read file contents on host."""
-        # Use 'type' on Windows, 'cat' on Unix — agent handles OS detection
-        result = self.run(f'python -c "print(open(r\'{path}\', encoding=\'utf-8\').read(), end=\'\')"', os.path.dirname(path) or ".")
+        encoded_path = self._encode_python_arg(path)
+        script = (
+            "import base64,pathlib,sys; "
+            f"p=base64.b64decode('{encoded_path}').decode('utf-8'); "
+            "sys.stdout.write(pathlib.Path(p).read_text(encoding='utf-8'))"
+        )
+        result = self.run(f'python -c "{script}"', os.path.dirname(path) or ".")
         if not result.success:
             return f"Error: {result.stderr}"
         return result.stdout
 
     def write(self, path: str, content: str, atomic: bool = True) -> FileChange:
         """Write content to file on host."""
-        # Use Python one-liner via agent for safe cross-platform writes
-        escaped = content.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r")
-        script = f"import os; os.makedirs(os.path.dirname(r'{path}') or '.', exist_ok=True); open(r'{path}', 'w', encoding='utf-8').write('{escaped}')"
+        encoded_path = self._encode_python_arg(path)
+        encoded_content = self._encode_python_arg(content)
+        script = (
+            "import base64,pathlib; "
+            f"p=base64.b64decode('{encoded_path}').decode('utf-8'); "
+            f"c=base64.b64decode('{encoded_content}').decode('utf-8'); "
+            "target=pathlib.Path(p); "
+            "target.parent.mkdir(parents=True, exist_ok=True); "
+            "target.write_text(c, encoding='utf-8')"
+        )
         result = self.run(f'python -c "{script}"', os.path.dirname(path) or ".")
         if not result.success:
             return FileChange(path=path, action="error", error_message=result.stderr)
@@ -460,17 +521,38 @@ class HostBridgeProvider(BaseProvider):
 
     def list(self, path: str, recursive: bool = False) -> List[str]:
         """List files in directory on host."""
+        encoded_path = self._encode_python_arg(path)
         if recursive:
-            result = self.run(f'python -c "import os; [print(os.path.relpath(os.path.join(r,f), r\'{path}\')) for r,d,files in os.walk(r\'{path}\') for f in files]"', path)
+            script = (
+                "import base64,os,pathlib,sys; "
+                f"p=pathlib.Path(base64.b64decode('{encoded_path}').decode('utf-8')); "
+                "sys.stdout.write('\\n'.join("
+                "os.path.relpath(str(child), str(p)) "
+                "for child in sorted(x for x in p.rglob('*') if x.is_file())"
+                "))"
+            )
         else:
-            result = self.run(f'python -c "import os; [print(f) for f in sorted(os.listdir(r\'{path}\'))]"', path)
+            script = (
+                "import base64,pathlib,sys; "
+                f"p=pathlib.Path(base64.b64decode('{encoded_path}').decode('utf-8')); "
+                "sys.stdout.write('\\n'.join("
+                "child.name for child in sorted(p.iterdir(), key=lambda item: item.name)"
+                "))"
+            )
+        result = self.run(f'python -c "{script}"', path)
         if not result.success:
             return [f"Error: {result.stderr}"]
         return [line for line in result.stdout.strip().split("\n") if line]
 
     def delete(self, path: str) -> FileChange:
         """Delete a file on host."""
-        result = self.run(f'python -c "import os; os.remove(r\'{path}\')"', os.path.dirname(path) or ".")
+        encoded_path = self._encode_python_arg(path)
+        script = (
+            "import base64,pathlib; "
+            f"p=base64.b64decode('{encoded_path}').decode('utf-8'); "
+            "pathlib.Path(p).unlink()"
+        )
+        result = self.run(f'python -c "{script}"', os.path.dirname(path) or ".")
         if not result.success:
             return FileChange(path=path, action="error", error_message=result.stderr)
         return FileChange(path=path, action="deleted")
@@ -492,3 +574,7 @@ class HostBridgeProvider(BaseProvider):
         if len(output) <= max_chars:
             return output, False
         return output[:max_chars] + "\n... (truncated)", True
+
+    def _encode_python_arg(self, value: str) -> str:
+        """Encode a Python string argument for shell-safe host-agent file ops."""
+        return base64.b64encode(str(value).encode("utf-8")).decode("ascii")

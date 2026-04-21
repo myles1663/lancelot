@@ -37,6 +37,11 @@ def _insert_session(token, capabilities):
     }
 
 
+def _authenticate_client(client, token):
+    client.cookies.set(auth_api.get_warroom_session_cookie_name(), token)
+    return client
+
+
 def _provider_client():
     api_auth.init_api_auth(lambda request: True)
     app = FastAPI()
@@ -169,10 +174,10 @@ def test_provider_admin_routes_require_admin_capability():
     token = "limited-provider-session"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login"})
+    _authenticate_client(client, token)
 
     response = client.post(
         "/api/v1/providers/switch",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
         json={"provider": "openai"},
     )
 
@@ -185,11 +190,11 @@ def test_soul_mutation_routes_require_soul_admin_capability(tmp_path):
     token = "limited-soul-session"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login"})
+    _authenticate_client(client, token)
 
     with patch.dict(os.environ, {"LANCELOT_API_TOKEN": "owner-token"}):
         response = client.post(
             "/soul/propose",
-            cookies={auth_api.get_warroom_session_cookie_name(): token},
             json={"proposed_yaml": "version: v2"},
         )
 
@@ -202,10 +207,10 @@ def test_actioncard_resolution_requires_platform_admin_and_uses_authenticated_id
     token = "limited-actioncard-session"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login"})
+    _authenticate_client(client, token)
 
     response = client.post(
         "/api/actioncards/card-1/resolve/approve",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
         json={},
     )
 
@@ -216,10 +221,10 @@ def test_actioncard_resolution_requires_platform_admin_and_uses_authenticated_id
     admin_token = "admin-actioncard-session"
     auth_api._sessions.clear()
     _insert_session(admin_token, {"warroom.login", "platform.admin"})
+    _authenticate_client(client, admin_token)
 
     response = client.post(
         "/api/actioncards/card-2/resolve/approve",
-        cookies={auth_api.get_warroom_session_cookie_name(): admin_token},
         json={},
     )
 
@@ -239,11 +244,9 @@ def test_scheduler_routes_require_scheduler_admin_capability():
     token = "limited-scheduler-session"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login"})
+    _authenticate_client(client, token)
 
-    response = client.get(
-        "/api/scheduler/jobs",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    response = client.get("/api/scheduler/jobs")
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Missing capability: scheduler.admin"
@@ -264,11 +267,9 @@ def test_scheduler_approval_uses_authenticated_identity():
     token = "admin-scheduler-session"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login", "scheduler.admin"})
+    _authenticate_client(client, token)
 
-    response = client.post(
-        "/api/scheduler/jobs/job-123/approve",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    response = client.post("/api/scheduler/jobs/job-123/approve")
 
     assert response.status_code == 200
     assert response.json()["approved"] is True
@@ -285,11 +286,9 @@ def test_timetravel_routes_require_timetravel_admin_capability():
     token = "limited-timetravel-session"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login"})
+    _authenticate_client(client, token)
 
-    response = client.get(
-        "/api/timetravel/status",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    response = client.get("/api/timetravel/status")
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Missing capability: timetravel.admin"
@@ -300,11 +299,9 @@ def test_a2a_routes_require_a2a_admin_capability():
     token = "limited-a2a-session"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login"})
+    _authenticate_client(client, token)
 
-    response = client.get(
-        "/api/a2a/status",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    response = client.get("/api/a2a/status")
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Missing capability: a2a.admin"
@@ -315,11 +312,9 @@ def test_mcp_routes_require_mcp_admin_capability():
     token = "limited-mcp-session"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login"})
+    _authenticate_client(client, token)
 
-    response = client.get(
-        "/api/mcp/servers",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    response = client.get("/api/mcp/servers")
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Missing capability: mcp.admin"
@@ -330,6 +325,7 @@ def test_metrics_routes_require_observability_admin_capability(monkeypatch):
     token = "limited-metrics-session"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login"})
+    _authenticate_client(client, token)
     monkeypatch.setattr(
         metrics_api,
         "load_config",
@@ -340,10 +336,7 @@ def test_metrics_routes_require_observability_admin_capability(monkeypatch):
         )(),
     )
 
-    response = client.get(
-        "/api/metrics/summary",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    response = client.get("/api/metrics/summary")
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Missing capability: observability.admin"
@@ -354,11 +347,9 @@ def test_playbook_reload_requires_incidents_admin_capability():
     token = "limited-playbook-session"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login"})
+    _authenticate_client(client, token)
 
-    response = client.post(
-        "/api/playbooks/reload",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    response = client.post("/api/playbooks/reload")
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Missing capability: incidents.admin"
@@ -369,6 +360,7 @@ def test_playbook_reload_emits_receipt_for_admin(monkeypatch):
     token = "admin-playbook-session"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login", "incidents.admin"})
+    _authenticate_client(client, token)
 
     monkeypatch.setattr(playbook_api, "_playbooks_dir", "playbooks")
     monkeypatch.setattr(playbook_api, "invalidate_cache", lambda: None)
@@ -389,10 +381,7 @@ def test_playbook_reload_emits_receipt_for_admin(monkeypatch):
 
     monkeypatch.setattr("src.core.governance_receipts.emit_governance_receipt", _emit)
 
-    response = client.post(
-        "/api/playbooks/reload",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    response = client.post("/api/playbooks/reload")
 
     assert response.status_code == 200
     assert response.json()["count"] == 2
@@ -407,15 +396,10 @@ def test_update_mutation_routes_require_platform_admin_capability():
     token = "limited-update-session"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login"})
+    _authenticate_client(client, token)
 
-    check_response = client.post(
-        "/api/updates/check",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
-    dismiss_response = client.post(
-        "/api/updates/dismiss",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    check_response = client.post("/api/updates/check")
+    dismiss_response = client.post("/api/updates/dismiss")
 
     assert check_response.status_code == 403
     assert check_response.json()["detail"] == "Missing capability: platform.admin"

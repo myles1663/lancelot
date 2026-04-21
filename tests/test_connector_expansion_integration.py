@@ -421,10 +421,21 @@ class TestCredentialKeyPropagation:
         result = c.execute("send_sms", {"to": "+1", "body": "hi"})
         assert result.credential_vault_key == "sms.auth_token"
 
-    def test_email_gmail_results_have_cred_key(self):
+    def test_email_gmail_results_have_cred_key(self, monkeypatch):
+        old = os.environ.get("FEATURE_GOOGLE_OAUTH")
+        monkeypatch.setenv("FEATURE_GOOGLE_OAUTH", "true")
+        feature_flags.reload_flags()
+
         c = EmailConnector(backend="gmail")
-        result = c.execute("list_messages", {})
-        assert result.credential_vault_key == "email.gmail_token"
+        try:
+            result = c.execute("list_messages", {})
+            assert result.credential_vault_key == "email.gmail_token"
+        finally:
+            if old is None:
+                monkeypatch.delenv("FEATURE_GOOGLE_OAUTH", raising=False)
+            else:
+                monkeypatch.setenv("FEATURE_GOOGLE_OAUTH", old)
+            feature_flags.reload_flags()
 
     def test_email_outlook_results_have_cred_key(self):
         c = EmailConnector(backend="outlook")

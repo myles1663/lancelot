@@ -180,7 +180,7 @@ class IntentTemplateRegistry:
         logger.info("Created template candidate %s for intent '%s'", template_id, intent)
         return template_id
 
-    # ── Matching (Prompt 17) ─────────────────────────────────────
+    # ── Matching ─────────────────────────────────────────────────
 
     def match(self, intent: str, parameters: dict = None) -> Optional[IntentTemplate]:
         """Find an active template matching the given intent.

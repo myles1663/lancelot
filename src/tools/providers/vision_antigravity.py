@@ -14,7 +14,6 @@ IMPORTANT: VisionControl requires Antigravity. This provider explicitly
 fails when Antigravity is unavailable - there is NO silent downgrade
 or fallback to alternative providers.
 
-Prompt 9 — VisionControl
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ import asyncio
 import hashlib
 import logging
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -247,6 +247,14 @@ class AntigravityVisionProvider(BaseProvider):
             await self._engine.start()
         return self._engine
 
+    def _run_sync(self, coroutine):
+        """Run a coroutine from sync code and always close it afterwards."""
+        try:
+            return asyncio.run(coroutine)
+        finally:
+            with suppress(Exception):
+                coroutine.close()
+
     # =========================================================================
     # VisionControl Capability
     # =========================================================================
@@ -271,7 +279,7 @@ class AntigravityVisionProvider(BaseProvider):
 
         try:
             # Run async capture
-            screenshot_bytes, screenshot_hash = asyncio.run(
+            screenshot_bytes, screenshot_hash = self._run_sync(
                 self._async_capture_screen()
             )
 
@@ -333,7 +341,7 @@ class AntigravityVisionProvider(BaseProvider):
                 receipt.screenshot_before_hash = hashlib.sha256(screenshot).hexdigest()
 
         try:
-            elements = asyncio.run(
+            elements = self._run_sync(
                 self._async_locate_element(selector_or_description, screenshot)
             )
 
@@ -449,7 +457,7 @@ class AntigravityVisionProvider(BaseProvider):
             receipt.action_value = value
 
         try:
-            result = asyncio.run(
+            result = self._run_sync(
                 self._async_perform_action(action, target, value)
             )
 
@@ -560,7 +568,7 @@ class AntigravityVisionProvider(BaseProvider):
                 receipt.screenshot_before_hash = hashlib.sha256(screenshot).hexdigest()
 
         try:
-            result = asyncio.run(
+            result = self._run_sync(
                 self._async_verify_state(expected, screenshot)
             )
 
@@ -662,9 +670,9 @@ class AntigravityVisionProvider(BaseProvider):
         """Destructor to cleanup engine."""
         if self._engine:
             try:
-                asyncio.run(self.cleanup())
-            except Exception:
-                pass
+                self._run_sync(self.cleanup())
+            except Exception as exc:
+                logger.debug("Failed to clean up vision antigravity engine during destruction: %s", exc)
 
 
 # =============================================================================

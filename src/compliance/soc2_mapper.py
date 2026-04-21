@@ -40,8 +40,7 @@ SOC2_CONTROL_MAP: Dict[str, Dict[str, Any]] = {
         "receipt_types": [
             ActionType.SOUL_UPDATED.value,
             ActionType.SOUL_VERSION_PINNED.value,
-            # CRUSADER_MODE_ACTIVATED — maps to closest existing type
-            # TODO: Add when CRUSADER_MODE_ACTIVATED ActionType is created
+            ActionType.SOUL_TEMPLATE_APPLIED.value,
         ],
     },
     "CC2_2": {
@@ -131,6 +130,7 @@ SOC2_CONTROL_MAP: Dict[str, Dict[str, Any]] = {
         "description": "Change Management — Soul updates, deployments, configuration changes",
         "receipt_types": [
             ActionType.SOUL_UPDATED.value,
+            ActionType.SOUL_TEMPLATE_APPLIED.value,
             ActionType.AGENT_DEPLOYED.value,
             ActionType.ALLOWLIST_MODIFIED.value,
             ActionType.TOOL_ENABLED.value,
@@ -140,13 +140,23 @@ SOC2_CONTROL_MAP: Dict[str, Dict[str, Any]] = {
     "CC9_2": {
         "description": "Risk Mitigation — Risk tier distribution and Trust Ledger changes",
         "receipt_types": [
-            # TRUST_TIER_UPDATED — maps to closest existing types
-            # TODO: Add when TRUST_TIER_UPDATED ActionType is created
             ActionType.APL_RULE_APPROVED.value,
             ActionType.APL_RULE_REJECTED.value,
+            ActionType.KILL_SWITCH_ISSUED.value,
+            ActionType.KILL_SWITCH_LIFTED.value,
+            ActionType.MCP_TOOL_BLOCKED.value,
+            ActionType.HIVE_INTERVENTION_EVENT.value,
+            ActionType.ALLOWLIST_MODIFIED.value,
         ],
     },
 }
+
+
+def _mapped_receipt_types() -> set[str]:
+    mapped: set[str] = set()
+    for control_def in SOC2_CONTROL_MAP.values():
+        mapped.update(control_def["receipt_types"])
+    return mapped
 
 
 def _receipt_to_evidence(receipt_dict: Dict[str, Any]) -> Dict[str, Any]:
@@ -174,6 +184,10 @@ def transform_soc2(
     for rd in redacted:
         action_type = rd.get("action_type", "")
         by_type.setdefault(action_type, []).append(rd)
+    mapped_receipt_types = _mapped_receipt_types()
+    observed_unmapped_receipt_types = sorted(
+        action_type for action_type in by_type.keys() if action_type and action_type not in mapped_receipt_types
+    )
 
     # Map to controls
     controls: Dict[str, Dict[str, Any]] = {}
@@ -261,6 +275,13 @@ def transform_soc2(
         "legacy_attribution_summary": build_legacy_attribution_summary(
             evidence_entries
         ),
+        "mapping_summary": {
+            "mapped_receipt_types": sorted(mapped_receipt_types),
+            "observed_unmapped_receipt_types": observed_unmapped_receipt_types,
+            "observed_unmapped_receipt_count": sum(
+                len(by_type[action_type]) for action_type in observed_unmapped_receipt_types
+            ),
+        },
         "control_summary": {
             "total_controls": len(controls),
             "controls_with_evidence": controls_with_evidence,

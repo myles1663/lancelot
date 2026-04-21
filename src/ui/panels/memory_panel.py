@@ -15,7 +15,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from src.core.feature_flags import FEATURE_MEMORY_VNEXT
+from src.core import feature_flags
 
 logger = logging.getLogger(__name__)
 
@@ -56,12 +56,11 @@ class MemoryPanel:
         self._commit_manager = commit_manager
         self._quarantine_manager = quarantine_manager
         self._memory_index = memory_index
-        self._enabled = FEATURE_MEMORY_VNEXT
 
     @property
     def is_enabled(self) -> bool:
         """Check if memory panel is enabled."""
-        return self._enabled and self._core_store is not None
+        return bool(getattr(feature_flags, "FEATURE_MEMORY_VNEXT", False)) and self._core_store is not None
 
     def get_core_blocks_summary(self) -> List[Dict[str, Any]]:
         """

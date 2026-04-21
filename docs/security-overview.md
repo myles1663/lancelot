@@ -21,7 +21,7 @@
 
 ## 1. Executive Summary
 
-Project Lancelot is a **Governed Autonomous System (GAS)** — an AI agent that executes real-world actions (shell commands, network requests, file operations, message delivery) under constitutional governance constraints. Unlike a chatbot, Lancelot operates autonomously within a framework of policy enforcement, risk-tiered approval gates, and cryptographic audit trails. This distinction is critical: the security surface area extends far beyond typical web application concerns into autonomous code execution, secret management, and LLM prompt integrity.
+Project Lancelot is a **Governed Autonomous System (GAS)** — an AI agent that executes real-world actions (shell commands, network requests, file operations, message delivery) under constitutional governance constraints. Unlike a chatbot, Lancelot operates autonomously within a framework of policy enforcement, risk-tiered approval gates, immutable receipts, and integrity-checked audit logging. This distinction is critical: the security surface area extends far beyond typical web application concerns into autonomous code execution, secret management, and LLM prompt integrity.
 
 ### 1.1 Scope
 
@@ -46,14 +46,14 @@ A comprehensive internal security assessment identified 15 findings across all s
 ### 1.3 Key Strengths
 
 - Constitutional governance model (Soul) with versioned, linted, owner-gated amendments
-- Receipt-based audit trail covering all action types with SHA-256 hashing
+- Receipt-based audit trail covering all action types, with SHA-256 hash chaining plus always-on HMAC signatures on finalized receipts and batch/export integrity artifacts
 - Fernet-encrypted secret vault with access policies and audit logging
 - SSRF protection with private IP blocking and fail-closed DNS resolution
 - Docker sandbox execution with memory limits, network isolation, and output bounding
 - 6-stage skill security pipeline with owner review gate
 - Quarantine-by-default memory editing with provenance tracking
 - Non-root container execution with gosu privilege dropping
-- Hash-chained tamper-evident audit log
+- Hash-chained AuditLogger for command and event logging
 - Thread-safe resource governance with atomic file writes
 - Docker socket proxy for restricted Docker API access
 - Non-builtin skill execution sandboxed in Docker containers
@@ -233,10 +233,10 @@ Counters are persisted to disk, reset daily, and protected by thread-safe file I
 | Audit | Every store/retrieve/delete logged with timestamp, accessor, action |
 | List safety | `list_secrets()` returns names only; values never exposed |
 
-**Environment variables:** API keys and tokens stored in `.env` file:
-- Loaded via `env_file` directive in Docker Compose
-- `.env` is `.gitignored` and has never been committed to the repository
-- Installer generates unique tokens during initial setup
+**Bootstrap and runtime secret flow:**
+- Initial secrets may originate from `.env` or the installer-generated setup flow
+- The supported runtime migrates them into the encrypted vault and then serves them from `secret_cache`
+- Migrated secrets are scrubbed from `os.environ` after bootstrap, so environment variables are bootstrap input, not the canonical runtime secret store
 
 **Sensitive data redaction:**
 
@@ -376,8 +376,8 @@ Stage 6: Trust Initialization
 | **A05: Security Misconfiguration** | Strong | CORS restricted to explicit methods/headers. Security headers middleware. Feature flags and subsystem gates properly configured. |
 | **A06: Vulnerable Components** | Not Assessed | Dependencies use minimum version bounds. Recommendation: enable automated vulnerability scanning in CI. |
 | **A07: Auth Failures** | Partial | HMAC-SHA256 constant-time comparison is correct. Single static tokens; no MFA. |
-| **A08: Software/Data Integrity** | Strong | Fernet encryption, atomic writes, file change hashing in receipts. |
-| **A09: Logging/Monitoring** | Strong | Comprehensive receipt system, structured audit logging with hash-chained tamper-evident entries. Thread-safe governance counters. |
+| **A08: Software/Data Integrity** | Strong | Fernet encryption, atomic writes, finalized receipt hash chaining, and file/change hashing in batch and export paths. |
+| **A09: Logging/Monitoring** | Strong | Comprehensive receipt system, structured audit logging with previous-entry hash chaining in `AuditLogger`, and thread-safe governance counters. |
 | **A10: SSRF** | Strong | NetworkInterceptor with private IP blocking across 6 CIDR ranges, fail-closed DNS resolution, URL credential stripping. |
 
 ### 4.2 NIST AI Risk Management Framework

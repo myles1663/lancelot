@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import importlib
 import json
 import logging
 import time
@@ -63,7 +64,15 @@ def _soul_payload(soul: Any) -> Dict[str, Any]:
 
 # ── Response Envelope ─────────────────────────────────────────────
 
-def _envelope(data: Any, cursor: Optional[str] = None, has_more: bool = False, limit: int = 100) -> Dict[str, Any]:
+def _envelope(
+    data: Any,
+    cursor: Optional[str] = None,
+    has_more: bool = False,
+    limit: int = 100,
+    runtime_degraded: bool = False,
+    degraded_reasons: Optional[List[str]] = None,
+    runtime_errors: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """Wrap response data in the standard Metrics API envelope."""
     soul_version = _get_soul_version()
     return {
@@ -71,6 +80,9 @@ def _envelope(data: Any, cursor: Optional[str] = None, has_more: bool = False, l
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "deployment_id": _get_deployment_id(),
         "soul_version": soul_version,
+        "runtime_degraded": runtime_degraded,
+        "degraded_reasons": list(degraded_reasons or []),
+        "runtime_errors": list(runtime_errors or []),
         "data": data,
         "pagination": {
             "cursor": cursor,
@@ -89,8 +101,8 @@ def _get_soul_version() -> str:
             return hashlib.sha256(
                 json.dumps(_soul_payload(soul), sort_keys=True).encode()
             ).hexdigest()[:16]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to resolve soul version for metrics API: %s", exc)
     return "unknown"
 
 
@@ -178,6 +190,49 @@ def _emit_metrics_query_receipt(request: Request, receipt_id: str, config) -> No
         logger.warning("Failed to emit metrics query receipt: %s", exc)
 
 
+def _append_runtime_issue(
+    degraded_reasons: List[str],
+    runtime_errors: List[str],
+    reason: str,
+    exc: Exception,
+) -> None:
+    degraded_reasons.append(reason)
+    runtime_errors.append(str(exc))
+    logger.warning("%s: %s", reason, exc)
+
+
+def _get_pending_t3_approvals_count() -> int:
+    """Return pending T3 approvals when governance exports a count helper."""
+    governance_api = importlib.import_module("src.core.governance_api")
+    count_fn = getattr(governance_api, "_get_pending_approvals_count", None)
+    if callable(count_fn):
+        return int(count_fn())
+    return 0
+
+
+def _get_active_hive_agents_count() -> int:
+    """Return the count of active HIVE agents from the live runtime module path."""
+    hive_runtime = importlib.import_module("src.hive.runtime")
+    get_runtime = getattr(hive_runtime, "get_runtime", None)
+    if callable(get_runtime):
+        runtime = get_runtime()
+        active_agents = getattr(runtime, "active_agents", None)
+        if callable(active_agents):
+            return len(list(active_agents()))
+        if isinstance(active_agents, (list, tuple, set, dict)):
+            return len(active_agents)
+
+    # Backward-compatible fallback for the current lifecycle-backed implementation.
+    hive_api = importlib.import_module("src.hive.api")
+    lifecycle = getattr(hive_api, "_lifecycle", None)
+    if lifecycle is None:
+        return 0
+    runtimes = getattr(lifecycle, "_runtimes", None)
+    if isinstance(runtimes, dict):
+        return len(runtimes)
+    return 0
+
+
 # ── Endpoints ─────────────────────────────────────────────────────
 
 @router.get("/summary")
@@ -191,6 +246,9 @@ async def metrics_summary(request: Request):
     if _receipt_service is None:
         return JSONResponse(status_code=503, content={"error": "Not initialized"})
 
+    degraded_reasons: List[str] = []
+    runtime_errors: List[str] = []
+
     # Active kill switches
     active_kills = 0
     try:
@@ -200,26 +258,37 @@ async def metrics_summary(request: Request):
         for name, val in flags.items():
             if name.startswith("FEATURE_") and not val:
                 active_kills += 1
-    except Exception:
-        pass
+    except Exception as exc:
+        _append_runtime_issue(
+            degraded_reasons,
+            runtime_errors,
+            "Kill switch status unavailable",
+            exc,
+        )
 
     # Pending T3 approvals
     pending_t3 = 0
     try:
-        from src.core.governance_api import _get_pending_approvals_count
-        pending_t3 = _get_pending_approvals_count()
-    except Exception:
-        pass
+        pending_t3 = _get_pending_t3_approvals_count()
+    except Exception as exc:
+        _append_runtime_issue(
+            degraded_reasons,
+            runtime_errors,
+            "Pending approval status unavailable",
+            exc,
+        )
 
     # Active HIVE agents
     active_agents = 0
     try:
-        from src.hive.runtime import get_runtime
-        rt = get_runtime()
-        if rt:
-            active_agents = len(rt.active_agents())
-    except Exception:
-        pass
+        active_agents = _get_active_hive_agents_count()
+    except Exception as exc:
+        _append_runtime_issue(
+            degraded_reasons,
+            runtime_errors,
+            "HIVE runtime status unavailable",
+            exc,
+        )
 
     # Cost rate
     cost_rate = 0.0
@@ -228,8 +297,13 @@ async def metrics_summary(request: Request):
         tracker = get_usage_tracker()
         if tracker:
             cost_rate = getattr(tracker, 'current_rate_usd_per_hour', 0.0)
-    except Exception:
-        pass
+    except Exception as exc:
+        _append_runtime_issue(
+            degraded_reasons,
+            runtime_errors,
+            "Cost tracker status unavailable",
+            exc,
+        )
 
     return _envelope({
         "active_kill_switches": active_kills,
@@ -237,7 +311,7 @@ async def metrics_summary(request: Request):
         "current_spend_rate_usd_hr": cost_rate,
         "active_hive_agents": active_agents,
         "soul_version": _get_soul_version(),
-    })
+    }, runtime_degraded=bool(degraded_reasons), degraded_reasons=degraded_reasons, runtime_errors=runtime_errors)
 
 
 @router.get("/receipts")
@@ -396,8 +470,16 @@ async def metrics_trust_ledger(request: Request):
         if _trust_ledger:
             entries = _trust_ledger.get_all_entries()
             return _envelope({"entries": [e.to_dict() if hasattr(e, 'to_dict') else str(e) for e in entries]})
-    except Exception:
-        pass
+    except Exception as exc:
+        degraded_reasons = ["Trust ledger status unavailable"]
+        runtime_errors = [str(exc)]
+        logger.warning("Trust ledger status unavailable: %s", exc)
+        return _envelope(
+            {"entries": []},
+            runtime_degraded=True,
+            degraded_reasons=degraded_reasons,
+            runtime_errors=runtime_errors,
+        )
     return _envelope({"entries": []})
 
 
@@ -406,6 +488,8 @@ async def metrics_soul(request: Request):
     """Current Soul document summary (not full text)."""
     _authorize_metrics_request(request)
     soul_data: Dict[str, Any] = {"version": "unknown"}
+    degraded_reasons: List[str] = []
+    runtime_errors: List[str] = []
     try:
         from src.core.soul.store import load_active_soul
         soul = load_active_soul()
@@ -416,9 +500,21 @@ async def metrics_soul(request: Request):
                 "capability_count": len(getattr(soul, "capabilities", [])),
                 "constraint_count": len(getattr(soul, "constraints", [])),
             }
-    except Exception:
-        pass
-    return _envelope(soul_data)
+        else:
+            degraded_reasons.append("Soul status unavailable")
+    except Exception as exc:
+        _append_runtime_issue(
+            degraded_reasons,
+            runtime_errors,
+            "Soul status unavailable",
+            exc,
+        )
+    return _envelope(
+        soul_data,
+        runtime_degraded=bool(degraded_reasons),
+        degraded_reasons=degraded_reasons,
+        runtime_errors=runtime_errors,
+    )
 
 
 @router.get("/kill-switches")
@@ -436,8 +532,14 @@ async def metrics_kill_switches(request: Request):
                 "disabled": not val,
             })
         return _envelope({"switches": switches, "total": len(switches)})
-    except Exception:
-        return _envelope({"switches": [], "total": 0})
+    except Exception as exc:
+        logger.warning("Kill switch status unavailable: %s", exc)
+        return _envelope(
+            {"switches": [], "total": 0},
+            runtime_degraded=True,
+            degraded_reasons=["Kill switch status unavailable"],
+            runtime_errors=[str(exc)],
+        )
 
 
 @router.get("/hive")
@@ -445,15 +547,23 @@ async def metrics_hive(request: Request):
     """Current HIVE state — active agents, quests."""
     _authorize_metrics_request(request)
     hive_data: Dict[str, Any] = {"active_agents": 0, "quests": []}
+    degraded_reasons: List[str] = []
+    runtime_errors: List[str] = []
     try:
-        from src.hive.runtime import get_runtime
-        rt = get_runtime()
-        if rt:
-            agents = rt.active_agents()
-            hive_data["active_agents"] = len(agents)
-    except Exception:
-        pass
-    return _envelope(hive_data)
+        hive_data["active_agents"] = _get_active_hive_agents_count()
+    except Exception as exc:
+        _append_runtime_issue(
+            degraded_reasons,
+            runtime_errors,
+            "HIVE runtime status unavailable",
+            exc,
+        )
+    return _envelope(
+        hive_data,
+        runtime_degraded=bool(degraded_reasons),
+        degraded_reasons=degraded_reasons,
+        runtime_errors=runtime_errors,
+    )
 
 
 @router.get("/webhooks/status")
@@ -465,9 +575,20 @@ async def metrics_webhook_status(request: Request):
         engine = get_webhook_engine()
         if engine:
             return _envelope({"endpoints": engine.get_stats()})
-    except Exception:
-        pass
-    return _envelope({"endpoints": {}})
+        return _envelope(
+            {"endpoints": {}},
+            runtime_degraded=True,
+            degraded_reasons=["Webhook engine not initialized"],
+            runtime_errors=[],
+        )
+    except Exception as exc:
+        logger.warning("Webhook engine status unavailable: %s", exc)
+        return _envelope(
+            {"endpoints": {}},
+            runtime_degraded=True,
+            degraded_reasons=["Webhook engine status unavailable"],
+            runtime_errors=[str(exc)],
+        )
 
 
 # ── Helpers ───────────────────────────────────────────────────────

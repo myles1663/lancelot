@@ -226,6 +226,16 @@ class TestExportEndpoint:
         })
         assert resp.status_code == 400
 
+    def test_export_rejects_unexpected_fields(self):
+        client = _get_client(receipt_service=MagicMock())
+        resp = client.post("/api/compliance/export", json={
+            "format": "SOC2_JSON",
+            "period_start": "2026-01-01",
+            "period_end": "2026-01-31",
+            "unexpected": "deny-me",
+        })
+        assert resp.status_code == 422
+
 
 @pytest.mark.skipif(not HAS_TESTCLIENT, reason="FastAPI/TestClient not available")
 class TestDownloadEndpoint:

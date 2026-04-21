@@ -8,13 +8,14 @@ and allows runtime toggling for the War Room Kill Switches page.
 import logging
 import os
 
-import yaml
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability
+from src.core.network_allowlist import NetworkAllowlistService
+from src.core.outbound_http import assert_local_control_url
 
 logger = logging.getLogger(__name__)
 
@@ -417,30 +418,11 @@ async def get_flags():
 # NOTE: These routes MUST be defined before /{name}/* routes to avoid
 # FastAPI matching "network-allowlist" as a flag name parameter.
 
-ALLOWLIST_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "config", "network_allowlist.yaml",
-)
-
-
-def _load_allowlist() -> dict:
-    """Load network_allowlist.yaml, returning default structure if missing."""
-    try:
-        with open(ALLOWLIST_PATH, "r") as f:
-            data = yaml.safe_load(f) or {}
-        return data
-    except FileNotFoundError:
-        return {"domains": [], "notes": "No allowlist config found. Create config/network_allowlist.yaml."}
-
-
-def _save_allowlist(data: dict) -> None:
-    """Persist allowlist config to YAML."""
-    os.makedirs(os.path.dirname(ALLOWLIST_PATH), exist_ok=True)
-    with open(ALLOWLIST_PATH, "w") as f:
-        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+_network_allowlist = NetworkAllowlistService()
 
 
 class AllowlistUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     domains: List[str]
 
 
@@ -448,10 +430,10 @@ class AllowlistUpdate(BaseModel):
 async def get_network_allowlist():
     """Return current network allowlist config."""
     try:
-        data = _load_allowlist()
+        data = _network_allowlist.load_config()
         return {
             "domains": data.get("domains", []),
-            "path": ALLOWLIST_PATH,
+            "path": _network_allowlist.path,
         }
     except Exception as exc:
         logger.error("get_network_allowlist error: %s", exc)
@@ -465,11 +447,7 @@ async def update_network_allowlist(
 ):
     """Update the network allowlist domains."""
     try:
-        data = _load_allowlist()
-        # Clean and deduplicate domains
-        clean = sorted(set(d.strip().lower() for d in body.domains if d.strip()))
-        data["domains"] = clean
-        _save_allowlist(data)
+        clean = _network_allowlist.set_domains(body.domains)
         # Reload the orchestrator's live NetworkInterceptor so changes take effect immediately
         try:
             from gateway import main_orchestrator
@@ -491,13 +469,29 @@ async def update_network_allowlist(
 
 HOST_AGENT_URL = os.environ.get("HOST_AGENT_URL", "http://host.docker.internal:9111")
 _LEGACY_HOST_AGENT_TOKEN = "lancelot-host-agent"
+_HOST_AGENT_ALLOWED_HOSTNAMES = frozenset({
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "host.docker.internal",
+})
 
 
-def _get_host_agent_token() -> str:
+def _get_host_agent_token_state() -> tuple[str, str]:
     token = os.environ.get("HOST_AGENT_TOKEN", "").strip()
-    if not token or token == _LEGACY_HOST_AGENT_TOKEN:
-        return ""
-    return token
+    if not token:
+        return "", "missing"
+    if token == _LEGACY_HOST_AGENT_TOKEN:
+        return "", "legacy_default"
+    return token, "configured"
+
+
+def _host_agent_url(path: str) -> str:
+    return assert_local_control_url(
+        f"{HOST_AGENT_URL}{path}",
+        component="Host agent control request",
+        allowed_hostnames=_HOST_AGENT_ALLOWED_HOSTNAMES,
+    )
 
 
 @router.get("/host-agent-status")
@@ -505,14 +499,15 @@ async def get_host_agent_status():
     """Check if the host agent is reachable and return its status."""
     import urllib.request
     import json as _json
-    token = _get_host_agent_token()
+    token, token_state = _get_host_agent_token_state()
     try:
-        req = urllib.request.Request(f"{HOST_AGENT_URL}/health", method="GET")
+        req = urllib.request.Request(_host_agent_url("/health"), method="GET")
         with urllib.request.urlopen(req, timeout=3) as resp:
             data = _json.loads(resp.read().decode("utf-8"))
         return {
             "reachable": True,
             "auth_configured": bool(token),
+            "auth_state": token_state,
             "platform": data.get("platform", "unknown"),
             "platform_version": data.get("platform_version", ""),
             "hostname": data.get("hostname", "unknown"),
@@ -522,6 +517,7 @@ async def get_host_agent_status():
         return {
             "reachable": False,
             "auth_configured": bool(token),
+            "auth_state": token_state,
             "platform": "",
             "platform_version": "",
             "hostname": "",
@@ -536,15 +532,21 @@ async def shutdown_host_agent(
     """Send shutdown signal to the host agent."""
     import urllib.request
     import json as _json
-    token = _get_host_agent_token()
+    token, token_state = _get_host_agent_token_state()
     if not token:
+        error_message = "HOST_AGENT_TOKEN is not configured for host bridge control."
+        if token_state == "legacy_default":
+            error_message = (
+                "HOST_AGENT_TOKEN is still using the rejected legacy default value "
+                "for host bridge control."
+            )
         return JSONResponse(
             status_code=503,
-            content={"error": "HOST_AGENT_TOKEN is not configured for host bridge control."},
+            content={"error": error_message},
         )
     try:
         req = urllib.request.Request(
-            f"{HOST_AGENT_URL}/shutdown",
+            _host_agent_url("/shutdown"),
             method="POST",
             headers={
                 "Authorization": f"Bearer {token}",
@@ -593,6 +595,7 @@ async def get_host_write_commands():
 
 
 class WriteCommandsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     raw: str
 
 
@@ -726,7 +729,7 @@ async def toggle_flag(
         # Host Bridge lifecycle: auto-shutdown on disable, reachability check on enable
         agent_reachable = None
         if name == "FEATURE_TOOLS_HOST_BRIDGE":
-            token = _get_host_agent_token()
+            token, _ = _get_host_agent_token_state()
             if not new_val:
                 # Shutting down — send stop signal to host agent
                 if not token:
@@ -736,7 +739,7 @@ async def toggle_flag(
                     try:
                         import urllib.request as _ur
                         _req = _ur.Request(
-                            f"{HOST_AGENT_URL}/shutdown",
+                            _host_agent_url("/shutdown"),
                             method="POST",
                             headers={"Authorization": f"Bearer {token}"},
                         )
@@ -749,7 +752,7 @@ async def toggle_flag(
                 # Enabling — check if host agent is reachable
                 try:
                     import urllib.request as _ur
-                    _req = _ur.Request(f"{HOST_AGENT_URL}/health", method="GET")
+                    _req = _ur.Request(_host_agent_url("/health"), method="GET")
                     _ur.urlopen(_req, timeout=3)
                     agent_reachable = True
                     logger.info("Host agent reachable on enable")

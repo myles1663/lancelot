@@ -1,10 +1,13 @@
 import re
 import json
+import logging
 from typing import Optional
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 
 from security import NetworkInterceptor
+
+logger = logging.getLogger(__name__)
 
 
 class APIDiscoveryEngine:
@@ -50,7 +53,7 @@ class APIDiscoveryEngine:
             try:
                 return self._llm_extract(doc_text)
             except Exception as e:
-                print(f"LLM extraction failed, using regex fallback: {e}")
+                logger.warning("LLM extraction failed, using regex fallback: %s", e)
 
         return self._regex_fallback_extract(doc_text)
 
@@ -174,8 +177,7 @@ class APIDiscoveryEngine:
             '    try:',
             '        return http_client.request(method, url, headers=headers, json=json_body)',
             '    except NameError:',
-            '        print(f"[DRY RUN] {method} {url} headers={headers} body={json_body}")',
-            '        return {"status": "dry_run"}',
+            '        return {"status": "dry_run", "method": method, "url": url, "headers": headers, "body": json_body}',
             '',
         ]
 

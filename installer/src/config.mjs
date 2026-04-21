@@ -41,8 +41,10 @@ export function generateEnvContent(config) {
   // Generate security tokens — store API token in config for OAuth flow
   const ownerToken = generateToken();
   const apiToken = generateToken();
+  const hostAgentToken = generateToken();
   const vaultKey = generateFernetKey();
   config._generatedApiToken = apiToken;
+  config._generatedHostAgentToken = hostAgentToken;
 
   lines.push(
     '',
@@ -50,6 +52,7 @@ export function generateEnvContent(config) {
     `LANCELOT_OWNER_TOKEN=${ownerToken}`,
     `LANCELOT_API_TOKEN=${apiToken}`,
     `LANCELOT_VAULT_KEY=${vaultKey}`,
+    `HOST_AGENT_TOKEN=${hostAgentToken}`,
     '',
     '# War Room Authentication',
     `LANCELOT_AUTH_PROVIDER=${warRoomAuthModel}`,
@@ -62,15 +65,21 @@ export function generateEnvContent(config) {
       `OIDC_CLIENT_SECRET=${config.oidcClientSecret || ''}`,
       `OIDC_REDIRECT_URI=${(config.oidcBaseUrl || 'http://localhost:8000').replace(/\/$/, '')}/auth/oidc/callback`,
       `OIDC_ALLOWED_GROUPS=${config.oidcAllowedGroups || ''}`,
+      `OIDC_ALLOW_ANY_AUTHENTICATED=${config.oidcAllowAnyAuthenticated ? 'true' : 'false'}`,
       '',
     );
   } else {
+    const warRoomUser = (config.warRoomUser || '').trim();
+    if (!warRoomUser) {
+      throw new Error('War Room username is required for local authentication');
+    }
     const warRoomPassword = config.warRoomPassword || crypto.randomBytes(12).toString('base64url');
     const resetCode = config.warRoomPasswordResetCode || crypto.randomBytes(12).toString('base64url');
+    config.warRoomUser = warRoomUser;
     config.warRoomPassword = warRoomPassword;
     config.warRoomPasswordResetCode = resetCode;
     lines.push(
-      `WARROOM_USERNAME=${config.warRoomUser || 'admin'}`,
+      `WARROOM_USERNAME=${warRoomUser}`,
       `WARROOM_PASSWORD=${warRoomPassword}`,
       `WARROOM_PASSWORD_RESET_CODE=${resetCode}`,
       '',

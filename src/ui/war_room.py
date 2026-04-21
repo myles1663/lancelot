@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import time
 import datetime
+import logging
 import requests
 from orchestrator import LancelotOrchestrator
 from onboarding import OnboardingOrchestrator
@@ -14,6 +15,7 @@ from panels.cost_panel import render_cost_panel
 # creating its own bare orchestrator. This ensures all subsystems (skill_executor,
 # local_model, scheduler, etc.) are available for tool execution.
 _GATEWAY_URL = os.getenv("LANCELOT_GATEWAY_URL", "http://localhost:8000")
+logger = logging.getLogger(__name__)
 
 
 def _chat_via_gateway(text: str, crusader_mode: bool = False) -> str:
@@ -33,7 +35,10 @@ def _chat_via_gateway(text: str, crusader_mode: bool = False) -> str:
             data = resp.json()
             return data.get("response", "")
     except Exception as e:
-        print(f"V11: Gateway call failed ({e}), falling back to direct orchestrator")
+        logger.warning(
+            "V11: Gateway call failed (%s), falling back to direct orchestrator",
+            e,
+        )
     # Fallback: direct orchestrator (missing subsystems but better than nothing)
     return st.session_state.orchestrator.chat(text, crusader_mode=crusader_mode)
 
@@ -65,7 +70,10 @@ def _chat_with_files_via_gateway(text: str, uploaded_files: list, save_to_worksp
             data = resp.json()
             return data.get("response", "")
     except Exception as e:
-        print(f"V14: Gateway upload call failed ({e}), falling back to text-only")
+        logger.warning(
+            "V14: Gateway upload call failed (%s), falling back to text-only",
+            e,
+        )
     return _chat_via_gateway(text)
 
 
@@ -108,7 +116,7 @@ if "crusader_session" not in st.session_state:
 if "onboarding_orchestrator" not in st.session_state:
     st.session_state.onboarding_orchestrator = OnboardingOrchestrator(data_dir=DATA_DIR)
 
-# [NEW] Check for Onboarding Trigger from Launcher or State
+# Resume onboarding automatically when the launcher or state machine requests it.
 onboard = st.session_state.onboarding_orchestrator
 if len(st.session_state.messages) == 0:
     # Auto-detect start state
@@ -144,14 +152,14 @@ if len(st.session_state.messages) == 0:
 
 # Sidebar: Live Logs
 with st.sidebar:
-    # [NEW] Branding Logo
+    # Render project branding when the asset is present.
     logo_path = os.path.join(STATIC_DIR, "logo.jpeg")
     if os.path.exists(logo_path):
         st.image(logo_path, use_container_width=True)
 
     st.title("🛡️ LANCELOT OS")
     
-    # [NEW] Restart Indicator — clear flag and reload UI
+    # Clear the restart flag and reset cached UI state after a reboot request.
     restart_flag = os.path.join(DATA_DIR, "FLAGS", "RESTART_REQUIRED")
     if os.path.exists(restart_flag):
         os.remove(restart_flag)

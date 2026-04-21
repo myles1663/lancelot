@@ -128,6 +128,14 @@ The standalone verification endpoint remains available at `GET /api/compliance/c
 | CC8.1 - Change Management | `SOUL_UPDATED`, `AGENT_DEPLOYED`, `ALLOWLIST_MODIFIED`, `TOOL_ENABLED`, `TOOL_DISABLED` |
 | CC9.2 - Risk Mitigation | `APL_RULE_APPROVED`, `APL_RULE_REJECTED` and related governed risk actions |
 
+SOC 2 exports now also include a `mapping_summary` block:
+
+- `mapped_receipt_types` — every receipt type currently mapped into the SOC 2 control set
+- `observed_unmapped_receipt_types` — receipt types observed in the export period that are not part of the current SOC 2 mapping
+- `observed_unmapped_receipt_count` — how many receipts fell into that unmapped set
+
+That makes mapping gaps explicit for auditors instead of leaving them implicit in mapper comments or code TODOs.
+
 ---
 
 ## ISO 27001:2022

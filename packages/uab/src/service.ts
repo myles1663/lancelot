@@ -201,11 +201,11 @@ export class UABService {
     const cached = this.cache.getTree(pid);
     if (cached) return cached;
 
-    const route = this.router.getRoute(pid);
-    if (!route) throw new Error(`Not connected to PID ${pid}`);
+    const connection = this.router.getConnection(pid);
+    if (!connection) throw new Error(`Not connected to PID ${pid}`);
 
     const tree = await withRetry(
-      () => route.connection.enumerate(),
+      () => connection.enumerate(),
       { maxRetries: 1, label: `enumerate-${pid}` },
     );
 
@@ -219,11 +219,11 @@ export class UABService {
     const cached = this.cache.getQuery(pid, selector);
     if (cached) return cached;
 
-    const route = this.router.getRoute(pid);
-    if (!route) throw new Error(`Not connected to PID ${pid}`);
+    const connection = this.router.getConnection(pid);
+    if (!connection) throw new Error(`Not connected to PID ${pid}`);
 
     const results = await withRetry(
-      () => route.connection.query(selector),
+      () => connection.query(selector),
       { maxRetries: 1, label: `query-${pid}` },
     );
 
@@ -234,7 +234,9 @@ export class UABService {
   /** Perform an action on a UI element (with permission check + cache invalidation) */
   async act(pid: number, elementId: string, action: ActionType, params?: ActionParams): Promise<ActionResult> {
     const route = this.router.getRoute(pid);
+    const connection = this.router.getConnection(pid);
     if (!route) throw new Error(`Not connected to PID ${pid}`);
+    if (!connection) throw new Error(`Not connected to PID ${pid}`);
 
     // Permission check
     const check = this.permissions.check(pid, action, route.app);
@@ -244,7 +246,7 @@ export class UABService {
     }
 
     const result = await withRetry(
-      () => route.connection.act(elementId, action, params),
+      () => connection.act(elementId, action, params),
       { maxRetries: 1, label: `act-${pid}-${action}` },
     );
 
@@ -261,11 +263,11 @@ export class UABService {
     const cached = this.cache.getState(pid);
     if (cached) return cached as AppState;
 
-    const route = this.router.getRoute(pid);
-    if (!route) throw new Error(`Not connected to PID ${pid}`);
+    const connection = this.router.getConnection(pid);
+    if (!connection) throw new Error(`Not connected to PID ${pid}`);
 
     const appState = await withRetry(
-      () => route.connection.state(),
+      () => connection.state(),
       { maxRetries: 1, label: `state-${pid}` },
     );
 
@@ -277,18 +279,18 @@ export class UABService {
 
   /** Send a single keypress to a connected app */
   async keypress(pid: number, key: string): Promise<ActionResult> {
-    const route = this.router.getRoute(pid);
-    if (!route) throw new Error(`Not connected to PID ${pid}`);
-    const result = await route.connection.act('', 'keypress', { key });
+    const connection = this.router.getConnection(pid);
+    if (!connection) throw new Error(`Not connected to PID ${pid}`);
+    const result = await connection.act('', 'keypress', { key });
     this.cache.invalidateIfNeeded(pid, 'keypress');
     return result;
   }
 
   /** Send a hotkey combination to a connected app (e.g., ['ctrl', 's']) */
   async hotkey(pid: number, keys: string[]): Promise<ActionResult> {
-    const route = this.router.getRoute(pid);
-    if (!route) throw new Error(`Not connected to PID ${pid}`);
-    const result = await route.connection.act('', 'hotkey', { keys });
+    const connection = this.router.getConnection(pid);
+    if (!connection) throw new Error(`Not connected to PID ${pid}`);
+    const result = await connection.act('', 'hotkey', { keys });
     this.cache.invalidateIfNeeded(pid, 'hotkey');
     return result;
   }
@@ -297,23 +299,23 @@ export class UABService {
 
   /** Minimize a window */
   async minimize(pid: number): Promise<ActionResult> {
-    const route = this.router.getRoute(pid);
-    if (!route) throw new Error(`Not connected to PID ${pid}`);
-    return route.connection.act('', 'minimize');
+    const connection = this.router.getConnection(pid);
+    if (!connection) throw new Error(`Not connected to PID ${pid}`);
+    return connection.act('', 'minimize');
   }
 
   /** Maximize a window */
   async maximize(pid: number): Promise<ActionResult> {
-    const route = this.router.getRoute(pid);
-    if (!route) throw new Error(`Not connected to PID ${pid}`);
-    return route.connection.act('', 'maximize');
+    const connection = this.router.getConnection(pid);
+    if (!connection) throw new Error(`Not connected to PID ${pid}`);
+    return connection.act('', 'maximize');
   }
 
   /** Restore a window from min/max */
   async restore(pid: number): Promise<ActionResult> {
-    const route = this.router.getRoute(pid);
-    if (!route) throw new Error(`Not connected to PID ${pid}`);
-    return route.connection.act('', 'restore');
+    const connection = this.router.getConnection(pid);
+    if (!connection) throw new Error(`Not connected to PID ${pid}`);
+    return connection.act('', 'restore');
   }
 
   /** Close a window gracefully */
@@ -323,25 +325,25 @@ export class UABService {
 
   /** Move a window to (x, y) */
   async moveWindow(pid: number, x: number, y: number): Promise<ActionResult> {
-    const route = this.router.getRoute(pid);
-    if (!route) throw new Error(`Not connected to PID ${pid}`);
-    return route.connection.act('', 'move', { x, y });
+    const connection = this.router.getConnection(pid);
+    if (!connection) throw new Error(`Not connected to PID ${pid}`);
+    return connection.act('', 'move', { x, y });
   }
 
   /** Resize a window to (width, height) */
   async resizeWindow(pid: number, width: number, height: number): Promise<ActionResult> {
-    const route = this.router.getRoute(pid);
-    if (!route) throw new Error(`Not connected to PID ${pid}`);
-    return route.connection.act('', 'resize', { width, height });
+    const connection = this.router.getConnection(pid);
+    if (!connection) throw new Error(`Not connected to PID ${pid}`);
+    return connection.act('', 'resize', { width, height });
   }
 
   // ─── Phase 3: Screenshot ──────────────────────────────────────
 
   /** Capture a screenshot of a connected app's window */
   async screenshot(pid: number, outputPath?: string): Promise<ActionResult> {
-    const route = this.router.getRoute(pid);
-    if (!route) throw new Error(`Not connected to PID ${pid}`);
-    return route.connection.act('', 'screenshot', { outputPath });
+    const connection = this.router.getConnection(pid);
+    if (!connection) throw new Error(`Not connected to PID ${pid}`);
+    return connection.act('', 'screenshot', { outputPath });
   }
 
   // ─── Phase 4: Action Chains ───────────────────────────────────

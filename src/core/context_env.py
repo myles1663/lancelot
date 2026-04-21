@@ -1,5 +1,7 @@
 import os
 import time
+import logging
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
 import json
@@ -7,9 +9,13 @@ import ast
 import subprocess
 from receipts import get_receipt_service, create_receipt, ActionType, CognitionTier, ReceiptStatus
 
+logger = logging.getLogger(__name__)
+
 # Configuration
 MAX_CONTEXT_TOKENS = 128000  # Default safe limit
 MAX_FILES_IN_CONTEXT = 50
+BOOTSTRAP_TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "config" / "bootstrap"
+BOOTSTRAP_DATA_FILES = ("RULES.md", "CAPABILITIES.md")
 
 @dataclass
 class ContextItem:
@@ -28,12 +34,28 @@ class ContextEnvironment:
     
     def __init__(self, data_dir: str):
         self.data_dir = os.path.abspath(data_dir)
+        os.makedirs(self.data_dir, exist_ok=True)
+        self._ensure_bootstrap_files()
         self.receipt_service = get_receipt_service(data_dir)
         self.items: Dict[str, ContextItem] = {}
         self.history: List[Dict[str, str]] = []
         self.current_tokens = 0
         self._current_quest_id: Optional[str] = None  # V29: Set by orchestrator per chat() call
         self._load_history()
+
+    def _ensure_bootstrap_files(self):
+        """Seed canonical runtime text files from tracked templates when missing."""
+        for filename in BOOTSTRAP_DATA_FILES:
+            destination = Path(self.data_dir) / filename
+            if destination.exists():
+                continue
+            template = BOOTSTRAP_TEMPLATE_DIR / filename
+            if not template.exists():
+                continue
+            try:
+                destination.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
+            except Exception as e:
+                logger.warning("Error seeding bootstrap file %s: %s", filename, e)
         
     def _chat_dir(self) -> str:
         """Return (and create) a dedicated chat subdirectory the librarian won't move."""
@@ -49,7 +71,7 @@ class ContextEnvironment:
                 with open(history_path, "r", encoding="utf-8") as f:
                     self.history = json.load(f)
             except Exception as e:
-                print(f"Error loading chat history: {e}")
+                logger.warning("Error loading chat history: %s", e)
 
     def save_history(self):
         """Persists chat history to JSON."""
@@ -58,7 +80,7 @@ class ContextEnvironment:
             with open(history_path, "w", encoding="utf-8") as f:
                 json.dump(self.history, f, indent=2)
         except Exception as e:
-             print(f"Error saving chat history: {e}")
+             logger.warning("Error saving chat history: %s", e)
 
     def add_history(self, role: str, content: str):
         """Adds a message to history and auto-saves."""
@@ -312,7 +334,12 @@ class ContextEnvironment:
                             count += 1
                             if count >= limit:
                                 break
-                    except:
+                    except OSError as exc:
+                        logger.debug(
+                            "ContextEnvironment skipped unreadable file %s during workspace search: %s",
+                            full_path,
+                            exc,
+                        )
                         continue
                 if count >= limit:
                     break
@@ -365,7 +392,12 @@ class ContextEnvironment:
                              doc = ast.get_docstring(node)
                              doc_stub = f" # {doc.splitlines()[0]}" if doc else ""
                              output.append(f"def {node.name}(...){doc_stub}")
-                except:
+                except SyntaxError as exc:
+                    logger.debug(
+                        "ContextEnvironment AST parse failed for %s: %s",
+                        full_path,
+                        exc,
+                    )
                     output.append("(AST Parse Failed) Showing first 10 lines:")
                     output.append("\n".join(content.splitlines()[:10]))
             else:

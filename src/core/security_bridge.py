@@ -10,12 +10,14 @@ Features:
 
 import asyncio
 import datetime
+import hmac
 import json
 import logging
 import os
 import time
 from pathlib import Path
 from security import AuditLogger
+from src.core.outbound_http import assert_url_allowed
 
 logger = logging.getLogger("lancelot.security_bridge")
 MFA_CHALLENGE_TTL_SECONDS = 300
@@ -209,52 +211,91 @@ class MFAListener:
 class WebhookAuthenticator:
     """Validates incoming Webhook requests."""
     
-    GOOGLE_Issuer = "chat@system.gserviceaccount.com"
+    GOOGLE_CHAT_SERVICE_ACCOUNT = "chat@system.gserviceaccount.com"
+
+    def _auth_mode(self) -> str:
+        return os.getenv("LANCELOT_WEBHOOK_AUTH_MODE", "google_signed").strip().lower() or "google_signed"
+
+    def _google_chat_audience(self) -> str:
+        return os.getenv("LANCELOT_GOOGLE_CHAT_AUDIENCE", "").strip()
 
     def _expected_bearer(self) -> str:
-        """Return the bonded webhook bearer secret.
-
-        Prefer a dedicated webhook bearer when configured. Fall back to the
-        general API token for backward compatibility with existing installs.
-        """
+        """Return the dedicated bonded webhook bearer secret."""
         try:
             import secret_cache
 
             expected = secret_cache.get("LANCELOT_WEBHOOK_BEARER", "")
             if expected:
                 return expected
-            return secret_cache.get("LANCELOT_API_TOKEN", "")
-        except Exception:
-            return (
-                os.getenv("LANCELOT_WEBHOOK_BEARER", "").strip()
-                or os.getenv("LANCELOT_API_TOKEN", "").strip()
+        except Exception as exc:
+            logger.debug("Failed to read bonded webhook bearer from secret cache: %s", exc)
+        return os.getenv("LANCELOT_WEBHOOK_BEARER", "").strip()
+
+    def _verify_google_signed_bearer(self, token: str) -> bool:
+        audience = self._google_chat_audience()
+        if not audience:
+            logger.error(
+                "Google-signed webhook auth attempted without LANCELOT_GOOGLE_CHAT_AUDIENCE configured"
             )
+            return False
+
+        try:
+            from google.auth.transport.requests import Request as GoogleAuthRequest
+            from google.oauth2 import id_token
+
+            claims = id_token.verify_oauth2_token(token, GoogleAuthRequest(), audience)
+        except Exception as exc:
+            logger.warning("Google-signed webhook token verification failed: %s", exc)
+            return False
+
+        email = str(claims.get("email", "")).strip().lower()
+        email_verified = bool(claims.get("email_verified"))
+        if email != self.GOOGLE_CHAT_SERVICE_ACCOUNT or not email_verified:
+            logger.warning(
+                "Rejected Google-signed webhook token: unexpected email=%s verified=%s",
+                email,
+                email_verified,
+            )
+            return False
+        return True
+
+    def _verify_bonded_bearer(self, token: str) -> bool:
+        expected_token = self._expected_bearer()
+        if not expected_token:
+            logger.error("Bonded webhook auth attempted without LANCELOT_WEBHOOK_BEARER configured")
+            return False
+        return hmac.compare_digest(token, expected_token)
     
     def verify_remote_header(self, auth_header: str) -> bool:
         """
-        Validates Bearer token from Google Chat.
-        
-        TODO: Implement real JWT signature validation using Google's public keys.
-        Current hardened fallback: require an explicit bonded webhook bearer.
+        Validate inbound webhook Authorization based on the configured mode.
+
+        Modes:
+        - google_signed: verify a Google-signed token against audience + Chat service account
+        - bonded_bearer: require an explicit dedicated shared secret
         """
-        expected_token = self._expected_bearer()
-        if not expected_token:
-            logger.error("Webhook auth attempted without a configured bearer secret")
-            return False
-            
         if not auth_header.startswith("Bearer "):
             return False
-            
-        token = auth_header.split(" ")[1]
-        return token == expected_token
+
+        token = auth_header.split(" ", 1)[1]
+        mode = self._auth_mode()
+
+        if mode == "google_signed":
+            return self._verify_google_signed_bearer(token)
+        if mode == "bonded_bearer":
+            return self._verify_bonded_bearer(token)
+
+        logger.error("Unsupported webhook auth mode configured: %s", mode)
+        return False
 
 class CommsBridge:
     """
     Handles Outbound Secure Communication.
     Uses the channel verified during Onboarding.
     """
-    def __init__(self):
+    def __init__(self, network_interceptor=None):
         self.comms_type = os.getenv("LANCELOT_COMMS_TYPE", "none")
+        self._network_interceptor = network_interceptor
 
         # Google Chat Config
         self.webhook_url = os.getenv("LANCELOT_COMMS_WEBHOOK")
@@ -283,7 +324,7 @@ class CommsBridge:
              if not self.webhook_url:
                  logger.warning("Google Chat Webhook missing.")
                  return
-             target_url = self.webhook_url
+             raw_target_url = self.webhook_url
              payload = {"text": message}
 
         elif self.comms_type == "telegram":
@@ -292,7 +333,7 @@ class CommsBridge:
              if not tg_token or not tg_chat:
                  logger.warning("Telegram settings missing.")
                  return
-             target_url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+             raw_target_url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
              payload = {"chat_id": tg_chat, "text": message, "parse_mode": "Markdown"}
         
         else:
@@ -300,6 +341,11 @@ class CommsBridge:
              return
 
         try:
+            target_url = assert_url_allowed(
+                raw_target_url,
+                component=f"CommsBridge {self.comms_type} alert",
+                network_interceptor=self._network_interceptor,
+            )
             async with aiohttp.ClientSession() as session:
                 async with session.post(target_url, json=payload) as resp:
                     if resp.status != 200:

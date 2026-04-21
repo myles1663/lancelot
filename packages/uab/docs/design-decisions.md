@@ -45,7 +45,7 @@ This document records key architectural decisions made during UAB's development,
 2. Batches of 50 PIDs for module scanning
 3. One P/Invoke call for all window titles
 
-Result: Full system scan in 2-5 seconds instead of 30+ seconds. This is fast enough for interactive use while simple enough to maintain.
+Result: Full system discovery stays interactive instead of degrading into tens of seconds of per-process PowerShell startup overhead. Actual timing still depends on the host, process mix, and PowerShell responsiveness, so target-machine measurement matters more than a single headline number.
 
 ---
 
@@ -74,7 +74,7 @@ The trade-off of maintaining two Maps is minimal compared to the performance ben
 
 **Alternatives Considered:**
 - **SQLite:** More query-capable but adds a native dependency (`better-sqlite3`) and is overkill for ~100 profiles.
-- **No persistence:** Simpler, but forces a full 2-5 second scan on every CLI invocation.
+- **No persistence:** Simpler, but forces a fresh full scan on every CLI invocation instead of using the saved registry.
 - **Multiple JSON files (one per app):** Fine-grained updates but creates file sprawl.
 - **YAML/TOML:** More human-readable but less universal than JSON.
 
@@ -91,7 +91,7 @@ The auto-save on mutation (with deferred save for bulk operations) means the fil
 
 ## 6. Framework-Independent Connector Pattern
 
-**Decision:** Add `UABConnector` as an instantiable, dependency-free API layer above the singleton `UABService`.
+**Decision:** Add `UABConnector` as an instantiable, agent-runtime-decoupled API layer above the singleton `UABService`.
 
 **Alternatives Considered:**
 - **Singleton only:** Simpler, but only one consumer can use UAB at a time.

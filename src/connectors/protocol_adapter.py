@@ -262,12 +262,12 @@ class ProtocolAdapter:
         if self._smtp_conn:
             try:
                 self._smtp_conn.quit()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to close SMTP connection cleanly: %s", exc)
             self._smtp_conn = None
         if self._imap_conn:
             try:
                 self._imap_conn.logout()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to close IMAP connection cleanly: %s", exc)
             self._imap_conn = None

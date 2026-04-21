@@ -16,7 +16,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability, resolve_authenticated_identity
 
@@ -46,6 +46,7 @@ def init_actioncard_api(card_store, card_resolver) -> None:
 
 class ResolveRequest(BaseModel):
     """Optional body for resolve endpoint."""
+    model_config = ConfigDict(extra="forbid")
     reason: str = ""
 
 

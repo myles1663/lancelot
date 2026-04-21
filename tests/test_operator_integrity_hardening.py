@@ -260,6 +260,15 @@ def test_soul_template_apply_uses_authenticated_operator(monkeypatch):
         json={"operator_id": "Mallory", "session_id": "fake-session", "customizations": {"mode": "strict"}},
     )
 
+    assert response.status_code == 422
+    assert "extra_forbidden" in response.text
+    assert captured == {}
+
+    response = client.post(
+        "/soul/templates/test-template/apply",
+        json={"customizations": {"mode": "strict"}},
+    )
+
     assert response.status_code == 200
     assert captured["operator_id"] == "op-arthur"
     assert captured["session_id"] == "session-1"

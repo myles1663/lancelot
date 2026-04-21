@@ -188,25 +188,42 @@ def test_default_max_length():
 
 ## Step 4: Submit a Proposal
 
-Skills go through a proposal pipeline before installation. Use the Skill Factory:
+Skills go through a governed proposal pipeline before installation. Use the Skill Factory:
 
 ```python
 from skills.factory import SkillFactory
 
 factory = SkillFactory(data_dir="data")
 
-proposal = factory.generate_skeleton(
+proposal = factory.create_proposal(
     name="url_summarizer",
     description="Fetches a URL and returns a summarized version",
-    permissions=["read_input", "write_output", "network_fetch"]
+    permissions=["read_input", "write_output", "network_fetch"],
+    target_domains=["api.example.com"],
+    credentials=[{"vault_key": "example.api_token", "type": "bearer", "purpose": "API auth"}],
+    execute_code="""
+def execute(context, inputs):
+    url = inputs.get("input_data", "")
+    return {"result": f"ready to summarize {url}"}
+""",
 )
 ```
 
-This creates a `SkillProposal` in `PENDING` status, stored in `data/skill_proposals.json`.
+This creates a governed `SkillProposal`, stored in `data/skill_proposals.json`, with an artifact package under `data/skill_proposals/<proposal_id>/`.
+Each package contains:
+
+- `skill.yaml` — runtime manifest used by the registry/executor
+- `security_manifest.yaml` — capability/domain/vault contract used by the security pipeline
+- `execute.py`
+- `test_<skill>.py`
+- `README.md`
+
+The factory evaluates that package through the shared Skill Security Pipeline before the proposal becomes reviewable.
 
 **Proposal states:**
 
 ```
+REVIEW_FAILED → regenerate or replace artifact
 PENDING → Owner reviews → APPROVED → Installed → INSTALLED
                         → REJECTED (terminal)
 ```
@@ -217,9 +234,10 @@ PENDING → Owner reviews → APPROVED → Installed → INSTALLED
 
 The owner reviews the proposal in the War Room Skills panel (or via API):
 
-- Views the manifest, permissions requested, and source code
-- Checks for elevated permissions that need explicit approval
-- Approves or rejects
+- Reviews runtime permissions, derived security capabilities, target domains, and vault keys
+- Reviews stage-by-stage pipeline evidence (manifest validation, static analysis, sandbox test, owner review)
+- Verifies artifact hashes match the reviewed package
+- Approves or rejects the exact reviewed artifact
 
 ```python
 factory.approve_proposal(proposal_id)
@@ -244,10 +262,12 @@ factory.install_proposal(proposal_id)
 ```
 
 This:
-1. Writes the skill files to the skill directory
-2. Registers the skill in the Skill Registry (`data/skills_registry.json`)
-3. Sets the skill to enabled status
-4. Emits an installation receipt
+1. Verifies the reviewed artifact hashes still match the proposal package
+2. Re-runs the shared Skill Security Pipeline against the reviewed package
+3. Copies the approved package into the installed-skills directory
+4. Registers the runtime manifest in the Skill Registry (`data/skills_registry.json`)
+5. Sets the skill to enabled status
+6. Emits an installation receipt
 
 ### Skill Registry Entry
 
@@ -412,4 +432,4 @@ def test_echo():
     assert result["echoed"] == "hello"
 ```
 
-This skill requests only `read_input` and `write_output` — no elevated permissions, no approval friction, instant installation.
+This skill requests only `read_input` and `write_output` — no elevated permissions and no approval friction, so installation stays low-friction.

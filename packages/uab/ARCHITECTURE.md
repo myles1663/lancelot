@@ -47,7 +47,7 @@ UAB sits between the agent runtime and the desktop OS. It provides a unified API
 │  └──────────────────────────────────────────────────────┘    │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────┐    │
-│  │              Plugin Manager (9 plugins)               │    │
+│  │          Plugin Manager (runtime adapters)            │    │
 │  │                                                       │    │
 │  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐│    │
 │  │  │Chrome Ext│ │ Browser  │ │ Electron │ │  Office  ││    │
@@ -128,12 +128,14 @@ This is the core of UAB. Five phases that transform a running desktop into a con
 │  └───────────────────────────────────────────────────────┘  │
 │                                                             │
 │  Result: ProcessInfo[] with pid, name, path, modules, title │
-│  Typical: 150+ processes → 79+ controllable apps            │
-│  Time: 2-5 seconds for full scan                            │
+│  Typical on current Windows test rigs: 150+ processes       │
+│  → Host-dependent app count and scan timing                 │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Key design decision:** All three scans are **batched**. A naive approach would call PowerShell once per process (150+ calls, ~30 seconds). UAB batches everything into 3-5 PowerShell calls total.
+Observed on some current Windows test rigs: full scans typically traverse 150+ processes and identify dozens of controllable apps, but actual timing and app counts vary significantly by process mix, PowerShell responsiveness, and host performance. Measure `uab scan` on the target machine for the real runtime expectation.
+
+**Key design decision:** All three scans are **batched**. A naive approach would call PowerShell once per process (150+ calls, roughly tens of seconds on the same test rigs). UAB batches everything into 3-5 PowerShell calls total.
 
 ### Phase 2: IDENTIFY — "What framework is each app?"
 
@@ -304,7 +306,7 @@ This is the core of UAB. Five phases that transform a running desktop into a con
 │  After successful connection:                               │
 │                                                             │
 │  registry.update('excel.exe', {                             │
-│    preferredMethod: 'com+uia',  // This method worked!     │
+│    preferredMethod: 'office-com+uia', // Exact method won  │
 │    pid: 5678,                   // Update last known PID    │
 │    lastSeen: Date.now()         // Update timestamp         │
 │  });                                                        │
@@ -326,7 +328,7 @@ This is the core of UAB. Five phases that transform a running desktop into a con
 │  │  scan() → register → connect → learn → persist        │  │
 │  │     ↑                                      │          │  │
 │  │     └──────────────────────────────────────┘          │  │
-│  │  Next session: load() → find() → instant connect      │  │
+│  │  Next session: load() → find() → registry-backed connect │  │
 │  └───────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -359,7 +361,7 @@ interface AppProfile {
   pid?: number;             // Last known PID (may be stale after restart)
   framework: FrameworkType; // Detected: "electron"
   confidence: number;       // 0.0-1.0 confidence score
-  preferredMethod?: string; // Learned: "cdp" (from successful connection)
+  preferredMethod?: string; // Learned: "browser-cdp", "office-com+uia", etc.
   connectionInfo?: object;  // Framework-specific: { debugPort: 9222 }
   path?: string;            // Full path: "C:\\...\\Code.exe"
   windowTitle?: string;     // Last seen: "project - Visual Studio Code"
@@ -406,43 +408,53 @@ The cascade is how UAB picks the best control method for each app. It's not just
 ### Priority Order
 
 ```
-Priority 1: Chrome Extension Bridge
+Priority 1: Direct API / local control endpoint
+   │   Used when the app exposes `connectionInfo.directApi`.
+   │   Coverage: Apps with an explicit JSON/HTTP control surface
+   │   fail
+   ▼
+Priority 2: Chrome Extension Bridge
    │   WebSocket to installed extension. No browser relaunch.
    │   Coverage: Any Chromium browser (Chrome, Edge, Brave)
    │   fail
    ▼
-Priority 2: CDP Browser Plugin
+Priority 3: CDP Browser Plugin
    │   Direct CDP WebSocket. Requires --remote-debugging-port.
    │   Coverage: Chromium browsers launched with debug flag
    │   fail
    ▼
-Priority 3: Framework-Specific Plugin
-   │   Electron CDP, Office COM, etc.
+Priority 4: Framework-Specific Plugin
+   │   Electron CDP, Office COM, and framework-aware hook wrappers.
    │   Coverage: Apps matching the plugin's framework
    │   fail
    ▼
-Priority 4: Windows UI Automation
+Priority 5: Windows UI Automation
    │   Accessibility API fallback. Works with ANY windowed Windows app.
    │   Coverage: Everything with a window
    │   fail
    ▼
-Priority 5: Vision (Screenshot + AI)
-   │   Last resort for element discovery. Screenshot → Claude Vision API → coordinate input.
-   │   Coverage: Anything visible on screen
-   │   (requires ANTHROPIC_API_KEY)
+Priority 6: Keyboard Native
+   │   Shortcuts, hotkeys, and SendKeys-based text input.
+   │   Coverage: Any focused window
    │   fail
    ▼
-Priority 6: OS Raw Input Injection
+Priority 7: OS Raw Input Injection
       SendInput() on Windows, CGEventPost() on macOS, xdotool on Linux.
       Injects mouse drag, scroll, and gesture events directly into the OS input stream.
       Coverage: ANY application — the app cannot distinguish injected input from human input.
       Used for: continuous spatial gestures (sculpting, painting, drawing, drag-and-drop)
       NOT used for: commands, menu navigation, text input (keyboard is faster/cheaper)
+      fail
+   ▼
+Vision Analysis
+      Screenshot → Claude Vision → verification / state reading / coordinate assistance.
 ```
 
 ### The Concerto Principle
 
-The cascade is NOT "pick one method per app." It's a concerto — for each micro-operation within a task, the agent picks the most efficient method. Efficiency means four things: **speed**, **outcome quality**, **control precision**, and **cost**.
+The cascade is NOT "pick one method per app." It's a concerto — for each micro-operation within a task, the runtime plans the most efficient method. Efficiency means four things: **speed**, **outcome quality**, **control precision**, and **cost**.
+
+In the current runtime this is a real scorer, not a static label table. Concerto starts with those four method descriptors, then folds in live route evidence from the connected app: active method, fallback order, environment mode, Session 0 bridge requirements, direct-API availability, vision backend availability, and connection-health failures/reconnect attempts. The result is a scored plan plus `runtimeEvidence` explaining what changed the ranking.
 
 A typical Blender sculpting session uses 5 methods in a single workflow:
 - **Keyboard** (P5): Ctrl+Tab to switch mode, Ctrl+4 to subdivide, F to resize brush
@@ -519,10 +531,10 @@ Instead of:                          UAB does:
 │ ...                │              │ PS: Get-Process    │ ×3
 │ PS: Get-Process -150│              │    -Id @(1,2,...50) │  (batches of 50)
 ├────────────────────┤              ├────────────────────┤
-│ ~30 seconds        │              │ PS: EnumWindows    │ ×1
+│ ~tens of seconds   │              │ PS: EnumWindows    │ ×1
 └────────────────────┘              │    (all titles)    │
                                     ├────────────────────┤
-                                    │ ~2-5 seconds       │
+                                    │ host-dependent; often a few seconds on current test rigs │
                                     └────────────────────┘
 ```
 
@@ -551,12 +563,16 @@ This is faster than calling `GetWindowTitle()` per PID because it only iterates 
 
 The router maps detected apps to control methods and manages the connection lifecycle.
 
+The important runtime detail is that fallback is not limited to the initial `connect()` call. Both `UABConnector` and `UABService` now obtain `RoutedConnection` wrappers from the router for `enumerate()`, `query()`, `state()`, `act()`, and `screenshot()`, so the public API paths inherit the same fallback behavior as the low-level router.
+
+That same live route also feeds Concerto planning. `UABConnector.planOperation()` does not ask callers to reconstruct runtime state manually; it derives the route order, active transport, direct-API presence, desktop reachability, vision availability, and any tracked health failures from the live connector state before handing the operation to the scorer.
+
 ### Route Structure
 
 ```typescript
 interface ControlRoute {
   app: DetectedApp;           // The detected app
-  method: ControlMethod;      // 'direct-api' | 'uab-hook' | 'accessibility' | 'vision'
+  method: ControlMethod;      // 'direct-api' | 'chrome-extension' | 'browser-cdp' | 'electron-cdp' | 'office-com+uia' | 'qt-uia' | 'gtk-uia' | 'java-jab-uia' | 'flutter-uia' | 'win-uia' | 'vision'
   connection: PluginConnection; // Active connection
   fallbacks: ControlMethod[];   // Remaining fallback methods
 }
@@ -567,28 +583,35 @@ interface ControlRoute {
 ```typescript
 // Router.connect() simplified
 async connect(app: DetectedApp): Promise<RoutedConnection> {
-  // 1. Find best plugin for this app's framework
-  const plugin = this.pluginManager.findPlugin(app);
+  // 1. Build the ordered method list for this app
+  const methods = this.describeAvailableMethods(app);
 
-  if (plugin) {
+  for (const method of methods) {
     try {
-      // 2. Try framework-specific connection
-      const conn = await plugin.connect(app);
-      return new RoutedConnection(conn, this, app);
+      // 2. Try each framework hook / fallback in cascade order
+      const connection = await this.tryMethod(app, method);
+      const route = {
+        app,
+        method,
+        connection,
+        fallbacks: methods.filter((candidate) => candidate !== method),
+      };
+      this.routes.set(app.pid, route);
+      return new RoutedConnection(route, this);
     } catch {
-      // 3. Framework plugin failed — fall through to UIA
+      // 3. Try the next method in the cascade
     }
   }
 
-  // 4. Accessibility fallback: Win-UIA works for any windowed app
-  const uia = this.pluginManager.getPlugin('win-uia');
-  const conn = await uia.connect(app);
-  return new RoutedConnection(conn, this, app);
-
-  // 5. Vision fallback (last resort): Screenshot → AI → Coordinate input
-  // Only used if both framework plugins AND UIA fail
-  // Requires ANTHROPIC_API_KEY to be configured
+  throw new Error('No control route available');
 }
+
+// Public API calls always execute through a RoutedConnection wrapper
+// so failed reads and actions can transparently replay on the next
+// available route in the cascade.
+const conn = router.getConnection(pid);
+await conn?.state();
+await conn?.act('field-1', 'click');
 ```
 
 ---
@@ -622,18 +645,19 @@ interface PluginConnection {
 Plugins are registered in the `UABConnector.start()` method in strict priority order:
 
 ```
-1. ChromeExtPlugin   — Chrome extension bridge (WebSocket, no relaunch)
-2. BrowserPlugin     — Browser CDP (needs --remote-debugging-port)
-3. ElectronPlugin    — Electron CDP (framework hook)
-4. OfficePlugin      — COM + UIA hybrid (Word, Excel, PPT, Outlook)
-5. QtPlugin          — Qt via UIA bridge
-6. GtkPlugin         — GTK via UIA bridge
-7. JavaPlugin        — Java via JAB→UIA bridge
-8. FlutterPlugin     — Flutter via UIA bridge
-9. WinUIAPlugin      — Accessibility fallback (ALWAYS returns canHandle=true)
-10. VisionPlugin     — Vision fallback (screenshot + Claude Vision API + coordinate input)
-                        Last resort — expensive but truly universal.
-                        Only available when ANTHROPIC_API_KEY is configured.
+1. DirectApiPlugin   — Direct application endpoint (when `connectionInfo.directApi` exists)
+2. ChromeExtPlugin   — Chrome extension bridge (WebSocket, no relaunch)
+3. BrowserPlugin     — Browser CDP (needs --remote-debugging-port)
+4. ElectronPlugin    — Electron CDP (framework hook)
+5. OfficePlugin      — COM + UIA hybrid (Word, Excel, PPT, Outlook)
+6. QtPlugin          — Qt via UIA bridge
+7. GtkPlugin         — GTK via UIA bridge
+8. JavaPlugin        — Java via JAB→UIA bridge
+9. FlutterPlugin     — Flutter via UIA bridge
+10. WinUIAPlugin     — `win-uia` fallback (ALWAYS returns canHandle=true)
+11. VisionPlugin     — Vision fallback (screenshot + Claude Vision API + coordinate input)
+                         Last resort — expensive but truly universal.
+                         Only available when ANTHROPIC_API_KEY is configured.
 ```
 
 ### Plugin Details
@@ -709,6 +733,10 @@ UAB provides two API layers:
 | **Use case** | Any agent framework, CLI, library | Single-consumer apps |
 | **Primary API** | `scan()`, `find()`, `connect()` | `detect()`, `connectByName()` |
 
+**Registered adapters:**
+- **UABConnector** — `direct-api`, optional `chrome-extension`, `browser-cdp`, `electron-cdp`, `office-com+uia`, `qt-uia`, `gtk-uia`, `java-jab-uia`, `flutter-uia`, `win-uia`
+- **UABService** — `browser-cdp`, `electron-cdp`, `office-com+uia`, `qt-uia`, `gtk-uia`, `java-jab-uia`, `flutter-uia`, `win-uia`, `vision`
+
 **Rule of thumb:**
 - Building an agent? Use `UABConnector` — it's framework-independent
 - Building a Telegram bot or single-purpose tool? Use `UABService` — simpler
@@ -757,7 +785,7 @@ UAB provides two API layers:
               └────────┬──────────┘
                        │
               ┌────────┴────────────┐
-              │  Registry Learning  │──▶ Update preferredMethod: 'com+uia'
+              │  Registry Learning  │──▶ Update preferredMethod: 'office-com+uia'
               └────────┬────────────┘
                        │
                        ▼
@@ -1121,8 +1149,8 @@ This is "programmatic visual equivalence through accessibility tree introspectio
 
 The Anti-Screenshot SDK inverts the traditional computer-use approach. Instead of screenshot → vision → coordinates → click, it uses:
 
-1. **UIA Tree** (instant) — element IDs, types, states, structure
-2. **Bounding Rects** (instant) — spatial positions, sizes → spatial map
+1. **UIA Tree** (direct) — element IDs, types, states, structure
+2. **Bounding Rects** (direct) — spatial positions, sizes → spatial map
 3. **Text Reading** (fast) — TextPattern/ValuePattern content extraction
 4. **Vision** (slow) — screenshot + Claude Vision (ONLY when needed)
 

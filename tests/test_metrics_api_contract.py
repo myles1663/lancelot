@@ -27,6 +27,11 @@ def _insert_session(token, capabilities):
     }
 
 
+def _authenticate_client(client, token):
+    client.cookies.set(auth_api.get_warroom_session_cookie_name(), token)
+    return client
+
+
 class _Receipt:
     def __init__(self, receipt_id="r-1"):
         self.receipt_id = receipt_id
@@ -91,11 +96,9 @@ def test_metrics_api_returns_503_when_disabled(monkeypatch):
     token = "metrics-admin-disabled"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login", "observability.admin"})
+    _authenticate_client(client, token)
 
-    response = client.get(
-        "/api/metrics/summary",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    response = client.get("/api/metrics/summary")
 
     assert response.status_code == 503
     assert response.json()["detail"] == "Metrics API disabled"
@@ -106,15 +109,10 @@ def test_metrics_api_rate_limits_per_operator(monkeypatch):
     token = "metrics-admin-rate"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login", "observability.admin"})
+    _authenticate_client(client, token)
 
-    first = client.get(
-        "/api/metrics/summary",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
-    second = client.get(
-        "/api/metrics/summary",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    first = client.get("/api/metrics/summary")
+    second = client.get("/api/metrics/summary")
 
     assert first.status_code == 200
     assert second.status_code == 429
@@ -126,11 +124,9 @@ def test_metrics_receipt_detail_emits_query_receipt_when_enabled(monkeypatch):
     token = "metrics-admin-receipts"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login", "observability.admin"})
+    _authenticate_client(client, token)
 
-    response = client.get(
-        "/api/metrics/receipts/receipt-123",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    response = client.get("/api/metrics/receipts/receipt-123")
 
     assert response.status_code == 200
     assert response.json()["data"]["receipt"]["id"] == "receipt-123"
@@ -144,6 +140,7 @@ def test_metrics_summary_uses_live_subsystem_module_paths(monkeypatch):
     token = "metrics-admin-summary"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login", "observability.admin"})
+    _authenticate_client(client, token)
 
     fake_flags = types.SimpleNamespace(get_all_flags=lambda: {"FEATURE_ALPHA": False, "FEATURE_BETA": True})
     fake_governance = types.SimpleNamespace(_get_pending_approvals_count=lambda: 7)
@@ -160,10 +157,7 @@ def test_metrics_summary_uses_live_subsystem_module_paths(monkeypatch):
     monkeypatch.setitem(sys.modules, "src.hive.runtime", fake_runtime)
     monkeypatch.setitem(sys.modules, "src.core.soul.store", types.SimpleNamespace(load_active_soul=lambda: _FakeSoul()))
 
-    response = client.get(
-        "/api/metrics/summary",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    response = client.get("/api/metrics/summary")
 
     assert response.status_code == 200
     data = response.json()["data"]
@@ -178,6 +172,7 @@ def test_metrics_trust_ledger_uses_namespaced_module_path(monkeypatch):
     token = "metrics-admin-trust"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login", "observability.admin"})
+    _authenticate_client(client, token)
 
     class _Entry:
         def to_dict(self):
@@ -189,10 +184,7 @@ def test_metrics_trust_ledger_uses_namespaced_module_path(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "src.core.trust_api", types.SimpleNamespace(_trust_ledger=_Ledger()))
 
-    response = client.get(
-        "/api/metrics/trust-ledger",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    response = client.get("/api/metrics/trust-ledger")
 
     assert response.status_code == 200
     entries = response.json()["data"]["entries"]

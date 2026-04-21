@@ -168,8 +168,8 @@ class MCPNetworkPolicy:
                     "MCP endpoint hostname cannot be resolved: %s "
                     "(may be unreachable)", hostname
                 )
-            except ValueError:
-                pass
+            except ValueError as exc:
+                logger.debug("Skipping malformed MCP endpoint IP result for %s: %s", hostname, exc)
 
         # Credentials in URL check
         if parsed.username or parsed.password:
@@ -194,12 +194,12 @@ class MCPNetworkPolicy:
         Returns True if allowed, False if blocked.
         """
         if not self._network:
-            # No network interceptor configured — can't enforce
+            # No network interceptor configured — fail closed
             logger.warning(
-                "No NetworkInterceptor configured — cannot enforce "
+                "No NetworkInterceptor configured — denying "
                 "network policy for MCP endpoint: %s", endpoint
             )
-            return True
+            return False
 
         return self._network.check_url(endpoint)
 

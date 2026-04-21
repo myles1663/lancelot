@@ -127,3 +127,57 @@ def test_list_servers_returns_clean_runtime_state_when_initialized(monkeypatch):
     assert data["evaluator_ready"] is True
     assert data["proxy_ready"] is True
     assert data["total"] == 1
+
+
+def test_server_detail_exposes_canonical_kill_switch_contract(monkeypatch):
+    class _Evaluator:
+        def check_server_access(self, server_id):
+            return type("Perm", (), {"allowed": True})()
+
+    class _NetworkPolicy:
+        def check_invocation_allowed(self, endpoint):
+            return True
+
+    monkeypatch.setattr("feature_flags.FEATURE_MCP", True, raising=False)
+    mcp_api.init_mcp_api(
+        registry=_Registry(),
+        evaluator=_Evaluator(),
+        proxy=object(),
+        vault=object(),
+        network_policy=_NetworkPolicy(),
+        receipt_service=None,
+    )
+    client = _build_client()
+
+    resp = client.get("/api/mcp/servers/srv-1")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["kill_switch_active"] is True
+    assert data["kill_switch"]["allowed"] is True
+    assert data["kill_switch"]["scope"] in {"mcp_master", "mcp_server"}
+
+
+def test_register_server_rejects_unexpected_fields(monkeypatch):
+    monkeypatch.setattr("feature_flags.FEATURE_MCP", True, raising=False)
+    mcp_api.init_mcp_api(
+        registry=_Registry(),
+        evaluator=object(),
+        proxy=object(),
+        vault=object(),
+        network_policy=object(),
+        receipt_service=None,
+    )
+    client = _build_client()
+
+    resp = client.post(
+        "/api/mcp/servers",
+        json={
+            "server_id": "srv-2",
+            "name": "Server 2",
+            "endpoint": "https://example.com/second",
+            "unexpected": "deny-me",
+        },
+    )
+
+    assert resp.status_code == 422

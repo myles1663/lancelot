@@ -33,6 +33,7 @@ import { WinUIAPlugin } from '../win-uia/index.js';
 export class FlutterPlugin implements FrameworkPlugin {
   readonly framework = 'flutter' as const;
   readonly name = 'Flutter (UIA Bridge)';
+  readonly controlMethod = 'flutter-uia' as const;
   private uiaPlugin = new WinUIAPlugin();
 
   canHandle(app: DetectedApp): boolean {

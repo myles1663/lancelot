@@ -76,7 +76,10 @@ class CommandRelay:
                             },
                         )
                     except Exception:
-                        pass
+                        logger.warning(
+                            "Failed to record kill command delivery audit for peer %s",
+                            pid,
+                        )
             else:
                 logger.warning(
                     "Kill command failed for peer %s: %s", pid, result.error
@@ -256,7 +259,10 @@ class CommandRelay:
                     agents_killed=agents_killed,
                 )
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to record kill acknowledgement receipt for command %s",
+                    command_id,
+                )
 
         logger.info(
             "Kill command executed: command_id=%s, type=%s, agents_killed=%d",

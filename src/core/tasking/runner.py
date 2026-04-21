@@ -438,16 +438,27 @@ class TaskRunner:
         operator_id: str = "",
         quest_id: str = "",
         parent_id: Optional[str] = None,
+        status: str = "success",
     ) -> str:
         """Emit a receipt and track it."""
         receipt_id = str(uuid.uuid4())
         if self.receipt_service:
             try:
-                from src.shared.receipts import create_receipt, ActionType, CognitionTier
+                from src.shared.receipts import (
+                    create_finalized_receipt,
+                    ActionType,
+                    CognitionTier,
+                    ReceiptStatus,
+                )
                 action = getattr(ActionType, action_type, ActionType.TOOL_CALL)
-                receipt = create_receipt(
+                receipt_status = (
+                    ReceiptStatus.FAILURE if status == RunStatus.FAILED.value or status == "failure"
+                    else ReceiptStatus.SUCCESS
+                )
+                receipt = create_finalized_receipt(
                     action, "task_runner",
                     inputs=inputs,
+                    status=receipt_status,
                     tier=CognitionTier.DETERMINISTIC,
                     parent_id=parent_id,
                     quest_id=quest_id or None,
@@ -491,6 +502,7 @@ class TaskRunner:
             {"step_id": step.step_id, "type": step.type,
              "outputs": result.outputs, "duration_ms": result.duration_ms},
             receipt_ids,
+            status="success",
             **kwargs,
         )
 
@@ -508,6 +520,7 @@ class TaskRunner:
              "error": error,
              "rollback_hint": step.rollback_hint},
             receipt_ids,
+            status="failure",
             **kwargs,
         )
 
@@ -522,6 +535,7 @@ class TaskRunner:
             run, "VERIFY_PASSED",
             {"step_id": step.step_id, "acceptance_check": step.acceptance_check},
             receipt_ids,
+            status="success",
             **kwargs,
         )
 
@@ -536,5 +550,6 @@ class TaskRunner:
             run, "VERIFY_FAILED",
             {"step_id": step.step_id, "acceptance_check": step.acceptance_check},
             receipt_ids,
+            status="failure",
             **kwargs,
         )

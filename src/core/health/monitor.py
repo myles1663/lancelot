@@ -1,16 +1,8 @@
 """
-Health Monitor — background loop and snapshot computation (Prompt 10 / C3-C5).
+Health monitor for background checks and snapshot computation.
 
 Runs periodic health checks and caches the latest HealthSnapshot.
 Emits receipts on state transitions.
-
-Public API:
-    HealthMonitor(check_fns, interval_s)
-    start_monitor()       — start background loop
-    stop_monitor()        — stop background loop
-    compute_snapshot()    → HealthSnapshot
-    latest_snapshot       → HealthSnapshot (cached)
-    receipts              → list[dict]
 """
 
 from __future__ import annotations
@@ -120,6 +112,16 @@ class HealthMonitor:
                 else "UNKNOWN"
             ),
             local_llm_ready=results.get("local_llm", False),
+            local_llm_loaded=bool(snapshot_details.get("local_llm_loaded", False)),
+            local_llm_status=str(snapshot_details.get(
+                "local_llm_status",
+                "ready" if results.get("local_llm", False) else "unavailable",
+            )),
+            local_llm_last_verified_at=snapshot_details.get("local_llm_last_verified_at"),
+            local_llm_last_checked_at=snapshot_details.get("local_llm_last_checked_at"),
+            local_llm_last_error=snapshot_details.get("local_llm_last_error"),
+            local_llm_consecutive_failures=int(snapshot_details.get("local_llm_consecutive_failures", 0) or 0),
+            local_llm_last_smoke_elapsed_ms=snapshot_details.get("local_llm_last_smoke_elapsed_ms"),
             scheduler_running=results.get("scheduler", False),
             last_health_tick_at=datetime.now(timezone.utc).isoformat(),
             last_scheduler_tick_at=snapshot_details.get("last_scheduler_tick_at"),

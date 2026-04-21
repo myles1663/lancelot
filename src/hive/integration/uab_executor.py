@@ -19,6 +19,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from src.hive.errors import ScopedSoulViolationError
+from src.hive.scoped_soul import (
+    capability_matches_allowed_categories,
+    scoped_soul_capability_decision,
+    scoped_soul_enforces_capability,
+)
+
 logger = logging.getLogger(__name__)
 
 # ── LLM Prompt for UAB Step Planning ─────────────────────────────────────────
@@ -143,6 +150,7 @@ class HiveUABExecutor:
         agent_id = action.get("agent_id", "")
         scoped_soul = action.get("scoped_soul")
         allowed_apps = action.get("allowed_apps") or []
+        allowed_categories = action.get("allowed_categories") or []
 
         if not pid:
             return {"success": False, "error": "No target_pid in context", "steps": []}
@@ -184,8 +192,15 @@ class HiveUABExecutor:
 
             # Step 4: Execute each UAB step
             for i, step in enumerate(uab_steps):
-                self._validate_step(step, app_name, agent_id)
+                self._validate_step(
+                    step,
+                    app_name,
+                    agent_id,
+                    scoped_soul=scoped_soul,
+                    allowed_categories=allowed_categories,
+                )
                 step_result = self._execute_step(step, pid)
+                self._record_step_outcome(step, app_name, step_result)
                 step_results.append(step_result)
 
                 if not step_result.get("success", False):
@@ -337,18 +352,51 @@ class HiveUABExecutor:
                 reason=f"Scoped Soul forbids desktop app '{app_name}'",
             )
 
-    def _validate_step(self, step: Dict[str, Any], app_name: str, agent_id: str) -> None:
+    def _validate_step(
+        self,
+        step: Dict[str, Any],
+        app_name: str,
+        agent_id: str,
+        *,
+        scoped_soul=None,
+        allowed_categories: Optional[List[str]] = None,
+    ) -> None:
         method = str(step.get("method", "")).strip().lower()
-        if method in {"state", "query"}:
-            return
+        scope_capability = self._scope_capability_for_step(step)
 
-        capability = None
-        if method == "act":
-            action_name = str(step.get("action", "")).strip().lower()
-            if action_name:
-                capability = f"uab_{action_name}"
-        elif method in {"keypress", "hotkey", "maximize", "restore"}:
-            capability = f"uab_{method}"
+        if scope_capability and scoped_soul_enforces_capability(scoped_soul, scope_capability):
+            decision = scoped_soul_capability_decision(scoped_soul, scope_capability)
+            if decision == "requires_approval":
+                raise ScopedSoulViolationError(
+                    agent_id=agent_id or "hive-uab",
+                    action=scope_capability,
+                    reason=(
+                        f"Scoped Soul requires operator approval for UAB capability "
+                        f"'{scope_capability}'"
+                    ),
+                )
+            if decision == "deny":
+                raise ScopedSoulViolationError(
+                    agent_id=agent_id or "hive-uab",
+                    action=scope_capability,
+                    reason=(
+                        f"Scoped Soul does not permit UAB capability "
+                        f"'{scope_capability}'"
+                    ),
+                )
+
+        if scope_capability and allowed_categories:
+            if not capability_matches_allowed_categories(scope_capability, allowed_categories):
+                raise ScopedSoulViolationError(
+                    agent_id=agent_id or "hive-uab",
+                    action=scope_capability,
+                    reason=(
+                        f"UAB capability '{scope_capability}' is outside scoped categories "
+                        f"{allowed_categories}"
+                    ),
+                )
+
+        capability = self._governed_capability_for_step(step)
 
         if capability and self._governance is not None:
             gov_result = self._governance.validate_action(
@@ -366,6 +414,46 @@ class HiveUABExecutor:
                         f"{gov_result.reason}"
                     ),
                 )
+
+    @staticmethod
+    def _scope_capability_for_step(step: Dict[str, Any]) -> Optional[str]:
+        method = str(step.get("method", "")).strip().lower()
+        if method == "connect":
+            return None
+        if method == "state":
+            return "uab_state"
+        if method == "query":
+            return "uab_query"
+        if method == "act":
+            action_name = str(step.get("action", "")).strip().lower()
+            if action_name:
+                return f"uab_{action_name}"
+            return None
+        if method in {"keypress", "hotkey", "maximize", "restore"}:
+            return f"uab_{method}"
+        return None
+
+    @classmethod
+    def _governed_capability_for_step(cls, step: Dict[str, Any]) -> Optional[str]:
+        capability = cls._scope_capability_for_step(step)
+        if capability in {"uab_state", "uab_query", None}:
+            return None
+        return capability
+
+    def _record_step_outcome(
+        self,
+        step: Dict[str, Any],
+        app_name: str,
+        step_result: Dict[str, Any],
+    ) -> None:
+        capability = self._governed_capability_for_step(step)
+        if capability is None or self._governance is None:
+            return
+        self._governance.update_trust(
+            capability,
+            app_name,
+            success=bool(step_result.get("success", False)),
+        )
 
     def _find_editor_element(self, elements: list) -> Optional[str]:
         """Find the main text editor element from a UI tree (recursive)."""

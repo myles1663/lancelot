@@ -103,7 +103,7 @@ class Capability(str, Enum):
 class UIBuilderMode(str, Enum):
     """Mode for UIBuilder operations."""
     DETERMINISTIC = "deterministic"  # Template-based scaffolding
-    GENERATIVE = "generative"        # AI-generated (Antigravity)
+    GENERATIVE = "generative"        # AI-generated via Antigravity-backed flagship models
 
 
 # =============================================================================
@@ -635,7 +635,7 @@ class UIBuilderCapability(Protocol):
 
     Two modes:
     - DETERMINISTIC: Template-based scaffolding (required provider)
-    - GENERATIVE: AI-generated (optional Antigravity provider)
+    - GENERATIVE: AI-generated scaffold via the optional Antigravity provider
     """
 
     def scaffold(
@@ -652,7 +652,7 @@ class UIBuilderCapability(Protocol):
             template_id: Template identifier (e.g., "nextjs_shadcn_dashboard")
             spec: Specification with routes, components, data models, etc.
             workspace: Output directory
-            mode: DETERMINISTIC (templates) or GENERATIVE (Antigravity)
+            mode: DETERMINISTIC (templates) or GENERATIVE (model-backed Antigravity)
 
         Returns:
             ScaffoldResult with created files and build status

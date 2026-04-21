@@ -318,3 +318,43 @@ class TestTransformSoc2:
             operator_display_name="Arthur",
         )
         assert result["export_metadata"]["generated_by"]["display_name"] == "Arthur"
+
+    def test_soul_template_receipts_map_into_governance_controls(self):
+        receipts = [
+            _make_receipt(
+                action_type=ActionType.SOUL_TEMPLATE_APPLIED.value,
+                id="r-template",
+            )
+        ]
+        result = transform_soc2(
+            receipts, _intact_chain(),
+            "2026-01-01", "2026-01-31", "op-001", "2026-01-31T00:00:00Z", "e-001",
+        )
+        assert result["controls"]["CC1_1"]["evidence_count"] == 1
+        assert result["controls"]["CC8_1"]["evidence_count"] == 1
+
+    def test_risk_mitigation_control_maps_real_mitigation_events(self):
+        receipts = [
+            _make_receipt(action_type=ActionType.KILL_SWITCH_ISSUED.value, id="r-kill"),
+            _make_receipt(action_type=ActionType.MCP_TOOL_BLOCKED.value, id="r-block"),
+        ]
+        result = transform_soc2(
+            receipts, _intact_chain(),
+            "2026-01-01", "2026-01-31", "op-001", "2026-01-31T00:00:00Z", "e-001",
+        )
+        assert result["controls"]["CC9_2"]["evidence_count"] == 2
+
+    def test_mapping_summary_reports_observed_unmapped_receipt_types(self):
+        receipts = [
+            _make_receipt(action_type=ActionType.A2A_TASK_RECEIVED.value, id="r-a2a"),
+            _make_receipt(action_type=ActionType.KILL_SWITCH_ISSUED.value, id="r-kill"),
+        ]
+        result = transform_soc2(
+            receipts, _intact_chain(),
+            "2026-01-01", "2026-01-31", "op-001", "2026-01-31T00:00:00Z", "e-001",
+        )
+        assert ActionType.KILL_SWITCH_ISSUED.value in result["mapping_summary"]["mapped_receipt_types"]
+        assert result["mapping_summary"]["observed_unmapped_receipt_types"] == [
+            ActionType.A2A_TASK_RECEIVED.value
+        ]
+        assert result["mapping_summary"]["observed_unmapped_receipt_count"] == 1

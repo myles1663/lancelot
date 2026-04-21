@@ -22,6 +22,8 @@ from src.core import feature_flags
 class TestConnector(ConnectorBase):
     """Concrete connector for testing."""
 
+    __test__ = False
+
     def __init__(self, manifest=None, ops=None):
         if manifest is None:
             manifest = ConnectorManifest(
@@ -122,7 +124,8 @@ class TestRegistration:
     def test_register_disabled_raises(self):
         os.environ["FEATURE_CONNECTORS"] = "false"
         # Clear persisted state so it doesn't override the env var
-        old_persisted = feature_flags._persisted_state.pop("FEATURE_CONNECTORS", None)
+        old_persisted = feature_flags.get_persisted_flag_state("FEATURE_CONNECTORS")
+        feature_flags.clear_persisted_flag_state("FEATURE_CONNECTORS")
         feature_flags.reload_flags()
 
         reg = ConnectorRegistry("config/connectors.yaml")
@@ -131,8 +134,7 @@ class TestRegistration:
                 reg.register(_make_connector("slack"))
         finally:
             # Restore persisted state
-            if old_persisted is not None:
-                feature_flags._persisted_state["FEATURE_CONNECTORS"] = old_persisted
+            feature_flags.set_persisted_flag_state("FEATURE_CONNECTORS", old_persisted)
 
     def test_register_enabled_succeeds(self):
         os.environ["FEATURE_CONNECTORS"] = "true"

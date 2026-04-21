@@ -1,5 +1,10 @@
-import { apiGet, apiPost } from './client'
-import type { RuntimeEmergencyStopResponse, RuntimePauseStatusResponse, SystemStatusResponse } from '@/types/api'
+import { apiGet, apiPost, apiPut } from './client'
+import type {
+  ModelUsagePolicyResponse,
+  RuntimeEmergencyStopResponse,
+  RuntimePauseStatusResponse,
+  SystemStatusResponse,
+} from '@/types/api'
 
 /** GET /system/status — Full system provisioning status */
 export function fetchSystemStatus() {
@@ -20,4 +25,15 @@ export function resumeRuntime() {
 
 export function emergencyStopRuntime(reason: string) {
   return apiPost<RuntimeEmergencyStopResponse>('/system/emergency-stop', { reason })
+}
+
+export function fetchModelUsagePolicy() {
+  return apiGet<ModelUsagePolicyResponse>('/system/model-policy')
+}
+
+export function updateModelUsagePolicy(payload: {
+  local_execution_mode?: string
+  frontier_scrub_mode?: string
+}) {
+  return apiPut<ModelUsagePolicyResponse>('/system/model-policy', payload)
 }

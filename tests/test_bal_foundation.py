@@ -291,6 +291,7 @@ class TestBALReceipts:
 
     def test_emit_bal_receipt(self, tmp_path):
         from src.core.bal.receipts import emit_bal_receipt
+        from src.shared.receipts import get_receipt_service
         receipt = emit_bal_receipt(
             event_type="client",
             action_name="client_created",
@@ -300,6 +301,9 @@ class TestBALReceipts:
         assert receipt.action_type == "bal_client_event"
         assert receipt.action_name == "client_created"
         assert receipt.metadata["bal_subsystem"] == "client"
+        persisted = get_receipt_service(str(tmp_path)).get(receipt.id)
+        assert persisted is not None
+        assert persisted.status == "success"
 
     def test_emit_bad_event_type_raises(self):
         from src.core.bal.receipts import emit_bal_receipt

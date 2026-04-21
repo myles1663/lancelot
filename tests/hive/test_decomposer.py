@@ -242,17 +242,19 @@ class TestParsing:
 
 @pytest.mark.asyncio
 class TestValidation:
-    async def test_invalid_execution_order_index_filtered(self):
-        """Out-of-bound indices in execution_order are silently filtered."""
+    async def test_invalid_execution_order_index_filtered(self, caplog):
+        """Out-of-bound indices in execution_order are filtered and logged."""
         response = json.dumps({
             "subtasks": [{"description": "One", "priority": "normal", "control_method": "supervised"}],
-            "execution_order": [[0], [5]],
+            "execution_order": [[0], [5], [-1], ["bad"], "not-a-group"],
         })
         decomposer, _ = _make_decomposer(response=response)
-        result = await decomposer.decompose("Bad order")
-        # Index 5 is filtered out, only group [0] remains
+        with caplog.at_level("WARNING"):
+            result = await decomposer.decompose("Bad order")
+        # Invalid entries are filtered out, only group [0] remains.
         assert len(result.execution_order) == 1
         assert result.execution_order[0] == ["0"]
+        assert "dropped invalid execution_order entries" in caplog.text
 
     async def test_duplicate_execution_order_index(self):
         response = json.dumps({

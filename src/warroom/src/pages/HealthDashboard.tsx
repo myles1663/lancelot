@@ -117,9 +117,41 @@ export function HealthDashboard() {
             <div className="flex items-center justify-between p-3 bg-surface-card-elevated rounded-md">
               <span className="text-sm text-text-primary">Local LLM</span>
               <StatusDot
-                state={ready.local_llm_ready ? 'healthy' : 'inactive'}
-                label={ready.local_llm_ready ? 'Ready' : 'Not Ready'}
+                state={
+                  ready.local_llm_ready
+                    ? 'healthy'
+                    : ready.local_llm_loaded
+                      ? 'degraded'
+                      : 'inactive'
+                }
+                label={
+                  ready.local_llm_ready
+                    ? 'Ready'
+                    : ready.local_llm_loaded
+                      ? 'Loaded, Not Ready'
+                      : 'Unavailable'
+                }
               />
+            </div>
+            <div className="flex items-center justify-between p-3 bg-surface-card-elevated rounded-md">
+              <span className="text-sm text-text-primary">Local LLM Last Verified</span>
+              <span className="text-xs font-mono text-text-secondary">
+                {formatTimestamp(ready.local_llm_last_verified_at)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between p-3 bg-surface-card-elevated rounded-md">
+              <span className="text-sm text-text-primary">Local LLM Failure Count</span>
+              <span className="text-xs font-mono text-text-secondary">
+                {ready.local_llm_consecutive_failures}
+              </span>
+            </div>
+            <div className="flex items-center justify-between p-3 bg-surface-card-elevated rounded-md">
+              <span className="text-sm text-text-primary">Local LLM Last Smoke</span>
+              <span className="text-xs font-mono text-text-secondary">
+                {ready.local_llm_last_smoke_elapsed_ms != null
+                  ? `${ready.local_llm_last_smoke_elapsed_ms} ms`
+                  : '--'}
+              </span>
             </div>
             <div className="flex items-center justify-between p-3 bg-surface-card-elevated rounded-md">
               <span className="text-sm text-text-primary">Scheduler</span>
@@ -150,6 +182,14 @@ export function HealthDashboard() {
           />
         ) : (
           <div className="space-y-2">
+            {ready.local_llm_last_error && (
+              <div className="flex items-start gap-3 p-3 bg-state-error/10 border border-state-error/20 rounded-md">
+                <span className="w-2 h-2 rounded-full bg-state-error mt-1 flex-shrink-0" />
+                <span className="text-sm text-text-primary">
+                  Local LLM readiness failure: {ready.local_llm_last_error}
+                </span>
+              </div>
+            )}
             {ready.degraded_reasons.map((reason, i) => (
               <div
                 key={i}

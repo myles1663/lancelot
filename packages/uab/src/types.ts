@@ -50,6 +50,7 @@ export type ActionType =
   | 'move' | 'resize' | 'screenshot' | 'contextmenu'
   | 'readDocument' | 'readCell' | 'writeCell'
   | 'readRange' | 'writeRange' | 'getSheets' | 'readFormula'
+  | 'createPivotTable' | 'createChart' | 'applyConditionalFormatting'
   | 'readSlides' | 'readSlideText'
   | 'readEmails' | 'composeEmail' | 'sendEmail'
   // Browser session/cookie actions
@@ -102,6 +103,17 @@ export interface ActionParams {
   // Excel COM params
   formula?: string;       // Excel formula like '=SUM(A1:A10)'
   values?: string[][];    // 2D array for writeRange
+  sourceRange?: string;   // Excel source range like 'A1:D50'
+  destinationSheet?: string; // Excel destination sheet
+  destinationCell?: string;  // Excel destination cell
+  rowFields?: string[];   // Pivot table row fields
+  columnFields?: string[]; // Pivot table column fields
+  dataField?: string;     // Pivot value field
+  aggregation?: 'sum' | 'count' | 'average' | 'min' | 'max';
+  chartType?: 'bar' | 'line' | 'pie' | 'column' | 'area';
+  chartTitle?: string;    // Chart title
+  targetRange?: string;   // Range for conditional formatting
+  formatType?: 'colorScale' | 'dataBar' | 'iconSet';
   // Outlook COM params
   to?: string;            // Email recipient
   subject?: string;       // Email subject
@@ -284,11 +296,43 @@ export interface DetectedApp {
   windowTitle?: string;
 }
 
+export type HookControlMethod =
+  | 'chrome-extension'
+  | 'browser-cdp'
+  | 'electron-cdp'
+  | 'office-com+uia'
+  | 'qt-uia'
+  | 'gtk-uia'
+  | 'java-jab-uia'
+  | 'flutter-uia'
+  | 'win-uia';
+
+export interface FrameworkHookDescriptor {
+  id: HookControlMethod;
+  name: string;
+  frameworks: FrameworkType[];
+  integration: 'native' | 'bridge' | 'fallback';
+  protocol: string;
+  discoverySignals: string[];
+}
+
+export interface DirectApiConfig {
+  baseUrl: string;
+  headers?: Record<string, string>;
+  endpoints?: Partial<{
+    enumerate: string;
+    query: string;
+    act: string;
+    state: string;
+  }>;
+}
+
 // ─── Plugin Interface ───────────────────────────────────────────
 
 export interface FrameworkPlugin {
   readonly framework: FrameworkType;
   readonly name: string;
+  readonly controlMethod: ControlMethod;
   canHandle(app: DetectedApp): boolean;
   connect(app: DetectedApp): Promise<PluginConnection>;
 }
@@ -306,7 +350,69 @@ export interface PluginConnection {
 
 // ─── Control Router ─────────────────────────────────────────────
 
-export type ControlMethod = 'direct-api' | 'uab-hook' | 'accessibility' | 'vision';
+export type ControlMethod = HookControlMethod | 'direct-api' | 'vision';
+
+export type ConcertoMethod =
+  | ControlMethod
+  | 'keyboard-native'
+  | 'os-input-injection'
+  | 'vision-analysis';
+
+export interface ConcertoMethodDescriptor {
+  id: ConcertoMethod;
+  name: string;
+  role: 'connection' | 'action' | 'verification';
+  speed: 'fastest' | 'fast' | 'moderate' | 'slow';
+  outcome: 'perfect' | 'high' | 'good' | 'variable';
+  control: 'precise' | 'broad' | 'spatial';
+  cost: 'free' | 'api';
+}
+
+export interface OperationPlanScore {
+  method: ConcertoMethod;
+  score: number;
+  role: ConcertoMethodDescriptor['role'];
+  dimensions: Pick<ConcertoMethodDescriptor, 'speed' | 'outcome' | 'control' | 'cost'>;
+  notes: string[];
+}
+
+export interface OperationPlanRuntimeContext {
+  mode?: 'desktop' | 'server' | 'container';
+  hasDesktop?: boolean;
+  needsBridge?: boolean;
+  platform?: NodeJS.Platform;
+  framework?: FrameworkType;
+  frameworkConfidence?: number;
+  activeMethod?: ConcertoMethod;
+  preferredMethodOrder?: ConcertoMethod[];
+  availableMethods?: ConcertoMethod[];
+  directApiAvailable?: boolean;
+  visionAvailable?: boolean;
+  connectionHealthy?: boolean;
+  healthFailures?: number;
+  reconnectAttempts?: number;
+}
+
+export interface OperationPlanContext {
+  weights?: Partial<Record<'speed' | 'outcome' | 'control' | 'cost' | 'role' | 'affinity', number>>;
+  preferredRole?: ConcertoMethodDescriptor['role'];
+  preferredControl?: ConcertoMethodDescriptor['control'];
+  candidateMethods?: ConcertoMethod[];
+  excludedMethods?: ConcertoMethod[];
+  boosts?: Partial<Record<ConcertoMethod, number>>;
+  penalties?: Partial<Record<ConcertoMethod, number>>;
+  runtime?: OperationPlanRuntimeContext;
+  note?: string;
+}
+
+export interface OperationPlan {
+  action: ActionType | 'describe';
+  primaryMethod: ConcertoMethod;
+  fallbackMethods: ConcertoMethod[];
+  rationale: string;
+  scoringTrace: OperationPlanScore[];
+  runtimeEvidence: string[];
+}
 
 export interface ControlRoute {
   app: DetectedApp;

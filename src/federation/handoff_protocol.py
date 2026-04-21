@@ -201,8 +201,8 @@ class HandoffProtocol:
                         target_instance_id=target_instance_id,
                         federation_quest_id=package.federation_quest_id,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to record handoff initiation receipt %s: %s", package.handoff_id, exc)
 
             if self._audit:
                 try:
@@ -216,8 +216,8 @@ class HandoffProtocol:
                             "latency_ms": result.latency_ms,
                         },
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to write handoff initiation audit %s: %s", package.handoff_id, exc)
 
             logger.info(
                 "Handoff initiated: %s → %s (quest=%s)",
@@ -368,8 +368,8 @@ class HandoffProtocol:
                     source_instance_id=source_id,
                     federation_quest_id=quest_id,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to record handoff received receipt %s: %s", handoff_id, exc)
 
         if self._audit:
             try:
@@ -382,8 +382,8 @@ class HandoffProtocol:
                         "source": source_id,
                     },
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to write handoff received audit %s: %s", handoff_id, exc)
 
         logger.info(
             "Handoff accepted: %s from %s (quest=%s)",
@@ -550,8 +550,8 @@ class HandoffProtocol:
                         federation_quest_id=package.federation_quest_id,
                         details={"handoff_id": handoff_id},
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to write handoff completion audit %s: %s", handoff_id, exc)
 
         return send_result.success
 
@@ -647,8 +647,8 @@ class HandoffProtocol:
                         "result_summary": result,
                     },
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to write inbound handoff completion audit %s: %s", handoff_id, exc)
 
         logger.info(
             "Handoff completion received: %s from %s",
@@ -682,8 +682,8 @@ class HandoffProtocol:
                             "description": getattr(contradiction, "description", ""),
                         },
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to write contradiction audit for handoff %s: %s", handoff_id, exc)
 
     def get_handoff_status(self, handoff_id: str) -> Optional[Dict[str, Any]]:
         """Get the current status of a handoff."""

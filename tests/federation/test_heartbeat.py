@@ -9,6 +9,7 @@ import asyncio
 import time
 from datetime import datetime, timezone, timedelta
 import pytest
+from src.core.outbound_http import OutboundNetworkError
 from src.federation.heartbeat import (
     Heartbeat,
     HeartbeatEmitter,
@@ -17,6 +18,11 @@ from src.federation.heartbeat import (
 )
 from src.federation.heartbeat_mesh import HeartbeatMesh
 from src.federation.topology import TopologyRegistry
+
+
+@pytest.fixture(autouse=True)
+def allow_outbound_requests(monkeypatch):
+    monkeypatch.setattr("src.federation.heartbeat_mesh.assert_url_allowed", lambda url, **kwargs: url)
 
 
 class TestHeartbeat:
@@ -341,5 +347,32 @@ class TestHeartbeatMesh:
             assert mesh.get_subscription_status()["peer-1"] == "reconnecting"
             assert mesh.get_stream_outcome_status()["peer-1"] == "failed"
             assert mesh.get_stream_errors()["peer-1"] == "HTTP 503"
+        finally:
+            await mesh.stop()
+
+    @pytest.mark.asyncio
+    async def test_subscription_status_reports_allowlist_block(self, monkeypatch):
+        topo = TopologyRegistry(self_instance_id="self-1")
+        topo.register_peer(
+            instance_id="peer-1",
+            fingerprint="fp",
+            public_key_hex="pk",
+            address="https://blocked.example.com",
+            role="peer",
+        )
+        monkeypatch.setattr(
+            "src.federation.heartbeat_mesh.assert_url_allowed",
+            lambda url, **kwargs: (_ for _ in ()).throw(
+                OutboundNetworkError("Federation heartbeat stream blocked by network allowlist")
+            ),
+        )
+
+        mesh = HeartbeatMesh(topology=topo)
+        await mesh.start()
+        try:
+            await asyncio.sleep(0.05)
+            assert mesh.get_subscription_status()["peer-1"] == "reconnecting"
+            assert mesh.get_stream_outcome_status()["peer-1"] == "failed"
+            assert "network allowlist" in mesh.get_stream_errors()["peer-1"]
         finally:
             await mesh.stop()

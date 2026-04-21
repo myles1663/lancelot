@@ -374,6 +374,58 @@ class TestNetworkPolicy:
         assert decision.allowed is True
         assert decision.requires_approval is True  # High risk
 
+    def test_network_allowlist_empty_fails_closed(self, monkeypatch, policy_engine):
+        """An enabled but empty network allowlist blocks outbound domains."""
+        import src.core.feature_flags as feature_flags
+
+        monkeypatch.setattr(
+            "src.tools.policies._NETWORK_ALLOWLIST.load_domains",
+            lambda include_core=True: [],
+        )
+        monkeypatch.setattr(feature_flags, "FEATURE_NETWORK_ALLOWLIST", True)
+
+        decision = policy_engine.evaluate_network(
+            Capability.WEB_OPS,
+            target_domain="api.example.com",
+        )
+
+        assert decision.allowed is False
+        assert "not in network allowlist" in decision.reasons[0].lower()
+
+    def test_network_allowlist_suffix_matching(self, monkeypatch, policy_engine):
+        """Configured parent domains allow matching subdomains."""
+        import src.core.feature_flags as feature_flags
+
+        monkeypatch.setattr(
+            "src.tools.policies._NETWORK_ALLOWLIST.load_domains",
+            lambda include_core=True: ["example.com"],
+        )
+        monkeypatch.setattr(feature_flags, "FEATURE_NETWORK_ALLOWLIST", True)
+
+        decision = policy_engine.evaluate_network(
+            Capability.WEB_OPS,
+            target_domain="api.example.com",
+        )
+
+        assert decision.allowed is True
+
+    def test_network_allowlist_core_domains_always_allowed(self, monkeypatch, policy_engine):
+        """Core infrastructure domains remain allowed under the shared evaluator."""
+        import src.core.feature_flags as feature_flags
+
+        monkeypatch.setattr(
+            "src.tools.policies._NETWORK_ALLOWLIST.load_domains",
+            lambda include_core=True: ["ghcr.io"],
+        )
+        monkeypatch.setattr(feature_flags, "FEATURE_NETWORK_ALLOWLIST", True)
+
+        decision = policy_engine.evaluate_network(
+            Capability.WEB_OPS,
+            target_domain="pkg.ghcr.io",
+        )
+
+        assert decision.allowed is True
+
 
 # =============================================================================
 # Tool Intent Tests

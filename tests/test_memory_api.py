@@ -22,6 +22,7 @@ os.environ["FEATURE_MEMORY_VNEXT"] = "true"
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 
+from src.core import api_auth
 from src.core.memory.api import router, get_memory_service, _memory_service, _get_memory_data_dir
 from src.core.memory.schemas import (
     CoreBlockType,
@@ -82,6 +83,7 @@ def app(temp_data_dir, monkeypatch):
 
         return _test_service
 
+    api_auth.init_api_auth(lambda request: True)
     app = FastAPI()
     app.include_router(router)
 
@@ -97,6 +99,7 @@ def app(temp_data_dir, monkeypatch):
     # Cleanup
     app.dependency_overrides.clear()
     api_module._memory_service = original_service
+    api_auth.init_api_auth(None)
 
 
 @pytest.fixture
@@ -713,6 +716,18 @@ class TestErrorHandling:
         )
 
         # FastAPI validation should catch this
+        assert response.status_code == 422
+
+    def test_search_rejects_unexpected_fields_with_valid_payload(self, client):
+        response = client.post(
+            "/memory/search",
+            json={
+                "query": "test search",
+                "tiers": ["working"],
+                "unexpected": "deny-me",
+            }
+        )
+
         assert response.status_code == 422
 
     def test_malformed_commit_request(self, client):

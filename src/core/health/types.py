@@ -1,9 +1,4 @@
-"""
-Health Types — HealthSnapshot model (Prompt 9 / C1-C2).
-
-Public API:
-    HealthSnapshot — Pydantic model for system health state
-"""
+"""Health types for liveness, readiness, and degraded-state snapshots."""
 
 from __future__ import annotations
 
@@ -18,6 +13,13 @@ class HealthSnapshot(BaseModel):
     ready: bool = False
     onboarding_state: str = "UNKNOWN"
     local_llm_ready: bool = False
+    local_llm_loaded: bool = False
+    local_llm_status: str = "unavailable"
+    local_llm_last_verified_at: Optional[str] = None
+    local_llm_last_checked_at: Optional[str] = None
+    local_llm_last_error: Optional[str] = None
+    local_llm_consecutive_failures: int = 0
+    local_llm_last_smoke_elapsed_ms: Optional[float] = None
     scheduler_running: bool = False
     last_health_tick_at: Optional[str] = None
     last_scheduler_tick_at: Optional[str] = None

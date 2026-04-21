@@ -11,6 +11,7 @@ import {
 import type { DiscoveredModel, AvailableProvider, ProviderKeyInfo, OAuthStatusResponse } from '@/api'
 import { MetricCard } from '@/components'
 import { formatTimeOnly } from '@/utils/dateFormat'
+import { getErrorMessage } from '@/utils/errors'
 
 /** Format context window size for display */
 function formatCtx(tokens: number): string {
@@ -57,44 +58,56 @@ export function CostTracker() {
   const [codexOauthStatus, setCodexOauthStatus] = useState<OAuthStatusResponse | null>(null)
   const [codexOauthLoading, setCodexOauthLoading] = useState(false)
 
+  const showStatus = useCallback((msg: string) => {
+    setStatusMsg(msg)
+    setTimeout(() => setStatusMsg(null), 4000)
+  }, [])
+
+  const loadProviders = useCallback(async (failureMessage = 'Failed to load available providers') => {
+    try {
+      const res = await fetchAvailableProviders()
+      setProviders(res.providers ?? [])
+    } catch (error) {
+      showStatus(getErrorMessage(error, failureMessage))
+    }
+  }, [showStatus])
+
+  const loadProviderKeys = useCallback(async (failureMessage = 'Failed to load provider keys') => {
+    try {
+      const res = await fetchProviderKeys()
+      setProviderKeys(res.keys ?? [])
+    } catch (error) {
+      showStatus(getErrorMessage(error, failureMessage))
+    }
+  }, [showStatus])
+
   // Fetch available providers on mount
   useEffect(() => {
-    fetchAvailableProviders()
-      .then(res => setProviders(res.providers ?? []))
-      .catch(() => {})
-    fetchProviderKeys()
-      .then(res => setProviderKeys(res.keys ?? []))
-      .catch(() => {})
+    void loadProviders()
+    void loadProviderKeys()
     // V28: Fetch OAuth status
     fetchOAuthStatus()
       .then(res => setOauthStatus(res))
-      .catch(() => {})
+      .catch((error) => showStatus(getErrorMessage(error, 'Failed to load Anthropic OAuth status')))
     // Fetch Codex OAuth status
     fetchCodexOAuthStatus()
       .then(res => setCodexOauthStatus(res))
-      .catch(() => {})
-  }, [])
+      .catch((error) => showStatus(getErrorMessage(error, 'Failed to load Codex OAuth status')))
+  }, [loadProviderKeys, loadProviders, showStatus])
 
   // Re-fetch providers after stack changes (to update active indicator)
   const refreshProviders = useCallback(() => {
-    fetchAvailableProviders()
-      .then(res => setProviders(res.providers ?? []))
-      .catch(() => {})
-  }, [])
-
-  const showStatus = (msg: string) => {
-    setStatusMsg(msg)
-    setTimeout(() => setStatusMsg(null), 4000)
-  }
+    return loadProviders('Failed to refresh available providers')
+  }, [loadProviders])
 
   const handleRefresh = async () => {
     setRefreshing(true)
     try {
       await refreshModelDiscovery()
       await refetchStack()
-      refreshProviders()
-    } catch {
-      // silently fail — UI will show stale data
+      await refreshProviders()
+    } catch (error) {
+      showStatus(getErrorMessage(error, 'Model discovery refresh failed'))
     } finally {
       setRefreshing(false)
     }
@@ -108,12 +121,12 @@ export function CostTracker() {
       if (res.status === 'ok') {
         showStatus(res.message || `Switched to ${providerName}`)
         await refetchStack()
-        refreshProviders()
+        await refreshProviders()
       } else {
         showStatus(res.message || 'Switch failed')
       }
-    } catch (e) {
-      showStatus('Provider switch failed')
+    } catch (error) {
+      showStatus(getErrorMessage(error, 'Provider switch failed'))
     } finally {
       setSwitching(false)
     }
@@ -163,14 +176,14 @@ export function CostTracker() {
         setEditingKey(null)
         setNewKeyValue('')
         // Refresh key list, providers, and stack status
-        fetchProviderKeys().then(r => setProviderKeys(r.keys ?? [])).catch(() => {})
-        refreshProviders()
+        await loadProviderKeys('Failed to refresh provider keys')
+        await refreshProviders()
         await refetchStack()
       } else {
         setKeyError(res.message || 'Rotation failed')
       }
-    } catch (e) {
-      setKeyError('Key rotation failed — check the key and try again')
+    } catch (error) {
+      setKeyError(getErrorMessage(error, 'Key rotation failed — check the key and try again'))
     } finally {
       setKeyLoading(false)
     }
@@ -192,11 +205,14 @@ export function CostTracker() {
             if (status.configured) {
               clearInterval(pollId)
               showStatus('OAuth authorized successfully!')
-              fetchProviderKeys().then(r => setProviderKeys(r.keys ?? [])).catch(() => {})
-              refreshProviders()
+              await loadProviderKeys('Failed to refresh provider keys')
+              await refreshProviders()
               await refetchStack()
             }
-          } catch { /* ignore */ }
+          } catch (error) {
+            clearInterval(pollId)
+            showStatus(getErrorMessage(error, 'Failed to refresh Anthropic OAuth status'))
+          }
         }, 3000)
         // Stop polling after 5 minutes
         setTimeout(() => clearInterval(pollId), 300000)
@@ -215,9 +231,9 @@ export function CostTracker() {
       await revokeOAuth()
       setOauthStatus({ configured: false, status: 'not_configured' })
       showStatus('OAuth tokens revoked')
-      fetchProviderKeys().then(r => setProviderKeys(r.keys ?? [])).catch(() => {})
-    } catch {
-      showStatus('Failed to revoke OAuth')
+      await loadProviderKeys('Failed to refresh provider keys')
+    } catch (error) {
+      showStatus(getErrorMessage(error, 'Failed to revoke OAuth'))
     }
   }
 
@@ -237,13 +253,23 @@ export function CostTracker() {
             if (status.configured) {
               clearInterval(pollId)
               showStatus('Codex OAuth authorized successfully!')
-              fetchProviderKeys().then(r => setProviderKeys(r.keys ?? [])).catch(() => {})
-              refreshProviders()
+              await loadProviderKeys('Failed to refresh provider keys')
+              await refreshProviders()
               await refetchStack()
             }
-          } catch { /* ignore */ }
+          } catch (error) {
+            clearInterval(pollId)
+            showStatus(getErrorMessage(error, 'Failed to refresh Codex OAuth status'))
+          }
         }, 3000)
         setTimeout(() => clearInterval(pollId), 300000)
+      } else if (res.status === 'ok') {
+        showStatus(res.message || 'Codex auth is already available')
+        const status = await fetchCodexOAuthStatus()
+        setCodexOauthStatus(status)
+        await loadProviderKeys('Failed to refresh provider keys')
+        await refreshProviders()
+        await refetchStack()
       } else {
         showStatus(res.message || 'Failed to initiate Codex OAuth')
       }
@@ -259,9 +285,9 @@ export function CostTracker() {
       await revokeCodexOAuth()
       setCodexOauthStatus({ configured: false, status: 'not_configured' })
       showStatus('Codex OAuth tokens revoked')
-      fetchProviderKeys().then(r => setProviderKeys(r.keys ?? [])).catch(() => {})
-    } catch {
-      showStatus('Failed to revoke Codex OAuth')
+      await loadProviderKeys('Failed to refresh provider keys')
+    } catch (error) {
+      showStatus(getErrorMessage(error, 'Failed to revoke Codex OAuth'))
     }
   }
 
@@ -474,7 +500,7 @@ export function CostTracker() {
           {providerKeys.length === 0 && (
             <p className="text-sm text-text-muted py-4 text-center">Loading provider keys...</p>
           )}
-          {providerKeys.filter(k => !(k as any).oauth_only).map(k => (
+          {providerKeys.filter(k => !k.oauth_only).map(k => (
             <div key={k.provider} className="flex items-center gap-3 p-3 bg-surface-card-elevated rounded-md">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
@@ -621,10 +647,11 @@ export function CostTracker() {
       {/* ======= OpenAI Codex OAuth Section ======= */}
       <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
         <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-          OpenAI Codex OAuth
+          OpenAI Codex Access
         </h3>
         <p className="text-xs text-text-muted mb-3">
-          Connect via your ChatGPT Plus/Pro subscription. Uses flat-rate billing — no per-token API costs.
+          Preferred: sign in on the host with the Codex CLI so `~/.codex/auth.json` is mounted into the container.
+          Browser OAuth is available only as a fallback when mounted Codex auth is not present.
         </p>
         <div className="flex items-center gap-3 p-3 bg-surface-card-elevated rounded-md">
           <div className="flex-1 min-w-0">
@@ -632,13 +659,14 @@ export function CostTracker() {
               <span className="text-sm font-medium text-text-primary">OpenAI Codex</span>
               {codexOauthStatus?.configured ? (
                 <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
-                  codexOauthStatus.status === 'active'
+                  codexOauthStatus.status === 'active' || codexOauthStatus.status === 'cli_auth'
                     ? 'bg-state-healthy/15 text-state-healthy'
                     : codexOauthStatus.status === 'expiring'
                     ? 'bg-yellow-500/15 text-yellow-400'
                     : 'bg-state-error/15 text-state-error'
                 }`}>
-                  {codexOauthStatus.status === 'active' ? 'CONNECTED' :
+                  {codexOauthStatus.status === 'cli_auth' ? 'CLI AUTH' :
+                   codexOauthStatus.status === 'active' ? 'CONNECTED' :
                    codexOauthStatus.status === 'expiring' ? 'EXPIRING' : 'EXPIRED'}
                 </span>
               ) : (
@@ -653,6 +681,11 @@ export function CostTracker() {
                 {codexOauthStatus.status === 'active' && ' (auto-refresh enabled)'}
               </span>
             )}
+            {codexOauthStatus?.status === 'cli_auth' && (
+              <span className="text-xs text-text-muted mt-1 block">
+                Using mounted host Codex auth. Revoke it by signing out on the host machine.
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {codexOauthStatus?.configured ? (
@@ -663,7 +696,7 @@ export function CostTracker() {
                   className="px-3 py-1.5 text-xs border border-border-default text-text-secondary rounded
                              hover:bg-surface-card hover:text-text-primary transition-colors whitespace-nowrap"
                 >
-                  Re-authorize
+                  Re-check
                 </button>
                 <button
                   onClick={handleCodexOAuthRevoke}
@@ -681,7 +714,7 @@ export function CostTracker() {
                            hover:bg-accent-primary/25 transition-colors
                            disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
               >
-                {codexOauthLoading ? 'Opening…' : 'Setup OAuth'}
+                {codexOauthLoading ? 'Checking…' : 'Check Codex Access'}
               </button>
             )}
           </div>

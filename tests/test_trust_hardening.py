@@ -97,13 +97,9 @@ class TestProposalReplay:
         assert rec.pending_proposal is None
         assert rec.current_tier == RiskTier.T3_IRREVERSIBLE
 
-        # Re-applying the same denied proposal should NOT change tier
-        # (apply_graduation finds the proposal, but record state is unchanged)
-        ledger.apply_graduation(proposal_id, approved=True)
-        # Tier would go T3→T2 again, but the record was already denied.
-        # After a second apply, cooldown is reset. The key security property:
-        # the original denial set cooldown and cleared pending_proposal.
-        # Verify the denied status was recorded in history.
+        with pytest.raises(ValueError, match="no longer pending"):
+            ledger.apply_graduation(proposal_id, approved=True)
+
         events = rec.graduation_history
         assert any(e.owner_approved is False for e in events)
 

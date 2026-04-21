@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability, resolve_authenticated_identity
 
@@ -67,6 +67,7 @@ class CoreBlocksResponse(BaseModel):
 
 class SearchRequest(BaseModel):
     """Request for memory search."""
+    model_config = ConfigDict(extra="forbid")
     query: str
     tiers: list[str] = Field(default=["working", "episodic", "archival"])
     namespace: Optional[str] = None
@@ -116,6 +117,11 @@ class RecentMemoryResponse(BaseModel):
 
 class BeginCommitRequest(BaseModel):
     """Request to begin a staged commit."""
+    model_config = ConfigDict(extra="forbid")
+    created_by: Optional[str] = Field(
+        default=None,
+        description="Deprecated client field. Operator identity is derived server-side.",
+    )
     message: str = ""
 
 
@@ -127,6 +133,7 @@ class BeginCommitResponse(BaseModel):
 
 class AddEditRequest(BaseModel):
     """Request to add an edit to a staged commit."""
+    model_config = ConfigDict(extra="forbid")
     op: str  # insert, replace, delete
     target: str  # core:type or tier:id
     after: Optional[str] = None
@@ -145,6 +152,7 @@ class AddEditResponse(BaseModel):
 
 class FinishCommitRequest(BaseModel):
     """Request to finish a staged commit."""
+    model_config = ConfigDict(extra="forbid")
     receipt_id: Optional[str] = None
 
 
@@ -157,7 +165,12 @@ class FinishCommitResponse(BaseModel):
 
 class RollbackRequest(BaseModel):
     """Request to rollback a commit."""
+    model_config = ConfigDict(extra="forbid")
     reason: str
+    created_by: Optional[str] = Field(
+        default=None,
+        description="Deprecated client field. Operator identity is derived server-side.",
+    )
 
 
 class RollbackResponse(BaseModel):
@@ -203,12 +216,21 @@ class QuarantineResponse(BaseModel):
 
 class PromoteRequest(BaseModel):
     """Request to promote a quarantined item."""
-    pass
+    model_config = ConfigDict(extra="forbid")
+    approver: Optional[str] = Field(
+        default=None,
+        description="Deprecated client field. Operator identity is derived server-side.",
+    )
 
 
 class MemoryActionRequest(BaseModel):
     """Request model for governed memory actions."""
+    model_config = ConfigDict(extra="forbid")
     reason: str = ""
+    operator: Optional[str] = Field(
+        default=None,
+        description="Deprecated client field. Operator identity is derived server-side.",
+    )
 
 
 class MemoryActionResponse(BaseModel):
@@ -222,6 +244,7 @@ class MemoryActionResponse(BaseModel):
 
 class CompileContextRequest(BaseModel):
     """Request to compile context."""
+    model_config = ConfigDict(extra="forbid")
     objective: str
     quest_id: Optional[str] = None
     mode: str = "normal"

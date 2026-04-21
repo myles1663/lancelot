@@ -9,7 +9,12 @@ import pytest
 from cryptography.fernet import Fernet
 
 from src.connectors.base import ConnectorManifest, CredentialSpec
-from src.connectors.vault import CredentialVault, VaultAccessPolicy, VaultEntry
+from src.connectors.vault import (
+    CredentialVault,
+    VaultAccessPolicy,
+    VaultConfigurationError,
+    VaultEntry,
+)
 
 
 @pytest.fixture
@@ -60,12 +65,22 @@ class TestInit:
         assert vault is not None
         assert vault.list_keys() == []
 
-    def test_generates_key_when_env_not_set(self, vault_config):
+    def test_fails_closed_when_env_not_set(self, vault_config):
         os.environ.pop("LANCELOT_VAULT_KEY", None)
-        v = CredentialVault(config_path=vault_config)
-        # Should work without error (ephemeral key generated)
-        v.store("test", "value")
-        assert v.retrieve("test") == "value"
+        os.environ.pop("LANCELOT_ALLOW_EPHEMERAL_VAULT", None)
+        with pytest.raises(VaultConfigurationError, match="no vault key configured"):
+            CredentialVault(config_path=vault_config)
+
+    def test_allows_explicit_ephemeral_override(self, vault_config):
+        os.environ.pop("LANCELOT_VAULT_KEY", None)
+        os.environ["LANCELOT_ALLOW_EPHEMERAL_VAULT"] = "true"
+        try:
+            v = CredentialVault(config_path=vault_config)
+            assert v.key_source == "ephemeral"
+            v.store("test", "value")
+            assert v.retrieve("test") == "value"
+        finally:
+            os.environ.pop("LANCELOT_ALLOW_EPHEMERAL_VAULT", None)
 
 
 # ── Store and Retrieve ────────────────────────────────────────────
@@ -163,6 +178,92 @@ class TestPersistence:
         vault.store("second", "value2")
         # Second save should backup the first file
         assert (tmp_path / "credentials.enc.bak").exists()
+
+    def test_corrupted_primary_uses_backup(self, vault_key, vault_config, tmp_path):
+        v1 = CredentialVault(config_path=vault_config)
+        v1.store("persistent_key", "persistent_value")
+
+        primary = tmp_path / "credentials.enc"
+        backup = tmp_path / "credentials.enc.bak"
+        backup.write_bytes(primary.read_bytes())
+        backup_bytes = backup.read_bytes()
+        primary.write_bytes(b"not-valid-fernet")
+
+        v2 = CredentialVault(config_path=vault_config)
+        assert v2.retrieve("persistent_key") == "persistent_value"
+        assert primary.read_bytes() == backup_bytes
+
+    def test_corrupted_primary_without_backup_raises(self, vault_key, vault_config, tmp_path):
+        v1 = CredentialVault(config_path=vault_config)
+        v1.store("persistent_key", "persistent_value")
+
+        primary = tmp_path / "credentials.enc"
+        backup = tmp_path / "credentials.enc.bak"
+        if backup.exists():
+            backup.unlink()
+        primary.write_bytes(b"not-valid-fernet")
+
+        with pytest.raises(VaultConfigurationError, match="could not be decrypted"):
+            CredentialVault(config_path=vault_config)
+
+    def test_atomic_save_failure_preserves_last_good_primary(self, vault, vault_config, tmp_path, monkeypatch):
+        vault.store("first", "value1")
+        primary = tmp_path / "credentials.enc"
+        primary_before = primary.read_bytes()
+
+        import src.connectors.vault as vault_module
+
+        def _raising_replace(*_args, **_kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(vault_module.os, "replace", _raising_replace)
+
+        with pytest.raises(OSError, match="disk full"):
+            vault.store("second", "value2")
+
+        assert primary.read_bytes() == primary_before
+        assert not (tmp_path / "credentials.enc.tmp").exists()
+
+        reloaded = CredentialVault(config_path=vault_config)
+        assert reloaded.retrieve("first") == "value1"
+        with pytest.raises(KeyError):
+            reloaded.retrieve("second")
+
+    def test_inspect_health_reports_key_mismatch_from_metadata(self, vault_config, tmp_path):
+        original_key = Fernet.generate_key().decode()
+        replacement_key = Fernet.generate_key().decode()
+        os.environ["LANCELOT_VAULT_KEY"] = original_key
+        vault = CredentialVault(config_path=vault_config)
+        vault.store("persistent_key", "persistent_value")
+
+        os.environ["LANCELOT_VAULT_KEY"] = replacement_key
+        snapshot = CredentialVault.inspect_health(
+            config_path=vault_config,
+            last_error="Credential vault initialization failed: encrypted vault contents could not be decrypted from the primary or backup file.",
+        )
+
+        assert snapshot.status == "key_mismatch"
+        assert snapshot.suspected_key_mismatch is True
+        assert snapshot.metadata_present is True
+        assert snapshot.has_primary is True
+        assert snapshot.key_id != snapshot.metadata_key_id
+
+    def test_reset_storage_archives_encrypted_vault_artifacts(self, vault_config, tmp_path):
+        vault = CredentialVault(config_path=vault_config)
+        vault.store("first", "value1")
+        vault.store("second", "value2")
+
+        result = CredentialVault.reset_storage(config_path=vault_config)
+
+        archive_dir = tmp_path / "reset_backups"
+        archived_names = {path.name for path in archive_dir.rglob("*") if path.is_file()}
+        assert "credentials.enc" in archived_names
+        assert "credentials.enc.bak" in archived_names
+        assert "credentials.meta.json" in archived_names
+        assert not (tmp_path / "credentials.enc").exists()
+        assert not (tmp_path / "credentials.enc.bak").exists()
+        assert not (tmp_path / "credentials.meta.json").exists()
+        assert result["archived_files"]
 
 
 # ── Audit Log ─────────────────────────────────────────────────────

@@ -47,6 +47,8 @@ class TestDockerCompose:
         svc = self.compose["services"]["local-llm"]
         assert svc["build"]["context"] == "./local_models"
         assert svc["build"]["dockerfile"] == "Dockerfile"
+        assert svc["build"]["args"]["LOCAL_LLM_WHEEL_VARIANT"] == "${LOCAL_LLM_WHEEL_VARIANT:-cpu}"
+        assert svc["build"]["args"]["LOCAL_LLM_WHEEL_VERSION"] == "${LOCAL_LLM_WHEEL_VERSION:-0.3.19}"
 
     def test_local_llm_container_name(self):
         svc = self.compose["services"]["local-llm"]
@@ -66,7 +68,7 @@ class TestDockerCompose:
         svc = self.compose["services"]["local-llm"]
         hc = svc["healthcheck"]
         # start_period should be generous for model loading
-        assert "60s" in str(hc.get("start_period", ""))
+        assert "120s" in str(hc.get("start_period", ""))
         assert hc.get("retries", 0) >= 3
 
     def test_local_llm_volume_mounts_weights(self):
@@ -105,6 +107,7 @@ class TestDockerCompose:
         assert "LOCAL_MODELS_DIR" in env_str
         assert "LOCAL_MODEL_CTX" in env_str
         assert "LOCAL_MODEL_THREADS" in env_str
+        assert "${LOCAL_MODEL_GPU_LAYERS:-0}" in env_str
 
 
 # ===================================================================
@@ -121,15 +124,18 @@ class TestDockerfile:
         assert _DOCKERFILE_PATH.exists()
 
     def test_base_image_is_python_311(self):
-        assert "python:3.11" in self.content
+        assert "ubuntu22.04" in self.content
+        assert "python3.11" in self.content
 
     def test_creates_non_root_user(self):
         assert "useradd" in self.content
         assert "USER" in self.content
 
     def test_installs_cmake(self):
-        # cmake needed for llama-cpp-python compilation
-        assert "cmake" in self.content
+        # Current image uses a prebuilt llama-cpp-python wheel instead of local compilation
+        assert "llama-cpp-python" in self.content
+        assert "extra-index-url" in self.content
+        assert "LOCAL_LLM_WHEEL_VARIANT" in self.content
 
     def test_installs_curl(self):
         # curl needed for HEALTHCHECK
@@ -165,9 +171,9 @@ class TestRequirementsLLM:
     def test_requirements_file_exists(self):
         assert _REQUIREMENTS_PATH.exists()
 
-    def test_includes_llama_cpp_python(self):
+    def test_requirements_file_excludes_llama_cpp_python(self):
         content = _REQUIREMENTS_PATH.read_text(encoding="utf-8")
-        assert "llama-cpp-python" in content
+        assert "llama-cpp-python" not in content
 
     def test_includes_fastapi(self):
         content = _REQUIREMENTS_PATH.read_text(encoding="utf-8")
@@ -180,6 +186,12 @@ class TestRequirementsLLM:
     def test_includes_pyyaml(self):
         content = _REQUIREMENTS_PATH.read_text(encoding="utf-8")
         assert "pyyaml" in content
+
+    def test_dockerfile_installs_pinned_llama_cpp_python(self):
+        dockerfile = _DOCKERFILE_PATH.read_text(encoding="utf-8")
+        assert 'ARG LOCAL_LLM_WHEEL_VERSION=0.3.19' in dockerfile
+        assert 'cpu) WHEEL_INDEX=""' in dockerfile
+        assert 'cu123) WHEEL_INDEX="https://abetlen.github.io/llama-cpp-python/whl/cu123"' in dockerfile
 
 
 # ===================================================================
@@ -197,6 +209,7 @@ class TestServerEndpoints:
         self._original_llm = srv._llm
         self._original_name = srv._model_name
         self._original_loaded = srv._loaded_at
+        self._original_readiness = dict(srv._readiness)
 
         mock_llm = MagicMock()
         mock_llm.return_value = {
@@ -206,6 +219,16 @@ class TestServerEndpoints:
         srv._llm = mock_llm
         srv._model_name = "test-model"
         srv._loaded_at = time.time()
+        srv._readiness.update({
+            "loaded": True,
+            "ready": True,
+            "status": "ready",
+            "last_verified_at": "2026-04-17T12:00:00Z",
+            "last_checked_at": "2026-04-17T12:00:00Z",
+            "last_error": None,
+            "consecutive_failures": 0,
+            "last_smoke_elapsed_ms": 12.3,
+        })
 
         from fastapi.testclient import TestClient
         self.client = TestClient(srv.app, raise_server_exceptions=False)
@@ -216,19 +239,32 @@ class TestServerEndpoints:
         srv._llm = self._original_llm
         srv._model_name = self._original_name
         srv._loaded_at = self._original_loaded
+        srv._readiness.clear()
+        srv._readiness.update(self._original_readiness)
 
     def test_health_returns_200(self):
         resp = self.client.get("/health")
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
+        assert data["ready"] is True
+        assert data["loaded"] is True
         assert data["model"] == "test-model"
+        assert data["last_verified_at"] == "2026-04-17T12:00:00Z"
         assert "uptime_seconds" in data
 
     def test_health_503_when_no_model(self):
         self._srv._llm = None
+        self._srv._readiness["loaded"] = False
+        self._srv._readiness["ready"] = False
+        self._srv._readiness["status"] = "unavailable"
+        self._srv._readiness["last_error"] = "Model not loaded"
         resp = self.client.get("/health")
         assert resp.status_code == 503
+        data = resp.json()
+        assert data["ready"] is False
+        assert data["loaded"] is False
+        assert data["status"] == "unavailable"
 
     def test_completions_returns_200(self):
         resp = self.client.post("/v1/completions", json={
@@ -244,10 +280,25 @@ class TestServerEndpoints:
 
     def test_completions_503_when_no_model(self):
         self._srv._llm = None
+        self._srv._readiness["loaded"] = False
+        self._srv._readiness["ready"] = False
+        self._srv._readiness["status"] = "unavailable"
+        self._srv._readiness["last_error"] = "Model not loaded"
         resp = self.client.post("/v1/completions", json={
             "prompt": "Hello",
         })
         assert resp.status_code == 503
+
+    def test_completions_503_when_model_loaded_but_not_ready(self):
+        self._srv._readiness["loaded"] = True
+        self._srv._readiness["ready"] = False
+        self._srv._readiness["status"] = "loaded_not_ready"
+        self._srv._readiness["last_error"] = "Inference smoke failed"
+        resp = self.client.post("/v1/completions", json={
+            "prompt": "Hello",
+        })
+        assert resp.status_code == 503
+        assert resp.json()["detail"] == "Inference smoke failed"
 
     def test_completions_validates_max_tokens(self):
         resp = self.client.post("/v1/completions", json={
@@ -303,6 +354,7 @@ class TestLiveDockerService:
         """Skip if the local-llm container isn't running."""
         import shutil
         import subprocess
+        import urllib.request
         if shutil.which("docker") is None:
             pytest.skip("Docker not available")
         result = subprocess.run(
@@ -312,6 +364,12 @@ class TestLiveDockerService:
         )
         if result.returncode != 0 or "true" not in result.stdout:
             pytest.skip("lancelot_local_llm container not running")
+        try:
+            resp = urllib.request.urlopen("http://localhost:8080/health", timeout=5)
+            if resp.status != 200:
+                pytest.skip("lancelot_local_llm not ready for inference")
+        except Exception:
+            pytest.skip("lancelot_local_llm not ready for inference")
 
     def test_health_endpoint_reachable(self):
         import urllib.request

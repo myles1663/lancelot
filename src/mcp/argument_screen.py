@@ -17,9 +17,9 @@ Extends the platform's InputSanitizer with MCP-specific threat patterns:
 The screener operates on the ARGUMENT VALUES, not the tool spec.
 It runs after Soul permission and kill switch checks (Gate 5 in proxy).
 
-Screening is fail-open by default for individual patterns (flag + log)
-but fail-closed if multiple patterns trigger on the same invocation
-(compound attack indicator).
+Screening is fail-closed for any detected violation. Compound attacks
+(multiple categories on the same invocation) are escalated to critical
+severity and logged distinctly because they indicate deliberate abuse.
 """
 
 from __future__ import annotations
@@ -260,17 +260,19 @@ class MCPArgumentScreener:
         # Severity determination
         severity = self._determine_severity(categories_hit)
 
-        # Compound attack detection
-        passed = len(categories_hit) < self._compound_threshold
-        if not passed:
+        # Gate 5 is fail-closed on any detected violation. Compound attacks
+        # are elevated to critical severity rather than being the only
+        # condition that blocks execution.
+        passed = False
+        if len(categories_hit) >= self._compound_threshold:
             severity = "critical"
             logger.warning(
                 "MCP compound attack detected for %s:%s — %d categories: %s",
                 server_id, tool_name, len(categories_hit), sorted(categories_hit),
             )
         else:
-            logger.info(
-                "MCP argument screening flagged %s:%s — %d violation(s) in %d category(ies): %s",
+            logger.warning(
+                "MCP argument screening blocked %s:%s — %d violation(s) in %d category(ies): %s",
                 server_id, tool_name, len(violations),
                 len(categories_hit), sorted(categories_hit),
             )
@@ -355,8 +357,8 @@ class MCPArgumentScreener:
                         f"SSRF: argument '{key}' contains URL targeting "
                         f"private/internal address {hostname} ({addr})"
                     )
-            except (socket.gaierror, ValueError):
-                pass
+            except (socket.gaierror, ValueError) as exc:
+                logger.debug("Unable to resolve URL hostname %s during SSRF screening: %s", hostname, exc)
 
             # Check for common internal hostnames
             internal_patterns = [
@@ -370,8 +372,8 @@ class MCPArgumentScreener:
                         f"SSRF: argument '{key}' contains URL targeting "
                         f"internal service: {hostname}"
                     )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to inspect URL argument %s=%r for SSRF patterns: %s", key, value, exc)
 
         return None
 

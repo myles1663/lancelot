@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { Outlet } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
 import { Header } from './Header'
@@ -8,6 +8,7 @@ import { UpdateBanner } from '@/components/UpdateBanner'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 import { useWebSocket, WsEvent } from '@/hooks/useWebSocket'
 import { LiveEventsProvider, useLiveEvents } from '@/contexts/LiveEventsContext'
+import { onWarRoomNotification, type WarRoomNotificationPriority } from '@/utils/notifications'
 
 export interface Notification {
   id: string
@@ -24,24 +25,39 @@ function WarRoomShellInner() {
   const [toasts, setToasts] = useState<Notification[]>([])
   const { handleLiveEvent } = useLiveEvents()
 
+  const enqueueNotification = useCallback((
+    message: string,
+    priority: WarRoomNotificationPriority = 'normal',
+  ) => {
+    const notif: Notification = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      message,
+      priority,
+      timestamp: Date.now() / 1000,
+      read: false,
+    }
+    setNotifications(prev => [notif, ...prev].slice(0, 50))
+    setToasts(prev => [...prev, notif])
+  }, [])
+
   const handleWsEvent = useCallback((event: WsEvent) => {
     if (event.type === 'warroom_notification') {
-      const notif: Notification = {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        message: (event.payload.message as string) || 'New notification',
-        priority: (event.payload.priority as 'normal' | 'high') || 'normal',
-        timestamp: event.timestamp || Date.now() / 1000,
-        read: false,
-      }
-      setNotifications(prev => [notif, ...prev].slice(0, 50))
-      setToasts(prev => [...prev, notif])
+      const message = typeof event.payload.message === 'string'
+        ? event.payload.message
+        : 'New notification'
+      const priority = event.payload.priority === 'high' ? 'high' : 'normal'
+      enqueueNotification(message, priority)
     }
 
     // Route toolflow.* and actioncard_* events to LiveEventsContext
     if (event.type.startsWith('toolflow.') || event.type.startsWith('actioncard_')) {
       handleLiveEvent(event)
     }
-  }, [handleLiveEvent])
+  }, [enqueueNotification, handleLiveEvent])
+
+  useEffect(() => onWarRoomNotification(({ message, priority }) => {
+    enqueueNotification(message, priority)
+  }), [enqueueNotification])
 
   useWebSocket({
     url: '/ws/warroom',

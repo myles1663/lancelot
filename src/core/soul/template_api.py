@@ -18,6 +18,7 @@ import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability, resolve_authenticated_identity
 
@@ -41,6 +42,12 @@ _TEMPLATES_DIR: Optional[str] = os.environ.get("TEMPLATES_DIR", None)
 _SOUL_DIR: Optional[str] = os.environ.get("SOUL_DIR", None)
 
 
+class ApplyTemplateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    customizations: dict = Field(default_factory=dict)
+
+
 def _set_templates_dir(d: str) -> None:
     """Set templates directory (used in tests)."""
     global _TEMPLATES_DIR
@@ -51,6 +58,28 @@ def _set_soul_dir(d: str) -> None:
     """Set soul directory (used in tests)."""
     global _SOUL_DIR
     _SOUL_DIR = d
+
+
+async def _parse_request_model(
+    request: Request,
+    model_cls: type[BaseModel],
+    *,
+    allow_empty: bool = False,
+) -> BaseModel:
+    if allow_empty and request.headers.get("content-length") in (None, "", "0"):
+        payload = {}
+    else:
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            if allow_empty:
+                payload = {}
+            else:
+                raise HTTPException(status_code=422, detail="Request body must be valid JSON") from exc
+    try:
+        return model_cls.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -99,12 +128,8 @@ async def apply_template_endpoint(
     The proposal must then be approved and activated via the standard
     Soul Amendment workflow (/soul/proposals/{id}/approve → activate).
     """
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    customizations = body.get("customizations")
+    body = await _parse_request_model(request, ApplyTemplateRequest, allow_empty=True)
+    customizations = body.customizations or None
     identity = resolve_authenticated_identity(request)
     operator_id = identity.operator_id
     session_id = identity.session_id or ""

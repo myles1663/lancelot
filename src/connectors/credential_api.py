@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability
 
@@ -92,6 +92,7 @@ def _resolve_connector_entry(connector_id: str):
 # ── Request/Response Models ───────────────────────────────────────
 
 class StoreCredentialRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     vault_key: str
     value: str
     type: str = "api_key"
@@ -250,6 +251,11 @@ def validate_credentials(connector_id: str):
         valid = entry.connector.validate_credentials()
         return ValidateCredentialResponse(valid=valid)
     except Exception as e:
+        logger.warning(
+            "Credential validation failed for connector %s: %s",
+            connector_id,
+            e,
+        )
         return ValidateCredentialResponse(valid=False, error=str(e))
 
 

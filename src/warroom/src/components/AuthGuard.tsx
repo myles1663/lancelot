@@ -2,6 +2,8 @@ import { useEffect, useState, useCallback } from 'react'
 import { Outlet, Navigate, useNavigate } from 'react-router-dom'
 import { validateSession, logout } from '@/api/auth'
 import { SessionExpiryModal } from './SessionExpiryModal'
+import { getErrorMessage } from '@/utils/errors'
+import { emitWarRoomNotification } from '@/utils/notifications'
 
 type AuthState = 'checking' | 'authenticated' | 'unauthenticated'
 
@@ -56,8 +58,12 @@ export function AuthGuard() {
 
   const handleSignOut = useCallback(async () => {
     setShowExpiryModal(false)
-    await logout()
-    navigate('/login', { replace: true })
+    try {
+      await logout()
+      navigate('/login', { replace: true })
+    } catch (error) {
+      emitWarRoomNotification(getErrorMessage(error, 'Sign out failed'), 'high')
+    }
   }, [navigate])
 
   if (authState === 'checking') {

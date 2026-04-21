@@ -1,22 +1,13 @@
-"""
-Tests for src.core.skills.factory — Skill Factory proposals (Prompt 15 / F1-F4).
-"""
+"""Tests for the governed SkillFactory proposal pipeline."""
 
-import pytest
 from pathlib import Path
 
-from src.core.skills.schema import SkillError
+import pytest
+
+from src.core.skills.factory import ProposalStatus, SkillFactory
 from src.core.skills.registry import SkillRegistry
-from src.core.skills.factory import (
-    SkillFactory,
-    SkillProposal,
-    ProposalStatus,
-)
+from src.core.skills.schema import SkillError
 
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 @pytest.fixture
 def factory(tmp_path):
@@ -25,140 +16,126 @@ def factory(tmp_path):
 
 @pytest.fixture
 def registry(tmp_path):
-    return SkillRegistry(str(tmp_path / "registry_data"))
+    return SkillRegistry(str(tmp_path / "registry"))
 
 
-# ===================================================================
-# Proposal cannot auto-enable itself
-# ===================================================================
+class TestGovernedProposalCreation:
+    def test_new_proposal_creates_artifact_package(self, factory):
+        proposal = factory.generate_skeleton("demo_skill", "Demo skill", permissions=["read_input", "write_output"])
 
-class TestProposalCannotAutoEnable:
-
-    def test_new_proposal_is_pending(self, factory):
-        """Blueprint requirement: proposal cannot auto-enable itself."""
-        proposal = factory.generate_skeleton("my_skill", "A test skill")
         assert proposal.status == ProposalStatus.PENDING
+        assert proposal.pipeline_passed is True
+        assert proposal.review_ready is True
+        assert "tool.read_input" in proposal.approved_capabilities
+        assert "tool.write_output" in proposal.approved_capabilities
+        assert "capabilities_required:" in proposal.security_manifest_yaml
 
-    def test_install_pending_raises(self, factory, registry):
-        """Cannot install a proposal that hasn't been approved."""
-        proposal = factory.generate_skeleton("my_skill")
+        artifact_dir = Path(proposal.artifact_dir)
+        assert artifact_dir.exists()
+        assert (artifact_dir / "skill.yaml").exists()
+        assert (artifact_dir / "security_manifest.yaml").exists()
+        assert (artifact_dir / "execute.py").exists()
+        assert (artifact_dir / "README.md").exists()
+        assert proposal.artifact_hashes["skill.yaml"]
+
+    def test_create_proposal_with_real_code_persists_metadata(self, factory):
+        proposal = factory.create_proposal(
+            name="trim_input",
+            description="Normalize whitespace",
+            permissions=["read_input", "write_output"],
+            execute_code=(
+                'def execute(context, inputs):\n'
+                '    value = str(inputs.get("input_data", "")).strip()\n'
+                '    return {"result": value}\n'
+            ),
+            target_domains=["api.example.com"],
+            credentials=[{"vault_key": "service.token", "type": "bearer", "purpose": "API access"}],
+            author="Arthur",
+        )
+
+        loaded = factory.get_proposal(proposal.id)
+        assert loaded is not None
+        assert loaded.author == "Arthur"
+        assert loaded.target_domains == ["api.example.com"]
+        assert loaded.credential_keys == ["service.token"]
+        assert loaded.pipeline_stage_results["owner_review"]["status"] == "pending"
+
+    def test_dangerous_code_is_blocked_by_real_pipeline(self, factory):
+        proposal = factory.create_proposal(
+            name="network_probe",
+            permissions=["network_fetch"],
+            execute_code=(
+                "import requests\n\n"
+                "def execute(context, inputs):\n"
+                '    return {"result": requests.get("https://example.com").text}\n'
+            ),
+        )
+
+        assert proposal.status == ProposalStatus.REVIEW_FAILED
+        assert proposal.pipeline_passed is False
+        assert proposal.pipeline_failed_at_stage == "static_analysis"
+
+
+class TestApprovalAndInstallation:
+    def test_pending_proposal_cannot_install(self, factory, registry):
+        proposal = factory.generate_skeleton("pending_skill")
         with pytest.raises(SkillError, match="approved"):
             factory.install_proposal(proposal.id, registry)
 
-    def test_install_rejected_raises(self, factory, registry):
-        proposal = factory.generate_skeleton("my_skill")
-        factory.reject_proposal(proposal.id)
-        with pytest.raises(SkillError, match="approved"):
-            factory.install_proposal(proposal.id, registry)
+    def test_review_failed_proposal_cannot_approve(self, factory):
+        proposal = factory.create_proposal(
+            name="bad_skill",
+            permissions=["network_fetch"],
+            execute_code="import requests\n",
+        )
 
+        with pytest.raises(SkillError, match="expected 'pending'"):
+            factory.approve_proposal(proposal.id)
 
-# ===================================================================
-# Approval required for installation
-# ===================================================================
+    def test_approve_then_install_uses_governed_package(self, factory, registry, tmp_path):
+        proposal = factory.create_proposal(
+            name="echo_v2",
+            description="Echo input for validation",
+            permissions=["read_input", "write_output"],
+            execute_code=(
+                'def execute(context, inputs):\n'
+                '    value = inputs.get("input_data", "")\n'
+                '    return {"result": value, "skill": "echo_v2"}\n'
+            ),
+        )
 
-class TestApprovalRequired:
+        approved = factory.approve_proposal(proposal.id, approved_by="owner")
+        entry = factory.install_proposal(approved.id, registry, install_dir=str(tmp_path / "skills"))
 
-    def test_approve_then_install(self, factory, registry, tmp_path):
-        """Blueprint requirement: approval required for installation."""
-        proposal = factory.generate_skeleton("echo_v2", "Echo skill v2",
-                                              permissions=["read_input"])
-        factory.approve_proposal(proposal.id, approved_by="owner")
-
-        install_dir = str(tmp_path / "skills")
-        entry = factory.install_proposal(proposal.id, registry, install_dir)
         assert entry.name == "echo_v2"
         assert entry.enabled is True
 
-    def test_proposal_marked_installed_after(self, factory, registry, tmp_path):
-        proposal = factory.generate_skeleton("my_skill", permissions=["read_input"])
-        factory.approve_proposal(proposal.id)
-        factory.install_proposal(proposal.id, registry, str(tmp_path / "skills"))
-
         loaded = factory.get_proposal(proposal.id)
-        assert loaded.status == ProposalStatus.INSTALLED
-
-
-# ===================================================================
-# Skeleton generation
-# ===================================================================
-
-class TestSkeletonGeneration:
-
-    def test_generates_manifest_yaml(self, factory):
-        proposal = factory.generate_skeleton("test_skill", "Test")
-        assert "name: test_skill" in proposal.manifest_yaml
-
-    def test_generates_execute_code(self, factory):
-        proposal = factory.generate_skeleton("test_skill")
-        assert "def execute" in proposal.execute_code
-
-    def test_generates_test_code(self, factory):
-        proposal = factory.generate_skeleton("test_skill")
-        assert "def test_" in proposal.test_code
-
-    def test_permissions_in_manifest(self, factory):
-        proposal = factory.generate_skeleton("test_skill",
-                                              permissions=["read_input", "write_output"])
-        assert "read_input" in proposal.manifest_yaml
-        assert "write_output" in proposal.manifest_yaml
-
-    def test_proposal_has_id(self, factory):
-        proposal = factory.generate_skeleton("test_skill")
-        assert proposal.id
-        assert len(proposal.id) == 12
-
-    def test_tests_status_not_run(self, factory):
-        proposal = factory.generate_skeleton("test_skill")
-        assert proposal.tests_status == "not_run"
-
-
-# ===================================================================
-# Persistence
-# ===================================================================
-
-class TestPersistence:
-
-    def test_proposals_persisted(self, factory):
-        factory.generate_skeleton("skill_one")
-        factory.generate_skeleton("skill_two")
-        proposals = factory.list_proposals()
-        assert len(proposals) == 2
-
-    def test_proposal_retrieved_by_id(self, factory):
-        p = factory.generate_skeleton("test_skill")
-        loaded = factory.get_proposal(p.id)
         assert loaded is not None
-        assert loaded.name == "test_skill"
+        assert loaded.status == ProposalStatus.INSTALLED
+        assert loaded.approved_by == "owner"
+        assert loaded.approved_at is not None
+        assert loaded.installed_at is not None
+
+    def test_artifact_tamper_blocks_install(self, factory, registry):
+        proposal = factory.generate_skeleton("tamper_check")
+        factory.approve_proposal(proposal.id, approved_by="owner")
+
+        artifact_dir = Path(proposal.artifact_dir)
+        (artifact_dir / "execute.py").write_text("def execute(context, inputs):\n    return {'result': 'tampered'}\n", encoding="utf-8")
+
+        with pytest.raises(SkillError, match="changed after review"):
+            factory.install_proposal(proposal.id, registry)
+
+
+class TestPersistenceAndReviewMetadata:
+    def test_reject_records_reason(self, factory):
+        proposal = factory.generate_skeleton("reject_me")
+        rejected = factory.reject_proposal(proposal.id, reason="Too much privilege")
+
+        assert rejected.status == ProposalStatus.REJECTED
+        assert rejected.rejected_reason == "Too much privilege"
+        assert rejected.rejected_at is not None
 
     def test_get_nonexistent_returns_none(self, factory):
-        assert factory.get_proposal("nonexistent") is None
-
-
-# ===================================================================
-# Approve / Reject
-# ===================================================================
-
-class TestApproveReject:
-
-    def test_approve_sets_status(self, factory):
-        p = factory.generate_skeleton("test_skill")
-        factory.approve_proposal(p.id, approved_by="owner")
-        loaded = factory.get_proposal(p.id)
-        assert loaded.status == ProposalStatus.APPROVED
-        assert loaded.approved_by == "owner"
-
-    def test_approve_nonexistent_raises(self, factory):
-        with pytest.raises(SkillError, match="not found"):
-            factory.approve_proposal("fake_id")
-
-    def test_approve_already_approved_raises(self, factory):
-        p = factory.generate_skeleton("test_skill")
-        factory.approve_proposal(p.id)
-        with pytest.raises(SkillError, match="pending"):
-            factory.approve_proposal(p.id)
-
-    def test_reject_sets_status(self, factory):
-        p = factory.generate_skeleton("test_skill")
-        factory.reject_proposal(p.id)
-        loaded = factory.get_proposal(p.id)
-        assert loaded.status == ProposalStatus.REJECTED
+        assert factory.get_proposal("missing") is None

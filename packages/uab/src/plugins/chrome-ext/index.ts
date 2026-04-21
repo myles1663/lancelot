@@ -28,6 +28,7 @@ const BROWSER_PROCESSES = new Set([
 export class ChromeExtPlugin implements FrameworkPlugin {
   readonly framework = 'browser' as const;
   readonly name = 'Chrome Extension Bridge';
+  readonly controlMethod = 'chrome-extension' as const;
 
   private wsServer: ExtensionWSServer;
   private connections: Map<number, ChromeExtConnection> = new Map();

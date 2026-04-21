@@ -23,6 +23,7 @@ import { runPSJsonInteractive } from '../../ps-exec.js';
 export class ElectronPlugin implements FrameworkPlugin {
   readonly framework = 'electron' as const;
   readonly name = 'Electron (CDP)';
+  readonly controlMethod = 'electron-cdp' as const;
 
   canHandle(app: DetectedApp): boolean {
     return app.framework === 'electron';

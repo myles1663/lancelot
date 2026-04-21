@@ -1,10 +1,14 @@
 import os
 import sys
 import json
+import logging
 from typing import Optional
 from cryptography.fernet import Fernet
 
 from security import AuditLogger
+
+
+logger = logging.getLogger(__name__)
 
 
 class SecretVault:
@@ -32,14 +36,16 @@ class SecretVault:
 
         # Priority 2: Existing key file
         if os.path.exists(self.key_file):
-            print("WARNING: Loading vault key from file. "
-                  "Set VAULT_ENCRYPTION_KEY env var for production use.")
+            logger.warning(
+                "Loading vault key from file. Set VAULT_ENCRYPTION_KEY env var for production use."
+            )
             with open(self.key_file, "rb") as f:
                 return f.read()
 
         # Priority 3: Generate new key
-        print("WARNING: Generating new vault key and saving to file. "
-              "Set VAULT_ENCRYPTION_KEY env var for production use.")
+        logger.warning(
+            "Generating new vault key and saving to file. Set VAULT_ENCRYPTION_KEY env var for production use."
+        )
         key = Fernet.generate_key()
         os.makedirs(self.data_dir, exist_ok=True)
         with open(self.key_file, "wb") as f:
@@ -49,8 +55,8 @@ class SecretVault:
         if sys.platform.startswith("linux"):
             try:
                 os.chmod(self.key_file, 0o600)
-            except OSError:
-                pass
+            except OSError as exc:
+                logger.warning("Failed to restrict vault key permissions on %s: %s", self.key_file, exc)
 
         return key
 
@@ -77,7 +83,7 @@ class SecretVault:
             self.audit_logger.log_event("VAULT_STORE", f"Secret stored: {name}")
             return True
         except Exception as e:
-            print(f"Vault store error: {e}")
+            logger.warning("Vault store error: %s", e)
             return False
 
     def retrieve(self, name: str) -> Optional[str]:
@@ -90,7 +96,7 @@ class SecretVault:
         try:
             return self.fernet.decrypt(encrypted.encode()).decode()
         except Exception as e:
-            print(f"Vault retrieve error: {e}")
+            logger.warning("Vault retrieve error: %s", e)
             return None
 
     def delete(self, name: str) -> bool:

@@ -112,6 +112,41 @@ def _save_persisted_state() -> None:
         logger.warning("Failed to save persisted flag state: %s", e)
 
 
+def get_persisted_flag_state(flag_name: str, default: bool | None = None) -> bool | None:
+    """Return the persisted override for a flag when one exists."""
+    return _persisted_state.get(flag_name, default)
+
+
+def persisted_flag_state_snapshot() -> dict[str, bool]:
+    """Return a copy of the persisted runtime overrides."""
+    return dict(_persisted_state)
+
+
+def set_persisted_flag_state(flag_name: str, value: bool | None) -> None:
+    """Set or clear a persisted override for a single flag."""
+    if value is None:
+        _persisted_state.pop(flag_name, None)
+    else:
+        _persisted_state[flag_name] = value
+    _save_persisted_state()
+
+
+def replace_persisted_flag_state(state: dict[str, bool]) -> None:
+    """Replace the persisted override snapshot in memory and on disk."""
+    _persisted_state.clear()
+    _persisted_state.update(state)
+    _save_persisted_state()
+
+
+def clear_persisted_flag_state(flag_name: str | None = None) -> None:
+    """Clear one persisted override or all persisted overrides."""
+    if flag_name is None:
+        _persisted_state.clear()
+    else:
+        _persisted_state.pop(flag_name, None)
+    _save_persisted_state()
+
+
 # Load persisted state on module import (before flags are initialized)
 _load_persisted_state()
 

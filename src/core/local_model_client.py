@@ -1,5 +1,5 @@
 """
-LocalModelClient — HTTP client for the local-llm utility service (Prompt 13).
+Local model client for the local utility service.
 
 Single-owner module providing high-level methods for the five utility tasks:
     classify_intent, extract_json, summarize, redact, rag_rewrite
@@ -25,11 +25,19 @@ import urllib.request
 import urllib.error
 from typing import Optional
 
+from src.core.outbound_http import LocalControlPlaneError, assert_local_control_url
 from local_models.lockfile import load_all_prompts
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_BASE_URL = "http://localhost:8080"
+_LOCAL_MODEL_ALLOWED_HOSTNAMES = frozenset({
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "host.docker.internal",
+    "local-llm",
+})
 
 
 class LocalModelError(Exception):
@@ -61,28 +69,48 @@ class LocalModelClient:
         template = self._get_prompts()[name]
         return template.format(**kwargs)
 
+    def _local_url(self, path: str) -> str:
+        url = f"{self._base_url}{path}"
+        return assert_local_control_url(
+            url,
+            component="Local utility model request",
+            allowed_hostnames=_LOCAL_MODEL_ALLOWED_HOSTNAMES,
+            allow_single_label_hostnames=True,
+        )
+
     # ------------------------------------------------------------------
     # Low-level HTTP
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _decode_http_error_body(exc: urllib.error.HTTPError) -> str:
+        """Best-effort HTTP error body decode with explicit observability."""
+        try:
+            return exc.read().decode("utf-8", errors="replace")
+        except Exception as decode_exc:
+            logger.warning(
+                "Failed to decode local model HTTP error body for %s: %s",
+                getattr(exc, "filename", "unknown"),
+                decode_exc,
+            )
+            return ""
+
     def _post(self, path: str, payload: dict, timeout: float = 30.0) -> dict:
         """POST JSON to the local-llm service and return parsed response."""
-        url = f"{self._base_url}{path}"
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-        )
         try:
+            url = self._local_url(path)
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/json"},
+            )
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
+        except LocalControlPlaneError as exc:
+            raise LocalModelError(str(exc)) from exc
         except urllib.error.HTTPError as exc:
-            body = ""
-            try:
-                body = exc.read().decode("utf-8", errors="replace")
-            except Exception:
-                pass
+            body = self._decode_http_error_body(exc)
             raise LocalModelError(
                 f"HTTP {exc.code} from {url}: {body}"
             ) from exc
@@ -95,17 +123,15 @@ class LocalModelClient:
 
     def _get(self, path: str, timeout: float = 10.0) -> dict:
         """GET from the local-llm service and return parsed response."""
-        url = f"{self._base_url}{path}"
-        req = urllib.request.Request(url)
         try:
+            url = self._local_url(path)
+            req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
+        except LocalControlPlaneError as exc:
+            raise LocalModelError(str(exc)) from exc
         except urllib.error.HTTPError as exc:
-            body = ""
-            try:
-                body = exc.read().decode("utf-8", errors="replace")
-            except Exception:
-                pass
+            body = self._decode_http_error_body(exc)
             raise LocalModelError(
                 f"HTTP {exc.code} from {url}: {body}"
             ) from exc
@@ -121,18 +147,48 @@ class LocalModelClient:
     # ------------------------------------------------------------------
 
     def health(self) -> dict:
-        """Return health status from the local-llm service.
+        """Return readiness status from the local-llm service.
 
-        Returns dict with keys: status, model, uptime_seconds.
-        Raises LocalModelError on failure.
+        Returns readiness metadata including loaded/ready state.
+        Raises LocalModelError only when the service is unreachable or
+        returns a non-JSON error body.
         """
-        return self._get("/health")
+        try:
+            url = self._local_url("/health")
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except LocalControlPlaneError as exc:
+            raise LocalModelError(str(exc)) from exc
+        except urllib.error.HTTPError as exc:
+            body = self._decode_http_error_body(exc)
+            if body:
+                try:
+                    parsed = json.loads(body)
+                except json.JSONDecodeError as parse_exc:
+                    logger.warning(
+                        "Local model health returned non-JSON HTTP error body from %s: %s",
+                        url,
+                        parse_exc,
+                    )
+                else:
+                    if isinstance(parsed, dict):
+                        return parsed
+            raise LocalModelError(
+                f"HTTP {exc.code} from {url}: {body}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise LocalModelError(
+                f"Connection failed to {url}: {exc.reason}"
+            ) from exc
+        except Exception as exc:
+            raise LocalModelError(f"Request failed: {exc}") from exc
 
     def is_healthy(self) -> bool:
-        """Quick health check — True if the service is up and model loaded."""
+        """Quick readiness check — True only when inference smoke has passed."""
         try:
             data = self.health()
-            return data.get("status") == "ok"
+            return data.get("ready") is True
         except LocalModelError:
             return False
 

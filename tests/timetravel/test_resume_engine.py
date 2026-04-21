@@ -515,17 +515,11 @@ class TestGetCurrentTrustTier:
         engine = ResumeEngine(svc, soul)
 
         mock_ledger = MagicMock()
-        mock_ledger.get_effective_tier.return_value = 2
+        mock_ledger.get_approval_tier.return_value = 2
 
-        mock_module = MagicMock()
-        mock_module.TrustLedger.return_value = mock_ledger
-
-        with patch.dict(
-            "sys.modules",
-            {"src.core.governance.trust_ledger": mock_module},
-        ):
-            tier = engine._get_current_trust_tier()
-            assert tier == 2
+        engine = ResumeEngine(svc, soul, trust_ledger=mock_ledger)
+        tier = engine._get_current_trust_tier()
+        assert tier == 2
 
     def test_defaults_to_t0_when_no_ledger(self):
         soul = _make_soul()

@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+﻿import { useState, useRef, useEffect, useCallback } from 'react'
 import { usePolling, usePageTitle } from '@/hooks'
 import {
   fetchOnboardingStatus,
+  fetchModelUsagePolicy,
   sendOnboardingCommand,
   onboardingBack,
   onboardingRestartStep,
@@ -12,27 +13,34 @@ import {
   shutdownContainer,
   fetchLogs,
   fetchVaultMasked,
+  fetchVaultStatus,
   deleteVaultKey,
   fetchTokens,
   revokeToken,
   clearReceipts,
   resetUsage,
   reloadConfig,
+  updateModelUsagePolicy,
   exportBackup,
   factoryReset,
   purgeMemory,
+  resetConnectorVault,
   resetFlags,
 } from '@/api'
 import { fetchReceiptStats } from '@/api/receipts'
 import { MetricCard, StatusDot, ConfirmDialog, EmptyState } from '@/components'
 import { formatTimestamp, formatUptime } from '@/utils/dateFormat'
+import { getErrorMessage } from '@/utils/errors'
+import { emitWarRoomNotification } from '@/utils/notifications'
 import type {
   SystemInfoResponse,
   VaultMaskedEntry,
+  VaultStatusResponse,
   ExecutionToken,
+  ModelUsagePolicyResponse,
 } from '@/types/api'
 
-// ── Tab definitions ─────────────────────────────────────────────
+// â”€â”€ Tab definitions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const TABS = [
   { id: 'system', label: 'System' },
@@ -43,7 +51,7 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]['id']
 
-// ── Section wrapper ─────────────────────────────────────────────
+// â”€â”€ Section wrapper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -56,7 +64,26 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-// ── Button helpers ──────────────────────────────────────────────
+function getVaultStatusState(
+  status: string,
+): 'healthy' | 'degraded' | 'error' | 'inactive' {
+  switch (status) {
+    case 'ready':
+      return 'healthy'
+    case 'empty':
+    case 'configured':
+      return 'inactive'
+    case 'key_mismatch':
+    case 'decryption_failed':
+    case 'missing_key':
+    case 'ephemeral_key':
+      return 'error'
+    default:
+      return 'degraded'
+  }
+}
+
+// â”€â”€ Button helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function ActionButton({
   label,
@@ -85,7 +112,7 @@ function ActionButton({
   )
 }
 
-// ── Main Component ──────────────────────────────────────────────
+// â”€â”€ Main Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export function SetupRecovery() {
   usePageTitle('Setup & Recovery')
@@ -137,6 +164,26 @@ function SystemTab() {
   })
   const [cmdResult, setCmdResult] = useState<string | null>(null)
   const [confirmAction, setConfirmAction] = useState<'restart' | 'shutdown' | null>(null)
+  const [modelPolicy, setModelPolicy] = useState<ModelUsagePolicyResponse | null>(null)
+  const [localExecutionMode, setLocalExecutionMode] = useState('low_risk_only')
+  const [frontierScrubMode, setFrontierScrubMode] = useState('required')
+  const [policySaving, setPolicySaving] = useState(false)
+  const [policyResult, setPolicyResult] = useState<string | null>(null)
+
+  const loadModelPolicy = useCallback(async () => {
+    const policy = await fetchModelUsagePolicy()
+    setModelPolicy(policy)
+    setLocalExecutionMode(policy.local_execution_mode)
+    setFrontierScrubMode(policy.frontier_scrub_mode)
+  }, [])
+
+  useEffect(() => {
+    loadModelPolicy().catch((error) => {
+      const message = getErrorMessage(error, 'Failed to load model usage policy.')
+      setPolicyResult(message)
+      emitWarRoomNotification(message, 'normal')
+    })
+  }, [loadModelPolicy])
 
   const runCommand = async (fn: () => Promise<{ response: string }>) => {
     const res = await fn()
@@ -149,9 +196,26 @@ function SystemTab() {
       if (confirmAction === 'restart') await restartContainer()
       if (confirmAction === 'shutdown') await shutdownContainer()
     } catch {
-      // Expected — connection will drop
+      // Expected â€” connection will drop
     } finally {
       setConfirmAction(null)
+    }
+  }
+
+  const handleSaveModelPolicy = async () => {
+    setPolicySaving(true)
+    setPolicyResult(null)
+    try {
+      const policy = await updateModelUsagePolicy({
+        local_execution_mode: localExecutionMode,
+        frontier_scrub_mode: frontierScrubMode,
+      })
+      setModelPolicy(policy)
+      setPolicyResult('Model usage policy saved.')
+    } catch {
+      setPolicyResult('Failed to save model usage policy.')
+    } finally {
+      setPolicySaving(false)
     }
   }
 
@@ -198,55 +262,232 @@ function SystemTab() {
         {!onboarding ? (
           <p className="text-sm text-text-muted">Loading...</p>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <div>
-              <span className="text-[10px] uppercase tracking-wider text-text-muted">State</span>
-              <div className="mt-1">
-                <StatusDot
-                  state={onboarding.is_ready ? 'healthy' : 'degraded'}
-                  label={onboarding.state}
-                />
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+              <div>
+                <span className="text-[10px] uppercase tracking-wider text-text-muted">State</span>
+                <div className="mt-1">
+                  <StatusDot
+                    state={onboarding.is_ready ? 'healthy' : 'degraded'}
+                    label={onboarding.state}
+                  />
+                </div>
+              </div>
+              <div>
+                <span className="text-[10px] uppercase tracking-wider text-text-muted">Provider</span>
+                <p className="text-sm font-mono text-text-primary mt-1">
+                  {onboarding.flagship_provider || 'None'}
+                </p>
+              </div>
+              <div>
+                <span className="text-[10px] uppercase tracking-wider text-text-muted">Mode</span>
+                <p className="text-sm font-mono text-text-primary mt-1">
+                  {(onboarding.provider_mode || 'sdk').toUpperCase()}
+                </p>
+              </div>
+              <div>
+                <span className="text-[10px] uppercase tracking-wider text-text-muted">
+                  Credentials
+                </span>
+                <p className="text-sm font-mono text-text-primary mt-1">
+                  {onboarding.credential_status}
+                </p>
+              </div>
+              <div>
+                <span className="text-[10px] uppercase tracking-wider text-text-muted">
+                  Local Model Install
+                </span>
+                <p className="text-sm font-mono text-text-primary mt-1">
+                  {onboarding.local_model_status}
+                </p>
               </div>
             </div>
-            <div>
-              <span className="text-[10px] uppercase tracking-wider text-text-muted">Provider</span>
-              <p className="text-sm font-mono text-text-primary mt-1">
-                {onboarding.flagship_provider || 'None'}
-              </p>
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="p-3 bg-surface-card-elevated rounded-md">
+                <span className="text-[10px] uppercase tracking-wider text-text-muted">
+                  Runtime State
+                </span>
+                <div className="mt-2">
+                  <StatusDot
+                    state={
+                      onboarding.local_model_runtime_ready
+                        ? 'healthy'
+                        : onboarding.local_model_runtime_loaded
+                          ? 'degraded'
+                          : 'inactive'
+                    }
+                    label={onboarding.local_model_runtime_status || 'unknown'}
+                  />
+                </div>
+              </div>
+              <div className="p-3 bg-surface-card-elevated rounded-md">
+                <span className="text-[10px] uppercase tracking-wider text-text-muted">
+                  Last Verified
+                </span>
+                <p className="text-xs font-mono text-text-primary mt-2">
+                  {onboarding.local_model_last_verified_at
+                    ? formatTimestamp(onboarding.local_model_last_verified_at)
+                    : '--'}
+                </p>
+              </div>
+              <div className="p-3 bg-surface-card-elevated rounded-md">
+                <span className="text-[10px] uppercase tracking-wider text-text-muted">
+                  Last Smoke
+                </span>
+                <p className="text-xs font-mono text-text-primary mt-2">
+                  {onboarding.local_model_last_smoke_elapsed_ms != null
+                    ? `${onboarding.local_model_last_smoke_elapsed_ms} ms`
+                    : '--'}
+                </p>
+              </div>
+              <div className="p-3 bg-surface-card-elevated rounded-md">
+                <span className="text-[10px] uppercase tracking-wider text-text-muted">
+                  Failure Count
+                </span>
+                <p className="text-sm font-mono text-text-primary mt-2">
+                  {onboarding.local_model_consecutive_failures ?? 0}
+                </p>
+              </div>
             </div>
-            <div>
-              <span className="text-[10px] uppercase tracking-wider text-text-muted">Mode</span>
-              <p className="text-sm font-mono text-text-primary mt-1">
-                {(onboarding.provider_mode || 'sdk').toUpperCase()}
-              </p>
-            </div>
-            <div>
-              <span className="text-[10px] uppercase tracking-wider text-text-muted">
-                Credentials
-              </span>
-              <p className="text-sm font-mono text-text-primary mt-1">
-                {onboarding.credential_status}
-              </p>
-            </div>
-            <div>
-              <span className="text-[10px] uppercase tracking-wider text-text-muted">
-                Local Model
-              </span>
-              <p className="text-sm font-mono text-text-primary mt-1">
-                {onboarding.local_model_status}
-              </p>
-            </div>
-          </div>
+            {onboarding.local_model_last_error && (
+              <div className="mt-4 p-3 bg-state-error/10 border border-state-error/30 rounded">
+                <span className="text-xs font-semibold text-state-error">
+                  Local runtime not ready
+                </span>
+                <p className="text-xs text-text-secondary mt-1">
+                  {onboarding.local_model_last_error}
+                </p>
+              </div>
+            )}
+          </>
         )}
         {onboarding?.cooldown_active && (
           <div className="mt-4 p-3 bg-state-degraded/10 border border-state-degraded/30 rounded">
             <span className="text-xs font-semibold text-state-degraded">
-              Cooldown Active — {Math.round(onboarding.cooldown_remaining)}s remaining
+              Cooldown Active â€” {Math.round(onboarding.cooldown_remaining)}s remaining
             </span>
             {onboarding.last_error && (
               <p className="text-xs text-text-secondary mt-1">{onboarding.last_error}</p>
             )}
           </div>
+        )}
+      </Section>
+
+      <Section title="Local Model Usage Policy">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-[10px] uppercase tracking-wider text-text-muted mb-1">
+              Local Execution
+            </label>
+            <select
+              value={localExecutionMode}
+              onChange={(e) => setLocalExecutionMode(e.target.value)}
+              className="w-full text-sm bg-surface-input border border-border-default rounded-md px-3 py-2 text-text-primary"
+            >
+              <option value="low_risk_only">Low-Risk Only</option>
+              <option value="disabled">Disabled</option>
+            </select>
+            <p className="text-xs text-text-muted mt-2">
+              Uses the installed local model only for low-risk utility tasks to save frontier tokens. It is not a replacement for frontier reasoning.
+            </p>
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase tracking-wider text-text-muted mb-1">
+              Frontier Scrubbing
+            </label>
+            <select
+              value={frontierScrubMode}
+              onChange={(e) => setFrontierScrubMode(e.target.value)}
+              className="w-full text-sm bg-surface-input border border-border-default rounded-md px-3 py-2 text-text-primary"
+            >
+              <option value="required">Required</option>
+              <option value="preferred">Preferred With Fallback</option>
+              <option value="disabled">Disabled</option>
+            </select>
+            <p className="text-xs text-text-muted mt-2">
+              Controls whether frontier-bound content must be scrubbed locally first or may fall back to direct frontier egress.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+          <div className="p-3 bg-surface-card-elevated rounded-md">
+            <span className="text-[10px] uppercase tracking-wider text-text-muted">Execution Available</span>
+            <p className="text-sm font-mono text-text-primary mt-1">
+              {modelPolicy?.local_execution_available ? 'yes' : 'no'}
+            </p>
+          </div>
+          <div className="p-3 bg-surface-card-elevated rounded-md">
+            <span className="text-[10px] uppercase tracking-wider text-text-muted">Scrub Available</span>
+            <p className="text-sm font-mono text-text-primary mt-1">
+              {modelPolicy?.local_scrub_available ? 'yes' : 'no'}
+            </p>
+          </div>
+          <div className="p-3 bg-surface-card-elevated rounded-md">
+            <span className="text-[10px] uppercase tracking-wider text-text-muted">Fallback Count</span>
+            <p className="text-sm font-mono text-text-primary mt-1">
+              {modelPolicy?.frontier_scrub_fallback_count ?? 0}
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
+          <div className="p-3 bg-surface-card-elevated rounded-md">
+            <span className="text-[10px] uppercase tracking-wider text-text-muted">Loaded</span>
+            <p className="text-sm font-mono text-text-primary mt-1">
+              {modelPolicy?.local_model_loaded ? 'yes' : 'no'}
+            </p>
+          </div>
+          <div className="p-3 bg-surface-card-elevated rounded-md">
+            <span className="text-[10px] uppercase tracking-wider text-text-muted">Ready</span>
+            <p className="text-sm font-mono text-text-primary mt-1">
+              {modelPolicy?.local_model_ready ? 'yes' : 'no'}
+            </p>
+          </div>
+          <div className="p-3 bg-surface-card-elevated rounded-md">
+            <span className="text-[10px] uppercase tracking-wider text-text-muted">Last Verified</span>
+            <p className="text-xs font-mono text-text-primary mt-1">
+              {modelPolicy?.local_model_last_verified_at
+                ? formatTimestamp(modelPolicy.local_model_last_verified_at)
+                : '--'}
+            </p>
+          </div>
+          <div className="p-3 bg-surface-card-elevated rounded-md">
+            <span className="text-[10px] uppercase tracking-wider text-text-muted">Failure Count</span>
+            <p className="text-sm font-mono text-text-primary mt-1">
+              {modelPolicy?.local_model_consecutive_failures ?? 0}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-3">
+          <p className="text-xs text-text-muted">
+            {modelPolicy?.availability_reason || 'Local model status unavailable.'}
+          </p>
+          {modelPolicy?.local_model_last_error && (
+            <p className="text-xs text-state-error mt-1">
+              Last readiness error: {modelPolicy.local_model_last_error}
+            </p>
+          )}
+          {modelPolicy?.frontier_scrub_fallback_active && (
+            <p className="text-xs text-state-degraded mt-1">
+              Frontier scrub fallback active: {modelPolicy.last_frontier_scrub_fallback_reason || 'local scrubbing unavailable'}
+            </p>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between mt-4">
+          <p className="text-xs text-text-muted">
+            Privacy fallback can never be silent. Preferred mode records and surfaces every frontier scrub fallback.
+          </p>
+          <ActionButton
+            label="Save Policy"
+            onClick={handleSaveModelPolicy}
+            loading={policySaving}
+          />
+        </div>
+        {policyResult && (
+          <p className="text-xs text-text-secondary mt-3">{policyResult}</p>
         )}
       </Section>
 
@@ -300,6 +541,10 @@ function SystemTab() {
 // ================================================================
 
 function DataTab() {
+  const { data: vaultStatus, refetch: refetchVaultStatus } = usePolling<VaultStatusResponse>({
+    fetcher: fetchVaultStatus,
+    interval: 30000,
+  })
   const { data: vaultData, refetch: refetchVault } = usePolling({
     fetcher: fetchVaultMasked,
     interval: 30000,
@@ -322,6 +567,7 @@ function DataTab() {
     try {
       await deleteVaultKey(deleteConfirm)
       refetchVault()
+      refetchVaultStatus()
     } finally {
       setDeleteConfirm(null)
     }
@@ -352,10 +598,75 @@ function DataTab() {
 
   return (
     <>
+      <Section title="Connector Vault Health">
+        {!vaultStatus ? (
+          <p className="text-sm text-text-muted">Loading...</p>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center gap-3">
+              <StatusDot
+                state={getVaultStatusState(vaultStatus.status)}
+                label={vaultStatus.status.replace(/_/g, ' ')}
+              />
+              <span className="text-sm text-text-secondary">{vaultStatus.message}</span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+              <div className="p-3 bg-surface-card-elevated rounded-md">
+                <span className="text-[10px] uppercase tracking-wider text-text-muted">Key Source</span>
+                <p className="text-sm font-mono text-text-primary mt-1">
+                  {vaultStatus.key_origin} / {vaultStatus.key_source}
+                </p>
+              </div>
+              <div className="p-3 bg-surface-card-elevated rounded-md">
+                <span className="text-[10px] uppercase tracking-wider text-text-muted">Key Id</span>
+                <p className="text-sm font-mono text-text-primary mt-1">
+                  {vaultStatus.key_id ? vaultStatus.key_id.slice(0, 16) : '--'}
+                </p>
+              </div>
+              <div className="p-3 bg-surface-card-elevated rounded-md">
+                <span className="text-[10px] uppercase tracking-wider text-text-muted">Vault Files</span>
+                <p className="text-sm font-mono text-text-primary mt-1">
+                  primary={vaultStatus.has_primary ? 'yes' : 'no'} backup={vaultStatus.has_backup ? 'yes' : 'no'}
+                </p>
+              </div>
+              <div className="p-3 bg-surface-card-elevated rounded-md">
+                <span className="text-[10px] uppercase tracking-wider text-text-muted">Entries</span>
+                <p className="text-sm font-mono text-text-primary mt-1">
+                  {vaultStatus.available ? vaultStatus.entry_count : '--'}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 text-[11px] text-text-muted space-y-1">
+              <p className="font-mono">Primary: {vaultStatus.primary_path}</p>
+              <p className="font-mono">Backup: {vaultStatus.backup_path}</p>
+              <p className="font-mono">Metadata: {vaultStatus.metadata_path}</p>
+              <p className="font-mono">Reset Archives: {vaultStatus.reset_backups_path}</p>
+            </div>
+            {(vaultStatus.last_error || vaultStatus.suspected_key_mismatch) && (
+              <div className="mt-4 p-3 bg-state-error/10 border border-state-error/30 rounded">
+                <span className="text-xs font-semibold text-state-error">
+                  Operator Attention Required
+                </span>
+                <p className="text-xs text-text-secondary mt-1">
+                  {vaultStatus.suspected_key_mismatch
+                    ? 'The configured vault key does not match the key id recorded for the encrypted vault.'
+                    : vaultStatus.last_error}
+                </p>
+              </div>
+            )}
+          </>
+        )}
+      </Section>
+
       {/* Vault Credentials */}
       <Section title="Vault Credentials">
-        {!vaultData ? (
+        {!vaultData || !vaultStatus ? (
           <p className="text-sm text-text-muted">Loading...</p>
+        ) : !vaultStatus.available ? (
+          <EmptyState
+            title="Vault Unavailable"
+            description={vaultStatus.message}
+          />
         ) : vaultData.keys.length === 0 ? (
           <EmptyState title="No Credentials" description="No credentials stored in the vault." />
         ) : (
@@ -620,6 +931,12 @@ function LogsConfigTab() {
 // ================================================================
 
 function DangerTab() {
+  const { data: vaultStatus } = usePolling<VaultStatusResponse>({
+    fetcher: fetchVaultStatus,
+    interval: 15000,
+  })
+  const [connectorVaultResetConfirm, setConnectorVaultResetConfirm] = useState(false)
+  const [connectorVaultResetText, setConnectorVaultResetText] = useState('')
   const [factoryResetConfirm, setFactoryResetConfirm] = useState(false)
   const [factoryResetText, setFactoryResetText] = useState('')
   const [purgeConfirm, setPurgeConfirm] = useState(false)
@@ -640,6 +957,29 @@ function DangerTab() {
       setActionLoading(false)
       setFactoryResetConfirm(false)
       setFactoryResetText('')
+    }
+  }
+
+  const handleConnectorVaultReset = async () => {
+    if (connectorVaultResetText !== 'RESET CONNECTOR VAULT') return
+    setActionLoading(true)
+    try {
+      const res = await resetConnectorVault('RESET CONNECTOR VAULT')
+      setActionResult(res.message || 'Connector vault reset initiated')
+    } catch (e) {
+      const message = getErrorMessage(
+        e,
+        'Connector vault reset may already be in progress. The container could be restarting.',
+      )
+      if (message.toLowerCase().includes('failed to fetch')) {
+        setActionResult('Connector vault reset initiated. The container is restarting.')
+      } else {
+        setActionResult(message)
+      }
+    } finally {
+      setActionLoading(false)
+      setConnectorVaultResetConfirm(false)
+      setConnectorVaultResetText('')
     }
   }
 
@@ -693,6 +1033,36 @@ function DangerTab() {
           These actions are destructive and cannot be undone. Proceed with caution.
         </p>
       </div>
+
+      {/* Reset Connector Vault */}
+      <section className="bg-surface-card border-2 border-state-error/20 rounded-lg p-4 mb-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h4 className="text-sm font-medium text-text-primary">Reset Connector Vault</h4>
+            <p className="text-xs text-text-secondary mt-1">
+              Archive the encrypted connector vault, clear stale in-memory credentials, and restart
+              the container. Use this when the vault failed closed and the stored ciphertext can no
+              longer be decrypted.
+            </p>
+            {vaultStatus && (
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <StatusDot
+                  state={getVaultStatusState(vaultStatus.status)}
+                  label={vaultStatus.status.replace(/_/g, ' ')}
+                />
+                <span className="text-[11px] text-text-muted font-mono">
+                  {vaultStatus.message}
+                </span>
+              </div>
+            )}
+          </div>
+          <ActionButton
+            label="Reset Connector Vault"
+            variant="destructive"
+            onClick={() => setConnectorVaultResetConfirm(true)}
+          />
+        </div>
+      </section>
 
       {/* Factory Reset */}
       <section className="bg-surface-card border-2 border-state-error/20 rounded-lg p-4 mb-4">
@@ -771,7 +1141,51 @@ function DangerTab() {
         </Section>
       )}
 
-      {/* Factory Reset — Custom Confirm Dialog with typed input */}
+      {/* Reset Connector Vault â€” Custom Confirm Dialog with typed input */}
+      {connectorVaultResetConfirm && (
+        <dialog
+          open
+          className="fixed inset-0 z-50 flex items-center justify-center bg-transparent"
+          style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}
+        >
+          <div className="bg-surface-card-elevated border border-state-error/30 rounded-lg p-6 max-w-md w-full shadow-xl">
+            <h3 className="text-lg font-semibold text-state-error">Reset Connector Vault</h3>
+            <p className="text-sm text-text-secondary mt-2">
+              This archives the current encrypted vault artifacts under the reset backup directory
+              and immediately restarts the container so stale in-memory credentials are gone. Type{' '}
+              <span className="font-mono font-bold text-state-error">RESET CONNECTOR VAULT</span>{' '}
+              to confirm.
+            </p>
+            <input
+              type="text"
+              value={connectorVaultResetText}
+              onChange={(e) => setConnectorVaultResetText(e.target.value)}
+              placeholder="Type RESET CONNECTOR VAULT"
+              className="w-full mt-4 px-3 py-2 text-sm bg-surface-input border border-border-default rounded-md text-text-primary font-mono focus:outline-none focus:border-state-error"
+            />
+            <div className="flex justify-end gap-3 mt-4">
+              <button
+                onClick={() => {
+                  setConnectorVaultResetConfirm(false)
+                  setConnectorVaultResetText('')
+                }}
+                className="px-4 py-2 text-sm text-text-secondary bg-surface-input border border-border-default rounded-md hover:bg-surface-card transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConnectorVaultReset}
+                disabled={connectorVaultResetText !== 'RESET CONNECTOR VAULT' || actionLoading}
+                className="px-4 py-2 text-sm font-medium rounded-md bg-state-error hover:bg-state-error/80 text-white transition-colors disabled:opacity-50"
+              >
+                {actionLoading ? 'Resetting...' : 'Reset Connector Vault'}
+              </button>
+            </div>
+          </div>
+        </dialog>
+      )}
+
+      {/* Factory Reset â€” Custom Confirm Dialog with typed input */}
       {factoryResetConfirm && (
         <dialog
           open

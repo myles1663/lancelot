@@ -113,7 +113,7 @@ class CostReporter:
             try:
                 await self._task
             except asyncio.CancelledError:
-                pass
+                logger.debug("Cost reporter background task cancelled during stop")
             self._task = None
         logger.info("Cost reporter stopped")
 

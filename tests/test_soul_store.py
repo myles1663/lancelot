@@ -134,22 +134,42 @@ class TestSoulModel:
 class TestRealSoulDirectory:
 
     def test_load_real_soul_v1(self):
-        """Load the actual soul.yaml shipped with the repo."""
-        real_soul_dir = str(Path(__file__).parent.parent / "soul")
-        soul = load_active_soul(real_soul_dir)
+        """The canonical shipped v1 soul artifact remains schema-valid."""
+        canonical_soul_path = (
+            Path(__file__).parent.parent
+            / "soul"
+            / "soul_versions"
+            / "soul_v1.yaml"
+        )
+        soul = Soul(**yaml.safe_load(canonical_soul_path.read_text(encoding="utf-8")))
         assert soul.version == "v1"
         assert soul.mission
         assert soul.allegiance
 
-    def test_real_soul_has_risk_rules(self):
+    def test_load_real_active_soul(self):
+        """The live ACTIVE pointer resolves to an installed soul version."""
         real_soul_dir = str(Path(__file__).parent.parent / "soul")
         soul = load_active_soul(real_soul_dir)
+        assert soul.version
+        assert soul.mission
+        assert soul.allegiance
+
+    def test_real_soul_has_risk_rules(self):
+        canonical_soul_path = (
+            Path(__file__).parent.parent
+            / "soul"
+            / "soul_versions"
+            / "soul_v1.yaml"
+        )
+        soul = Soul(**yaml.safe_load(canonical_soul_path.read_text(encoding="utf-8")))
         assert len(soul.risk_rules) >= 1
 
     def test_real_active_pointer(self):
         real_soul_dir = str(Path(__file__).parent.parent / "soul")
         version = get_active_version(real_soul_dir)
-        assert version == "v1"
+        assert version
+        version_file = Path(real_soul_dir) / "soul_versions" / f"soul_{version}.yaml"
+        assert version_file.exists()
 
     def test_real_versions_list(self):
         real_soul_dir = str(Path(__file__).parent.parent / "soul")
@@ -162,6 +182,11 @@ class TestRealSoulDirectory:
 # ===================================================================
 
 class TestGetActiveVersion:
+    def test_uses_env_soul_dir_when_arg_missing(self, tmp_path, monkeypatch):
+        soul_dir = _write_soul_dir(tmp_path, active="v1\n")
+        monkeypatch.setenv("SOUL_DIR", soul_dir)
+
+        assert get_active_version() == "v1"
 
     def test_reads_active_pointer(self, tmp_path):
         soul_dir = _write_soul_dir(tmp_path, active="v1\n")
@@ -217,10 +242,11 @@ class TestListVersions:
             "v1": _minimal_soul_dict(version="v1"),
             "v3": _minimal_soul_dict(version="v3"),
             "v2": _minimal_soul_dict(version="v2"),
+            "v10": _minimal_soul_dict(version="v10"),
         }
         soul_dir = _write_soul_dir(tmp_path, versions=versions, active="v1\n")
         result = list_versions(soul_dir)
-        assert result == ["v1", "v2", "v3"]
+        assert result == ["v1", "v2", "v3", "v10"]
 
     def test_ignores_non_soul_files(self, tmp_path):
         soul_dir = _write_soul_dir(tmp_path)

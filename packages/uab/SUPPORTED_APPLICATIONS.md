@@ -8,7 +8,7 @@ Documented results from real-world testing. Every entry below reflects actual UA
 
 - **OS:** Windows 10/11 (64-bit)
 - **Node.js:** 18+
-- **UAB Version:** 1.0.0
+- **UAB Version:** 1.3.0
 - **Test Method:** Live agent-driven operations via CLI and programmatic API
 
 ---
@@ -36,16 +36,24 @@ Documented results from real-world testing. Every entry below reflects actual UA
 | Click buttons | UIA | ✅ Verified | Ribbon buttons, dialog buttons |
 | Keyboard shortcuts | UIA `SendKeys` | ✅ Verified | Ctrl+S, Ctrl+Z, etc. |
 
-### Performance Benchmark
+### Capability Proof Surface
 
-> **35 seconds** — Time to create a complete Excel workbook with:
-> - Data population across multiple sheets
-> - Pivot table with row/column/value fields
-> - Chart (bar chart with formatted axes)
-> - Conditional formatting (color scales + data bars)
-> - Cell styling (fonts, colors, borders, number formats)
->
-> All performed autonomously by an AI agent through UAB.
+The Excel control surface in this repo includes explicit Office automation code paths for:
+
+- Data population across multiple sheets
+- Pivot tables with row/column/value fields
+- Charts with formatted axes
+- Conditional formatting (color scales and data bars)
+- Cell styling (fonts, colors, borders, number formats)
+
+The current repo proves these capabilities through the Office automation implementation, an end-to-end workbook benchmark harness, and CLI/server entrypoints that can probe Excel COM availability, build a workbook artifact on demand, and persist a JSON proof manifest alongside the saved workbook:
+
+```bash
+uab excel-probe
+uab excel-benchmark --rows 2000 --output data/uab-benchmarks/demo.xlsx --manifest data/uab-benchmarks/demo.benchmark.json
+```
+
+The benchmark harness creates a workbook, writes synthetic data, builds a pivot table, adds a chart, applies conditional formatting, saves the workbook, inspects the saved `.xlsx` package directly on disk for pivot/chart/conditional-formatting parts, computes the workbook SHA-256, and writes a JSON manifest with host metadata, probe status, elapsed time, and persisted-artifact verification details. The exact duration still depends on host machine performance and local Excel availability.
 
 ---
 

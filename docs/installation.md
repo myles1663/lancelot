@@ -68,6 +68,8 @@ You need an API key from at least one provider:
 
 You can configure one or more providers. Lancelot routes between them based on task complexity and provider availability. API keys can be rotated from the War Room UI without restarting the container.
 
+For `openai-codex`, the preferred production path is not an API key. Sign in with the Codex CLI on the host first so `~/.codex/auth.json` exists and can be mounted into the container. During onboarding, selecting Codex now checks for that mounted auth file first and proceeds immediately when it is present. Browser OAuth remains available only as a fallback when mounted Codex auth is missing.
+
 ---
 
 ## Docker Compose (Recommended)
@@ -79,7 +81,7 @@ Docker Compose is the primary and recommended deployment method. It runs two con
 | `lancelot_core` | 8000 | FastAPI gateway, API endpoints, War Room React SPA |
 | `lancelot_local_llm` | 8080 | Local GGUF model inference server |
 
-Both containers communicate on an internal bridge network (`lancelot_net`). The core container depends on the local LLM being healthy before starting.
+Both containers communicate on an internal bridge network (`lancelot_net`). The core container depends on the local LLM readiness probe before starting. That probe now requires a real local inference smoke, not just "model loaded."
 
 > **Production note:** installation success is not the same as production readiness. Before go-live, run the auth, runtime-control, federation, A2A, and compliance checks in the [Production Hardening Guide](production-hardening.md).
 
@@ -110,11 +112,40 @@ The installer handles:
 | Flag | Description |
 |------|-------------|
 | `-d, --directory <path>` | Install location (default: `./lancelot`) |
-| `--provider <name>` | Pre-select: `gemini`, `openai`, `anthropic`, or `xai` |
-| `--skip-model` | Skip the local model download |
+| `--provider <name>` | Pre-select: `gemini`, `openai`, `anthropic`, `xai`, or `nvidia` |
 | `--resume` | Resume an interrupted installation |
 
 When the installer finishes, it automatically opens the **War Room** in your default browser at `http://localhost:8000`.
+
+The repo's installer-owned smoke coverage now exercises the live CLI entrypoint plus the real clone/configure/build/start/health/host-agent code paths against a local harness, so the "one-command installer" claim is backed by the actual installer modules rather than only fixture-only flows.
+
+### Fresh-Machine Proof Bundle
+
+If you need due-diligence evidence from a real clean-host install, collect it immediately after the installer finishes:
+
+```bash
+cd /path/to/installed/lancelot
+node installer/scripts/collect-install-proof.mjs \
+  --install-dir . \
+  --output-dir ./installer-proof
+```
+
+The collector emits:
+
+- `installer-proof/installer-proof.json` - machine-readable artifact manifest, host details, command versions, health checks, and file hashes
+- `installer-proof/installer-proof.md` - human-readable checklist for reviewers
+- `installer-proof/sanitized.env` - redacted environment snapshot with secrets removed
+
+The proof collector checks:
+
+- generated `.env`
+- patched `docker-compose.yml`
+- onboarding snapshot and `USER.md`
+- presence and hashes of downloaded model weights
+- `/health`, `/health/live`, `/health/ready`, and Host Agent health
+- local `git`, `docker`, and `docker compose` command availability
+
+Use `--allow-partial` only when you need to gather a bundle from a degraded host for troubleshooting; for a real installer proof run, let the collector fail if required evidence is missing.
 
 ---
 
@@ -135,7 +166,13 @@ cd lancelot
 cp config/models.example.yaml config/models.yaml
 ```
 
-Create a `.env` file in the project root with your configuration:
+Start from the canonical template in the project root:
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env` with your environment-specific values:
 
 ```ini
 # LLM Provider (gemini, openai, anthropic, xai, or nvidia)
@@ -147,15 +184,21 @@ GEMINI_API_KEY=your-key-here
 # ANTHROPIC_API_KEY=your-key-here
 # XAI_API_KEY=your-key-here
 
+# Optional Gemini ADC / OAuth bootstrap
+# Only set this if you explicitly want Google ADC instead of an API key.
+# LANCELOT_AUTH_MODE=OAUTH
+
 # Security Tokens (auto-generated during onboarding if omitted)
 # LANCELOT_OWNER_TOKEN=
 # LANCELOT_API_TOKEN=
 # LANCELOT_VAULT_KEY=
+# Development-only vault escape hatch (do not enable in production)
+# LANCELOT_ALLOW_EPHEMERAL_VAULT=false
 
 # War Room authentication
 # Choose exactly one model:
 # LANCELOT_AUTH_PROVIDER=local
-# WARROOM_USERNAME=admin
+# WARROOM_USERNAME=choose-an-operator-username
 # WARROOM_PASSWORD=choose-a-strong-password
 # WARROOM_PASSWORD_RESET_CODE=store-this-reset-code-securely
 
@@ -165,12 +208,17 @@ GEMINI_API_KEY=your-key-here
 # OIDC_CLIENT_SECRET=your-client-secret
 # OIDC_REDIRECT_URI=http://localhost:8000/auth/oidc/callback
 # OIDC_ALLOWED_GROUPS=lancelot-admins,lancelot-operators
+# OIDC_ALLOW_ANY_AUTHENTICATED=false
+# Set OIDC_ALLOW_ANY_AUTHENTICATED=true only when you explicitly intend to
+# allow any authenticated OIDC user into the War Room.
 
 # Local model settings
 LOCAL_LLM_URL=http://local-llm:8080
 LOCAL_MODEL_CTX=4096
 LOCAL_MODEL_THREADS=4
 LOCAL_MODEL_GPU_LAYERS=0
+LOCAL_LLM_WHEEL_VARIANT=cpu
+LOCAL_LLM_WHEEL_VERSION=0.3.19
 
 # Logging
 LANCELOT_LOG_LEVEL=INFO
@@ -188,7 +236,7 @@ FEATURE_LOCAL_AGENTIC=true
 
 ### 3. Download the local model
 
-The local model handles routine tasks (classification, summarization, PII redaction) without sending data to cloud APIs. See [Local Model Setup](#local-model-setup) for details.
+The local model is always installed as part of the supported deployment shape. It handles low-risk utility work and local frontier scrubbing based on the admin policy you set after install. See [Local Model Setup](#local-model-setup) for details.
 
 ### 4. Configure GPU (if available)
 
@@ -196,6 +244,7 @@ If you have an NVIDIA GPU, edit `.env` to offload model layers:
 
 ```ini
 LOCAL_MODEL_GPU_LAYERS=15
+LOCAL_LLM_WHEEL_VARIANT=cu123
 ```
 
 The `docker-compose.yml` already includes GPU configuration. If you do **not** have an NVIDIA GPU, remove or comment out the `deploy` section under `local-llm`:
@@ -238,7 +287,7 @@ lancelot_local_llm  | INFO:     Model loaded successfully
 .\launch.ps1           # PowerShell (Windows)
 ```
 
-Or open `http://localhost:8000` manually. The in-app onboarding will guide you through any remaining configuration, including provider selection, API key validation, comms setup, security tokens, and War Room auth model selection.
+Or open `http://localhost:8000` manually. The in-app onboarding will guide you through any remaining configuration, including provider selection, API key validation, comms setup, security tokens, and War Room auth model selection. If you choose `OpenAI Codex (Pro)`, onboarding now prefers mounted host Codex auth at `~/.codex/auth.json`; complete host Codex sign-in before launching if you want to avoid the browser OAuth fallback.
 
 ### 7. Verify
 
@@ -267,6 +316,14 @@ Running without Docker is supported but **not recommended**. Docker provides the
 pip install -r requirements.txt
 ```
 
+This installs the main Lancelot API/runtime environment. The local model service is a separate Python runtime and does **not** come from the root `requirements.txt`.
+
+If you need the test toolchain in a legacy pip workflow, install:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
 ### Start the API server
 
 ```bash
@@ -278,9 +335,29 @@ PYTHONPATH=src/core:src/ui:src/agents:src/memory:src/shared:src/integrations:src
 
 ```bash
 cd local_models
-pip install llama-cpp-python>=0.2.0
+pip install -r requirements-llm.txt
 python server.py
 ```
+
+#### Windows local-model note
+
+On Windows, `llama-cpp-python` should not be installed through the root project sync path. Use one of these explicit local-model install paths instead:
+
+- CPU / no NVIDIA acceleration:
+
+```bash
+pip install --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu "llama-cpp-python==0.3.19"
+```
+
+- NVIDIA CUDA 12.3 acceleration:
+
+```bash
+pip install --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu123 "llama-cpp-python==0.3.19"
+```
+
+If you skip the wheel index on Windows, `pip` / `uv` will fall back to a native source build and require Visual Studio C++ Build Tools, `nmake`, CMake, and a configured MSVC toolchain.
+
+For the Docker local-model service, the repo now builds the CPU wheel by default. Opt into CUDA explicitly with `LOCAL_LLM_WHEEL_VARIANT=cu123` only after validating that the host can complete local inference smoke reliably.
 
 ### Environment variables
 
@@ -291,7 +368,7 @@ export LOCAL_LLM_URL=http://localhost:8080
 export FEATURE_TOOLS_HOST_EXECUTION=true
 ```
 
-**Security warning:** Without Docker, tool execution runs directly on your host machine. The `FEATURE_TOOLS_HOST_EXECUTION=true` flag is required, but bypasses the Docker sandbox. All workspace boundary enforcement and command denylists still apply, but there is no container isolation.
+**Security warning:** Without Docker, tool execution runs directly on your host machine. The `FEATURE_TOOLS_HOST_EXECUTION=true` flag is required, but bypasses the Docker sandbox. All workspace boundary enforcement and command denylists still apply, command `cwd` is constrained to the configured workspace, and host execution now uses direct subprocess argument invocation instead of a generic host shell. There is still no container isolation.
 
 ---
 
@@ -352,17 +429,19 @@ LOCAL_MODEL_CTX=2048     # Lower memory usage
 LOCAL_MODEL_CTX=8192     # More context (needs more RAM/VRAM)
 ```
 
-### Running without a local model
+### Local model usage policy
 
-Lancelot works without the local model — it routes all tasks (including classification and redaction) to cloud APIs. This means:
+The local model is installed on every supported instance. What changes is how the runtime uses it:
 
-- Higher API costs (routine tasks use cloud tokens)
-- PII redaction happens via cloud APIs (data leaves your machine)
-- Slightly higher latency for classification tasks
+- `local_execution_mode`
+  - `low_risk_only`: use the local model for bounded low-risk utility work to reduce frontier token usage
+  - `disabled`: do not use the local model for utility execution
+- `frontier_scrub_mode`
+  - `required`: frontier-bound content must be scrubbed locally first; if local scrubbing is unavailable or the local scrub output still contains detectable structured PII, the request is blocked
+  - `preferred`: use local scrubbing when available; if unavailable, allow direct frontier egress and record degraded privacy mode
+  - `disabled`: do not require local scrubbing before frontier egress
 
-Without the local model, Lancelot loses the live frontier scrub boundary. User prompts and tool-result payloads are sent directly to the configured frontier provider, and routine low-risk work no longer stays on the local lane.
-
-To skip the local model during install: `npx create-lancelot --skip-model`
+These controls are runtime usage settings, not install options. The local model remains present on disk and available for readiness verification, recovery, and later policy changes.
 
 ---
 
@@ -372,7 +451,7 @@ Lancelot routes tasks across four lanes, using local and cloud models:
 
 | Priority | Lane | Default Model | Purpose |
 |----------|------|---------------|---------|
-| 1 | `local_redaction` | Qwen3-8B (local) | PII redaction — always local |
+| 1 | `local_redaction` | Qwen3-8B (local) | Local scrub lane used when frontier scrub policy requires or prefers local redaction |
 | 2 | `local_utility` | Qwen3-8B (local) | Classify, summarize, extract |
 | 3 | `flagship_fast` | Gemini Flash / GPT-4o-mini / Claude Haiku / Nemotron Nano | Orchestration, tool calls |
 | 4 | `flagship_deep` | Gemini Pro / GPT-4o / Claude Sonnet / Nemotron Super | Planning, complex reasoning |
@@ -439,6 +518,8 @@ domains:
   - raw.githubusercontent.com
 ```
 
+If `FEATURE_NETWORK_ALLOWLIST=true`, an empty or missing allowlist is treated as a configuration error and outbound domains are blocked until the file is populated.
+
 To allow additional domains (for connectors or integrations), add them to this file and restart.
 
 ### Firewall considerations
@@ -464,15 +545,20 @@ The `docker-compose.yml` maps two key volumes:
 
 | Path | Contents |
 |------|----------|
-| `lancelot_data/receipts/` | Audit trail (JSON files) |
+| `lancelot_data/receipts/` | Audit trail directory (`receipts.db` immutable log + staging tables, plus `receipt_integrity_key.json` for the persisted finalized-receipt signing key when no external key override is configured) |
 | `lancelot_data/chat_log.json` | Chat history |
 | `lancelot_data/USER.md` | Owner profile |
+| `lancelot_data/RULES.md` | Runtime copy of the operating-rules bootstrap template |
+| `lancelot_data/CAPABILITIES.md` | Runtime copy of the capabilities bootstrap template |
 | `lancelot_data/scheduler.sqlite` | Scheduler job state |
 | `lancelot_data/memory.sqlite` | Memory database (if Memory vNext enabled) |
 | `lancelot_data/skills_registry.json` | Installed skills |
 | `lancelot_data/soul_proposals.json` | Soul amendment proposals |
+| `lancelot_data/governance/trust_ledger.json` | Persisted Trust Ledger state and graduation history |
 
 All persistent data lives in `lancelot_data/`. Back up this directory to preserve your system state.
+
+Canonical bootstrap text files are tracked under `config/bootstrap/`. The runtime seeds missing `RULES.md` and `CAPABILITIES.md` into `lancelot_data/` automatically so the live data directory no longer needs tracked seed content in git.
 
 ### Workspace
 
@@ -519,7 +605,7 @@ curl -X POST http://localhost:8080/v1/chat/completions \
   -d '{"model": "local", "messages": [{"role": "user", "content": "hello"}]}'
 ```
 
-Should return a JSON response with a completion.
+Should return a JSON response with a completion. This is the same class of inference smoke Lancelot now uses to decide whether the local model is truly ready.
 
 ### 4. Soul status
 
@@ -573,9 +659,12 @@ Open `http://localhost:8000` in a browser. You should see the operator dashboard
 | `LANCELOT_COMMS_TYPE` | No | — | Channel type: `telegram`, `google_chat`, or `none` |
 | `LANCELOT_TELEGRAM_TOKEN` | No | — | Telegram bot token |
 | `LANCELOT_TELEGRAM_CHAT_ID` | No | — | Telegram chat ID |
+| `LANCELOT_TELEGRAM_DEBUG_DUMP` | No | `false` | Explicit debug mode that writes the last outbound Telegram message and metadata to `lancelot_data/chat/debug/` for operator troubleshooting. Leave disabled in normal operation. |
 | `LANCELOT_CHAT_SPACE_NAME` | No | — | Google Chat space resource name |
-| `LANCELOT_WEBHOOK_BEARER` | No | falls back to `LANCELOT_API_TOKEN` | Dedicated bearer secret for bonded inbound comms callbacks such as Google Chat approval actions |
-> **Note:** Security tokens (`LANCELOT_OWNER_TOKEN`, `LANCELOT_API_TOKEN`, `LANCELOT_VAULT_KEY`) are auto-generated during onboarding if not manually set. The CLI installer and in-app onboarding both handle this automatically.
+| `LANCELOT_WEBHOOK_AUTH_MODE` | No | `google_signed` | Inbound webhook auth mode: `google_signed` or `bonded_bearer` |
+| `LANCELOT_GOOGLE_CHAT_AUDIENCE` | No | — | Required when `LANCELOT_WEBHOOK_AUTH_MODE=google_signed`; expected audience for Google-signed Chat callback tokens |
+| `LANCELOT_WEBHOOK_BEARER` | No | — | Dedicated bearer secret for `bonded_bearer` inbound comms callbacks; no fallback to `LANCELOT_API_TOKEN` |
+> **Note:** `LANCELOT_OWNER_TOKEN` and `LANCELOT_API_TOKEN` can be generated during onboarding if omitted. The credential vault now fails closed when `LANCELOT_VAULT_KEY` is missing unless you explicitly opt into `LANCELOT_ALLOW_EPHEMERAL_VAULT=true` for development-only use.
 >
 > **Current runtime support:** bidirectional communications are currently implemented for `telegram` and `google_chat`. Other messaging and outreach services remain connector-level capabilities until dedicated comms runtimes are added.
 
@@ -608,7 +697,7 @@ Open `http://localhost:8000` in a browser. You should see the operator dashboard
 | `FEATURE_TOOLS_NETWORK` | `false` | Network access in sandbox |
 | `FEATURE_TOOLS_HOST_EXECUTION` | `false` | Host execution (no sandbox) |
 | `FEATURE_AGENTIC_LOOP` | `false` | Agentic tool loop |
-| `FEATURE_LOCAL_AGENTIC` | `false` | Route simple queries to local model |
+| `FEATURE_LOCAL_AGENTIC` | `false` | Enable the local utility execution lane for low-risk token-saving work |
 
 Set to `true`, `1`, or `yes` to enable; anything else disables.
 
@@ -676,13 +765,14 @@ docker compose up -d
 
 ### Local LLM won't start
 
-**Symptom:** `lancelot_local_llm` keeps restarting or shows `unhealthy`.
+**Symptom:** `lancelot_local_llm` keeps restarting, shows `unhealthy`, or War Room reports the model as loaded but not ready.
 
 **Fix:**
 1. Verify model weights exist: `ls local_models/weights/` (should show a ~5 GB `.gguf` file)
 2. Check logs: `docker compose logs local-llm`
 3. If out of memory, reduce context: `LOCAL_MODEL_CTX=2048` in `.env`
 4. If no NVIDIA GPU, remove the `deploy.resources` block from `docker-compose.yml`
+5. If the container stays up but readiness is still false, the inference smoke is failing — inspect the last readiness error in War Room or the local-llm logs
 
 ### Port conflicts
 

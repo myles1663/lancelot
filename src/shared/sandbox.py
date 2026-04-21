@@ -1,7 +1,7 @@
 import contextlib
 import io
-import sys
 import ast
+import multiprocessing as mp
 import threading
 from typing import Optional
 
@@ -130,14 +130,18 @@ class SandboxExecutor:
         if ast_error:
             return {"success": False, "output": "", "error": ast_error}
 
-        # Build restricted globals
-        sandbox_globals = {"__builtins__": dict(self.ALLOWED_BUILTINS)}
-        if injected_globals:
-            sandbox_globals.update(injected_globals)
-
-        # Capture stdout
-        captured_output = io.StringIO()
         result = {"success": False, "output": "", "error": ""}
+
+        # Use a separate process when we can so timed-out code can be terminated
+        # instead of leaking a live worker thread forever.
+        if injected_globals is None:
+            return _execute_in_process(code, timeout)
+
+        # Fallback for injected mock/module globals that are not safely serializable.
+        sandbox_globals = {"__builtins__": dict(self.ALLOWED_BUILTINS)}
+        sandbox_globals.update(injected_globals)
+
+        captured_output = io.StringIO()
         execution_error = [None]
 
         def _run():
@@ -147,7 +151,7 @@ class SandboxExecutor:
             except Exception as e:
                 execution_error[0] = str(e)
 
-        thread = threading.Thread(target=_run)
+        thread = threading.Thread(target=_run, daemon=True)
         thread.start()
         thread.join(timeout=timeout)
 
@@ -163,3 +167,47 @@ class SandboxExecutor:
             result["success"] = True
 
         return result
+
+
+def _sandbox_process_main(code: str, result_queue: mp.Queue) -> None:
+    """Execute sandboxed code in an isolated worker process."""
+    sandbox_globals = {"__builtins__": dict(SandboxExecutor.ALLOWED_BUILTINS)}
+    captured_output = io.StringIO()
+    result = {"success": False, "output": "", "error": ""}
+
+    try:
+        with contextlib.redirect_stdout(captured_output):
+            exec(code, sandbox_globals)
+    except Exception as exc:
+        result["error"] = str(exc)
+    else:
+        result["success"] = True
+
+    result["output"] = captured_output.getvalue()
+    result_queue.put(result)
+
+
+def _execute_in_process(code: str, timeout: int) -> dict:
+    """Run sandboxed code in a child process so timeout enforcement is real."""
+    result_queue: mp.Queue = mp.Queue()
+    process = mp.Process(target=_sandbox_process_main, args=(code, result_queue))
+    process.start()
+    process.join(timeout=timeout)
+
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=1)
+        return {
+            "success": False,
+            "output": "",
+            "error": f"Execution timed out after {timeout} seconds",
+        }
+
+    if not result_queue.empty():
+        return result_queue.get()
+
+    return {
+        "success": False,
+        "output": "",
+        "error": "Sandbox worker exited without returning a result",
+    }

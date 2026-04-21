@@ -4,58 +4,14 @@
 # Patent Pending: US Provisional Application #63/982,183
 #
 # This module bridges to the Universal App Bridge (UAB) daemon.
-# UAB itself is licensed separately under MIT — see packages/uab/LICENSE.
+# UAB itself is licensed under the Business Source License 1.1 (BSL 1.1) —
+# see packages/uab/LICENSE.
 
 """
-UABProvider — Universal App Bridge Desktop App Control (v0.6.0)
-================================================================
+Bridge Lancelot's tool fabric to the Universal App Bridge daemon.
 
-Framework-level desktop application control via the UAB daemon.
-Hooks into 9 framework plugins (including Browser CDP and Claude Vision)
-to give Lancelot structured, reliable access to any desktop app's interface.
-
-Gated by: FEATURE_TOOLS_UAB (default: false)
-Requires: FEATURE_TOOLS_FABRIC, FEATURE_TOOLS_HOST_BRIDGE
-
-Architecture:
-    Container (Lancelot)
-        |-- HTTP --> host.docker.internal:7900 (UAB daemon, JSON-RPC 2.0)
-                         |-- CDP ------------> Electron apps
-                         |-- Browser CDP ----> Chrome, Edge, Brave, Vivaldi, Opera
-                         |-- Chrome Ext WS --> Browser (no relaunch, port 8787)
-                         |-- Win-UIA --------> WPF, WinForms, native Win32 (fallback)
-                         |-- Qt UIA ---------> Qt5/Qt6 apps
-                         |-- GTK UIA --------> GTK3/GTK4 apps
-                         |-- JAB → UIA ------> Java Swing/JavaFX apps
-                         |-- Flutter UIA ----> Flutter Windows apps
-                         |-- Office UIA -----> Word, Excel, PowerPoint, Outlook
-                         |-- Vision ---------> Screenshot + Claude AI (last resort)
-
-Capabilities (v0.6.0):
-    - Smart element caching with TTL (5s tree, 3s query, 2s state)
-    - Connection health monitoring + auto-reconnect
-    - Permission model with risk levels + audit log
-    - Action chains for multi-step workflows
-    - Retry with exponential backoff on transient errors
-    - Office document operations (read/write cells, documents, emails)
-    - Window management (minimize, maximize, move, resize, screenshot)
-    - Keyboard input (keypress, hotkey combos)
-    - Browser control (CDP): tabs, cookies, storage, navigation, JS execution
-    - Spatial Map engine: structured UI layout replaces screenshots
-    - Composite query engine: UIA + bounding rects + text + optional vision
-    - Vision fallback: Claude Vision API for universal app coverage
-    - App registry with JSON persistence across sessions
-    - Chrome extension bridge for zero-relaunch browser control
-    - MCP server for Claude Desktop integration (17 tools)
-    - AgentSDK high-level workflow API
-
-Security model:
-    - UAB daemon runs on host machine (started from packages/uab/)
-    - All actions produce AppControl receipts for full audit trail
-    - Read-only operations (detect, enumerate, query, state) = LOW risk
-    - Mutating operations (click, type, select, keypress) = MEDIUM risk
-    - Destructive operations (close, invoke, sendEmail) = HIGH risk
-    - PolicyEngine evaluates all actions before execution
+This provider translates governed desktop-control requests into UAB JSON-RPC
+calls and normalizes the results back into Lancelot provider contracts.
 """
 
 from __future__ import annotations
@@ -68,6 +24,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from src.tools.contracts import (
@@ -90,43 +47,61 @@ logger = logging.getLogger(__name__)
 # Risk Classification for UAB Actions
 # =============================================================================
 
-# Read-only actions — no state change, safe to run autonomously
-_READ_ONLY_ACTIONS = frozenset({
-    "detect", "enumerate", "query", "state",
-    "screenshot",
-    # Office read operations
-    "readDocument", "readCell", "readRange",
-    "getSheets", "readFormula",
-    "readSlides", "readSlideText",
-    "readEmails",
-})
+_ACTION_RISK_MANIFEST_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "packages"
+    / "uab"
+    / "data"
+    / "action-risk.json"
+)
 
-# Mutating actions — change UI state, governed by Soul posture
-_MUTATING_ACTIONS = frozenset({
-    "click", "doubleclick", "rightclick", "type", "clear",
-    "select", "scroll", "focus", "hover", "expand", "collapse",
-    "check", "uncheck", "toggle", "keypress", "hotkey",
-    "contextmenu",
-    # Office write operations
-    "writeCell", "writeRange",
-    "composeEmail",
-})
 
-# Destructive actions — high risk, always require approval
-_DESTRUCTIVE_ACTIONS = frozenset({
-    "close", "invoke", "minimize", "maximize", "restore",
-    "move", "resize",
-    "sendEmail",  # irreversible
-})
+def _load_action_risk_manifest() -> dict[str, list[str]]:
+    """Load the shared UAB action-risk taxonomy used by Python and TypeScript."""
+    try:
+        with _ACTION_RISK_MANIFEST_PATH.open("r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except OSError as exc:
+        raise RuntimeError(
+            f"UAB action risk manifest could not be read at "
+            f"{_ACTION_RISK_MANIFEST_PATH}: {exc}"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"UAB action risk manifest is invalid JSON at "
+            f"{_ACTION_RISK_MANIFEST_PATH}: {exc}"
+        ) from exc
 
-# Sensitive app patterns — auto-escalate risk when detected
-_SENSITIVE_APP_PATTERNS = frozenset({
-    "1password", "bitwarden", "keepass", "lastpass",    # password managers
-    "bank", "chase", "wells fargo", "capital one",      # banking
-    "venmo", "paypal", "stripe",                        # financial
-    "outlook", "thunderbird", "gmail",                   # email
-    "terminal", "powershell", "cmd",                     # shells
-})
+    required_keys = (
+        "read_only",
+        "mutating",
+        "destructive",
+        "sensitive_app_patterns",
+    )
+    for key in required_keys:
+        if not isinstance(manifest.get(key), list):
+            raise RuntimeError(
+                f"UAB action risk manifest missing array: {key}"
+            )
+    return manifest
+
+
+_ACTION_RISK_MANIFEST = _load_action_risk_manifest()
+_READ_ONLY_ACTIONS = frozenset(_ACTION_RISK_MANIFEST["read_only"])
+_MUTATING_ACTIONS = frozenset(_ACTION_RISK_MANIFEST["mutating"])
+_DESTRUCTIVE_ACTIONS = frozenset(_ACTION_RISK_MANIFEST["destructive"])
+_SENSITIVE_APP_PATTERNS = frozenset(
+    _ACTION_RISK_MANIFEST["sensitive_app_patterns"]
+)
+
+
+def _read_http_error_body(error: urllib.error.HTTPError, source: str) -> str:
+    """Read a bounded HTTP error body without silently swallowing decode errors."""
+    try:
+        return error.read().decode("utf-8", errors="replace")[:200]
+    except Exception as exc:
+        logger.warning("%s error body could not be decoded: %s", source, exc)
+        return ""
 
 
 def classify_action_risk(action: str, app_name: str = "") -> RiskLevel:
@@ -285,11 +260,7 @@ class UABProvider(BaseProvider):
             return result.get("result")
 
         except urllib.error.HTTPError as e:
-            error_body = ""
-            try:
-                error_body = e.read().decode("utf-8", errors="replace")[:200]
-            except Exception:
-                pass
+            error_body = _read_http_error_body(e, "UAB daemon HTTP response")
             raise ConnectionError(
                 f"UAB daemon returned HTTP {e.code}: {error_body}"
             ) from e

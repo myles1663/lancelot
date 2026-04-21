@@ -17,6 +17,8 @@ import urllib.error
 from pathlib import Path
 from typing import Optional
 
+from src.core.outbound_http import assert_url_allowed
+
 logger = logging.getLogger("lancelot.update_checker")
 
 # ---------------------------------------------------------------------------
@@ -151,8 +153,12 @@ class UpdateChecker:
         try:
             import urllib.request
 
-            req = urllib.request.Request(
+            version_url = assert_url_allowed(
                 _VERSION_URL,
+                component="Update checker manifest fetch",
+            )
+            req = urllib.request.Request(
+                version_url,
                 headers={"Accept": "application/json", "User-Agent": f"Lancelot/{self._current_version}"},
             )
             with urllib.request.urlopen(req, timeout=10) as resp:

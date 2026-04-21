@@ -89,8 +89,15 @@ class PolicyCache:
                             snapshot = policy_engine.evaluate_path(capability)
                             decision = "allow" if snapshot.allowed else "deny"
                             reason = f"PolicyEngine: {snapshot.reasons}" if hasattr(snapshot, "reasons") else reason
-                        except Exception:
-                            decision = "allow"  # Safe default for low-risk
+                        except Exception as exc:
+                            decision = "deny"
+                            reason = f"PolicyEngine error: {exc}"
+                            logger.warning(
+                                "PolicyCache compile denied %s/%s after PolicyEngine error: %s",
+                                capability,
+                                scope,
+                                exc,
+                            )
 
                     self._cache[(capability, scope, None)] = CachedPolicyDecision(
                         capability=capability,

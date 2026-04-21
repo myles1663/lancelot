@@ -146,6 +146,19 @@ class TestCommandRunner:
         assert result["return_code"] == 0
         assert "hello" in result["stdout"]
 
+    def test_cwd_outside_workspace_blocked(self, tmp_path, monkeypatch):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        monkeypatch.setenv("LANCELOT_WORKSPACE", str(workspace))
+
+        with pytest.raises(ValueError, match="outside workspace boundary"):
+            command_runner.execute(CTX, {
+                "command": "echo hello",
+                "cwd": str(outside),
+            })
+
     def test_blocked_command_rejected(self):
         with pytest.raises(ValueError, match="not in whitelist"):
             command_runner.execute(CTX, {"command": "rm -rf /"})

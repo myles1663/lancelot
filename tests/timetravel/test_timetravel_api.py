@@ -255,6 +255,33 @@ class TestGetReceiptSnapshot:
         assert resp.status_code == 503
 
 
+class TestRequestValidation:
+    def test_inspect_rejects_unexpected_fields(self, client):
+        resp = client.post(
+            "/api/timetravel/inspect",
+            json={"receipt_id": "r-001", "unexpected": "deny-me"},
+        )
+        assert resp.status_code == 422
+
+    def test_replay_rejects_unexpected_fields(self, client):
+        resp = client.post(
+            "/api/timetravel/replay",
+            json={"source_quest_id": "q-001", "unexpected": "deny-me"},
+        )
+        assert resp.status_code == 422
+
+    def test_fork_rejects_unexpected_fields(self, client):
+        resp = client.post(
+            "/api/timetravel/fork",
+            json={
+                "source_quest_id": "q-001",
+                "modifications": {},
+                "unexpected": "deny-me",
+            },
+        )
+        assert resp.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # POST /inspect
 # ---------------------------------------------------------------------------

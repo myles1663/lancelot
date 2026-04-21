@@ -14,6 +14,9 @@
   "engines": {
     "node": ">=18.0.0"
   },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
   "keywords": [
     "lancelot",
     "ai",

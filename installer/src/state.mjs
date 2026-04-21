@@ -39,6 +39,7 @@ export async function saveState(completedSteps, config) {
       oidcClientId: config.oidcClientId,
       oidcBaseUrl: config.oidcBaseUrl,
       oidcAllowedGroups: config.oidcAllowedGroups,
+      oidcAllowAnyAuthenticated: config.oidcAllowAnyAuthenticated,
     },
   };
   // Note: API keys and tokens are NEVER stored in state

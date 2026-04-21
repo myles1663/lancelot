@@ -13,21 +13,21 @@ export function fetchSkillProposal(proposalId: string) {
 
 /** POST /api/skills/proposals/:id/approve — approve a pending proposal */
 export function approveSkillProposal(proposalId: string) {
-  return apiPost<{ status: string; proposal_id: string; name: string; approved_by: string }>(
+  return apiPost<{ status: string; proposal_id: string; name: string; approved_by: string; approved_at: string | null }>(
     `/api/skills/proposals/${proposalId}/approve`,
   )
 }
 
 /** POST /api/skills/proposals/:id/reject — reject a pending proposal */
 export function rejectSkillProposal(proposalId: string) {
-  return apiPost<{ status: string; proposal_id: string; name: string }>(
+  return apiPost<{ status: string; proposal_id: string; name: string; rejected_reason: string | null }>(
     `/api/skills/proposals/${proposalId}/reject`,
   )
 }
 
 /** POST /api/skills/proposals/:id/install — install an approved proposal */
 export function installSkillProposal(proposalId: string) {
-  return apiPost<{ status: string; proposal_id: string; name: string; message: string }>(
+  return apiPost<{ status: string; proposal_id: string; name: string; message: string; validated_capabilities: string[] }>(
     `/api/skills/proposals/${proposalId}/install`,
   )
 }

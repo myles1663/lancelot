@@ -176,7 +176,7 @@ const TOOLS: MCPTool[] = [
   },
   {
     name: 'desktop_apps',
-    description: 'List previously discovered apps from the registry (instant, no scanning). Use after desktop_scan.',
+    description: 'List previously discovered apps from the registry (direct lookup, no scanning). Use after desktop_scan.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -344,7 +344,7 @@ const TOOLS: MCPTool[] = [
   },
   {
     name: 'desktop_focused',
-    description: 'Get the currently focused UI element in an app. Fast (<50ms) — useful for tracking where the cursor/focus is.',
+    description: 'Get the currently focused UI element in an app via UIA FocusedElement. Useful for tracking where the cursor/focus is.',
     inputSchema: {
       type: 'object',
       properties: {

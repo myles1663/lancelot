@@ -1,4 +1,5 @@
 import unittest
+import multiprocessing
 from sandbox import SandboxExecutor
 
 
@@ -168,9 +169,11 @@ class TestSandboxLimits(unittest.TestCase):
 
     def test_timeout_still_works(self):
         code = "while True: pass"
+        children_before = len(multiprocessing.active_children())
         result = self.sandbox.execute(code, timeout=1)
         self.assertFalse(result["success"])
         self.assertIn("timed out", result["error"])
+        self.assertEqual(len(multiprocessing.active_children()), children_before)
 
     def test_syntax_error_caught(self):
         result = self.sandbox.execute("def foo(")

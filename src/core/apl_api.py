@@ -8,6 +8,7 @@ import logging
 
 from fastapi import APIRouter, Depends, Request, Query
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability
 
@@ -21,6 +22,14 @@ router = APIRouter(
 
 _rule_engine = None
 _decision_log = None
+
+
+class RuleDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str | None = Field(
+        default=None,
+        description="Optional operator-supplied rule rejection reason.",
+    )
 
 
 def init_apl_api(rule_engine=None, decision_log=None) -> None:
@@ -187,14 +196,14 @@ async def resume_rule(
 async def revoke_rule(
     rule_id: str,
     request: Request,
+    body: RuleDecisionRequest | None = None,
     _authz: None = Depends(require_operator_capability("apl.admin")),
 ):
     """Revoke a rule permanently."""
     try:
         if _rule_engine is None:
             return _safe_error(400, "Rule engine not initialised")
-        data = await request.json() if request.headers.get("content-type") else {}
-        reason = data.get("reason", "Revoked via War Room")
+        reason = body.reason if body and body.reason else "Revoked via War Room"
         _rule_engine.revoke_rule(rule_id, reason=reason)
 
         # Governance receipt
@@ -245,14 +254,14 @@ async def activate_proposal(
 async def decline_proposal(
     rule_id: str,
     request: Request,
+    body: RuleDecisionRequest | None = None,
     _authz: None = Depends(require_operator_capability("apl.admin")),
 ):
     """Decline a proposed rule."""
     try:
         if _rule_engine is None:
             return _safe_error(400, "Rule engine not initialised")
-        data = await request.json() if request.headers.get("content-type") else {}
-        reason = data.get("reason", "Declined via War Room")
+        reason = body.reason if body and body.reason else "Declined via War Room"
         _rule_engine.decline_rule(rule_id, reason=reason)
 
         # Governance receipt

@@ -1,5 +1,5 @@
 """
-Global Recovery Commands (v4 Upgrade — Prompts 2-5)
+Global recovery commands for onboarding flows.
 
 Commands available at every onboarding step.  The onboarding orchestrator
 calls ``try_handle()`` *before* state-specific dispatch.  If a recovery

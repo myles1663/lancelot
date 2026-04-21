@@ -47,6 +47,13 @@ export interface MCPServerDetailResponse {
   tools: MCPToolInfo[]
   soul_permitted: boolean
   kill_switch_active: boolean
+  kill_switch?: {
+    allowed: boolean
+    switch_id: string
+    scope: string
+    source: string
+    reason: string
+  }
   network_allowed: boolean
 }
 

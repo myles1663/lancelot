@@ -40,6 +40,7 @@ class TestLancelotVNext(unittest.TestCase):
         
         # Verify Persistence
         loaded = self.orch.receipt_service.get(receipt.id)
+        self.assertIsNotNone(loaded)
         self.assertEqual(loaded.outputs["result"], "ok")
         print("✅ Receipts Verified")
 

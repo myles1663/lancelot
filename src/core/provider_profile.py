@@ -1,5 +1,5 @@
 """
-ProviderProfile registry & runtime config loader (Prompt 14).
+Provider profile registry and runtime configuration loader.
 
 Single-owner module for loading models.yaml / router.yaml and providing
 typed access to provider profiles, lane configurations, and routing rules.

@@ -17,9 +17,30 @@ Environment variables always win. The Soul can escalate risk tiers above governa
 
 ---
 
+## Network Allowlist (`config/network_allowlist.yaml`)
+
+Lancelot uses a single canonical network allowlist subsystem for outbound-domain enforcement. The same config file is consumed by core security, Tool Fabric policy, the War Room allowlist editor, and the direct outbound HTTP clients that talk to external providers and services (OIDC/OAuth, flagship model APIs, update checks, A2A, MCP, federation, observability webhooks, and governed connector traffic).
+
+Built-in infrastructure domains are always allowed and do not need to be listed in the file:
+- `localhost`
+- `127.0.0.1`
+- `api.projectlancelot.dev`
+- `ghcr.io`
+
+Configured domains are normalized to lowercase and matched by exact host or parent-domain suffix. For example, allowlisting `github.com` also permits `api.github.com`.
+
+Local-only control-plane URLs such as `LOCAL_LLM_URL` and `HOST_AGENT_URL` are not treated as general internet egress. They remain separate operator-managed local paths, and the runtime fails closed if they are pointed at public internet hostnames.
+
+---
+
 ## Environment Variables (`.env`)
 
 The `.env` file is the primary configuration for secrets and runtime settings. It is never committed to git.
+Start from the repo template:
+
+```bash
+cp .env.example .env
+```
 
 ### LLM API Keys
 
@@ -33,21 +54,43 @@ The `.env` file is the primary configuration for secrets and runtime settings. I
 
 At least one API key is required. You can configure one or more providers. Keys can be rotated from the War Room UI without restarting.
 
+### Provider Auth Mode
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `LANCELOT_AUTH_MODE` | No | _(unset)_ | Optional provider-auth bootstrap mode. Set to `OAUTH` only when you explicitly want Gemini ADC / OAuth bootstrap or another OAuth-backed provider flow. When unset, the runtime does **not** probe Gemini ADC automatically if `GEMINI_API_KEY` is missing. |
+
+### Soul Runtime
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SOUL_DIR` | No | repo `soul/` directory | Override path for the active Soul store (`ACTIVE`, `soul_versions/`, proposals). The Soul API, Crusader mode, and runtime loaders all honor this path when it is set. |
+
 ### Authentication
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `LANCELOT_OWNER_TOKEN` | Yes | — | Token for administrative operations (Soul amendments, memory writes, approvals) |
-| `LANCELOT_VAULT_KEY` | No | — | Encryption key for credential vault (Fernet) |
+| `LANCELOT_VAULT_KEY` | Yes | — | Encryption key for credential vault (Fernet). Vault startup now fails closed when this is missing unless you explicitly set `LANCELOT_ALLOW_EPHEMERAL_VAULT=true` for development. |
+| `LANCELOT_ALLOW_EPHEMERAL_VAULT` | No | `false` | Development-only override that allows an ephemeral in-memory vault key when `LANCELOT_VAULT_KEY` is missing. Credentials will not survive restart. Do not use in production. |
 
 ### Local Model
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `LOCAL_LLM_URL` | No | `http://local-llm:8080` | URL of the local GGUF model server |
+| `LOCAL_LLM_URL` | No | `http://local-llm:8080` | URL of the local GGUF model server. Must stay on loopback, `host.docker.internal`, or a single-label local service hostname such as `local-llm`. |
 | `LOCAL_MODEL_CTX` | No | `4096` | Context window size (tokens) |
 | `LOCAL_MODEL_THREADS` | No | `4` | CPU threads for inference |
 | `LOCAL_MODEL_GPU_LAYERS` | No | `0` | Number of model layers offloaded to GPU |
+| `LANCELOT_LOCAL_EXECUTION_MODE` | No | `low_risk_only` | Runtime usage policy for local execution: `low_risk_only` or `disabled` |
+| `LANCELOT_FRONTIER_SCRUB_MODE` | No | `required` | Runtime frontier scrub policy: `required`, `preferred`, or `disabled` |
+
+### Host Bridge
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `HOST_AGENT_URL` | No | `http://host.docker.internal:9111` | URL of the Lancelot Host Agent. Must stay on loopback or `host.docker.internal`; public FQDNs are rejected at runtime. |
+| `HOST_AGENT_TOKEN` | Yes when host bridge is enabled | â€” | Shared bearer token between the container runtime and the host agent. The legacy default token is rejected. |
 
 ### Logging
 
@@ -83,7 +126,7 @@ All feature flags are boolean: `true`/`1`/`yes` to enable, anything else to disa
 | `FEATURE_TOOLS_NETWORK` | `false` | Network access from sandbox |
 | `FEATURE_TOOLS_HOST_EXECUTION` | `false` | Host execution (no Docker sandbox — **DANGEROUS**) |
 | `FEATURE_AGENTIC_LOOP` | `false` | Agentic tool loop |
-| `FEATURE_LOCAL_AGENTIC` | `false` | Route simple queries to local model |
+| `FEATURE_LOCAL_AGENTIC` | `false` | Enable the local utility execution lane for bounded low-risk work |
 | `FEATURE_RESPONSE_ASSEMBLER` | `true` | Response assembly pipeline |
 | `FEATURE_EXECUTION_TOKENS` | `true` | Execution token minting |
 | `FEATURE_TASK_GRAPH_EXECUTION` | `true` | Task graph compilation |
@@ -417,6 +460,7 @@ See [Hive Agent Mesh](hive.md) for full rule descriptions.
 ### `config/network_allowlist.yaml`
 
 Outbound domain allowlist. Only these domains can be contacted from within the Lancelot container.
+When `FEATURE_NETWORK_ALLOWLIST=true`, an empty or missing allowlist now fails closed for Tool Fabric and other governed outbound paths.
 
 ```yaml
 domains:
@@ -478,20 +522,28 @@ Soul files live in the `soul/` directory, not in `config/`. See [Authoring Souls
 
 Runtime data lives in `lancelot_data/` (container path: `/home/lancelot/data`).
 
+The runtime data directory is no longer used as a source-controlled seed location. Canonical bootstrap templates live in `config/bootstrap/`, and the runtime seeds missing `RULES.md` / `CAPABILITIES.md` into `lancelot_data/` on first use.
+
 | Path | Description |
 |------|-------------|
-| `lancelot_data/receipts/` | Audit trail (JSON files) |
+| `lancelot_data/receipts/` | Audit trail directory (`receipts.db` immutable log + staging tables, plus `receipt_integrity_key.json` for the persisted finalized-receipt signing key when no external key override is configured) |
 | `lancelot_data/chat_log.json` | Conversation history |
 | `lancelot_data/USER.md` | Owner profile |
+| `lancelot_data/RULES.md` | Runtime copy of the operating-rules bootstrap template |
+| `lancelot_data/CAPABILITIES.md` | Runtime copy of the capabilities bootstrap template |
 | `lancelot_data/scheduler.sqlite` | Scheduler job state and run history |
 | `lancelot_data/memory.sqlite` | Memory database (if Memory vNext enabled) |
 | `lancelot_data/skills_registry.json` | Installed skills |
-| `lancelot_data/skill_proposals.json` | Skill proposal pipeline |
+| `lancelot_data/skill_proposals.json` | Skill proposal index and review state |
+| `lancelot_data/skill_proposals/` | Per-proposal governed artifact packages (`skill.yaml`, `security_manifest.yaml`, code, tests, README, hashes) |
 | `lancelot_data/soul_proposals.json` | Soul amendment proposals |
 | `lancelot_data/vault/` | Encrypted credential storage |
 | `lancelot_data/apl/` | APL decision logs and rules |
 | `lancelot_data/governance/` | Policy cache and intent templates |
-| `lancelot_data/receipts/uab/` | UAB action receipts (JSON files) |
+| `lancelot_data/governance/trust_ledger.json` | Persisted Trust Ledger records, proposals, and graduation history |
+| `lancelot_data/receipts/uab/` | UAB action receipt exports and session artifacts |
 | `lancelot_data/receipts/uab/sessions/` | UAB session summaries |
+| `config/bootstrap/` | Source-controlled bootstrap templates seeded into the runtime data dir |
 | `config/hive.yaml` | Hive Agent Mesh configuration |
+| `config/federation_topology.example.json` | Example federation topology document; copy to `config/federation_topology.json` for local deployments |
 | `soul/overlays/hive.yaml` | Hive governance overlay |

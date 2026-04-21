@@ -4,8 +4,11 @@ End-to-end tests covering: submit → decompose → spawn → execute → collap
 """
 
 import json
+from dataclasses import FrozenInstanceError, dataclass
 import pytest
 
+from src.core.soul.store import AutonomyPosture, Soul
+from src.shared.receipts import get_receipt_service
 from src.hive.types import (
     AgentState,
     CollapseReason,
@@ -21,6 +24,8 @@ from src.hive.scoped_soul import ScopedSoulGenerator
 from src.hive.lifecycle import AgentLifecycleManager
 from src.hive.decomposer import TaskDecomposer
 from src.hive.architect import ArchitectAgent
+from src.hive.integration.governance_bridge import GovernanceResult
+from src.hive.integration.uab_executor import HiveUABExecutor
 
 
 class MockRouterResult:
@@ -49,6 +54,103 @@ def _decomposition_response(n=2):
         "execution_order": [[i] for i in range(n)],
         "rationale": "Integration test plan",
     })
+
+
+@dataclass
+class _ConnectResult:
+    success: bool = True
+    error_message: str | None = None
+    duration_ms: int = 1
+    state_changes: dict | None = None
+
+
+@dataclass
+class _StateResult:
+    window_title: str = "Notepad"
+    focused: bool = True
+
+
+class _MockUABProvider:
+    def __init__(self):
+        self.act_calls = []
+
+    def connect(self, pid):
+        return _ConnectResult()
+
+    def state(self, pid):
+        return _StateResult()
+
+    def enumerate(self, pid):
+        return [
+            {
+                "id": "edit1",
+                "type": "edit",
+                "label": "Editor",
+                "actions": ["click", "type"],
+            }
+        ]
+
+    def act(self, pid, element_id, action, params):
+        self.act_calls.append((pid, element_id, action, params))
+        return _ConnectResult(state_changes={})
+
+
+class _AuditedGovernance:
+    def __init__(self, deny_capabilities=None):
+        self._deny = {cap.lower() for cap in (deny_capabilities or set())}
+        self.validations = []
+        self.updates = []
+
+    def validate_action(self, **kwargs):
+        self.validations.append(dict(kwargs))
+        capability = str(kwargs.get("capability", "")).lower()
+        if capability in self._deny:
+            return GovernanceResult(
+                approved=False,
+                tier="T3",
+                reason=f"Denied by test for {capability}",
+                requires_operator_approval=False,
+            )
+        return GovernanceResult(
+            approved=True,
+            tier="T0",
+            reason="allowed",
+        )
+
+    def update_trust(self, capability, scope, success):
+        self.updates.append((capability, scope, success))
+
+
+def _make_parent_soul_with_uab_capabilities(*capabilities: str) -> Soul:
+    return Soul(
+        version="v1",
+        mission="Support software reliably",
+        allegiance="Customer and operator trust",
+        autonomy_posture=AutonomyPosture(
+            level="supervised",
+            description="test",
+            allowed_autonomous=list(capabilities),
+            requires_approval=[],
+        ),
+    )
+
+
+def _make_uab_lifecycle(config, registry, receipt_mgr, governance, parent_soul=None):
+    provider = _MockUABProvider()
+    executor = HiveUABExecutor(
+        uab_provider=provider,
+        governance_bridge=governance,
+    )
+    lifecycle = AgentLifecycleManager(
+        config=config,
+        registry=registry,
+        receipt_manager=receipt_mgr,
+        soul_generator=ScopedSoulGenerator(),
+        governance_bridge=governance,
+        parent_soul=parent_soul,
+        action_executor=executor,
+    )
+    return lifecycle, provider
 
 
 @pytest.fixture(autouse=True)
@@ -232,3 +334,481 @@ class TestInterventionIntegration:
 
         interventions = receipt_mgr.get_interventions(quest_id="q-int-test")
         assert len(interventions) >= 1
+
+
+@pytest.mark.asyncio
+class TestGovernedUABIntegration:
+    async def test_governed_uab_execution_emits_receipts_and_updates_trust(
+        self,
+        config,
+        registry,
+        receipt_mgr,
+    ):
+        governance = _AuditedGovernance()
+        lifecycle, provider = _make_uab_lifecycle(
+            config,
+            registry,
+            receipt_mgr,
+            governance,
+            parent_soul=_make_parent_soul_with_uab_capabilities(
+                "uab_automation",
+                "uab_click",
+                "uab_type",
+                "uab_query",
+                "uab_state",
+            ),
+        )
+
+        try:
+            record = lifecycle.spawn(
+                TaskSpec(
+                    allowed_apps=["notepad"],
+                    allowed_categories=["uab"],
+                ),
+                quest_id="quest-uab-success",
+            )
+            future = lifecycle.execute(
+                record.agent_id,
+                [
+                    {
+                        "action": "execute_subtask",
+                        "capability": "uab_automation",
+                        "spec": "type 'hello world'",
+                        "context": {"target_pid": 202, "target_app": "notepad"},
+                    }
+                ],
+            )
+            result = future.result(timeout=5)
+        finally:
+            lifecycle.shutdown()
+
+        assert result.success is True
+        assert provider.act_calls == [
+            (202, "edit1", "click", {}),
+            (202, "edit1", "type", {"text": "hello world"}),
+        ]
+        assert [call["capability"] for call in governance.validations] == [
+            "uab_automation",
+            "uab_click",
+            "uab_type",
+        ]
+        assert governance.updates == [
+            ("uab_click", "notepad", True),
+            ("uab_type", "notepad", True),
+        ]
+
+        receipts = receipt_mgr.get_task_receipt_tree("quest-uab-success")
+        service = get_receipt_service(receipt_mgr._data_dir)
+        governance_receipt = next(r for r in receipts if r.action_name == "governance_check")
+        action_receipt = next(r for r in receipts if r.action_name == "agent_action:execute_subtask")
+
+        assert governance_receipt.inputs["capability"] == "uab_automation"
+        assert governance_receipt.inputs["approved"] is True
+        assert action_receipt.parent_id == governance_receipt.id
+        assert service.validate_parent_chain(quest_id="quest-uab-success") == []
+
+    async def test_parent_soul_without_mutating_uab_capability_blocks_step_execution(
+        self,
+        config,
+        registry,
+        receipt_mgr,
+    ):
+        governance = _AuditedGovernance()
+        lifecycle, provider = _make_uab_lifecycle(
+            config,
+            registry,
+            receipt_mgr,
+            governance,
+            parent_soul=_make_parent_soul_with_uab_capabilities(
+                "uab_automation",
+                "uab_query",
+                "uab_state",
+            ),
+        )
+
+        try:
+            record = lifecycle.spawn(
+                TaskSpec(
+                    allowed_apps=["notepad"],
+                    allowed_categories=["uab"],
+                ),
+                quest_id="quest-uab-parent-soul-denied",
+            )
+            future = lifecycle.execute(
+                record.agent_id,
+                [
+                    {
+                        "action": "execute_subtask",
+                        "capability": "uab_automation",
+                        "spec": "type 'hello world'",
+                        "context": {"target_pid": 202, "target_app": "notepad"},
+                    }
+                ],
+            )
+            result = future.result(timeout=5)
+        finally:
+            lifecycle.shutdown()
+
+        assert result.success is False
+        assert result.collapse_reason == CollapseReason.SOUL_VIOLATION
+        assert provider.act_calls == []
+        assert [call["capability"] for call in governance.validations] == ["uab_automation"]
+        assert governance.updates == []
+
+        receipts = receipt_mgr.get_task_receipt_tree("quest-uab-parent-soul-denied")
+        action_receipt = next(r for r in receipts if r.action_name == "agent_action:execute_subtask")
+        assert "does not permit UAB capability 'uab_click'" in (
+            action_receipt.inputs["action_result"]["error"]
+        )
+
+    async def test_governance_denial_blocks_uab_execution_before_mutation(
+        self,
+        config,
+        registry,
+        receipt_mgr,
+    ):
+        governance = _AuditedGovernance(deny_capabilities={"uab_automation"})
+        lifecycle, provider = _make_uab_lifecycle(config, registry, receipt_mgr, governance)
+
+        try:
+            record = lifecycle.spawn(
+                TaskSpec(
+                    allowed_apps=["notepad"],
+                    allowed_categories=["uab"],
+                ),
+                quest_id="quest-uab-denied",
+            )
+            future = lifecycle.execute(
+                record.agent_id,
+                [
+                    {
+                        "action": "execute_subtask",
+                        "capability": "uab_automation",
+                        "spec": "type 'hello world'",
+                        "context": {"target_pid": 202, "target_app": "notepad"},
+                    }
+                ],
+            )
+            result = future.result(timeout=5)
+        finally:
+            lifecycle.shutdown()
+
+        assert result.success is False
+        assert result.collapse_reason == CollapseReason.GOVERNANCE_DENIED
+        assert provider.act_calls == []
+        assert governance.updates == []
+
+        receipts = receipt_mgr.get_task_receipt_tree("quest-uab-denied")
+        service = get_receipt_service(receipt_mgr._data_dir)
+        governance_receipt = next(r for r in receipts if r.action_name == "governance_check")
+
+        assert governance_receipt.inputs["capability"] == "uab_automation"
+        assert governance_receipt.inputs["approved"] is False
+        assert not any(r.action_name == "agent_action:execute_subtask" for r in receipts)
+        assert service.validate_parent_chain(quest_id="quest-uab-denied") == []
+
+    async def test_restrictive_task_scope_blocks_disallowed_uab_app_before_governance(
+        self,
+        config,
+        registry,
+        receipt_mgr,
+    ):
+        governance = _AuditedGovernance()
+        lifecycle, provider = _make_uab_lifecycle(config, registry, receipt_mgr, governance)
+
+        try:
+            record = lifecycle.spawn(
+                TaskSpec(
+                    allowed_apps=["notepad"],
+                    allowed_categories=["uab"],
+                ),
+                quest_id="quest-uab-scoped-denied",
+            )
+            future = lifecycle.execute(
+                record.agent_id,
+                [
+                    {
+                        "action": "execute_subtask",
+                        "capability": "uab_automation",
+                        "spec": "type 'hello world'",
+                        "context": {"target_pid": 202, "target_app": "chrome"},
+                    }
+                ],
+            )
+            result = future.result(timeout=5)
+        finally:
+            lifecycle.shutdown()
+
+        assert result.success is False
+        assert result.collapse_reason == CollapseReason.SOUL_VIOLATION
+        assert provider.act_calls == []
+        assert governance.validations == []
+
+        receipts = receipt_mgr.get_task_receipt_tree("quest-uab-scoped-denied")
+        service = get_receipt_service(receipt_mgr._data_dir)
+        action_receipt = next(r for r in receipts if r.action_name == "agent_action:execute_subtask")
+
+        assert action_receipt.inputs["action_result"]["type"] == "soul_violation"
+        assert not any(r.action_name == "governance_check" for r in receipts)
+        assert service.validate_parent_chain(quest_id="quest-uab-scoped-denied") == []
+
+    async def test_injected_allowed_categories_cannot_widen_uab_execution_scope(
+        self,
+        config,
+        registry,
+        receipt_mgr,
+    ):
+        governance = _AuditedGovernance()
+        lifecycle, provider = _make_uab_lifecycle(config, registry, receipt_mgr, governance)
+
+        try:
+            record = lifecycle.spawn(
+                TaskSpec(
+                    allowed_apps=["notepad"],
+                    allowed_categories=["query"],
+                ),
+                quest_id="quest-uab-injected-category-widening",
+            )
+            future = lifecycle.execute(
+                record.agent_id,
+                [
+                    {
+                        "action": "execute_subtask",
+                        "capability": "execute_subtask",
+                        "spec": "type 'hello world'",
+                        "context": {"target_pid": 202, "target_app": "notepad"},
+                        "allowed_categories": ["uab"],
+                    }
+                ],
+            )
+            result = future.result(timeout=5)
+        finally:
+            lifecycle.shutdown()
+
+        assert result.success is False
+        assert result.collapse_reason == CollapseReason.SOUL_VIOLATION
+        assert provider.act_calls == []
+        assert [call["capability"] for call in governance.validations] == ["execute_subtask"]
+        assert governance.updates == []
+
+        receipts = receipt_mgr.get_task_receipt_tree("quest-uab-injected-category-widening")
+        service = get_receipt_service(receipt_mgr._data_dir)
+        action_receipt = next(r for r in receipts if r.action_name == "agent_action:execute_subtask")
+
+        assert "outside scoped categories ['query']" in action_receipt.inputs["action_result"]["error"]
+        assert service.validate_parent_chain(quest_id="quest-uab-injected-category-widening") == []
+
+    async def test_injected_scoped_soul_cannot_widen_uab_execution_scope(
+        self,
+        config,
+        registry,
+        receipt_mgr,
+    ):
+        governance = _AuditedGovernance()
+        lifecycle, provider = _make_uab_lifecycle(
+            config,
+            registry,
+            receipt_mgr,
+            governance,
+            parent_soul=_make_parent_soul_with_uab_capabilities(
+                "uab_automation",
+                "uab_query",
+                "uab_state",
+            ),
+        )
+        injected_scoped_soul = {
+            "allowed_autonomous": [
+                "uab_automation",
+                "uab_query",
+                "uab_state",
+                "uab_click",
+                "uab_type",
+            ]
+        }
+
+        try:
+            record = lifecycle.spawn(
+                TaskSpec(
+                    allowed_apps=["notepad"],
+                    allowed_categories=["uab"],
+                ),
+                quest_id="quest-uab-injected-soul-widening",
+            )
+            future = lifecycle.execute(
+                record.agent_id,
+                [
+                    {
+                        "action": "execute_subtask",
+                        "capability": "uab_automation",
+                        "spec": "type 'hello world'",
+                        "context": {"target_pid": 202, "target_app": "notepad"},
+                        "scoped_soul": injected_scoped_soul,
+                    }
+                ],
+            )
+            result = future.result(timeout=5)
+        finally:
+            lifecycle.shutdown()
+
+        assert result.success is False
+        assert result.collapse_reason == CollapseReason.SOUL_VIOLATION
+        assert provider.act_calls == []
+        assert [call["capability"] for call in governance.validations] == ["uab_automation"]
+        assert governance.updates == []
+
+        receipts = receipt_mgr.get_task_receipt_tree("quest-uab-injected-soul-widening")
+        service = get_receipt_service(receipt_mgr._data_dir)
+        action_receipt = next(r for r in receipts if r.action_name == "agent_action:execute_subtask")
+
+        assert "does not permit UAB capability 'uab_click'" in action_receipt.inputs["action_result"]["error"]
+        assert service.validate_parent_chain(quest_id="quest-uab-injected-soul-widening") == []
+
+    async def test_post_spawn_category_mutation_cannot_widen_uab_execution_scope(
+        self,
+        config,
+        registry,
+        receipt_mgr,
+    ):
+        governance = _AuditedGovernance()
+        lifecycle, provider = _make_uab_lifecycle(config, registry, receipt_mgr, governance)
+        spec = TaskSpec(
+            allowed_apps=["notepad"],
+            allowed_categories=["query"],
+        )
+
+        try:
+            record = lifecycle.spawn(
+                spec,
+                quest_id="quest-uab-post-spawn-category-mutation",
+            )
+            with pytest.raises(FrozenInstanceError):
+                spec.allowed_categories = ("uab",)
+            with pytest.raises(FrozenInstanceError):
+                record.task_spec.allowed_categories = ("uab",)
+
+            future = lifecycle.execute(
+                record.agent_id,
+                [
+                    {
+                        "action": "execute_subtask",
+                        "capability": "execute_subtask",
+                        "spec": "type 'hello world'",
+                        "context": {"target_pid": 202, "target_app": "notepad"},
+                    }
+                ],
+            )
+            result = future.result(timeout=5)
+        finally:
+            lifecycle.shutdown()
+
+        assert result.success is False
+        assert result.collapse_reason == CollapseReason.SOUL_VIOLATION
+        assert provider.act_calls == []
+        assert [call["capability"] for call in governance.validations] == ["execute_subtask"]
+
+        receipts = receipt_mgr.get_task_receipt_tree("quest-uab-post-spawn-category-mutation")
+        action_receipt = next(r for r in receipts if r.action_name == "agent_action:execute_subtask")
+        assert "outside scoped categories ['query']" in action_receipt.inputs["action_result"]["error"]
+
+    async def test_post_spawn_app_mutation_cannot_widen_uab_execution_scope(
+        self,
+        config,
+        registry,
+        receipt_mgr,
+    ):
+        governance = _AuditedGovernance()
+        lifecycle, provider = _make_uab_lifecycle(config, registry, receipt_mgr, governance)
+        spec = TaskSpec(
+            allowed_apps=["notepad"],
+            allowed_categories=["uab"],
+        )
+
+        try:
+            record = lifecycle.spawn(
+                spec,
+                quest_id="quest-uab-post-spawn-app-mutation",
+            )
+            with pytest.raises(FrozenInstanceError):
+                spec.allowed_apps = ("chrome",)
+            with pytest.raises(FrozenInstanceError):
+                record.task_spec.allowed_apps = ("chrome",)
+
+            future = lifecycle.execute(
+                record.agent_id,
+                [
+                    {
+                        "action": "execute_subtask",
+                        "capability": "uab_automation",
+                        "spec": "type 'hello world'",
+                        "context": {"target_pid": 202, "target_app": "chrome"},
+                    }
+                ],
+            )
+            result = future.result(timeout=5)
+        finally:
+            lifecycle.shutdown()
+
+        assert result.success is False
+        assert result.collapse_reason == CollapseReason.SOUL_VIOLATION
+        assert provider.act_calls == []
+        assert governance.validations == []
+
+        receipts = receipt_mgr.get_task_receipt_tree("quest-uab-post-spawn-app-mutation")
+        action_receipt = next(r for r in receipts if r.action_name == "agent_action:execute_subtask")
+        assert "forbids app 'chrome'" in action_receipt.inputs["action_result"]["error"]
+
+    async def test_post_spawn_raw_scoped_soul_mutation_cannot_widen_uab_execution_scope(
+        self,
+        config,
+        registry,
+        receipt_mgr,
+    ):
+        governance = _AuditedGovernance()
+        lifecycle, provider = _make_uab_lifecycle(
+            config,
+            registry,
+            receipt_mgr,
+            governance,
+            parent_soul=_make_parent_soul_with_uab_capabilities(
+                "uab_automation",
+                "uab_query",
+                "uab_state",
+            ),
+        )
+
+        try:
+            record = lifecycle.spawn(
+                TaskSpec(
+                    allowed_apps=["notepad"],
+                    allowed_categories=["uab"],
+                ),
+                quest_id="quest-uab-post-spawn-soul-mutation",
+            )
+            runtime = lifecycle.get_runtime(record.agent_id)
+            assert runtime is not None
+            runtime._scoped_soul.autonomy_posture.allowed_autonomous.append("uab_click")
+            runtime._scoped_soul.autonomy_posture.allowed_autonomous.append("uab_type")
+
+            future = lifecycle.execute(
+                record.agent_id,
+                [
+                    {
+                        "action": "execute_subtask",
+                        "capability": "uab_automation",
+                        "spec": "type 'hello world'",
+                        "context": {"target_pid": 202, "target_app": "notepad"},
+                    }
+                ],
+            )
+            result = future.result(timeout=5)
+        finally:
+            lifecycle.shutdown()
+
+        assert result.success is False
+        assert result.collapse_reason == CollapseReason.SOUL_VIOLATION
+        assert provider.act_calls == []
+        assert [call["capability"] for call in governance.validations] == ["uab_automation"]
+
+        receipts = receipt_mgr.get_task_receipt_tree("quest-uab-post-spawn-soul-mutation")
+        action_receipt = next(r for r in receipts if r.action_name == "agent_action:execute_subtask")
+        assert "does not permit UAB capability 'uab_click'" in action_receipt.inputs["action_result"]["error"]

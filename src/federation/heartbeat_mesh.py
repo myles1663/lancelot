@@ -26,6 +26,7 @@ from typing import Dict, Optional
 
 import httpx
 
+from src.core.outbound_http import assert_url_allowed
 from src.federation.auth import FederationAuth
 from src.federation.topology import TopologyRegistry
 
@@ -53,6 +54,7 @@ class HeartbeatMesh:
         budget_utilization_provider=None,
         on_diverged=None,
         on_reconnecting=None,
+        network_interceptor=None,
     ):
         self._topology = topology
         self._divergence = divergence_detector
@@ -67,6 +69,7 @@ class HeartbeatMesh:
         self._budget_utilization_provider = budget_utilization_provider
         self._on_diverged = on_diverged
         self._on_reconnecting = on_reconnecting
+        self._network_interceptor = network_interceptor
 
         self._tasks: Dict[str, asyncio.Task] = {}
         self._subscription_status: Dict[str, str] = {}
@@ -209,6 +212,11 @@ class HeartbeatMesh:
         """Connect to and consume an SSE heartbeat stream."""
         if not self._client:
             return
+        assert_url_allowed(
+            url,
+            component="Federation heartbeat stream",
+            network_interceptor=self._network_interceptor,
+        )
 
         path = "/api/federation/stream"
         headers = self._auth.sign_request("GET", path, b"") if self._auth else {}

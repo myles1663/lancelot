@@ -1,6 +1,6 @@
 # Quickstart
 
-**Goal:** Clone to first governed action in 15 minutes.
+**Goal:** Fastest path from clone to first governed action on a standard local setup.
 
 This guide gets you from zero to a working Lancelot instance as fast as possible. No explanations of why things work this way — just what to type and what you should see. For deeper understanding, see the [Architecture](architecture.md) and [Installation Guide](installation.md).
 
@@ -17,12 +17,13 @@ Before you start, make sure you have:
   - [OpenAI](https://platform.openai.com/api-keys) (pay-as-you-go)
   - [Anthropic](https://console.anthropic.com/) (pay-as-you-go)
   - [xAI](https://console.x.ai/) (Grok, pay-as-you-go)
+  - [NVIDIA Nemotron](https://build.nvidia.com/) (NIM API, free tier available)
 
 ---
 
 ## Step 1: Install Lancelot
 
-Run the one-command installer:
+Run the recommended interactive installer:
 
 ```bash
 npx create-lancelot
@@ -32,12 +33,13 @@ The installer walks you through each step interactively:
 
 1. **Prerequisites check** — verifies Docker, Git, disk space, RAM, GPU
 2. **Install location** — where to put Lancelot (default: `./lancelot`)
-3. **LLM provider** — select Gemini, OpenAI, Anthropic, xAI, or NVIDIA and paste your API key
+3. **LLM provider** — select Gemini, OpenAI, Anthropic, xAI, or NVIDIA and configure API key or OAuth when available
 4. **Communications** — optionally configure a messaging channel: Telegram or Google Chat (you can skip this)
-5. **Repository clone** — pulls the latest code from GitHub
-6. **Configuration** — generates your `.env` file automatically
-7. **Model download** — downloads the 5GB local utility model (with progress bar)
-8. **Docker build & start** — builds images, starts services, waits for health
+5. **War Room auth** — choose local credentials or enterprise OIDC
+6. **Repository clone** — pulls the latest code from GitHub
+7. **Configuration** — generates your `.env` file and patches runtime config automatically
+8. **Model download** — downloads the 5GB local utility model (with progress bar)
+9. **Docker build & start** — builds images, starts services, waits for health
 
 When it finishes, the **War Room** opens automatically in your default browser and you'll see:
 
@@ -50,7 +52,7 @@ When it finishes, the **War Room** opens automatically in your default browser a
   ╚══════════════════════════════════════════╝
 ```
 
-> **Tip:** If the install is interrupted, resume with `npx create-lancelot --resume`. To skip the 5GB model download, use `--skip-model` (the local model handles routine tasks like PII redaction — Lancelot still works without it, but routes everything to cloud APIs).
+> **Tip:** If the install is interrupted, resume with `npx create-lancelot --resume`.
 
 ---
 
@@ -73,7 +75,7 @@ http://localhost:8000
 docker compose up -d
 ```
 
-You should see the Lancelot War Room dashboard with panels for health, governance, and system status. The health dashboard should show all subsystems as operational.
+You should see the Lancelot War Room dashboard with panels for health, governance, and system status. The health dashboard should show the core runtime as ready, and the local model should show as both loaded and ready.
 
 ---
 
@@ -109,6 +111,8 @@ curl http://localhost:8000/health/ready
 ```
 
 If `ready` is `false`, check `degraded_reasons` — it tells you exactly what's not ready yet. The local LLM can take up to 2 minutes to load the model on first start.
+
+For the local model specifically, "ready" now means more than "weights loaded." Lancelot requires a real local inference smoke to pass before it treats the local execution/scrub lane as available.
 
 ---
 
@@ -233,13 +237,13 @@ Now that you have a running instance:
 
 ### Local LLM won't start
 
-**Symptom:** Health check shows `local_llm_ready: false` after 2+ minutes.
+**Symptom:** Health check shows `local_llm_ready: false` after 2+ minutes, or War Room shows the local model as loaded but not ready.
 
 **Fix:** Check if model weights were downloaded:
 ```bash
 ls local_models/weights/
 ```
-If empty, re-run the installer with `npx create-lancelot --resume`, or manually download the model (see the [Installation Guide](installation.md)).
+If empty, re-run the installer with `npx create-lancelot --resume`, or manually download the model (see the [Installation Guide](installation.md)). If weights exist but readiness still fails, inspect `docker compose logs local-llm` for inference smoke errors.
 
 ### Port already in use
 
@@ -257,7 +261,7 @@ If empty, re-run the installer with `npx create-lancelot --resume`, or manually 
 
 **Symptom:** Container keeps restarting, logs show memory errors.
 
-**Fix:** The local model needs ~6GB RAM. If your system is constrained, either skip the local model (`--skip-model` during install) or reduce context in `.env`:
+**Fix:** The local model needs ~6GB RAM. If your system is constrained, reduce context in `.env`:
 ```ini
 LOCAL_MODEL_CTX=2048
 ```

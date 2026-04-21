@@ -25,16 +25,20 @@ class RateLimiter:
         self._refill_rate: float = max_requests_per_minute / 60.0
         self._last_refill: float = time.time()
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
 
     def _refill(self) -> None:
         """Refill tokens based on elapsed time."""
         now = time.time()
         elapsed = now - self._last_refill
+        previous_tokens = self._tokens
         self._tokens = min(
             self._max_tokens,
             self._tokens + elapsed * self._refill_rate,
         )
         self._last_refill = now
+        if previous_tokens < 1.0 <= self._tokens:
+            self._condition.notify_all()
 
     def acquire(self) -> bool:
         """Try to consume one token. Returns True if successful."""
@@ -51,11 +55,17 @@ class RateLimiter:
         Returns True if a token was acquired, False on timeout.
         """
         deadline = time.time() + timeout
-        while time.time() < deadline:
-            if self.acquire():
-                return True
-            time.sleep(0.01)
-        return False
+        with self._condition:
+            while time.time() < deadline:
+                self._refill()
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return True
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    return False
+                self._condition.wait(timeout=min(0.1, remaining))
+            return False
 
     @property
     def available_tokens(self) -> float:

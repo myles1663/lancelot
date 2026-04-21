@@ -9,6 +9,7 @@ and injection attacks.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import re
 import socket
 from dataclasses import dataclass
@@ -49,6 +50,7 @@ _PRIVATE_NETWORKS = [
 ]
 
 _PARAM_NAME_RE = re.compile(r"^[a-zA-Z0-9_]{1,64}$")
+logger = logging.getLogger(__name__)
 
 
 def _is_private_host(hostname: str) -> bool:
@@ -59,7 +61,10 @@ def _is_private_host(hostname: str) -> bool:
         addr = ipaddress.ip_address(hostname)
         return any(addr in net for net in _PRIVATE_NETWORKS)
     except ValueError:
-        pass
+        logger.debug(
+            "Generic REST hostname %s is not a literal IP address; skipping private-IP check",
+            hostname,
+        )
     return False
 
 

@@ -8,6 +8,8 @@ import socket
 import threading
 from urllib.parse import urlparse, unquote
 
+from src.core.network_allowlist import NetworkAllowlistService
+
 _security_logger = logging.getLogger("lancelot.security")
 
 class InputSanitizer:
@@ -134,9 +136,16 @@ class AuditLogger:
                 if last_line:
                     return hashlib.sha256(last_line.encode()).hexdigest()
         except FileNotFoundError:
-            pass
-        except Exception:
-            pass
+            _security_logger.debug(
+                "Audit log %s not found during hash recovery; starting new chain",
+                self.log_path,
+            )
+        except Exception as exc:
+            _security_logger.warning(
+                "Failed to recover audit log hash from %s: %s",
+                self.log_path,
+                exc,
+            )
         return "0" * 64
 
     def _write_entry(self, entry_content: str) -> None:
@@ -169,20 +178,6 @@ class AuditLogger:
         )
 
 class NetworkInterceptor:
-    # Core domains that are always allowed (infrastructure, not user-configurable)
-    _CORE_DOMAINS = [
-        "localhost",
-        "127.0.0.1",
-        "api.projectlancelot.dev",
-        "ghcr.io",
-    ]
-
-    # Config file path — editable via Kill Switches UI
-    _ALLOWLIST_CONFIG = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "config", "network_allowlist.yaml",
-    )
-
     BLOCKED_IP_RANGES = [
         ipaddress.ip_network("10.0.0.0/8"),
         ipaddress.ip_network("172.16.0.0/12"),
@@ -196,22 +191,17 @@ class NetworkInterceptor:
     _RELOAD_INTERVAL_S = 300
 
     def __init__(self):
-        self.ALLOW_LIST = list(self._CORE_DOMAINS)
+        self._allowlist = NetworkAllowlistService()
+        self.ALLOW_LIST = self._allowlist.load_domains(include_core=True)
         self._reload_timer: threading.Timer | None = None
         self._load_config_domains()
         self._schedule_reload()
 
     def _load_config_domains(self):
-        """Load domains from config/network_allowlist.yaml and merge with core domains."""
+        """Load domains from the canonical allowlist subsystem."""
         try:
-            import yaml
-            with open(self._ALLOWLIST_CONFIG, "r") as f:
-                data = yaml.safe_load(f) or {}
-            config_domains = data.get("domains", [])
-            # Merge: core + config, deduplicated
-            merged = set(self._CORE_DOMAINS)
-            merged.update(d.strip().lower() for d in config_domains if d and d.strip())
-            self.ALLOW_LIST = list(merged)
+            config_domains = self._allowlist.load_domains(include_core=False)
+            self.ALLOW_LIST = self._allowlist.load_domains(include_core=True)
             _security_logger.debug(
                 "Network allowlist loaded: %d domains (%d from config)",
                 len(self.ALLOW_LIST), len(config_domains),
@@ -220,7 +210,7 @@ class NetworkInterceptor:
             _security_logger.warning(
                 "Network allowlist config not found at %s — using %d core domains only. "
                 "Create this file with a 'domains:' YAML list to add allowed domains.",
-                self._ALLOWLIST_CONFIG, len(self._CORE_DOMAINS),
+                self._allowlist.path, len(self._allowlist.core_domains),
             )
         except Exception as e:
             _security_logger.error("Failed to load network allowlist config: %s", e)
@@ -292,17 +282,27 @@ class NetworkInterceptor:
             if not hostname:
                 return False
 
+            if self._allowlist.is_hostname_allowed(
+                hostname,
+                domains=self._allowlist.core_domains,
+            ):
+                return True
+
             # Check for private IP / SSRF
             if self._is_private_ip(hostname):
-                print(f"SECURITY ALERT: Blocked connection to private/internal address {hostname}")
+                _security_logger.warning(
+                    "SECURITY ALERT: Blocked connection to private/internal address %s",
+                    hostname,
+                )
                 return False
 
-            # Check if domain ends with allowed domain (to allow subdomains)
-            for allowed in self.ALLOW_LIST:
-                if hostname == allowed or hostname.endswith("." + allowed):
-                    return True
+            if self._allowlist.is_hostname_allowed(hostname, domains=self.ALLOW_LIST):
+                return True
 
-            print(f"SECURITY ALERT: Blocked outbound connection to {hostname}")
+            _security_logger.warning(
+                "SECURITY ALERT: Blocked outbound connection to %s",
+                hostname,
+            )
             return False
         except Exception:
             # Fail closed: if we cannot resolve, treat as blocked
@@ -333,7 +333,12 @@ class CognitionGovernor:
                 try:
                     with open(self.usage_file, "r") as f:
                         self.usage = json.load(f)
-                except Exception:
+                except Exception as exc:
+                    _security_logger.warning(
+                        "Failed to load usage stats from %s: %s",
+                        self.usage_file,
+                        exc,
+                    )
                     self.usage = {}
             else:
                 self.usage = {}
@@ -397,7 +402,12 @@ class Sentry:
             try:
                 with open(self.approvals_file, "r") as f:
                     self.approvals = json.load(f)
-            except Exception:
+            except Exception as exc:
+                _security_logger.warning(
+                    "Failed to load sentry approvals from %s: %s",
+                    self.approvals_file,
+                    exc,
+                )
                 self.approvals = {}
 
     def _save_approvals(self):
@@ -405,8 +415,12 @@ class Sentry:
         try:
             with open(self.approvals_file, "w") as f:
                 json.dump(self.approvals, f)
-        except Exception:
-            pass
+        except Exception as exc:
+            _security_logger.warning(
+                "Failed to save sentry approvals to %s: %s",
+                self.approvals_file,
+                exc,
+            )
 
     def add_approval(self, action_type: str, metadata: dict):
         """Whitelists an action signature."""

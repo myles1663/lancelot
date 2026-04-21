@@ -102,7 +102,7 @@ Receipts are tagged with a cognition tier indicating the level of processing inv
 Receipt inputs and outputs are sanitized before persistence:
 
 - **Secrets** are redacted (API keys, tokens, passwords replaced with `[REDACTED]`)
-- **PII** is stripped via local-model redaction when that lane is enabled; reduced-footprint installs that skip the local model rely on the upstream provider path instead
+- **PII** is stripped according to the configured frontier scrub policy. In `required` or `preferred` mode, Lancelot uses the local redaction lane before frontier egress when local scrubbing is available; `preferred` mode may fall back to direct frontier egress and now writes an immutable `pii_scrub_fallback` receipt instead of only surfacing that state in runtime status. Structured PII that is scrubbed locally emits `pii_scrub_applied`, and required-mode blocks emit `pii_scrub_blocked`, so the privacy boundary is auditable in the receipt log rather than only inferred from configuration.
 - **Large payloads** are truncated with size noted
 - **Binary content** is replaced with type and size metadata
 
@@ -161,9 +161,42 @@ By following `parent_id` links, you can reconstruct the complete causal chain fr
 
 ---
 
+## Integrity Chain
+
+Finalized receipts in the SQLite audit log now carry two integrity fields:
+
+- `integrity_prev_hash` — the SHA-256 hash of the previous finalized receipt in insertion order
+- `integrity_hash` — the SHA-256 hash of this receipt's canonical payload plus `integrity_prev_hash`
+
+This gives the finalized receipt log a tamper-evident chain. If a stored receipt body is edited after the fact, chain verification will fail.
+
+Finalized receipts also carry:
+
+- `integrity_key_id` — the active receipt-signing key identifier
+- `integrity_signature` — an HMAC-SHA256 signature over the finalized receipt hash
+
+By default, `ReceiptService` provisions and persists a local signing key alongside the receipt database on first boot, so new finalized receipts are always signed without requiring extra operator setup. Operators can still override that key with `LANCELOT_RECEIPT_HMAC_KEY` and `LANCELOT_RECEIPT_HMAC_KEY_ID` when they need externally managed signing material.
+
+This means the finalized chain is not just hash-linked. It is a keyed cryptographic verification path without changing receipt IDs or parent/quest lineage.
+
+`ReceiptService.validate_integrity_chain()` walks the finalized receipt log and reports:
+
+- missing integrity fields
+- previous-hash mismatches
+- recomputed-hash mismatches
+- missing integrity signatures when signing is enabled
+- integrity signature mismatches
+
+The receipt chain is separate from `parent_id` / `quest_id` lineage:
+
+- `parent_id` proves causal relationship between actions
+- `integrity_*` proves the finalized receipt body itself has not been modified without detection
+
+---
+
 ## Batch Receipts
 
-For high-volume T0 and T1 actions, receipts are batched together and flushed as a single JSON artifact with a SHA-256 integrity hash.
+For high-volume T0 and T1 actions, receipts are batched together and flushed as a single JSON artifact.
 
 **When batches flush:**
 - When the buffer reaches the configured size (default: 20)
@@ -174,13 +207,23 @@ For high-volume T0 and T1 actions, receipts are batched together and flushed as 
 ```json
 {
   "batch_id": "batch_abc123",
-  "receipts": [...],
-  "count": 20,
-  "integrity_hash": "sha256:abc123..."
+  "created_at": "2026-04-18T12:00:00Z",
+  "entries": [
+    {
+      "input_hash": "abc123...",
+      "output_hash": "def456..."
+    }
+  ],
+  "summary": {
+    "total_actions": 20,
+    "succeeded": 20,
+    "failed": 0,
+    "highest_risk_tier": 1
+  }
 }
 ```
 
-The integrity hash covers all receipt inputs and outputs, enabling tamper detection.
+Each batch entry records SHA-256 hashes of the serialized inputs and outputs. Batch receipts reduce I/O overhead and preserve integrity metadata for the entries they contain, but they are not currently described by their own signed or hash-chained batch manifest.
 
 ---
 
@@ -203,7 +246,9 @@ GET /router/decisions         → Recent routing decisions (which lane, which mo
 GET /router/stats             → Aggregate routing statistics
 ```
 
-Receipts are persisted as JSON files in `lancelot_data/receipts/`.
+Receipts are persisted in the SQLite audit store at `lancelot_data/receipts/receipts.db`.
+
+Finalized receipts live in the immutable `receipts` table. Pending work is held in an internal staging table until it resolves to `success` or `failure`, at which point the finalized receipt is written into the immutable log. Event-style receipts that do not have a pending execution window are finalized at creation time and land in the immutable log immediately.
 
 ### Tracing a Complete Action
 
@@ -218,14 +263,14 @@ To trace a complete action from request through execution:
 
 ## Receipt Retention
 
-Receipts are append-only — they cannot be modified or deleted at runtime. They accumulate in `lancelot_data/receipts/` over time.
+Finalized receipts are append-only — they cannot be modified or deleted at runtime. They accumulate in `lancelot_data/receipts/receipts.db` over time.
 
 **Storage considerations:**
 - Each receipt is a few hundred bytes to a few KB
 - A typical day of active use generates hundreds to low thousands of receipts
 - Monitor `lancelot_data/receipts/` disk usage as part of regular maintenance
 
-**Archival:** Receipts can be safely backed up or moved to external storage. The live system only reads recent receipts — older receipts are for auditing and incident investigation.
+**Archival:** Receipts can be safely backed up or exported to external storage. The live system does not support destructive retention cleanup from the immutable receipt log — archival should be done by copying or exporting the database, not deleting rows in place.
 
 ---
 

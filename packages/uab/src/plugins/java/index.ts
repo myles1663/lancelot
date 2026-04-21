@@ -34,6 +34,7 @@ import { WinUIAPlugin } from '../win-uia/index.js';
 export class JavaPlugin implements FrameworkPlugin {
   readonly framework = 'java-swing' as const;
   readonly name = 'Java (UIA via JAB)';
+  readonly controlMethod = 'java-jab-uia' as const;
   private uiaPlugin = new WinUIAPlugin();
 
   canHandle(app: DetectedApp): boolean {

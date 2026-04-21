@@ -1,6 +1,6 @@
 # V30: Intent classification helper functions extracted from orchestrator.py
 # These are pure functions — no instance state, no side effects.
-# EGOS audit Phase 1: orchestrator decomposition (conservative)
+# Kept separate so routing logic stays readable and testable.
 
 import re
 

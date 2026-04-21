@@ -32,6 +32,15 @@ _span_processor = None
 _initialized = False
 
 
+def _reset_state() -> None:
+    """Clear cached provider state so re-init starts from a known baseline."""
+    global _tracer, _meter, _span_processor, _initialized
+    _tracer = None
+    _meter = None
+    _span_processor = None
+    _initialized = False
+
+
 def init_otel(
     endpoint: str,
     auth_header: str = "",
@@ -142,14 +151,15 @@ def init_otel(
         return True
 
     except Exception as exc:
+        _reset_state()
         logger.error("OTel initialization failed: %s", exc)
         return False
 
 
 def shutdown_otel() -> None:
     """Gracefully shutdown OTel exporters. Flush pending spans/metrics."""
-    global _initialized
     if not _initialized:
+        _reset_state()
         return
 
     try:
@@ -163,10 +173,11 @@ def shutdown_otel() -> None:
         if hasattr(mp, "shutdown"):
             mp.shutdown()
 
-        _initialized = False
         logger.info("OTel shutdown complete")
     except Exception as exc:
         logger.warning("OTel shutdown error: %s", exc)
+    finally:
+        _reset_state()
 
 
 def get_tracer():

@@ -8,7 +8,7 @@
 import os
 import tempfile
 import pytest
-from src.shared.receipts import ActionType
+from src.shared.receipts import ActionType, get_receipt_service
 from src.federation.receipts import emit_federation_receipt, _FEDERATION_ACTION_TYPES
 from src.federation.receipt_manager import FederationReceiptManager
 
@@ -50,6 +50,9 @@ class TestEmitFederationReceipt:
         assert receipt.action_name == "heartbeat_emitted"
         assert receipt.metadata["federation_subsystem"] == "heartbeat"
         assert receipt.metadata["instance_id"] == "test-instance-123"
+        persisted = get_receipt_service(data_dir).get(receipt.id)
+        assert persisted is not None
+        assert persisted.status == "success"
 
     def test_emit_with_federation_fields(self, data_dir):
         receipt = emit_federation_receipt(

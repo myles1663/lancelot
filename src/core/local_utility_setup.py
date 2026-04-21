@@ -1,5 +1,5 @@
 """
-LOCAL_UTILITY_SETUP onboarding handler (v4 Upgrade — Prompt 12).
+Local utility setup handler for the required onboarding flow.
 
 Single-owner module for the mandatory local model install during onboarding.
 Manages the full lifecycle: consent → download → checksum → smoke test.

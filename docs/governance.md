@@ -127,6 +127,16 @@ Rollback is idempotent — calling it twice is a safe no-op.
 
 Verification is synchronous — the system waits for confirmation before proceeding.
 
+## Kill Switch Contract
+
+Kill switches are governed through a shared contract even when their runtime implementations differ. Feature-flag subsystem kills, MCP master and per-server kills, federated kill commands, and runtime pause/emergency-stop are all operator controls with the same core semantics:
+- a stable switch identifier
+- a defined scope
+- an explicit reason when the gate blocks work
+- observable status in operator-facing APIs
+
+Subsystem feature flags and MCP kill gates now share a canonical feature-flag-backed kill-switch contract. Federation kill propagation remains a specialized engine because it tracks cross-instance command lifecycle, acknowledgments, and lift review.
+
 ### T3 — Irreversible
 
 **Actions:** Network POSTs, outbound writes, deployments, deletions, financial transactions
@@ -194,6 +204,8 @@ Trust is revocable:
 - **On rollback:** Trust resets to one tier above default
 - **After denial:** 50-action cooldown before re-proposing graduation
 - **After revocation:** 25-action cooldown
+- **Across restart:** Trust records, pending proposals, and graduation history persist in `lancelot_data/governance/trust_ledger.json`
+- **Proposal integrity:** Resolved graduation proposals cannot be replayed by reusing an old proposal ID
 
 ### Soul Ceilings
 
@@ -265,7 +277,7 @@ Mapping common AI agent failure modes to the specific Lancelot mechanism that bl
 - Marketplace skills are restricted to `read_input`, `write_output`, `read_config` only
 - Elevated permissions require explicit owner approval
 - All skill executions produce receipts
-- Feature flags can kill the entire skill subsystem instantly
+- Feature flags can disable the entire skill subsystem immediately at the policy boundary
 
 ### Memory Poisoning
 
@@ -283,7 +295,7 @@ Mapping common AI agent failure modes to the specific Lancelot mechanism that bl
 
 **Defense:**
 - Secrets are stored in `.env` and sealed references, never in general memory
-- When the local model is enabled, PII redaction runs locally before frontier API calls; installs that skip the local model trade away that privacy boundary
+- Frontier-bound PII handling follows the runtime frontier scrub policy. In `required` or `preferred` mode, Lancelot uses the local redaction lane before frontier API calls when the local model is ready for inference. `required` blocks frontier egress if local scrubbing is unavailable or if the local lane returns output that still contains detectable structured PII; `preferred` allows fallback and records the degraded privacy event. Frontier payload scrubbing now recurses through nested provider payload fields rather than only top-level text slots, and residual-PII validation normalizes zero-width characters plus common Unicode separator variants before matching, so structured PII hidden under arbitrary nested keys or lightly obfuscated separators is still caught before frontier egress. The canonical runtime boundary for that logic is `LocalPIIScrubber` in `src/core/frontier_scrubber.py`.
 - Receipts sanitize inputs and outputs
 - Credential access is logged (enforced by Soul risk rule)
 
@@ -360,16 +372,17 @@ Constitutional governance documents. See [Authoring Souls](authoring-souls.md) f
 
 ## Scoped Soul Governance (Hive Agent Mesh)
 
-When the Hive Agent Mesh spawns sub-agents, each agent receives a **scoped Soul** — a task-specific governance document derived from the parent Soul with the **monotonic restriction principle**: scoped Souls can only be more restrictive, never less.
+When the Hive Agent Mesh spawns sub-agents, each agent receives a **scoped Soul** — a task-specific governance document derived from the parent Soul with the **monotonic restriction principle**: scoped Souls can only be more restrictive, never less. Spawn also derives an immutable execution boundary from the parent Soul plus the frozen `TaskSpec`, so post-spawn mutation of a raw scoped Soul document cannot widen what the child is allowed to execute.
 
 ### How Scoped Souls Work
 
 1. Start with the parent Soul's `allowed_autonomous` actions
-2. Filter to only the actions matching the subtask's `allowed_categories`
+2. Filter to only the actions matching the subtask's canonical `allowed_categories` map (exact category matching, not substring heuristics)
 3. If `control_method=MANUAL_CONFIRM`, move all actions to `requires_approval`
 4. Preserve all parent risk rules and add Hive-specific rules
 5. Tighten scheduling: `max_concurrent_jobs=1`, duration capped to task timeout
 6. Validate with `validate_more_restrictive()` — if validation fails, the agent is not spawned
+7. Seal execution with an immutable capability boundary — runtime and UAB enforcement use the frozen boundary, not caller-supplied or later-mutated scope fields
 
 ### Soul Overlay (`soul/overlays/hive.yaml`)
 
@@ -395,6 +408,12 @@ The scoped Soul mechanism extends the existing governance model (Soul → Policy
 - **Per-agent governance** — each sub-agent has its own governance boundary
 - **Monotonic restriction** — sub-agents are always less powerful than the parent
 - **Hive overlay rules** — additional safety constraints specific to ephemeral multi-agent execution
+
+Read-only and mutating UAB steps now use the same scoped-category contract at runtime. `uab_query`/`uab_state` are checked as scoped read/query capabilities, while mutating capabilities such as `uab_click` and `uab_type` are checked before the bridge or executor calls the UAB provider.
+
+Within the live HIVE runtime, those UAB checks now run against authoritative task state rather than caller-supplied action fields. `SubAgentRuntime` overwrites injected `agent_id`, `scoped_soul`, `allowed_apps`, and `allowed_categories` with the registered task-record values before the action reaches `HiveUABExecutor`, which closes the action-level scope-widening path for desktop execution.
+
+The runtime now also seals the task contract at spawn. The registry copies the submitted `TaskSpec`, and `SubAgentRuntime` snapshots that copied spec when it is created, so mutating the caller's original task object or the returned record after spawn cannot widen the agent's live app/category boundary.
 
 For the full Hive Agent Mesh architecture, see [Hive](hive.md). For Soul overlay authoring, see [Authoring Souls](authoring-souls.md).
 

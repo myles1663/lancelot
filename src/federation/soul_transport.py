@@ -362,8 +362,8 @@ class SoulTransport:
                     soul_hash=soul_hash,
                     target_instance_ids=[p.instance_id for p in peers],
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to record soul push receipt for %s: %s", soul_hash[:8], exc)
 
         if self._audit:
             try:
@@ -379,8 +379,8 @@ class SoulTransport:
                         "governance_gaps": handshake_result.governance_gaps,
                     },
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to write soul push audit for %s: %s", soul_hash[:8], exc)
 
         logger.info(
             "Soul push complete: %d/%d peers received (%s, hash=%s)",
@@ -541,8 +541,12 @@ class SoulTransport:
                         soul_version_hash=soul_hash,
                         compatible=False,
                     )
-                except Exception:
-                    pass
+                except Exception as receipt_exc:
+                    logger.warning(
+                        "Failed to record failed soul handshake receipt for %s: %s",
+                        source_id,
+                        receipt_exc,
+                    )
             return {
                 "accepted": False,
                 "error": f"Failed to apply Soul update: {exc}",
@@ -557,8 +561,8 @@ class SoulTransport:
                     soul_version_hash=soul_hash,
                     compatible=True,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to record soul handshake acknowledgement for %s: %s", source_id, exc)
 
         logger.info(
             "Soul update received from %s: tier=%s, hash=%s",

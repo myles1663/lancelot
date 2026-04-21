@@ -389,7 +389,7 @@ Returns the active version and all available versions.
 
 ### Switching Versions
 
-Switching is instant — update the pointer and rebuild the policy cache:
+Switching is a direct pointer update plus a policy-cache rebuild:
 
 ```python
 set_active_version("v2", soul_dir)
@@ -459,11 +459,11 @@ requires_approval:
 When the Hive Agent Mesh spawns a sub-agent, it generates a **scoped Soul** — a task-specific Soul derived from the parent with the monotonic restriction principle:
 
 1. **Start with parent** `allowed_autonomous` actions
-2. **Filter by task categories** — keep only actions matching the subtask's `allowed_categories`
+2. **Filter by canonical task categories** — keep only actions matching the subtask's `allowed_categories` via the Hive capability/category map (no fuzzy substring matching)
 3. **Apply control method** — `MANUAL_CONFIRM` moves all actions to `requires_approval`
 4. **Preserve all parent risk rules** — only add, never remove
 5. **Tighten scheduling** — `max_concurrent_jobs=1`, duration capped to task timeout
 
-The scoped Soul is validated with `validate_more_restrictive()` to ensure it never grants more autonomy than the parent. Each scoped Soul is SHA256-hashed and stored on the agent record for audit linkage.
+The scoped Soul is validated with `validate_more_restrictive()` to ensure it never grants more autonomy than the parent. Each scoped Soul is SHA256-hashed and stored on the agent record for audit linkage. Explicit `mcp:<server_id>` / `server:<server_id>` selectors can narrow MCP permissions further; ordinary task categories do not fuzzily match MCP server IDs.
 
 For full details, see [Hive Agent Mesh](hive.md).

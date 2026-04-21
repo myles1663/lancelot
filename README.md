@@ -1,310 +1,104 @@
 # Lancelot
 
-[![License: BSL-1.1](https://img.shields.io/badge/License-BSL%201.1-blue.svg)](LICENSE)
-[![Patent Pending](https://img.shields.io/badge/Patent-Pending-orange.svg)](DISCLOSURE.md)
-[![Built with Claude Code](https://img.shields.io/badge/Built%20with-Claude%20Code-blueviolet.svg)](CLAUDE.md)
-[![Tests](https://img.shields.io/badge/Tests-4200%2B%20passing-brightgreen.svg)]()
-
-**A Governed Autonomous System** — an AI operator that can plan, act, remember, and recover under explicit constitutional control.
-
-![Lancelot Logo](static/logo.jpeg)
-
----
-
-Lancelot is a **self-hosted, local-first autonomous AI system** for people who want an AI they can trust to *operate*, not just converse. It executes real actions, maintains structured memory, and produces auditable records of everything it does — all governed by an explicit constitutional document called the **Soul**.
-
-This is not a chatbot. This is not a prompt wrapper. This is not a framework.
-It is a **system**.
-
-## Design Principles (Non-Negotiable)
-
-These principles are enforced in code, not just stated in docs:
-
-1. **Governance over convenience** — Every action passes through policy evaluation
-2. **Verification over speed** — Planner/Verifier pipeline validates outcomes
-3. **Deterministic context over retrieval vibes** — Structured tiered memory, not lossy RAG
-4. **Receipts over "trust me"** — Every action produces an auditable receipt
-5. **Reversibility over irreversible autonomy** — Atomic operations, rollback by default
-
-## Architecture at a Glance
-
-<p align="center">
-  <img src="docs/images/fig1_system_architecture.svg" alt="Lancelot System Architecture" width="900">
-</p>
-
-Every subsystem is **independently disableable** via feature flags. If something breaks, kill it — the rest keeps running. Recent additions include the **Federation Data Plane** for multi-instance Soul-governed coordination, **MCP Governance** for governed access to external tool servers, the **Universal Application Bridge (UAB)** for framework-level desktop app control, the **Hive Agent Mesh** for ephemeral sub-agent task decomposition, and the **A2A Protocol** for governed cross-agent interoperability via Google's A2A v0.2 spec — all feature-gated and disabled by default.
-
-## Key Capabilities
-
-| Subsystem | What It Does | Learn More |
-|-----------|-------------|------------|
-| **Soul** | Constitutional governance — defines what Lancelot can and cannot do | [Governance](docs/governance.md) |
-| **Memory** | Tiered, commit-based memory with quarantine and rollback | [Memory](docs/memory.md) |
-| **Skills** | Modular capabilities with manifest-declared permissions | [Developing Skills](docs/developing-skills.md) |
-| **Tool Fabric** | Provider-agnostic execution with sandboxing and policy gates | [Architecture](docs/architecture.md) |
-| **UAB** | Framework-level desktop app control across 10 plugins with the standalone 1.3.0 core embedded behind Lancelot's governed JSON-RPC compatibility bridge on `:7900` (feature-gated) | [UAB](docs/uab.md) |
-| **Hive Mesh** | Ephemeral sub-agent architecture with task decomposition and scoped souls (feature-gated) | [Hive](docs/hive.md) |
-| **Federation** | Multi-instance coordination with Soul propagation, task handoff, and cross-instance audit (feature-gated) | [Federation](docs/federation.md) |
-| **MCP Governance** | Governed MCP tool server access with 8-gate fail-closed pipeline (feature-gated) | [MCP](docs/mcp.md) |
-| **Connectors** | Governed external service integrations with risk classification and trust tracking (feature-gated) | [Connectors](docs/connectors.md) |
-| **Receipts** | Auditable record of every action, decision, and outcome | [Receipts](docs/receipts.md) |
-| **Compliance Export** | One-click SOC 2, ISO 27001, GDPR audit artifacts from the receipt DAG | [Compliance Export](docs/compliance-export.md) |
-| **Time-Travel** | Governed fork/replay of quest histories with DAG visualization and state snapshots (feature-gated) | [Time-Travel](docs/time-travel.md) |
-| **A2A Protocol** | Governed Agent-to-Agent interoperability via Google A2A v0.2 — inbound server, outbound client, agent card, trust tracking (feature-gated) | [A2A](docs/a2a.md) |
-| **Observability** | OTel traces/metrics, webhooks, and Metrics API for enterprise monitoring stacks (feature-gated) | [Observability](docs/observability.md) |
-| **Incident Response** | Structured response playbooks for governance events with trigger engine, PDF reports, and industry variant overlays (feature-gated) | [Incident Response](docs/incident-response.md) |
-| **Soul Template Library** | Pre-validated Soul templates for industry verticals with propose→approve→activate workflow | [Soul Templates](docs/soul-templates.md) |
-| **Scheduler** | Gated cron/interval automation with approval pipelines | [Configuration](docs/configuration-reference.md) |
-| **War Room** | Operator dashboard for full system observability | [War Room Guide](docs/war-room.md) |
+Lancelot is a self-hosted AI operator for technical users who want model-driven automation with hard policy boundaries. It can call tools, control desktop applications through a governed bridge, keep structured memory, and write immutable receipts for every action. The design goal is simple: treat the model as untrusted planning logic inside a system that can say no, require approval, and leave an audit trail.
 
 ## Quickstart
 
-### One-Command Install (Recommended)
+1. Install Docker Desktop and Node.js 18+.
+2. Run `npx create-lancelot`.
+3. The installer will collect one provider credential, build the Docker image, and start the stack.
+4. Open http://localhost:8000.
+5. Verify liveness: `curl http://localhost:8000/health/live`
+6. Send a smoke test: `curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '{"text":"hello"}'`
 
-Requires **Docker Desktop** and **Node.js 18+**:
-
-```bash
-npx create-lancelot
-```
-
-The installer handles everything: prerequisites check, API key setup, model download, Docker build, and startup. You'll have a running instance in about 5 minutes.
-
-Options:
-- `npx create-lancelot --resume` — resume an interrupted install
-- `npx create-lancelot --skip-model` — skip the 5GB local model download
-- `npx create-lancelot --provider gemini` — pre-select a provider
-
-<details>
-<summary><strong>Manual Installation</strong></summary>
-
-#### Prerequisites
-
-- Docker Desktop
-- At least one LLM API key (Gemini, OpenAI, Anthropic, xAI, or NVIDIA), or a ChatGPT Plus/Pro subscription (via Codex OAuth)
-- NVIDIA GPU recommended for local model (works without, just slower)
-
-#### Steps
+Manual setup:
 
 ```bash
-# Clone
-git clone https://github.com/myles1663/lancelot.git
+git clone <repo-url>
 cd lancelot
-
-# Configure — the installer creates .env for you, but for manual setup:
-# Add your API keys and settings to .env
-
-# Launch (starts Docker + auto-opens War Room in browser)
-./launch.sh            # Linux / macOS / Git Bash
-.\launch.ps1           # PowerShell (Windows)
-
-# Or start manually without auto-open:
-docker compose up -d
+cp .env.example .env
+docker compose up --build
 ```
 
-The launch scripts start the containers, wait for the health check to pass, then automatically open the War Room in your default browser.
+For installation details and provider-specific setup, see [docs/installation.md](docs/installation.md).
 
-If you are using ChatGPT Plus/Pro via Codex, complete the Codex sign-in flow on the host first so `~/.codex/auth.json` exists. Lancelot mounts that directory into the container and runs the official `codex exec` client for the `openai-codex` provider.
+Lancelot is built for developers, operators, and technical teams who need governed automation rather than a lightweight agent demo or consumer chatbot.
 
-In `openai-codex` mode, Codex is the planner, not the direct executor. Codex proposes tool calls, then Lancelot routes those calls through its own governance layer, approval checks, receipts, and skill execution pipeline before any action runs.
+## Core Components
 
-#### Verify
+### Governance
+
+The governance layer evaluates every agent action against policy before execution. It combines Soul-defined constraints, risk classification, approval requirements, and kill switches so the model cannot bypass the system with prompt text alone.
+
+### UAB
+
+The Universal Application Bridge gives Lancelot a governed path to desktop application control. It routes operations through framework-aware hooks and fallbacks so app automation stays explicit, inspectable, and policy-bound instead of being treated like a generic tool call.
+
+### HIVE
+
+HIVE handles task decomposition into bounded sub-agents. Each spawned task gets explicit scope, app/category limits, and runtime enforcement so delegation remains constrained instead of turning into open-ended autonomous execution.
+
+### Receipts
+
+The receipt system is the audit trail. Actions are staged, finalized into an immutable log, and linked into an integrity chain so operators can reconstruct what happened and verify that records were not silently rewritten.
+
+## Governed Action Flow
+
+1. A model or operator request proposes an action.
+2. Lancelot classifies the action risk and checks the active Soul policy.
+3. Kill switches, approval rules, and scoped runtime boundaries decide whether execution can continue.
+4. The approved action runs through a governed tool provider or UAB route.
+5. The outcome is written as a finalized receipt linked into the integrity chain.
+
+## Architecture
+
+<p align="center">
+  <img src="docs/images/fig1_system_architecture.svg" alt="Lancelot system architecture" width="900">
+</p>
+
+The diagram shows the system boundary clearly: governance sits in front of execution, receipts capture outcomes, and feature-gated subsystems can be disabled without collapsing the entire stack.
+
+## Proof Points
+
+Key guarantees are backed by contract tests you can run directly:
+
+- Receipt immutability and integrity-chain validation: [tests/test_receipts.py](tests/test_receipts.py)
+- HIVE scoped execution and boundary enforcement: [tests/hive/test_runtime.py](tests/hive/test_runtime.py)
+- Kill switch propagation and fail-closed behavior: [tests/test_kill_switch_contract.py](tests/test_kill_switch_contract.py)
+- UAB route selection and fallback behavior: [packages/uab/tests/router-methods.test.mjs](packages/uab/tests/router-methods.test.mjs), [packages/uab/tests/connector-fallbacks.test.mjs](packages/uab/tests/connector-fallbacks.test.mjs)
+- UAB action-risk taxonomy: [packages/uab/tests/permissions-risk.test.mjs](packages/uab/tests/permissions-risk.test.mjs), [tests/test_uab_bridge_provider.py](tests/test_uab_bridge_provider.py)
+- UAB readiness polling: [packages/uab/tests/server-readiness.test.mjs](packages/uab/tests/server-readiness.test.mjs)
 
 ```bash
-# Health check
-curl http://localhost:8000/health/live
-
-# Send a test message
-curl -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"text": "hello"}'
+pytest tests/test_receipts.py tests/hive/test_runtime.py tests/test_kill_switch_contract.py
+cd packages/uab
+npm run build
+node --test tests/router-methods.test.mjs tests/connector-fallbacks.test.mjs tests/permissions-risk.test.mjs
+node --test tests/server-readiness.test.mjs
 ```
 
-Open the **War Room** at `http://localhost:8000` to see the operator dashboard.
+## Development Note
 
-![War Room Overview Dashboard](docs/images/war-room-overview-dashboard.png)
+Lancelot was built through AI-assisted development. The engineering bar for the repo is not whether generated code is detectable; it is whether the system has explicit contracts, failure-mode tests, and reviewable boundaries. The files above are the best starting point for evaluating that claim.
 
-For detailed setup including GPU configuration, multi-provider routing, and network hardening, see the [Installation Guide](docs/installation.md).
+## Known Limitations
 
-</details>
+- Several major subsystems, including HIVE, Federation, MCP Governance, A2A, Time Travel, Observability, and parts of UAB, are feature-gated and disabled by default. The default path to inspect first is governance, receipts, health checks, and the core tool bridge.
+- UAB is strongest on supported desktop frameworks and host setups. It is not universal automation for every application.
+- The system is local-first and self-hosted, not a managed SaaS.
+- The configuration surface is large. Operators should treat `config/*.yaml` and `.env` as deployment artifacts, not casual defaults.
+- Some modules still need refactoring and logging cleanup to match the maturity of the core governance and receipt systems.
 
-## What Makes Lancelot Different
+## Deep Dives
 
-Most AI agent frameworks give the model a bag of tools and hope for the best. Lancelot treats the model as **untrusted logic inside a governed, observable, reversible system**.
+For the full documentation index, architecture notes, subsystem guides, and operational references, see [docs/INDEX.md](docs/INDEX.md).
 
-- **The Soul is law.** The model cannot override its constitutional document. If the Soul forbids an action, it cannot be executed — regardless of prompt, context, or model intent.
-- **Every action has a receipt.** LLM calls, tool executions, file operations, memory edits, scheduler runs, verification steps — all produce durable, auditable records. If there's no receipt, it didn't happen.
-- **Memory is structured, not vibes.** Four tiers (Core, Working, Episodic, Archival) with commit-based editing, quarantine for risky writes, and exact rollback. No vector-search-and-pray.
-- **Verification is mandatory.** The Planner/Executor/Verifier loop means results are checked, not assumed. Failures are surfaced, never hidden.
-- **Everything has a kill switch.** Every subsystem is feature-flagged. Shell execution, networking, scheduling, skill installation, memory writes — all independently disableable.
+Short architecture decision records:
 
-For a detailed comparison with other agent systems, see [How Lancelot Compares](docs/comparison.md).
-
-## Security
-
-Lancelot is **safe by construction**, not by convention:
-
-- Prompt injection detection with 16 patterns + homoglyph normalization
-- Capability-based tool access with default-deny posture
-- Sandboxed execution (Docker containers, workspace boundary enforcement)
-- Symlink-safe path validation, atomic file writes
-- Local PII redaction before frontier API calls when the local model is enabled; direct frontier mode remains available for reduced-footprint installs
-- Feature-flag kill switches for every high-risk subsystem
-- 96 vulnerabilities identified and remediated across two hardening passes
-
-### Vault-Backed Secret Management
-
-Secrets never live in plaintext environment variables at runtime. Lancelot uses a **3-phase hardened secret pipeline**:
-
-1. **Encrypted Vault Storage** — All system secrets (API tokens, War Room credentials, Telegram tokens) are stored in a Fernet-encrypted vault (`AES-128-CBC + HMAC-SHA256`). On first boot, secrets are auto-migrated from `.env` into the vault. War Room passwords are SHA-256 hashed on migration.
-
-2. **In-Memory Cache + Environ Scrub** — At startup, secrets are loaded from the vault into a thread-safe in-memory cache (`secret_cache`), then scrubbed from `os.environ` — including `LANCELOT_VAULT_KEY` itself. This closes the `/proc/PID/environ` exposure window. All modules read secrets from the cache, never from environment variables.
-
-3. **Hot Rotation Without Restart** — Secrets can be rotated at runtime via `POST /api/secrets/reload` (owner-token-protected) or `kill -HUP <pid>`. Changed secrets propagate immediately to all consumers. Every rotation emits an auditable `SYSTEM` receipt.
-
-**Optional hardening:**
-- **Docker Secrets** — Read the vault key from `/run/secrets/` instead of environment variables (commented-out config in `docker-compose.yml`)
-- **PBKDF2 Passphrase Derivation** — Use a human-memorable passphrase instead of a raw Fernet key. The vault auto-detects passphrases and derives a key via `PBKDF2HMAC(SHA256, 600k iterations)` with a persisted random salt.
-- **Rollback** — Set `FEATURE_VAULT_SECRETS=false` to fall back to `os.getenv()` without code changes.
-
-Full details: [Security Posture](docs/security.md)
-
-## Who This Is For
-
-Lancelot is built for people who want **agency with accountability**:
-
-- Developers and DevOps engineers who need an AI that can actually execute
-- Security-conscious operators who won't deploy ungoverned agents
-- Founders and technical leads building AI-powered workflows
-- Anyone who wants an AI they can trust to act — and prove what it did
-
-## Who This Is Not For
-
-- If you want a consumer chatbot, use ChatGPT
-- If you want a lightweight agent demo, use a framework
-- If you want to move fast and break things, Lancelot will slow you down — on purpose
-
-## Project Values
-
-Read the [Anti-Roadmap](docs/anti-roadmap.md) — what we will *not* build, and why. It says more about this project than any feature list.
-
-<details>
-<summary><strong>Project Structure</strong></summary>
-
-```
-lancelot/
-├── src/
-│   ├── core/              # Orchestration, routing, security
-│   │   ├── memory/        # Tiered memory: block store, commits, compiler
-│   │   ├── soul/          # Constitutional identity: store, linter, amendments, templates
-│   │   │   ├── templates.py      # Soul Template Library: registry, validation
-│   │   │   ├── template_api.py   # Template API: propose, approve, activate
-│   │   ├── skills/        # Modular skills: schema, registry, executor, factory
-│   │   ├── health/        # Heartbeat: health types, monitor, API
-│   │   ├── scheduler/     # Job scheduling: schema, service, executor
-│   │   └── feature_flags.py
-│   ├── tools/             # Tool Fabric: contracts, policies, providers
-│   ├── connectors/        # Governed external service integrations
-│   ├── mcp/               # MCP governance: 8-gate proxy, argument screening, response guard
-│   ├── a2a/               # A2A Protocol: inbound server, outbound client, agent card, registry
-│   ├── federation/        # Federation: identity, transport, Soul propagation, handoff, audit
-│   ├── incidents/         # Incident Response: trigger engine, playbooks, store, reports
-│   ├── hive/              # Hive Agent Mesh: decomposition, scoped souls, governance bridge
-│   ├── warroom/           # React War Room (Vite + React 18 + TypeScript)
-│   ├── agents/            # Planner, Verifier, Crusader
-│   ├── ui/                # Legacy Streamlit UI, Launcher
-│   ├── integrations/      # Telegram, Google Chat
-│   └── shared/            # Utilities, logging, receipts
-├── playbooks/             # Incident response playbooks (YAML) + industry variant overlays
-├── installer/             # create-lancelot CLI installer (npm)
-├── config/                # YAML configuration files
-├── docs/                  # Documentation
-├── soul/                  # Soul version files
-├── tests/                 # Test suite (4200+ tests)
-└── static/                # UI assets
-```
-
-</details>
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [Quickstart](docs/quickstart.md) | Clone to first governed action in 15 minutes |
-| [Installation Guide](docs/installation.md) | Comprehensive setup for all deployment methods |
-| [Architecture](docs/architecture.md) | Full system walkthrough with diagrams |
-| [Governance Deep Dive](docs/governance.md) | Soul, Policy Engine, Trust Ledger, APL |
-| [Security Posture](docs/security.md) | Threat model, enforcement layers, hardening |
-| [Memory System](docs/memory.md) | Tiered memory, quarantine, rollback |
-| [Receipts](docs/receipts.md) | Audit trail and action tracing |
-| [War Room Guide](docs/war-room.md) | Operator dashboard manual |
-| [Configuration Reference](docs/configuration-reference.md) | Every env var, YAML file, and option |
-| [Developing Connectors](docs/developing-connectors.md) | Build governed integrations |
-| [Developing Skills](docs/developing-skills.md) | Build capabilities that pass the security pipeline |
-| [Authoring Souls](docs/authoring-souls.md) | Customize Lancelot's constitutional governance |
-| [UAB (Universal Application Bridge)](docs/uab.md) | Desktop app control via the embedded standalone UAB core and governed host bridge |
-| [Hive Agent Mesh](docs/hive.md) | Ephemeral sub-agent task decomposition |
-| [Federation Data Plane](docs/federation.md) | Multi-instance coordination, Soul propagation, task handoff |
-| [MCP Governance](docs/mcp.md) | Governed MCP tool server access with 8-gate pipeline |
-| [Kill Switches](docs/kill-switches.md) | Complete feature flag reference with dependency chains |
-| [Connectors](docs/connectors.md) | External service integrations with governed proxy |
-| [Trust Ledger](docs/trust-ledger.md) | Progressive tier relaxation via demonstrated reliability |
-| [Approval Pattern Learning](docs/apl.md) | Auto-approval from learned owner decision patterns |
-| [Skill Security Pipeline](docs/skill-security.md) | 6-stage evaluation for new skills |
-| [Compliance Export](docs/compliance-export.md) | One-click SOC 2, ISO 27001, GDPR audit artifacts |
-| [Observability](docs/observability.md) | OTel export, webhooks, Metrics API, dashboard templates |
-| [Time-Travel Debugging](docs/time-travel.md) | Governed fork/replay, DAG navigator, state snapshots |
-| [A2A Protocol](docs/a2a.md) | Governed Agent-to-Agent interoperability with inbound/outbound pipelines |
-| [Soul Templates](docs/soul-templates.md) | Pre-validated Soul templates for industry verticals |
-| [Incident Response](docs/incident-response.md) | Response playbooks, trigger engine, incident lifecycle, PDF reports |
-| [How Lancelot Compares](docs/comparison.md) | Factual comparison with the agent landscape |
-| [Anti-Roadmap](docs/anti-roadmap.md) | What we will not build, and why |
-| [Changelog](CHANGELOG.md) | Version history |
-| [Contributing](CONTRIBUTING.md) | How to contribute |
-| [Disclosure](DISCLOSURE.md) | Patent status, licensing, development methodology |
-| [Security Policy](SECURITY.md) | Responsible disclosure process |
-
-## Test Suite
-
-**196 test files — 4,200+ tests** across the full stack:
-
-| Category | Tests | Coverage |
-|----------|------:|----------|
-| **Unit** | ~3,850 | Core subsystems, types, state machines, serialization, policies, receipts |
-| **Integration** | ~100 | End-to-end task lifecycle, API endpoints, cross-subsystem coordination |
-| **End-to-end** | ~145 | Full orchestrator flows, multi-agent execution, receipt chain verification |
-| **Failure injection** | 46 | Connector failure mid-task, timeout/cleanup, concurrent conflicts, soul violations, receipt tampering, UAB fallback, trust ledger race conditions |
-
-Run the suite:
-
-```bash
-pytest tests/ -x                        # Stop on first failure
-pytest tests/hive/ -v                   # HIVE subsystem only
-pytest tests/hive/test_failure_injection.py -v  # Failure/edge-case tests
-```
-
-### What the Tests Found
-
-Failure injection testing uncovered 4 bugs and 2 design gaps. All bugs have been fixed and regression-tested.
-
-**Bugs Uncovered and Fixed:**
-
-| Issue | Severity | File | Fix |
-|-------|----------|------|-----|
-| Governance pause ignored agent timeout — paused agents waited a hardcoded 300s regardless of their actual deadline | Bug | `src/hive/runtime.py` | `_wait_for_unpause` now uses remaining task timeout |
-| Governance component failures logged at `debug` level — trust ledger and MCP Sentry errors invisible to operators | Monitoring gap | `src/hive/integration/governance_bridge.py` | Bumped to `warning` level |
-| `TaskSpec.timeout_seconds` had no floor — zero or negative values accepted silently | Defensive gap | `src/hive/types.py` | Added `__post_init__` floor at 1 second |
-| Receipt `parent_id` could reference non-existent receipts with no way to audit | Audit gap | `src/shared/receipts.py` | Added `validate_parent_chain()` for orphan detection |
-
-**Design Notes (Not Bugs — Documented for Transparency):**
-
-- `HiveConfig.max_retry_attempts` exists but the runtime doesn't use it — retries are handled at the architect level, not per-action. This is intentional but underdocumented.
-- `UABBridge._validate_app_access` is a no-op stub — app access is validated by the runtime before calling the bridge. The stub exists for future per-bridge enforcement.
+- [Local-first, self-hosted control plane](docs/adr/0001-local-first-self-hosted.md)
+- [SQLite-backed receipts](docs/adr/0002-sqlite-receipts.md)
+- [Feature-gated subsystems](docs/adr/0003-feature-gated-subsystems.md)
 
 ## License
 
-BSL 1.1 (source-available) — See [LICENSE](LICENSE) for details. Free for non-production use (evaluation, development, testing). Production use requires a commercial license. Converts automatically to AGPL-3.0 on March 4, 2030.
-
----
-
-> If you want a clever agent demo, use a framework.
-> If you want an AI you can **trust to operate**, use a **Governed Autonomous System**.
+Business Source License 1.1 (BSL 1.1, source-available). Non-production use is free. Production use requires a commercial license; see [LICENSE](LICENSE) for the exact terms.

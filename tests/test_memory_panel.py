@@ -18,6 +18,9 @@ from pathlib import Path
 # Enable feature flag for testing
 os.environ["FEATURE_MEMORY_VNEXT"] = "true"
 
+from src.core import feature_flags
+feature_flags.reload_flags()
+
 from src.ui.panels.memory_panel import MemoryPanel
 from src.core.memory.store import CoreBlockStore
 from src.core.memory.sqlite_store import MemoryStoreManager
@@ -38,6 +41,15 @@ from src.core.memory.schemas import (
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def enable_memory_vnext(monkeypatch):
+    """Keep Memory vNext enabled even when earlier tests imported feature flags first."""
+    monkeypatch.setenv("FEATURE_MEMORY_VNEXT", "true")
+    feature_flags.reload_flags()
+    yield
+    feature_flags.reload_flags()
+
+
 @pytest.fixture
 def temp_data_dir():
     """Create a temporary data directory."""

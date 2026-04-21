@@ -14,6 +14,8 @@ import {
 } from '@/api'
 import type { ConnectorInfo, CredentialInfo, GoogleOAuthStatusResponse } from '@/api/connectors'
 import { StatusDot, ConfirmDialog, MCPSection } from '@/components'
+import { getErrorMessage } from '@/utils/errors'
+import { emitWarRoomNotification } from '@/utils/notifications'
 
 // ── Google OAuth vault keys that are managed by the OAuth flow ──
 const GOOGLE_OAUTH_KEYS = new Set(['email.gmail_token', 'calendar.google_token'])
@@ -59,12 +61,18 @@ export function Connectors() {
   const [googleOAuthMessage, setGoogleOAuthMessage] = useState('')
   const [revokeConfirm, setRevokeConfirm] = useState(false)
 
+  const reportConnectorError = (error: unknown, fallback: string) => {
+    emitWarRoomNotification(getErrorMessage(error, fallback), 'high')
+  }
+
   // Fetch Google OAuth status on mount and periodically
   useEffect(() => {
     const fetchStatus = () => {
       fetchGoogleOAuthStatus()
         .then(res => setGoogleOAuthStatus(res))
-        .catch(() => {})
+        .catch((error) => {
+          setGoogleOAuthMessage(getErrorMessage(error, 'Unable to refresh Google OAuth status.'))
+        })
     }
     fetchStatus()
     const id = setInterval(fetchStatus, 10000)
@@ -97,13 +105,16 @@ export function Connectors() {
               setGoogleClientSecret('')
               refetch()
             }
-          } catch { /* ignore */ }
+          } catch (error) {
+            clearInterval(pollId)
+            setGoogleOAuthMessage(getErrorMessage(error, 'Failed to verify Google OAuth completion.'))
+          }
         }, 3000)
         // Stop polling after 5 minutes
         setTimeout(() => clearInterval(pollId), 300000)
       }
-    } catch {
-      setGoogleOAuthMessage('Failed to start Google OAuth flow.')
+    } catch (error) {
+      setGoogleOAuthMessage(getErrorMessage(error, 'Failed to start Google OAuth flow.'))
     } finally {
       setGoogleOAuthLoading(false)
     }
@@ -116,8 +127,8 @@ export function Connectors() {
       setGoogleOAuthStatus(null)
       setGoogleOAuthMessage('Google OAuth tokens revoked.')
       refetch()
-    } catch {
-      setGoogleOAuthMessage('Failed to revoke Google tokens.')
+    } catch (error) {
+      setGoogleOAuthMessage(getErrorMessage(error, 'Failed to revoke Google tokens.'))
     }
   }
 
@@ -150,7 +161,9 @@ export function Connectors() {
     try {
       await enableConnector(connector.id)
       refetch()
-    } catch { /* ignore */ } finally {
+    } catch (error) {
+      reportConnectorError(error, `Failed to enable connector ${connector.name}`)
+    } finally {
       setToggling(null)
     }
   }
@@ -161,7 +174,9 @@ export function Connectors() {
     try {
       await disableConnector(id)
       refetch()
-    } catch { /* ignore */ } finally {
+    } catch (error) {
+      reportConnectorError(error, `Failed to disable connector ${id}`)
+    } finally {
       setToggling(null)
     }
   }
@@ -170,7 +185,9 @@ export function Connectors() {
     try {
       await setConnectorBackend(id, backend)
       refetch()
-    } catch { /* ignore */ }
+    } catch (error) {
+      reportConnectorError(error, `Failed to switch connector backend for ${id}`)
+    }
   }
 
   const handleSaveCred = async (connectorId: string, cred: CredentialInfo) => {
@@ -185,7 +202,9 @@ export function Connectors() {
         [connectorId]: { ...prev[connectorId], [cred.vault_key]: '' },
       }))
       refetch()
-    } catch { /* ignore */ } finally {
+    } catch (error) {
+      reportConnectorError(error, `Failed to save credential ${cred.name}`)
+    } finally {
       setSaving(null)
     }
   }
@@ -195,7 +214,9 @@ export function Connectors() {
     try {
       await deleteCredential(deleteConfirm.connectorId, deleteConfirm.vaultKey)
       refetch()
-    } catch { /* ignore */ } finally {
+    } catch (error) {
+      reportConnectorError(error, `Failed to delete credential ${deleteConfirm.name}`)
+    } finally {
       setDeleteConfirm(null)
     }
   }

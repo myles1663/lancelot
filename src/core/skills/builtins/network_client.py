@@ -108,8 +108,8 @@ def execute(context, inputs: Dict[str, Any]) -> Dict[str, Any]:
         error_body = ""
         try:
             error_body = e.read().decode("utf-8", errors="replace")[:2000]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("network_client: failed to read HTTP error body for %s %s: %s", method, url, exc)
 
         return {
             "status_code": e.code,

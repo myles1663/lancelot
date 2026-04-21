@@ -1,22 +1,58 @@
 import { useState } from 'react'
 import { usePolling, usePageTitle } from '@/hooks'
 import {
-  fetchSkillProposals,
   fetchSkillProposal,
+  fetchSkillProposals,
   approveSkillProposal,
   rejectSkillProposal,
   installSkillProposal,
   fetchInstalledSkills,
 } from '@/api'
-import { StatusDot, MetricCard } from '@/components'
+import { MetricCard, StatusDot } from '@/components'
 import { formatDateOnly, formatTimestamp } from '@/utils/dateFormat'
 import type { SkillProposalDetail } from '@/types/api'
 
 const STATUS_STATES: Record<string, 'healthy' | 'degraded' | 'error' | 'inactive'> = {
   pending: 'degraded',
+  review_failed: 'error',
   approved: 'healthy',
-  rejected: 'error',
+  rejected: 'inactive',
   installed: 'healthy',
+}
+
+function renderPills(values: string[], emptyLabel: string) {
+  if (values.length === 0) {
+    return <span className="text-xs text-text-muted">{emptyLabel}</span>
+  }
+  return (
+    <div className="flex flex-wrap gap-2">
+      {values.map((value) => (
+        <span
+          key={value}
+          className="rounded-md border border-border-default bg-surface-input px-2 py-1 text-[11px] font-mono text-text-secondary"
+        >
+          {value}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function describeStage(stageData: unknown): string {
+  if (!stageData || typeof stageData !== 'object') {
+    return 'No data'
+  }
+  const data = stageData as Record<string, unknown>
+  if (typeof data.status === 'string') {
+    return data.status
+  }
+  if (typeof data.passed === 'boolean') {
+    return data.passed ? 'passed' : 'failed'
+  }
+  if (typeof data.error === 'string') {
+    return data.error
+  }
+  return 'Recorded'
 }
 
 export function SkillsPanel() {
@@ -29,16 +65,16 @@ export function SkillsPanel() {
   const [actionMessage, setActionMessage] = useState<string | null>(null)
 
   const pendingCount = proposals?.proposals.filter((p) => p.status === 'pending').length ?? 0
+  const blockedCount = proposals?.proposals.filter((p) => p.status === 'review_failed').length ?? 0
   const approvedCount = proposals?.proposals.filter((p) => p.status === 'approved').length ?? 0
   const installedCount = skills?.skills.filter((s) => s.ownership === 'dynamic').length ?? 0
-  const builtinCount = skills?.skills.filter((s) => s.ownership === 'system').length ?? 0
 
   const viewProposal = async (id: string) => {
     try {
       const detail = await fetchSkillProposal(id)
       setSelectedProposal(detail)
     } catch {
-      setActionMessage('Failed to load proposal detail.')
+      setActionMessage('Failed to load skill proposal detail.')
     }
   }
 
@@ -48,20 +84,22 @@ export function SkillsPanel() {
     try {
       if (action === 'approve') {
         const res = await approveSkillProposal(id)
-        setActionMessage(`Approved: ${res.name}`)
+        setActionMessage(`Approved ${res.name} for installation review.`)
       } else if (action === 'reject') {
         const res = await rejectSkillProposal(id)
-        setActionMessage(`Rejected: ${res.name}`)
-      } else if (action === 'install') {
+        setActionMessage(`Rejected ${res.name}${res.rejected_reason ? `: ${res.rejected_reason}` : ''}`)
+      } else {
         const res = await installSkillProposal(id)
-        setActionMessage(res.message)
+        setActionMessage(
+          `${res.message}${res.validated_capabilities.length ? ` Validated capabilities: ${res.validated_capabilities.join(', ')}` : ''}`,
+        )
       }
       setSelectedProposal(null)
       refreshProposals()
       refreshSkills()
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Action failed'
-      setActionMessage(`Error: ${msg}`)
+      const message = err instanceof Error ? err.message : 'Action failed'
+      setActionMessage(`Error: ${message}`)
     } finally {
       setLoading(false)
     }
@@ -69,86 +107,87 @@ export function SkillsPanel() {
 
   return (
     <div>
-      <h2 className="text-lg font-semibold text-text-primary mb-6">Skills Manager</h2>
+      <h2 className="mb-6 text-lg font-semibold text-text-primary">Governed Skill Pipeline</h2>
 
-      {/* Summary */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <MetricCard label="Builtin Skills" value={builtinCount} />
-        <MetricCard label="Dynamic Skills" value={installedCount} />
-        <MetricCard label="Pending Proposals" value={pendingCount} />
+      <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4">
+        <MetricCard label="Pending Review" value={pendingCount} />
+        <MetricCard label="Review Failed" value={blockedCount} />
         <MetricCard label="Approved" value={approvedCount} />
+        <MetricCard label="Installed Dynamic" value={installedCount} />
       </div>
 
       {actionMessage && (
-        <div className="mb-4 p-3 rounded-md bg-surface-card-elevated border border-border-default text-sm text-text-primary">
+        <div className="mb-4 rounded-md border border-border-default bg-surface-card-elevated p-3 text-sm text-text-primary">
           {actionMessage}
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Skill Proposals */}
-        <section className="bg-surface-card border border-border-default rounded-lg p-4">
-          <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-            Skill Proposals
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <section className="rounded-lg border border-border-default bg-surface-card p-4">
+          <h3 className="mb-3 text-sm font-medium uppercase tracking-wider text-text-secondary">
+            Proposal Queue
           </h3>
           {!proposals || proposals.proposals.length === 0 ? (
-            <p className="text-sm text-text-muted">
-              No proposals yet. Lancelot will propose new skills when needed.
-            </p>
+            <p className="text-sm text-text-muted">No governed skill proposals are waiting for review.</p>
           ) : (
             <div className="space-y-2">
-              {proposals.proposals.map((p) => (
-                <div
-                  key={p.id}
-                  className="flex items-center justify-between p-3 bg-surface-card-elevated rounded-md cursor-pointer hover:ring-1 hover:ring-accent-primary/30 transition-all"
-                  onClick={() => viewProposal(p.id)}
+              {proposals.proposals.map((proposal) => (
+                <button
+                  key={proposal.id}
+                  type="button"
+                  onClick={() => viewProposal(proposal.id)}
+                  className="w-full rounded-md bg-surface-card-elevated p-3 text-left transition-all hover:ring-1 hover:ring-accent-primary/30"
                 >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-mono text-text-primary truncate">{p.name}</span>
-                      <StatusDot
-                        state={STATUS_STATES[p.status] ?? 'inactive'}
-                        label={p.status}
-                      />
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="truncate text-sm font-mono text-text-primary">{proposal.name}</span>
+                        <StatusDot state={STATUS_STATES[proposal.status] ?? 'inactive'} label={proposal.status} />
+                        <StatusDot
+                          state={proposal.pipeline_passed ? 'healthy' : 'error'}
+                          label={proposal.pipeline_passed ? 'pipeline passed' : proposal.pipeline_failed_at_stage ?? 'pipeline blocked'}
+                        />
+                      </div>
+                      <p className="mt-1 truncate text-[11px] text-text-muted">{proposal.description || 'No description'}</p>
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-text-muted">
+                        <span>Risk: {proposal.risk}</span>
+                        <span>Source: {proposal.source}</span>
+                        {proposal.credential_keys.length > 0 && <span>Vault: {proposal.credential_keys.join(', ')}</span>}
+                      </div>
                     </div>
-                    <p className="text-[11px] text-text-muted mt-0.5 truncate">{p.description}</p>
+                    <span className="whitespace-nowrap text-[10px] text-text-muted">{formatDateOnly(proposal.created_at)}</span>
                   </div>
-                  <span className="text-[10px] text-text-muted ml-2 whitespace-nowrap">
-                    {formatDateOnly(p.created_at)}
-                  </span>
-                </div>
+                </button>
               ))}
             </div>
           )}
         </section>
 
-        {/* Installed Skills */}
-        <section className="bg-surface-card border border-border-default rounded-lg p-4">
-          <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+        <section className="rounded-lg border border-border-default bg-surface-card p-4">
+          <h3 className="mb-3 text-sm font-medium uppercase tracking-wider text-text-secondary">
             Installed Skills
           </h3>
           {!skills || skills.skills.length === 0 ? (
-            <p className="text-sm text-text-muted">Loading...</p>
+            <p className="text-sm text-text-muted">Loading installed skills…</p>
           ) : (
             <div className="space-y-2">
-              {skills.skills.map((s) => (
-                <div key={s.name} className="flex items-center justify-between p-3 bg-surface-card-elevated rounded-md">
+              {skills.skills.map((skill) => (
+                <div key={skill.name} className="flex items-center justify-between rounded-md bg-surface-card-elevated p-3">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-mono text-text-primary">{s.name}</span>
-                    <span className="text-[10px] text-text-muted font-mono">v{s.version}</span>
+                    <span className="text-sm font-mono text-text-primary">{skill.name}</span>
+                    <span className="text-[10px] font-mono text-text-muted">v{skill.version}</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
-                      s.ownership === 'system'
-                        ? 'bg-accent-primary/10 text-accent-primary'
-                        : 'bg-state-success/10 text-state-success'
-                    }`}>
-                      {s.ownership}
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-mono ${
+                        skill.ownership === 'system'
+                          ? 'bg-accent-primary/10 text-accent-primary'
+                          : 'bg-state-success/10 text-state-success'
+                      }`}
+                    >
+                      {skill.ownership}
                     </span>
-                    <StatusDot
-                      state={s.enabled ? 'healthy' : 'inactive'}
-                      label={s.enabled ? 'enabled' : 'disabled'}
-                    />
+                    <StatusDot state={skill.enabled ? 'healthy' : 'inactive'} label={skill.enabled ? 'enabled' : 'disabled'} />
                   </div>
                 </div>
               ))}
@@ -157,19 +196,18 @@ export function SkillsPanel() {
         </section>
       </div>
 
-      {/* Proposal Detail Modal */}
       {selectedProposal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="bg-surface-card border border-border-default rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col">
-            {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b border-border-default">
+          <div className="mx-4 flex max-h-[88vh] w-full max-w-5xl flex-col rounded-lg border border-border-default bg-surface-card shadow-xl">
+            <div className="flex items-start justify-between border-b border-border-default p-4">
               <div>
                 <h3 className="text-base font-semibold text-text-primary">{selectedProposal.name}</h3>
-                <p className="text-xs text-text-muted mt-0.5">{selectedProposal.description}</p>
+                <p className="mt-0.5 text-xs text-text-muted">{selectedProposal.description || 'No description'}</p>
               </div>
               <button
+                type="button"
                 onClick={() => setSelectedProposal(null)}
-                className="p-1.5 text-text-muted hover:text-text-primary transition-colors"
+                className="p-1.5 text-text-muted transition-colors hover:text-text-primary"
               >
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                   <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -177,62 +215,147 @@ export function SkillsPanel() {
               </button>
             </div>
 
-            {/* Body */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              {/* Meta */}
-              <div className="flex items-center gap-3 text-xs">
-                <StatusDot
-                  state={STATUS_STATES[selectedProposal.status] ?? 'inactive'}
-                  label={selectedProposal.status}
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+                <MetricCard label="Status" value={selectedProposal.status} />
+                <MetricCard label="Risk" value={selectedProposal.risk} />
+                <MetricCard label="Source" value={selectedProposal.source} />
+                <MetricCard
+                  label="Pipeline"
+                  value={selectedProposal.pipeline_passed ? 'passed' : selectedProposal.pipeline_failed_at_stage ?? 'blocked'}
                 />
-                <span className="text-text-muted">
-                  Created: {formatTimestamp(selectedProposal.created_at)}
-                </span>
-                {selectedProposal.permissions.length > 0 && (
-                  <span className="text-text-muted">
-                    Permissions: {selectedProposal.permissions.join(', ')}
-                  </span>
-                )}
               </div>
 
-              {/* Code Preview */}
-              <div>
-                <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-2">
-                  Implementation
-                </h4>
-                <pre className="bg-surface-input border border-border-default rounded-md p-3 text-xs font-mono text-text-primary overflow-x-auto max-h-60 overflow-y-auto whitespace-pre">
-                  {selectedProposal.execute_code || '(no code)'}
-                </pre>
-              </div>
-
-              {/* Manifest */}
-              {selectedProposal.manifest_yaml && (
-                <div>
-                  <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-2">
-                    Manifest
+              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                <section className="rounded-lg border border-border-default bg-surface-card-elevated p-4">
+                  <h4 className="mb-3 text-xs font-medium uppercase tracking-wider text-text-secondary">
+                    Governance Contract
                   </h4>
-                  <pre className="bg-surface-input border border-border-default rounded-md p-3 text-xs font-mono text-text-muted overflow-x-auto max-h-40 overflow-y-auto whitespace-pre">
-                    {selectedProposal.manifest_yaml}
+                  <div className="space-y-4">
+                    <div>
+                      <p className="mb-2 text-[11px] uppercase tracking-wider text-text-muted">Runtime Permissions</p>
+                      {renderPills(selectedProposal.permissions, 'No runtime permissions declared')}
+                    </div>
+                    <div>
+                      <p className="mb-2 text-[11px] uppercase tracking-wider text-text-muted">Security Capabilities</p>
+                      {renderPills(selectedProposal.approved_capabilities, 'No approved capabilities recorded')}
+                    </div>
+                    <div>
+                      <p className="mb-2 text-[11px] uppercase tracking-wider text-text-muted">Target Domains</p>
+                      {renderPills(selectedProposal.target_domains, 'No network domains declared')}
+                    </div>
+                    <div>
+                      <p className="mb-2 text-[11px] uppercase tracking-wider text-text-muted">Vault Keys</p>
+                      {renderPills(selectedProposal.credential_keys, 'No vault keys declared')}
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 text-xs text-text-muted">
+                      <span>Created: {formatTimestamp(selectedProposal.created_at)}</span>
+                      {selectedProposal.approved_by && <span>Approved by: {selectedProposal.approved_by}</span>}
+                      {selectedProposal.approved_at && <span>Approved at: {formatTimestamp(selectedProposal.approved_at)}</span>}
+                      {selectedProposal.installed_at && <span>Installed at: {formatTimestamp(selectedProposal.installed_at)}</span>}
+                      {selectedProposal.rejected_reason && <span>Rejected because: {selectedProposal.rejected_reason}</span>}
+                    </div>
+                  </div>
+                </section>
+
+                <section className="rounded-lg border border-border-default bg-surface-card-elevated p-4">
+                  <h4 className="mb-3 text-xs font-medium uppercase tracking-wider text-text-secondary">
+                    Security Pipeline
+                  </h4>
+                  <div className="space-y-2">
+                    {Object.entries(selectedProposal.pipeline_stage_results).map(([stage, result]) => (
+                      <div key={stage} className="rounded-md border border-border-default bg-surface-input p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-xs font-mono text-text-primary">{stage}</span>
+                          <StatusDot
+                            state={
+                              describeStage(result) === 'passed' || describeStage(result) === 'approved'
+                                ? 'healthy'
+                                : describeStage(result) === 'pending'
+                                  ? 'degraded'
+                                  : 'error'
+                            }
+                            label={describeStage(result)}
+                          />
+                        </div>
+                        <pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-[11px] text-text-muted">
+                          {JSON.stringify(result, null, 2)}
+                        </pre>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </div>
+
+              <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
+                <section>
+                  <h4 className="mb-2 text-xs font-medium uppercase tracking-wider text-text-secondary">
+                    Runtime Manifest
+                  </h4>
+                  <pre className="max-h-72 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs font-mono text-text-primary">
+                    {selectedProposal.manifest_yaml || '(no runtime manifest)'}
                   </pre>
+                </section>
+                <section>
+                  <h4 className="mb-2 text-xs font-medium uppercase tracking-wider text-text-secondary">
+                    Security Manifest
+                  </h4>
+                  <pre className="max-h-72 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs font-mono text-text-primary">
+                    {selectedProposal.security_manifest_yaml || '(no security manifest)'}
+                  </pre>
+                </section>
+              </div>
+
+              <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
+                <section>
+                  <h4 className="mb-2 text-xs font-medium uppercase tracking-wider text-text-secondary">
+                    Implementation
+                  </h4>
+                  <pre className="max-h-80 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs font-mono text-text-primary">
+                    {selectedProposal.execute_code || '(no implementation)'}
+                  </pre>
+                </section>
+                <section>
+                  <h4 className="mb-2 text-xs font-medium uppercase tracking-wider text-text-secondary">
+                    Generated Tests
+                  </h4>
+                  <pre className="max-h-80 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs font-mono text-text-primary">
+                    {selectedProposal.test_code || '(no generated tests)'}
+                  </pre>
+                </section>
+              </div>
+
+              <section className="mt-6 rounded-lg border border-border-default bg-surface-card-elevated p-4">
+                <h4 className="mb-3 text-xs font-medium uppercase tracking-wider text-text-secondary">
+                  Artifact Hashes
+                </h4>
+                <div className="space-y-2">
+                  {Object.entries(selectedProposal.artifact_hashes).map(([artifact, digest]) => (
+                    <div key={artifact} className="flex flex-col gap-1 rounded-md bg-surface-input p-3">
+                      <span className="text-xs font-mono text-text-primary">{artifact}</span>
+                      <span className="break-all text-[11px] text-text-muted">{digest}</span>
+                    </div>
+                  ))}
                 </div>
-              )}
+              </section>
             </div>
 
-            {/* Actions */}
-            <div className="flex items-center justify-end gap-2 p-4 border-t border-border-default">
-              {selectedProposal.status === 'pending' && (
+            <div className="flex items-center justify-end gap-2 border-t border-border-default p-4">
+              {selectedProposal.status === 'pending' && selectedProposal.pipeline_passed && (
                 <>
                   <button
+                    type="button"
                     onClick={() => handleAction('reject', selectedProposal.id)}
                     disabled={loading}
-                    className="px-3 py-1.5 text-xs font-medium rounded-md bg-state-error/10 text-state-error hover:bg-state-error/20 transition-colors disabled:opacity-50"
+                    className="rounded-md bg-state-error/10 px-3 py-1.5 text-xs font-medium text-state-error transition-colors hover:bg-state-error/20 disabled:opacity-50"
                   >
                     Reject
                   </button>
                   <button
+                    type="button"
                     onClick={() => handleAction('approve', selectedProposal.id)}
                     disabled={loading}
-                    className="px-3 py-1.5 text-xs font-medium rounded-md bg-state-success/10 text-state-success hover:bg-state-success/20 transition-colors disabled:opacity-50"
+                    className="rounded-md bg-state-success/10 px-3 py-1.5 text-xs font-medium text-state-success transition-colors hover:bg-state-success/20 disabled:opacity-50"
                   >
                     Approve
                   </button>
@@ -240,16 +363,18 @@ export function SkillsPanel() {
               )}
               {selectedProposal.status === 'approved' && (
                 <button
+                  type="button"
                   onClick={() => handleAction('install', selectedProposal.id)}
                   disabled={loading}
-                  className="px-3 py-1.5 text-xs font-medium rounded-md bg-accent-primary/10 text-accent-primary hover:bg-accent-primary/20 transition-colors disabled:opacity-50"
+                  className="rounded-md bg-accent-primary/10 px-3 py-1.5 text-xs font-medium text-accent-primary transition-colors hover:bg-accent-primary/20 disabled:opacity-50"
                 >
                   Install Skill
                 </button>
               )}
               <button
+                type="button"
                 onClick={() => setSelectedProposal(null)}
-                className="px-3 py-1.5 text-xs font-medium rounded-md bg-surface-input text-text-secondary hover:text-text-primary transition-colors"
+                className="rounded-md bg-surface-input px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:text-text-primary"
               >
                 Close
               </button>

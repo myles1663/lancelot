@@ -1,4 +1,11 @@
+import json
 from pathlib import Path
+
+import gateway
+import gateway_oauth_routes
+import pytest
+from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from src.core.orch_helpers.response_helpers import append_download_links
 
@@ -23,25 +30,42 @@ def test_warroom_ws_source_does_not_accept_query_param_tokens():
     assert 'query_params.get("token"' not in source
 
 
-def test_gateway_source_removes_query_token_auth_from_live_and_file_routes():
-    source = Path("src/core/gateway.py").read_text(encoding="utf-8")
+def test_live_websocket_rejects_query_param_tokens(monkeypatch):
+    monkeypatch.setattr(gateway, "API_TOKEN", "secret-token")
 
-    live_idx = source.find('async def live_stream')
-    files_idx = source.find('async def serve_workspace_file')
-    assert live_idx != -1
-    assert files_idx != -1
+    client = TestClient(gateway.app)
+    with client.websocket_connect("/live?token=secret-token") as websocket:
+        websocket.send_text(json.dumps({"type": "ping"}))
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            websocket.receive_text()
 
-    live_body = source[live_idx:files_idx]
-    files_body = source[files_idx:files_idx + 900]
+    assert excinfo.value.code == 4001
 
-    assert 'query_params.get("token"' not in live_body
-    assert 'token_param' not in files_body
-    assert 'auth != f"Bearer {API_TOKEN}"' in files_body
+
+def test_workspace_file_route_requires_header_auth_not_query_token(monkeypatch, tmp_path):
+    workspace = tmp_path / "workspace"
+    report_dir = workspace / "reports"
+    report_dir.mkdir(parents=True)
+    report = report_dir / "summary.pdf"
+    report.write_text("pdf-bytes", encoding="utf-8")
+
+    monkeypatch.setattr(gateway, "API_TOKEN", "secret-token")
+    monkeypatch.setattr(gateway_oauth_routes, "_WORKSPACE_ROOT", workspace)
+
+    client = TestClient(gateway.app)
+    unauthorized = client.get("/api/files/reports/summary.pdf?token=secret-token")
+    assert unauthorized.status_code == 401
+
+    authorized = client.get(
+        "/api/files/reports/summary.pdf",
+        headers={"Authorization": "Bearer secret-token"},
+    )
+    assert authorized.status_code == 200
+    assert authorized.content == b"pdf-bytes"
 
 
 def test_chat_message_source_uses_authorized_fetch_for_workspace_downloads():
     source = Path("src/warroom/src/pages/command/ChatMessage.tsx").read_text(encoding="utf-8")
 
-    assert "fetch(url.toString(), { headers })" in source
-    assert "Authorization = `Bearer ${token}`" in source
+    assert "fetch(url.toString(), { credentials: 'include' })" in source
     assert "url.pathname.startsWith('/api/files/')" in source

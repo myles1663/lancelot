@@ -208,6 +208,10 @@ class TestNvidiaFactory:
 
 class TestFlagshipNvidia:
 
+    @pytest.fixture(autouse=True)
+    def _allow_nvidia_flagship_calls(self, monkeypatch):
+        monkeypatch.setattr("src.core.flagship_client.assert_url_allowed", lambda url, **kwargs: url)
+
     @patch("urllib.request.urlopen")
     def test_nvidia_complete(self, mock_open, nvidia_profile):
         mock_resp = MagicMock()

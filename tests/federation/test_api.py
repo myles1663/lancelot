@@ -309,6 +309,159 @@ class TestCommandEndpoints:
         assert data["local_agents_killed"] == 2
         assert data["command"]["state"] == "completed"
 
+    def test_command_rejects_unexpected_fields(self, app, identity, emitter, config):
+        api_auth.init_api_auth(lambda request: False)
+        client = TestClient(app)
+        init_federation_api(identity, emitter, config)
+        called = []
+
+        class FakeAuth:
+            def verify_request(self, method, path, body, headers):
+                return SimpleNamespace(valid=True, reason="", instance_id="peer-1")
+
+        init_federation_transport(
+            command_relay=SimpleNamespace(
+                handle_kill_command=lambda body, authenticated_instance_id="": called.append(body) or {"accepted": True}
+            ),
+            auth=FakeAuth(),
+        )
+
+        resp = client.post(
+            "/api/federation/command",
+            json={
+                "command": {
+                    "command_id": "cmd-1",
+                    "command_type": "federation_kill",
+                    "authority": "L1_federation_root",
+                    "reason": "operator test",
+                },
+                "issuer_instance_id": "peer-1",
+                "unexpected": True,
+            },
+        )
+
+        assert resp.status_code == 422
+        assert called == []
+
+    def test_pause_rejects_unexpected_fields(self, app, identity, emitter, config):
+        api_auth.init_api_auth(lambda request: False)
+        client = TestClient(app)
+        init_federation_api(identity, emitter, config)
+        called = []
+
+        class FakeAuth:
+            def verify_request(self, method, path, body, headers):
+                return SimpleNamespace(valid=True, reason="", instance_id="peer-1")
+
+        init_federation_transport(
+            command_relay=SimpleNamespace(
+                handle_pause=lambda body, authenticated_instance_id="": called.append(body) or {"accepted": True}
+            ),
+            auth=FakeAuth(),
+        )
+
+        resp = client.post(
+            "/api/federation/pause",
+            json={"reason": "Soul propagation", "issuer_instance_id": "peer-1", "operator_id": "spoofed"},
+        )
+
+        assert resp.status_code == 422
+        assert called == []
+
+    def test_peer_register_rejects_unexpected_fields(self, client, identity, emitter, config):
+        init_federation_api(identity, emitter, config)
+        called = []
+
+        async def handle_registration_request(body):
+            called.append(body)
+            return {"accepted": True}
+
+        init_federation_transport(
+            peer_protocol=SimpleNamespace(
+                handle_registration_request=handle_registration_request,
+                handle_registration_confirm=lambda body: {"accepted": True},
+            )
+        )
+
+        resp = client.post(
+            "/api/federation/peer/register",
+            json={
+                "registration_id": "reg-1",
+                "instance_id": "peer-1",
+                "public_key_hex": "abcd",
+                "address": "https://peer-1.example",
+                "challenge": "challenge",
+                "challenge_signature": "deadbeef",
+                "operator_id": "spoofed",
+            },
+        )
+
+        assert resp.status_code == 422
+        assert called == []
+
+    def test_manage_register_peer_rejects_unexpected_fields(self, client, identity, emitter, config):
+        init_federation_api(identity, emitter, config)
+        called = []
+
+        async def initiate_registration(**kwargs):
+            called.append(kwargs)
+            return SimpleNamespace(success=True, peer_instance_id="peer-1", peer_fingerprint="fp", mutual=True, error="")
+
+        init_federation_transport(peer_protocol=SimpleNamespace(initiate_registration=initiate_registration))
+
+        resp = client.post(
+            "/api/federation/manage/register-peer",
+            json={"target_address": "https://peer-1.example", "role": "peer", "operator_id": "spoofed"},
+        )
+
+        assert resp.status_code == 422
+        assert called == []
+
+    def test_manage_handoff_rejects_unexpected_fields(self, client, identity, emitter, config):
+        init_federation_api(identity, emitter, config)
+        called = []
+
+        async def initiate_handoff(**kwargs):
+            called.append(kwargs)
+            return SimpleNamespace(success=True, handoff_id="h-1", state="accepted", target_instance_id="peer-1", error="")
+
+        init_federation_transport(handoff_protocol=SimpleNamespace(initiate_handoff=initiate_handoff))
+
+        resp = client.post(
+            "/api/federation/manage/handoff",
+            json={"target_instance_id": "peer-1", "task_context": {}, "operator_id": "spoofed"},
+        )
+
+        assert resp.status_code == 422
+        assert called == []
+
+    def test_manage_kill_rejects_unexpected_fields(self, client, identity, emitter, config):
+        init_federation_api(identity, emitter, config)
+        called = []
+
+        class SpyRelay:
+            async def issue_and_propagate_kill(self, command_data):
+                called.append(command_data)
+                return {"command_id": "cmd-1", "results": {}, "total": 0, "timed_out": [], "command": None}
+
+        init_federation_transport(command_relay=SpyRelay())
+
+        resp = client.post(
+            "/api/federation/manage/kill",
+            json={
+                "command": {
+                    "command_id": "cmd-1",
+                    "command_type": "federation_kill",
+                    "authority": "L1_federation_root",
+                    "reason": "operator test",
+                    "operator_id": "spoofed",
+                }
+            },
+        )
+
+        assert resp.status_code == 422
+        assert called == []
+
 
 class TestDiscoveryEndpoints:
     """Live discovery endpoints after initialization."""

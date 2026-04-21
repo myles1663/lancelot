@@ -35,6 +35,7 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlencode
 
 import requests
+from src.core.outbound_http import assert_url_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -87,9 +88,10 @@ def _generate_code_challenge(verifier: str) -> str:
 class OAuthTokenManager:
     """Manages the full Anthropic OAuth lifecycle: PKCE, exchange, vault storage, refresh."""
 
-    def __init__(self, vault: Any, port: int = 8000):
+    def __init__(self, vault: Any, port: int = 8000, network_interceptor=None):
         self._vault = vault
         self._port = port
+        self._network_interceptor = network_interceptor
         self._pending_flows: Dict[str, Dict[str, Any]] = {}  # state -> {code_verifier, created_at}
         self._lock = threading.Lock()
         self._refresh_thread: Optional[threading.Thread] = None
@@ -149,8 +151,13 @@ class OAuthTokenManager:
 
         redirect_uri = f"http://localhost:{self._port}/callback"
         try:
-            resp = requests.post(
+            token_url = assert_url_allowed(
                 ANTHROPIC_TOKEN_URL,
+                component="Anthropic OAuth token exchange",
+                network_interceptor=self._network_interceptor,
+            )
+            resp = requests.post(
+                token_url,
                 data={
                     "grant_type": "authorization_code",
                     "client_id": CLIENT_ID,
@@ -240,8 +247,8 @@ class OAuthTokenManager:
             try:
                 if self._vault.exists(key):
                     self._vault.delete(key)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to delete Anthropic OAuth vault key %s: %s", key, exc)
         _oauth_token_cache.pop("access_token", None)
         os.environ.pop(ENV_OAUTH_TOKEN, None)  # clean up legacy env if present
         logger.info("OAuth tokens revoked")
@@ -303,8 +310,13 @@ class OAuthTokenManager:
                 return False
 
             try:
-                resp = requests.post(
+                token_url = assert_url_allowed(
                     ANTHROPIC_TOKEN_URL,
+                    component="Anthropic OAuth token refresh",
+                    network_interceptor=self._network_interceptor,
+                )
+                resp = requests.post(
+                    token_url,
                     data={
                         "grant_type": "refresh_token",
                         "client_id": CLIENT_ID,

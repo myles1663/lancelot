@@ -219,6 +219,58 @@ class TestTaskSubmission:
         assert data["status"] == "not_initialized"
         assert data["runtime_degraded"] is True
 
+    def test_submit_task_rejects_unexpected_fields(self, app):
+        architect = type("Architect", (), {})()
+        architect.execute_task = AsyncMock(return_value={"quest_id": "quest-1", "success": True})
+
+        init_hive_api(
+            architect=architect,
+            lifecycle=None,
+            registry=None,
+            receipt_mgr=None,
+            config=HiveConfig(max_concurrent_agents=5),
+        )
+        client = TestClient(app)
+        client.cookies.set(auth_api.get_warroom_session_cookie_name(), "hive-test-session")
+
+        try:
+            response = client.post(
+                "/api/hive/tasks",
+                json={
+                    "goal": "Investigate issue",
+                    "context": {"ticket": "INC-1"},
+                    "operator_id": "spoofed-operator",
+                },
+            )
+            assert response.status_code == 422
+            architect.execute_task.assert_not_called()
+        finally:
+            shutdown_hive_api()
+
+    def test_submit_task_rejects_malformed_context_type(self, app):
+        architect = type("Architect", (), {})()
+        architect.execute_task = AsyncMock(return_value={"quest_id": "quest-1", "success": True})
+
+        init_hive_api(
+            architect=architect,
+            lifecycle=None,
+            registry=None,
+            receipt_mgr=None,
+            config=HiveConfig(max_concurrent_agents=5),
+        )
+        client = TestClient(app)
+        client.cookies.set(auth_api.get_warroom_session_cookie_name(), "hive-test-session")
+
+        try:
+            response = client.post(
+                "/api/hive/tasks",
+                json={"goal": "Investigate issue", "context": ["not", "a", "dict"]},
+            )
+            assert response.status_code == 422
+            architect.execute_task.assert_not_called()
+        finally:
+            shutdown_hive_api()
+
 
 class TestRosterEndpoint:
     def test_roster_empty(self, initialized_client):
@@ -296,6 +348,14 @@ class TestAgentControlEndpoints:
         )
         assert resp.status_code == 404
 
+    def test_kill_rejects_unexpected_fields(self, initialized_client, lifecycle):
+        record = lifecycle.spawn(TaskSpec())
+        resp = initialized_client.post(
+            f"/api/hive/agents/{record.agent_id}/kill",
+            json={"reason": "Test kill", "operator_id": "spoofed"},
+        )
+        assert resp.status_code == 422
+
     def test_kill_all(self, initialized_client, lifecycle):
         for _ in range(3):
             lifecycle.spawn(TaskSpec())
@@ -305,6 +365,15 @@ class TestAgentControlEndpoints:
         )
         assert resp.status_code == 200
         assert resp.json()["status"] == "killed_all"
+
+    def test_kill_all_rejects_unexpected_fields(self, initialized_client, lifecycle):
+        for _ in range(2):
+            lifecycle.spawn(TaskSpec())
+        resp = initialized_client.post(
+            "/api/hive/kill-all",
+            json={"reason": "Emergency", "collapsed": ["spoofed"]},
+        )
+        assert resp.status_code == 422
 
 
 class TestInterventionEndpoints:

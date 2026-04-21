@@ -1,37 +1,41 @@
 /**
- * UAB Permissions — Safety model for destructive and sensitive actions.
+ * UAB Permissions - daemon-local action safety model.
  *
- * Phase 4: Security hardening.
- * - Destructive action gating (close, delete, etc.)
- * - Rate limiting per PID
- * - Action audit logging
- * - Per-app permission overrides
+ * Keep this taxonomy aligned with src/tools/providers/uab_bridge.py. The Python
+ * bridge is the governance-facing classifier; this layer provides the daemon's
+ * local confirmation and audit guardrails.
  */
 
 import type { ActionType, DetectedApp } from './types.js';
+import { readFileSync } from 'fs';
 import { createLogger } from './logger.js';
 
 const log = createLogger('uab-perms');
 
-/** Actions that are considered destructive and may need confirmation */
-const DESTRUCTIVE_ACTIONS: Set<ActionType> = new Set([
-  'close',
-]);
+interface ActionRiskManifest {
+  read_only: string[];
+  mutating: string[];
+  destructive: string[];
+  sensitive_app_patterns: string[];
+}
 
-/** Actions that modify data (moderate risk) */
-const MODIFYING_ACTIONS: Set<ActionType> = new Set([
-  'type', 'clear', 'select', 'check', 'uncheck', 'toggle',
-  'keypress', 'hotkey', 'invoke',
-]);
+function loadActionRiskManifest(): ActionRiskManifest {
+  const manifestUrl = new URL('../data/action-risk.json', import.meta.url);
+  const manifest = JSON.parse(readFileSync(manifestUrl, 'utf-8')) as Partial<ActionRiskManifest>;
 
-/** Actions that are read-only / low risk */
-const SAFE_ACTIONS: Set<ActionType> = new Set([
-  'click', 'doubleclick', 'rightclick',
-  'focus', 'hover', 'scroll',
-  'expand', 'collapse',
-  'minimize', 'maximize', 'restore',
-  'move', 'resize', 'screenshot',
-]);
+  for (const key of ['read_only', 'mutating', 'destructive', 'sensitive_app_patterns'] as const) {
+    if (!Array.isArray(manifest[key])) {
+      throw new Error(`UAB action risk manifest missing array: ${key}`);
+    }
+  }
+
+  return manifest as ActionRiskManifest;
+}
+
+const ACTION_RISK_MANIFEST = loadActionRiskManifest();
+const DESTRUCTIVE_ACTIONS = new Set(ACTION_RISK_MANIFEST.destructive);
+const MODIFYING_ACTIONS = new Set(ACTION_RISK_MANIFEST.mutating);
+const SAFE_ACTIONS = new Set(ACTION_RISK_MANIFEST.read_only);
 
 export type RiskLevel = 'safe' | 'moderate' | 'destructive';
 
@@ -173,7 +177,10 @@ export class PermissionManager {
   getRiskLevel(action: ActionType): RiskLevel {
     if (DESTRUCTIVE_ACTIONS.has(action)) return 'destructive';
     if (MODIFYING_ACTIONS.has(action)) return 'moderate';
-    return 'safe';
+    if (SAFE_ACTIONS.has(action)) return 'safe';
+
+    log.warn('Unknown UAB action risk classification; defaulting to moderate', { action });
+    return 'moderate';
   }
 
   /** Get recent audit log entries */

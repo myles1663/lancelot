@@ -241,7 +241,7 @@ Before any commit is finalized, write gates enforce:
 ### Memory Exclusions
 
 - The **Soul is never stored in memory** — memory references Soul version numbers, never Soul content. This prevents memory poisoning from corrupting governance.
-- **PII is redacted** before storage via the local model when that lane is enabled; installs that skip the local model lose that local scrub boundary
+- **PII is redacted** before storage via the local model when that lane is enabled and inference-ready; if the runtime scrub policy allows fallback, that degraded privacy event is surfaced separately
 - **Secrets are never persisted** in any memory tier
 
 ### Poisoning Defense

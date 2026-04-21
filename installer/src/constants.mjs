@@ -2,7 +2,7 @@
 // Constants — shared config for the create-lancelot installer
 // ============================================================
 
-export const REPO_URL = 'https://github.com/myles1663/lancelot.git';
+export const REPO_URL = process.env.CREATE_LANCELOT_REPO_URL || 'https://github.com/myles1663/lancelot.git';
 export const DEFAULT_DIR = './lancelot';
 
 export const PROVIDERS = {
@@ -80,9 +80,11 @@ export const COMMS = {
 export const MIN_DISK_GB = 10;
 export const MIN_RAM_GB = 8;
 
-export const HEALTH_CHECK_URL = 'http://localhost:8000/health';
+export const HEALTH_CHECK_URL = process.env.CREATE_LANCELOT_HEALTH_URL || 'http://localhost:8000/health';
 export const HEALTH_CHECK_INTERVAL_MS = 3000;
 export const HEALTH_CHECK_MAX_ATTEMPTS = 60; // 3 min timeout
+export const HOST_AGENT_HEALTH_URL =
+  process.env.CREATE_LANCELOT_HOST_AGENT_HEALTH_URL || 'http://127.0.0.1:9111/health';
 
 export const STEPS = [
   'prereqs',

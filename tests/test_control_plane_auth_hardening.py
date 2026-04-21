@@ -40,6 +40,11 @@ def _insert_session(token, capabilities):
     }
 
 
+def _authenticate_client(client, token):
+    client.cookies.set(auth_api.get_warroom_session_cookie_name(), token)
+    return client
+
+
 def test_control_plane_sensitive_routes_require_auth(tmp_path):
     client = _build_client(tmp_path, verify_request=lambda request: False)
 
@@ -56,13 +61,13 @@ def test_control_plane_sensitive_routes_require_auth(tmp_path):
         assert response.json()["detail"] == "Unauthorized"
 
 
-def test_control_plane_onboarding_routes_remain_available_without_auth(tmp_path):
+def test_control_plane_onboarding_status_requires_auth(tmp_path):
     client = _build_client(tmp_path, verify_request=lambda request: False)
 
     response = client.get("/onboarding/status")
 
-    assert response.status_code == 200
-    assert "state" in response.json()
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Unauthorized"
 
 
 def test_control_plane_onboarding_mutation_routes_require_auth(tmp_path):
@@ -87,11 +92,9 @@ def test_control_plane_onboarding_mutation_routes_require_admin_capability(tmp_p
     token = "limited-session"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login"})
+    _authenticate_client(client, token)
 
-    response = client.post(
-        "/onboarding/reset",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    response = client.post("/onboarding/reset")
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Missing capability: onboarding.admin"
@@ -102,40 +105,30 @@ def test_control_plane_platform_admin_routes_require_platform_admin(tmp_path):
     token = "limited-platform-session"
     auth_api._sessions.clear()
     _insert_session(token, {"warroom.login"})
+    _authenticate_client(client, token)
 
-    response = client.get(
-        "/tokens",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    response = client.get("/tokens")
     assert response.status_code == 403
     assert response.json()["detail"] == "Missing capability: platform.admin"
 
-    response = client.post(
-        "/usage/reset",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    response = client.post("/usage/reset")
     assert response.status_code == 403
     assert response.json()["detail"] == "Missing capability: platform.admin"
 
     response = client.post(
         "/system/pause",
         json={"reason": "maintenance"},
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
     )
     assert response.status_code == 403
     assert response.json()["detail"] == "Missing capability: platform.admin"
 
-    response = client.post(
-        "/system/resume",
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
-    )
+    response = client.post("/system/resume")
     assert response.status_code == 403
     assert response.json()["detail"] == "Missing capability: platform.admin"
 
     response = client.post(
         "/system/emergency-stop",
         json={"reason": "maintenance"},
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
     )
     assert response.status_code == 403
     assert response.json()["detail"] == "Missing capability: platform.admin"
@@ -143,7 +136,6 @@ def test_control_plane_platform_admin_routes_require_platform_admin(tmp_path):
     response = client.post(
         "/warroom/artifacts",
         json={"type": "TOOL_TRACE", "content": {"message": "x"}},
-        cookies={auth_api.get_warroom_session_cookie_name(): token},
     )
     assert response.status_code == 403
     assert response.json()["detail"] == "Missing capability: platform.admin"

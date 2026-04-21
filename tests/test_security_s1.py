@@ -10,6 +10,8 @@ path so tests run outside Docker.
 
 import importlib
 import os
+from pathlib import Path
+import shutil
 import sys
 import tempfile
 import unittest
@@ -44,6 +46,12 @@ def _load_gateway(data_dir: str):
     outside Docker.
     """
     _prepare_data_dir(data_dir)
+    source_soul_dir = Path(__file__).resolve().parents[1] / "soul"
+    test_soul_dir = Path(data_dir) / "soul"
+    if test_soul_dir.exists():
+        shutil.rmtree(test_soul_dir)
+    shutil.copytree(source_soul_dir, test_soul_dir)
+    os.environ["SOUL_DIR"] = str(test_soul_dir)
 
     # Patch at the orchestrator and onboarding level
     import orchestrator as _orch_mod
@@ -62,6 +70,10 @@ def _load_gateway(data_dir: str):
 
     _orch_mod.LancelotOrchestrator.__init__ = patched_orch_init
     _onb_mod.OnboardingOrchestrator.__init__ = patched_onb_init
+    for module_name in ("src.core.soul.api", "soul.api"):
+        mod = sys.modules.get(module_name)
+        if mod and hasattr(mod, "_set_soul_dir"):
+            mod._set_soul_dir(str(test_soul_dir))
 
     try:
         import gateway
@@ -92,60 +104,6 @@ def _insert_session(token: str, capabilities: set[str]):
         "groups": [],
     }
 
-# Stub heavy external dependencies that gateway.py imports
-sys.modules.setdefault("google.generativeai", type(sys)("google.generativeai"))
-sys.modules.setdefault("chromadb", type(sys)("chromadb"))
-
-
-def _prepare_data_dir(data_dir: str):
-    """Create minimal memory files so orchestrator init succeeds."""
-    os.makedirs(data_dir, exist_ok=True)
-    for fn in ("USER.md", "RULES.md", "MEMORY_SUMMARY.md"):
-        path = os.path.join(data_dir, fn)
-        if not os.path.exists(path):
-            with open(path, "w") as f:
-                if fn == "USER.md":
-                    f.write("# User Profile\n- Name: Arthur\n- Role: Commander\n- Bonded: True\n- OnboardingComplete: True")
-                else:
-                    f.write("")
-
-
-def _load_gateway(data_dir: str):
-    """Import (or reload) gateway with a patched data directory.
-
-    Patches the hardcoded '/home/lancelot/data' to a temp directory so
-    the orchestrator, onboarding, and receipt service init correctly
-    outside Docker.
-    """
-    _prepare_data_dir(data_dir)
-
-    # Patch at the orchestrator and onboarding level
-    import orchestrator as _orch_mod
-    import onboarding as _onb_mod
-
-    orig_orch_init = _orch_mod.LancelotOrchestrator.__init__
-    orig_onb_init = _onb_mod.OnboardingOrchestrator.__init__
-
-    def patched_orch_init(self, data_dir_arg="/home/lancelot/data", **kw):
-        kw.pop("data_dir", None)
-        orig_orch_init(self, data_dir=data_dir, **kw)
-
-    def patched_onb_init(self, data_dir_arg="/home/lancelot/data", **kw):
-        kw.pop("data_dir", None)
-        orig_onb_init(self, data_dir=data_dir, **kw)
-
-    _orch_mod.LancelotOrchestrator.__init__ = patched_orch_init
-    _onb_mod.OnboardingOrchestrator.__init__ = patched_onb_init
-
-    try:
-        import gateway
-        importlib.reload(gateway)
-    finally:
-        _orch_mod.LancelotOrchestrator.__init__ = orig_orch_init
-        _onb_mod.OnboardingOrchestrator.__init__ = orig_onb_init
-
-    return gateway
-
 
 class TestGatewayAuth(unittest.TestCase):
     """Tests that POST endpoints require valid Bearer token."""
@@ -154,6 +112,8 @@ class TestGatewayAuth(unittest.TestCase):
     def setUpClass(cls):
         cls._tmpdir = tempfile.mkdtemp(prefix="lancelot_s1_")
         os.environ["LANCELOT_API_TOKEN"] = "test-secret-token-12345"
+        os.environ["LANCELOT_WEBHOOK_AUTH_MODE"] = "bonded_bearer"
+        os.environ["LANCELOT_WEBHOOK_BEARER"] = "test-webhook-secret-67890"
         gw = _load_gateway(cls._tmpdir)
         cls.app = gw.app
 
@@ -183,6 +143,22 @@ class TestGatewayAuth(unittest.TestCase):
         )
         self.assertNotEqual(response.status_code, 401)
 
+    def test_chat_rejects_undeclared_fields(self):
+        response = self.client.post(
+            "/chat",
+            json={"text": "hello", "user": "Arthur", "operator_id": "spoofed"},
+            headers=self.valid_headers,
+        )
+        self.assertEqual(response.status_code, 422)
+
+    def test_chat_rejects_invalid_json(self):
+        response = self.client.post(
+            "/chat",
+            content='{"text": "hello"',
+            headers={**self.valid_headers, "Content-Type": "application/json"},
+        )
+        self.assertEqual(response.status_code, 422)
+
     def test_mfa_submit_no_token_returns_401(self):
         response = self.client.post("/mfa_submit", json={"code": "123456"})
         self.assertEqual(response.status_code, 401)
@@ -194,6 +170,14 @@ class TestGatewayAuth(unittest.TestCase):
             headers=self.valid_headers,
         )
         self.assertNotEqual(response.status_code, 401)
+
+    def test_mfa_submit_rejects_undeclared_fields(self):
+        response = self.client.post(
+            "/mfa_submit",
+            json={"code": "123456", "approved_by": "spoofed"},
+            headers=self.valid_headers,
+        )
+        self.assertEqual(response.status_code, 422)
 
     def test_mcp_callback_no_token_returns_401(self):
         response = self.client.post(
@@ -210,11 +194,19 @@ class TestGatewayAuth(unittest.TestCase):
         )
         self.assertIn(response.status_code, (200, 400))
 
+    def test_mcp_callback_rejects_undeclared_fields(self):
+        response = self.client.post(
+            "/mcp_callback",
+            json={"request_id": "abc", "action": "APPROVE", "operator_id": "spoofed"},
+            headers=self.valid_headers,
+        )
+        self.assertEqual(response.status_code, 422)
+
     def test_mcp_callback_webhook_bearer_succeeds_without_session_capability(self):
         response = self.client.post(
             "/mcp_callback",
             json={"request_id": "abc", "action": "APPROVE"},
-            headers={"Authorization": "Bearer test-secret-token-12345"},
+            headers={"Authorization": "Bearer test-webhook-secret-67890"},
         )
         self.assertIn(response.status_code, (200, 400))
 
@@ -222,12 +214,28 @@ class TestGatewayAuth(unittest.TestCase):
         response = self.client.post("/forge/discover", json={"url": "test docs"})
         self.assertEqual(response.status_code, 401)
 
+    def test_forge_discover_rejects_undeclared_fields(self):
+        response = self.client.post(
+            "/forge/discover",
+            json={"url": "test docs", "approval": "spoofed"},
+            headers=self.valid_headers,
+        )
+        self.assertEqual(response.status_code, 422)
+
     def test_forge_dispatch_no_token_returns_401(self):
         response = self.client.post(
             "/forge/dispatch",
             json={"content": "test", "prompt": "post [x:local:post]"},
         )
         self.assertEqual(response.status_code, 401)
+
+    def test_forge_dispatch_rejects_undeclared_fields(self):
+        response = self.client.post(
+            "/forge/dispatch",
+            json={"content": "test", "prompt": "post [x:local:post]", "task_id": "spoofed"},
+            headers=self.valid_headers,
+        )
+        self.assertEqual(response.status_code, 422)
 
 
 class TestHealthNoAuth(unittest.TestCase):
@@ -302,33 +310,51 @@ class TestGatewayCapabilityHardening(unittest.TestCase):
     def test_crusader_activate_requires_platform_admin(self):
         limited = "limited-session"
         _insert_session(limited, {"warroom.login"})
+        self.client.cookies.set("lancelot_session", limited)
 
-        response = self.client.post(
-            "/api/crusader/activate",
-            cookies={"lancelot_session": limited},
-        )
+        response = self.client.post("/api/crusader/activate")
         self.assertEqual(response.status_code, 403)
         self.assertIn("Missing capability: platform.admin", response.json()["error"])
 
         admin = "admin-session"
         _insert_session(admin, {"warroom.login", "platform.admin"})
-        response = self.client.post(
-            "/api/crusader/activate",
-            cookies={"lancelot_session": admin},
-        )
+        self.client.cookies.set("lancelot_session", admin)
+        response = self.client.post("/api/crusader/activate")
         self.assertNotIn(response.status_code, (401, 403))
 
     def test_google_oauth_start_requires_connectors_admin(self):
         limited = "limited-connectors-session"
         _insert_session(limited, {"warroom.login"})
+        self.client.cookies.set("lancelot_session", limited)
 
         response = self.client.post(
             "/api/google-oauth/start",
-            cookies={"lancelot_session": limited},
             json={"client_id": "cid", "client_secret": "csecret"},
         )
         self.assertEqual(response.status_code, 403)
         self.assertIn("Missing capability: connectors.admin", response.json()["error"])
+
+    def test_google_oauth_start_rejects_undeclared_fields(self):
+        admin = "admin-connectors-session"
+        _insert_session(admin, {"warroom.login", "connectors.admin"})
+        self.client.cookies.set("lancelot_session", admin)
+
+        with patch("feature_flags.FEATURE_GOOGLE_OAUTH", True), \
+             patch("google_oauth_manager.get_google_oauth_manager") as mock_get_manager:
+            manager = MagicMock()
+            manager.generate_auth_url.return_value = "https://accounts.google.com/o/oauth2/auth"
+            mock_get_manager.return_value = manager
+
+            response = self.client.post(
+                "/api/google-oauth/start",
+                json={
+                    "client_id": "cid",
+                    "client_secret": "csecret",
+                    "operator_id": "spoofed",
+                },
+            )
+
+        self.assertEqual(response.status_code, 422)
 
 
 class TestDevModeNoToken(unittest.TestCase):

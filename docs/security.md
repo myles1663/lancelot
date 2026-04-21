@@ -24,6 +24,14 @@ Instead, it enforces security through **explicit boundaries** and **reversible s
 - Reversibility over irreversible autonomy
 - Observability over silent failure
 
+### Canonical Network Allowlist Enforcement
+
+Outbound domain control is enforced through a single canonical network allowlist subsystem. Core security, Tool Fabric policy, and the War Room allowlist editor all read and write the same config path, use the same hostname normalization rules, and apply the same suffix-matching contract. The built-in infrastructure domains (`localhost`, `127.0.0.1`, `api.projectlancelot.dev`, `ghcr.io`) remain always allowed, while all configured domains are operator-managed through `config/network_allowlist.yaml`.
+
+That canonical guard is now wired into the main direct HTTP transport chokepoints as well: OIDC discovery/token/userinfo exchange, onboarding provider-validation probes, Telegram onboarding and bot traffic, Anthropic/Google/Codex OAuth token exchange and refresh flows, bonded Google Chat and Telegram alert delivery, flagship provider REST calls, the background update-manifest fetcher, outbound A2A client calls, MCP HTTP transport, federation peer transport and heartbeat streams, and observability webhook delivery all invoke the same allowlist check before a socket is opened. A blocked destination fails closed at the caller with an explicit error instead of silently bypassing the allowlist.
+
+Local control-plane traffic is treated separately from internet egress. The local utility-model endpoint (`LOCAL_LLM_URL`) and host-agent bridge endpoint (`HOST_AGENT_URL`) remain operator-scoped local paths rather than generic outbound destinations, so they are not folded into the external-domain allowlist contract above. The runtime now enforces that distinction directly: `LOCAL_LLM_URL` must stay on loopback, `host.docker.internal`, or a single-label local service hostname, and `HOST_AGENT_URL` must stay on loopback or `host.docker.internal`. Public FQDNs fail closed before any socket is opened.
+
 ---
 
 ## Threat Model
@@ -158,6 +166,8 @@ Shell commands are tokenized using `shlex` (proper shell parsing, not substring 
 
 The denylist uses token-level matching, which means `rm` in a filename doesn't trigger a false positive — only actual `rm` commands are blocked.
 
+When host execution is enabled, the same workspace boundary still applies to shell execution. The runtime now resolves command `cwd` against the configured workspace root before execution, uses argv-style subprocess invocation (`shell=False`) for normal commands, and only uses an explicit `cmd.exe /c` wrapper for a narrow set of Windows shell builtins such as `echo`, `dir`, `type`, `set`, and `ver`.
+
 ---
 
 ## Prompt and Tool Injection Defense
@@ -171,6 +181,7 @@ Lancelot defends against prompt injection at multiple layers:
 2. **Governance context separation** — The Soul and governance rules are structurally separated from untrusted user content. The model receives them as system-level context, not as part of the conversation.
 3. **Context compiler authority hierarchy** — The context compiler enforces: Soul > operator instructions > user input. Injected instructions cannot override Soul constraints.
 4. **Verifier cross-check** — The Verifier agent analyzes execution outputs for signs of policy bypass or unexpected behavior.
+5. **Auditable refusal path** — Suspicious chat input now writes an immutable `prompt_injection_blocked` verification receipt with quest/session/operator provenance before the refusal is returned, so hostile input never reaches the frontier provider silently.
 
 ### Tool Output Injection
 
@@ -228,13 +239,14 @@ Critical security boundaries for memory:
 - Secrets are never sent to models unless explicitly required and approved
 
 **Implementation:**
-- API keys and credentials stored in `.env` file (excluded from git via `.gitignore`)
-- Environment variables injected at container startup, not baked into images
+- Bootstrap secrets can originate from `.env` or the installer, but the supported runtime migrates them into the encrypted vault and then serves them through `secret_cache`
+- Modules read secrets from the in-memory cache after bootstrap instead of treating `os.environ` as the canonical runtime store
+- Migrated secrets — including the vault bootstrap key when present — are scrubbed from `os.environ` after cache bootstrap
 - Docker env var sanitization prevents shell injection through environment variables
 - Sealed secret references allow the system to *use* credentials without *seeing* them in plaintext
-- When the local model is enabled, PII redaction runs locally before content is sent to frontier APIs. If the instance is installed without the local model, prompts and tool payloads go directly to the configured provider and that privacy boundary no longer applies.
+- Frontier-bound PII handling is controlled by the runtime frontier scrub policy. In `required` or `preferred` mode, Lancelot uses the local redaction lane before frontier egress when local scrubbing is available. `required` blocks frontier egress if local scrubbing is unavailable. `preferred` allows direct frontier fallback and records the degraded privacy event. `disabled` permits direct frontier egress without local scrubbing. The canonical enforcement surface is `src/core/frontier_scrubber.py`: `LocalPIIScrubber.scrub_text()` governs text egress, `scrub_payload()` walks nested provider payload structures recursively, and the residual-PII validator normalizes zero-width characters plus common Unicode separator variants before matching so string fields carrying structured PII are caught even when they appear under arbitrary nested keys or lightly obfuscated separators rather than only top-level prompt fields. The orchestrator now persists immutable `pii_scrub_applied`, `pii_scrub_fallback`, and `pii_scrub_blocked` verification receipts with payload-path metadata, so degraded privacy mode and fail-closed blocks are visible in the same audit trail as the rest of governance.
 
-**Operator responsibility:** The `.env` file and the host machine's security are the operator's responsibility. Lancelot protects secrets within its runtime but cannot protect against host compromise.
+**Operator responsibility:** Bootstrap material (`.env`, installer-generated secrets, vault key custody) and the host machine's security remain the operator's responsibility. Lancelot protects secrets within its runtime but cannot protect against host compromise.
 
 ---
 
@@ -260,8 +272,9 @@ Every action emits a receipt containing:
 
 **Receipt guarantees:**
 - If there's no receipt, the action didn't happen
-- Receipts are append-only — they cannot be modified or deleted at runtime
+- Finalized receipts are append-only — they cannot be modified or deleted at runtime
 - Parent-child linking enables complete decision chain reconstruction
+- Finalized receipt hashes are sequentially chained and HMAC-signed by default; operators can override the signing key with `LANCELOT_RECEIPT_HMAC_KEY`
 - Batch receipts include SHA-256 hashes for integrity verification
 - Receipt inputs/outputs are sanitized (secrets redacted, PII stripped)
 
@@ -317,8 +330,12 @@ Recommendations for production deployments:
 ### Network Security
 - Outbound domains restricted via `config/network_allowlist.yaml`
 - Default allowlist contains only necessary API endpoints
+- If allowlist enforcement is enabled, an empty or missing allowlist fails closed instead of silently allowing outbound domains
 - The War Room is designed for **local access only** — do not expose to the public internet without additional authentication
 - No inbound connections are required (Lancelot initiates all external communication)
+
+### API Boundary Hardening
+- Management and governance request-body models reject undeclared JSON fields instead of silently ignoring them. That fail-closed request validation is enforced across HIVE, A2A, MCP, Time-Travel, Observability, Compliance, credential onboarding, Memory, Federation graph/settings, Providers, Skills, ActionCards, Flags, Connectors, and Scheduler management routes.
 
 ### Monitoring
 - Review receipts regularly via the War Room
@@ -405,11 +422,12 @@ The Hive Agent Mesh introduces ephemeral sub-agents, which require governance at
 
 ### Scoped Soul Validation
 
-Every sub-agent receives a scoped Soul that is validated to be **strictly more restrictive** than the parent:
+Every sub-agent receives a scoped Soul that is validated to be **strictly more restrictive** than the parent, and the live execution path now seals that scope into an immutable spawn-time capability boundary:
 - No new `allowed_autonomous` actions beyond what the parent allows
 - All parent risk rules preserved (only additions allowed)
 - Scheduling boundaries tightened (max 1 concurrent job, duration capped)
 - `no_autonomous_irreversible` maintained if parent has it
+- Runtime and UAB execution consult the immutable boundary derived from the parent Soul plus the frozen task scope, so later mutation of a raw scoped Soul object cannot widen child permissions
 
 If validation fails, the agent is not spawned.
 
@@ -425,6 +443,7 @@ Sub-Agent Action → RiskClassifier (T0–T3) → TrustLedger (effective tier)
 - T3 actions **always** require operator approval for Hive agents (Soul overlay rule)
 - Governance denial collapses the agent immediately (no retry)
 - Governance checks produce receipts for audit trail
+- If the MCP permission boundary errors, HIVE denies the action instead of approving by exception
 
 ### Collapse-on-Violation
 

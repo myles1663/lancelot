@@ -279,8 +279,7 @@ class ConnectorProxy:
                     cred_value = self._vault.retrieve(
                         result.credential_vault_key, accessor_id=connector_id,
                     )
-                    vault_entry = self._vault._entries.get(result.credential_vault_key)
-                    cred_type = vault_entry.type if vault_entry else "api_key"
+                    cred_type = self._vault.get_entry_type(result.credential_vault_key)
 
                     if cred_type in ("oauth_token", "bearer"):
                         headers["Authorization"] = f"Bearer {cred_value}"

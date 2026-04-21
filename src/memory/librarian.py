@@ -2,10 +2,14 @@ import os
 import shutil
 import time
 import datetime
+import logging
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from google import genai
 from receipts import create_receipt, get_receipt_service, ActionType, ReceiptStatus, CognitionTier
+
+
+logger = logging.getLogger(__name__)
 
 class FileAction:
     def __init__(self, log_path="/home/lancelot/data/librarian.log", receipt_service=None):
@@ -19,7 +23,7 @@ class FileAction:
             with open(self.log_path, "a") as f:
                 f.write(entry)
         except Exception as e:
-            print(f"Error writing to librarian log: {e}")
+            logger.warning("Error writing to librarian log: %s", e)
 
     def safe_move(self, src: str, dst_folder: str, justification: str):
         """Moves file to destination folder, creating it if needed."""
@@ -58,7 +62,7 @@ class FileAction:
                 
             return dst
         except Exception as e:
-            print(f"Error moving file: {e}")
+            logger.warning("Error moving file %s: %s", src, e)
             if receipt:
                 duration = int((__import__("time").time() - start_time) * 1000)
                 self.receipt_service.update(receipt.fail(str(e), duration))
@@ -242,7 +246,7 @@ class Librarian:
         event_handler = LibrarianHandler(self)
         self.observer.schedule(event_handler, self.data_dir, recursive=False) # Not recursive to avoid loops in subfolders
         self.observer.start()
-        print("Librarian is watching...")
+        logger.info("Librarian is watching %s", self.data_dir)
 
     def _is_ignored(self, path: str) -> bool:
         """Checks if path is in an ignored directory."""
@@ -260,7 +264,7 @@ class Librarian:
         if filename.startswith(".") or filename in ["USER.md", "RULES.md", "MEMORY_SUMMARY.md", "audit.log", "librarian.log"]:
             return
 
-        print(f"Librarian processing: {filename}")
+        logger.info("Librarian processing: %s", filename)
         
         # Create Receipt for Analysis
         start_time = __import__("time").time()
@@ -290,13 +294,11 @@ class Librarian:
             # Not raising here to keep process alive, but failing receipt
             duration = int((__import__("time").time() - start_time) * 1000)
             self.receipt_service.update(receipt.fail(str(e), duration))
-            print(f"Error reading file {filename}: {e}")
-            return
-            print(f"Could not read file {filename}: {e}")
+            logger.warning("Error reading file %s: %s", filename, e)
             return
 
         if not self.client:
-            print("Gemini not ready, skipping tag.")
+            logger.info("Gemini not ready, skipping librarian tag for %s", filename)
             return
 
         try:
@@ -330,15 +332,15 @@ class Librarian:
             self.action_handler.safe_move(file_path, dst_folder, f"Organized into {category} based on content analysis.")
             
         except Exception as e:
-            print(f"Error processing file with Gemini: {e}")
+            logger.warning("Error processing file with Gemini for %s: %s", filename, e)
 
     def _update_memory_summary(self, filename, summary, category):
         summary_path = os.path.join(self.data_dir, "MEMORY_SUMMARY.md")
         try:
             with open(summary_path, "a") as f:
                 f.write(f"\n- **{filename}** ([{category}]): {summary}")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to update memory summary for %s: %s", filename, exc)
 
     def check_queue(self):
         """Manual trigger to process queue (simplifies threading model for this script)."""

@@ -34,8 +34,9 @@
 import { createServer, IncomingMessage, ServerResponse, Server } from 'http';
 import { UABConnector, type ConnectorOptions } from './connector.js';
 import { detectEnvironment, getDefaults, type EnvironmentInfo } from './environment.js';
+import { createLogger } from './logger.js';
 import type {
-  ActionType, ElementSelector, ElementType,
+  ActionType, ElementSelector, ElementType, OperationPlanContext,
 } from './types.js';
 
 // ─── Types ────────────────────────────────────────────────────
@@ -55,6 +56,130 @@ export interface ServerOptions {
 
 interface RouteHandler {
   (body: Record<string, unknown>, connector: UABConnector): Promise<unknown>;
+}
+
+interface WaitOptions {
+  timeoutMs?: number;
+  intervalMs?: number;
+}
+
+const log = createLogger('uab-server');
+
+function delay(timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, timeoutMs));
+}
+
+export async function waitUntil(
+  label: string,
+  predicate: () => Promise<boolean>,
+  options: Required<WaitOptions>,
+  details: Record<string, unknown>,
+): Promise<boolean> {
+  const startedAt = Date.now();
+  const deadline = startedAt + options.timeoutMs;
+  let lastError: string | undefined;
+
+  while (Date.now() <= deadline) {
+    try {
+      if (await predicate()) {
+        log.debug(`${label}_ready`, {
+          ...details,
+          elapsedMs: Date.now() - startedAt,
+        });
+        return true;
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+    }
+
+    await delay(options.intervalMs);
+  }
+
+  log.warn(`${label}_wait_timeout`, {
+    ...details,
+    timeoutMs: options.timeoutMs,
+    ...(lastError ? { lastError } : {}),
+  });
+  return false;
+}
+
+async function waitForFocusAcquired(
+  conn: UABConnector,
+  pid: number,
+  options: WaitOptions = {},
+): Promise<void> {
+  await waitUntil(
+    'focus',
+    async () => {
+      const state = await conn.state(pid);
+      return state.window?.focused === true;
+    },
+    {
+      timeoutMs: options.timeoutMs ?? 500,
+      intervalMs: options.intervalMs ?? 50,
+    },
+    { pid },
+  );
+}
+
+async function readClipboardText(): Promise<string> {
+  const { execSync } = await import('child_process');
+  return execSync(
+    'powershell -NoProfile -Command "Get-Clipboard"',
+    { encoding: 'utf-8', timeout: 5000, shell: 'cmd.exe' as any },
+  ).trim();
+}
+
+async function waitForClipboardStable(
+  pid: number,
+  previousValue?: string,
+  options: WaitOptions = {},
+): Promise<void> {
+  let lastValue: string | undefined;
+  let stableReads = 0;
+
+  await waitUntil(
+    'clipboard',
+    async () => {
+      const currentValue = await readClipboardText();
+      if (previousValue !== undefined && currentValue === previousValue) {
+        lastValue = currentValue;
+        stableReads = 0;
+        return false;
+      }
+      if (currentValue === lastValue) {
+        stableReads += 1;
+      } else {
+        lastValue = currentValue;
+        stableReads = 1;
+      }
+      return stableReads >= 2;
+    },
+    {
+      timeoutMs: options.timeoutMs ?? 750,
+      intervalMs: options.intervalMs ?? 75,
+    },
+    { pid },
+  );
+}
+
+async function waitForLaunchReady(
+  conn: UABConnector,
+  target: string,
+  options: WaitOptions = {},
+): Promise<void> {
+  await waitUntil(
+    'launch',
+    async () => {
+      const matches = await conn.find(target);
+      return matches.some((app) => !!app.pid || !!app.windowTitle);
+    },
+    {
+      timeoutMs: options.timeoutMs ?? 3000,
+      intervalMs: options.intervalMs ?? 150,
+    },
+    { target },
+  );
 }
 
 // ─── Server ───────────────────────────────────────────────────
@@ -121,6 +246,10 @@ export class UABServer {
   }
 
   get address(): string {
+    const bound = this.server?.address();
+    if (bound && typeof bound === 'object') {
+      return `http://${bound.address}:${bound.port}`;
+    }
     return `http://${this.opts.host}:${this.opts.port}`;
   }
 
@@ -216,11 +345,17 @@ export class UABServer {
 
     // GET /info is public (agents need to discover endpoints)
     if (req.method === 'GET' && path === '/info') {
+      const hooks = this.connector.hookInventory();
+      const signatures = this.connector.signatureInventory();
+      const concerto = this.connector.concertoInventory();
       this.sendJSON(res, 200, {
         name: 'Universal App Bridge Server',
         version: '1.0.0',
         environment: this.environment,
         endpoints: [...this.routes.keys()].map(r => `POST ${r}`),
+        frameworkHooks: hooks,
+        frameworkSignatures: signatures,
+        concertoMethods: concerto,
       });
       return;
     }
@@ -405,6 +540,46 @@ export class UABServer {
       };
     });
 
+    this.routes.set('/plan', async (body, conn) => {
+      const pid = body.pid as number;
+      const action = body.action as ActionType | 'describe';
+      const context = body.context as OperationPlanContext | undefined;
+      if (!pid || !action) throw new Error('Missing required fields: pid, action');
+      if (!conn.isConnected(pid)) await conn.connect(pid);
+      return { pid, action, plan: conn.planOperation(pid, action, context) };
+    });
+
+    this.routes.set('/excel/probe', async () => {
+      const { probeExcelAutomation } = await import('./plugins/office/index.js');
+      return probeExcelAutomation();
+    });
+
+    this.routes.set('/excel/benchmark', async (body) => {
+      const rowCount = body.rowCount as number | undefined;
+      const outputPath = body.outputPath as string | undefined;
+      const manifestPath = body.manifestPath as string | undefined;
+      const visible = body.visible === true;
+      const keepOpen = body.keepOpen === true;
+      const dryRun = body.dryRun === true;
+      const {
+        buildExcelWorkbookBenchmarkScript,
+        resolveExcelWorkbookBenchmarkPaths,
+        runExcelWorkbookBenchmark,
+      } = await import('./plugins/office/index.js');
+
+      const options = { rowCount, outputPath, manifestPath, visible, keepOpen };
+      if (dryRun) {
+        return {
+          dryRun: true,
+          options,
+          resolvedPaths: resolveExcelWorkbookBenchmarkPaths(options),
+          script: buildExcelWorkbookBenchmarkScript(options),
+        };
+      }
+
+      return runExcelWorkbookBenchmark(options);
+    });
+
     this.routes.set('/act', async (body, conn) => {
       const pid = body.pid as number;
       const elementId = (body.elementId as string) || '';
@@ -461,8 +636,8 @@ export class UABServer {
       if (!path || !Array.isArray(path) || path.length < 2) {
         throw new Error('Missing required field: path (array of {x,y} with at least 2 points)');
       }
-      const { dragPath } = await import('./plugins/vision/input.js');
-      const result = dragPath(pid, path, stepDelay, button);
+      if (!this.connector.isConnected(pid)) await this.connector.connect(pid);
+      const result = await this.connector.drag(pid, path, stepDelay, button);
       return { pid, ...result };
     });
 
@@ -475,8 +650,8 @@ export class UABServer {
       if (!pid || x === undefined || y === undefined || amount === undefined) {
         throw new Error('Missing required fields: pid, x, y, amount');
       }
-      const { scrollAt } = await import('./plugins/vision/input.js');
-      const result = scrollAt(pid, x, y, amount);
+      if (!this.connector.isConnected(pid)) await this.connector.connect(pid);
+      const result = await this.connector.scroll(pid, x, y, amount);
       return { pid, ...result };
     });
 
@@ -743,17 +918,14 @@ try {
 
       // Focus the window, Ctrl+A to select all, Ctrl+C to copy
       await conn.act(pid, '', 'hotkey' as ActionType, { keys: ['ctrl', 'a'] });
-      await new Promise(r => setTimeout(r, 200));
+      await waitForFocusAcquired(conn, pid, { timeoutMs: 500 });
+      const previousClipboard = await readClipboardText().catch(() => undefined);
       await conn.act(pid, '', 'hotkey' as ActionType, { keys: ['ctrl', 'c'] });
-      await new Promise(r => setTimeout(r, 300));
+      await waitForClipboardStable(pid, previousClipboard, { timeoutMs: 750 });
 
       // Read clipboard via PowerShell
-      const { execSync } = await import('child_process');
       try {
-        const text = execSync(
-          'powershell -NoProfile -Command "Get-Clipboard"',
-          { encoding: 'utf-8', timeout: 5000, shell: 'cmd.exe' as any },
-        ).trim();
+        const text = await readClipboardText();
         return { pid, success: true, text };
       } catch (err) {
         return { pid, success: false, error: 'Could not read clipboard', text: '' };
@@ -806,26 +978,8 @@ try {
         };
       }
 
-      let AnthropicCtor: new (opts: { apiKey?: string }) => {
-        messages: {
-          create: (params: unknown) => Promise<{ content: Array<{ type: string; text?: string }> }>;
-        };
-      };
-      try {
-        const sdkName = '@anthropic-ai/sdk';
-        const { default: Anthropic } = await (Function('specifier', 'return import(specifier)')(sdkName) as Promise<{
-          default: typeof AnthropicCtor;
-        }>);
-        AnthropicCtor = Anthropic;
-      } catch {
-        return {
-          pid: targetPid,
-          screenshot: (screenshotResult as any).path,
-          description: 'Vision descriptions require @anthropic-ai/sdk to be installed alongside ANTHROPIC_API_KEY.',
-        };
-      }
-
-      const client = new AnthropicCtor({ apiKey });
+      const { default: Anthropic } = await import('@anthropic-ai/sdk');
+      const client = new Anthropic({ apiKey });
       const response = await client.messages.create({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 2048,
@@ -853,7 +1007,7 @@ try {
     });
 
     // Launch / Focus
-    this.routes.set('/open', async (body) => {
+    this.routes.set('/open', async (body, conn) => {
       const target = body.target as string;
       if (!target) throw new Error('Missing required field: target (app name or path)');
       const { execSync } = await import('child_process');
@@ -865,8 +1019,7 @@ try {
         } else {
           execSync(`open "${target}"`, { stdio: 'pipe' });
         }
-        // Wait for the app to start
-        await new Promise(r => setTimeout(r, 2000));
+        await waitForLaunchReady(conn, target, { timeoutMs: 3000 });
         return { success: true, message: `Launched ${target}` };
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };

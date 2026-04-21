@@ -796,7 +796,7 @@ function UABPanel() {
       )}
       <div className="p-2 bg-surface-input rounded border border-border-default">
         <p className="text-[9px] text-text-muted leading-relaxed">
-          UAB is licensed under <span className="font-medium text-text-secondary">BSL 1.1</span> — free for personal use and the Lancelot ecosystem.
+          UAB is licensed under <span className="font-medium text-text-secondary">Business Source License 1.1 (BSL 1.1)</span> — free for personal use and the Lancelot ecosystem.
           Commercial agent runtimes and enterprise use require a separate license. See packages/uab/LICENSE.
         </p>
       </div>

@@ -1,7 +1,10 @@
 import os
 import datetime
+import logging
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+
+logger = logging.getLogger(__name__)
 
 class CalendarService:
     def __init__(self):
@@ -18,12 +21,12 @@ class CalendarService:
                     creds_path, scopes=['https://www.googleapis.com/auth/calendar']
                 )
                 self.service = build('calendar', 'v3', credentials=self.creds)
-                print("Authenticated with Google Calendar API.")
+                logger.info("Authenticated with Google Calendar API.")
             except Exception as e:
-                print(f"Error authenticating: {e}. Falling back to mock.")
+                logger.warning("Error authenticating Google Calendar API: %s. Falling back to mock.", e)
                 self.service = None
         else:
-            print("No Google Credentials found. Using Mock Calendar Service.")
+            logger.info("No Google Credentials found. Using Mock Calendar Service.")
             self.service = None
 
     def create_event(self, summary: str, description: str = "") -> str:
@@ -53,4 +56,4 @@ class CalendarService:
 
 if __name__ == "__main__":
     svc = CalendarService()
-    print(svc.create_event("Test Meeting"))
+    logger.info("%s", svc.create_event("Test Meeting"))

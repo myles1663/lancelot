@@ -35,6 +35,7 @@ Public API:
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -125,11 +126,15 @@ class ResumeEngine:
         soul: Any,
         snapshot_reader: Any = None,
         quest_executor: Optional[Callable[..., Dict[str, Any]]] = None,
+        trust_ledger: Any = None,
+        data_dir: Optional[str] = None,
     ):
         self._receipt_service = receipt_service
         self._soul = soul
         self._snapshot_reader = snapshot_reader
         self._quest_executor = quest_executor
+        self._trust_ledger = trust_ledger
+        self._data_dir = data_dir or os.environ.get("LANCELOT_DATA_DIR", "lancelot_data")
 
     def _get_soul(self) -> Any:
         """Resolve the live Soul object."""
@@ -147,6 +152,18 @@ class ResumeEngine:
     def update_quest_executor(self, quest_executor: Optional[Callable[..., Dict[str, Any]]]) -> None:
         """Refresh the quest execution callback used by replay and fork."""
         self._quest_executor = quest_executor
+
+    def update_trust_ledger(self, trust_ledger: Any) -> None:
+        """Refresh the live Trust Ledger/provider used for approval decisions."""
+        self._trust_ledger = trust_ledger
+
+    def _resolve_trust_ledger(self) -> Any:
+        if self._trust_ledger is not None:
+            return self._trust_ledger
+
+        from src.core.governance.trust_ledger import TrustLedger
+
+        return TrustLedger(data_dir=self._data_dir)
 
     def _execute_governed_quest(
         self,
@@ -584,9 +601,8 @@ class ResumeEngine:
     def _get_current_trust_tier(self) -> int:
         """Get the current effective trust tier from the trust ledger."""
         try:
-            from src.core.governance.trust_ledger import TrustLedger
-            ledger = TrustLedger()
-            return ledger.get_effective_tier()
+            ledger = self._resolve_trust_ledger()
+            return ledger.get_approval_tier()
         except Exception:
             # If trust ledger is unavailable, default to T0 (most restrictive)
             return 0

@@ -111,7 +111,7 @@ Internal Request -> OutboundPipeline.delegate()
 ```
 
 **Key behaviors**
-- PII scrubbing removes SSNs, credit card numbers, and email addresses before egress.
+- PII scrubbing removes SSNs, credit card numbers, and email addresses before egress. When the live runtime has the canonical frontier scrubber bound, outbound A2A uses that scrubber first for task content and returned text artifacts; otherwise it falls back to deterministic structured-pattern redaction so egress still fails closed on the common categories.
 - `max_delegation_depth` prevents unbounded delegation chains.
 - Agent Card verification is required by default before delegation.
 - Verification is now pinned: a peer must have a previously accepted Agent Card snapshot in the registry, and any card drift requires an explicit operator re-verification before delegation resumes.
@@ -196,10 +196,11 @@ This endpoint now degrades explicitly when the live Soul resolver, registry, or 
 
 ---
 
-## Source Files
+## Core Source Files
 
 ```
 src/a2a/
+├── __init__.py
 ├── types.py
 ├── registry.py
 ├── agent_card.py

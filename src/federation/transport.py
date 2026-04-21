@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from src.core.outbound_http import OutboundNetworkError, assert_url_allowed
 from src.federation.auth import FederationAuth
 
 logger = logging.getLogger(__name__)
@@ -161,6 +162,7 @@ class FederationTransport:
         max_connections: int = 100,
         max_keepalive: int = 20,
         tls_verify: bool = True,
+        network_interceptor=None,
     ):
         self._auth = auth
         self._max_retries = max_retries
@@ -174,6 +176,7 @@ class FederationTransport:
         self._max_connections = max_connections
         self._max_keepalive = max_keepalive
         self._tls_verify = tls_verify
+        self._network_interceptor = network_interceptor
 
         self._client: Optional[httpx.AsyncClient] = None
         self._circuit_breakers: Dict[str, PeerCircuitBreaker] = {}
@@ -260,6 +263,19 @@ class FederationTransport:
         # Prepare body bytes
         body_bytes = json.dumps(body).encode("utf-8") if body else b""
         url = f"{peer_address.rstrip('/')}{path}"
+        try:
+            assert_url_allowed(
+                url,
+                component="Federation transport",
+                network_interceptor=self._network_interceptor,
+            )
+        except OutboundNetworkError as exc:
+            logger.warning("%s", exc)
+            return TransportResult(
+                success=False,
+                error=str(exc),
+                peer_id=peer_id,
+            )
 
         # Sign request
         auth_headers = self._auth.sign_request(method, path, body_bytes)

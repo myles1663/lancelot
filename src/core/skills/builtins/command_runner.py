@@ -17,6 +17,7 @@ import os
 import shlex
 import subprocess
 import time
+from pathlib import Path
 from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ COMMAND_WHITELIST = {
 
 # Dangerous shell metacharacters
 BLOCKED_CHARS = {'&', '|', ';', '$', '`', '(', ')', '{', '}', '<', '>'}
+WINDOWS_SHELL_BUILTINS = {"echo", "dir", "type", "set", "ver"}
 
 DEFAULT_TIMEOUT = 30
 
@@ -154,7 +156,7 @@ def _execute_via_fabric(fabric, command: str, timeout_sec: int, inputs: dict) ->
     """Execute command through Tool Fabric (routes to host bridge/execution/sandbox)."""
     start = time.monotonic()
 
-    workspace = inputs.get("cwd") or os.environ.get("LANCELOT_WORKSPACE", ".")
+    workspace = _resolve_workspace(inputs)
     result = fabric.run_command(
         command=command,
         workspace=workspace,
@@ -179,19 +181,21 @@ def _execute_via_fabric(fabric, command: str, timeout_sec: int, inputs: dict) ->
 
 def _execute_local(command: str, timeout_sec: int, inputs: dict) -> dict:
     """Execute command directly via subprocess (container-local)."""
-    try:
-        parts = shlex.split(command)
-    except ValueError as e:
-        raise ValueError(f"Invalid command syntax: {e}")
+    cwd = _resolve_workspace(inputs)
+    binary, parts = _parse_command(command)
 
     start = time.monotonic()
     try:
+        if os.name == "nt" and binary in WINDOWS_SHELL_BUILTINS:
+            exec_args = ["cmd.exe", "/d", "/s", "/c", command]
+        else:
+            exec_args = parts
         result = subprocess.run(
-            parts,
+            exec_args,
             capture_output=True,
             text=True,
             timeout=timeout_sec,
-            cwd=inputs.get("cwd", None),
+            cwd=cwd,
         )
         duration_ms = (time.monotonic() - start) * 1000
 
@@ -218,15 +222,7 @@ def _validate_command(command: str) -> None:
             raise ValueError(f"Blocked shell metacharacter: '{char}'")
 
     # Parse and check binary
-    try:
-        parts = shlex.split(command)
-    except ValueError:
-        raise ValueError("Invalid command syntax")
-
-    if not parts:
-        raise ValueError("Empty command")
-
-    binary = os.path.basename(parts[0])
+    binary, _ = _parse_command(command)
     if binary in COMMAND_WHITELIST:
         return  # Always allowed
 
@@ -238,3 +234,48 @@ def _validate_command(command: str) -> None:
             return
 
     raise ValueError(f"Command '{binary}' not in whitelist")
+
+
+def _parse_command(command: str) -> tuple[str, list[str]]:
+    """Parse a command string into the executable and argv list."""
+    try:
+        parts = shlex.split(command, posix=os.name != "nt")
+    except ValueError as e:
+        raise ValueError(f"Invalid command syntax: {e}")
+
+    if not parts:
+        raise ValueError("Empty command")
+
+    return os.path.basename(parts[0]), parts
+
+
+def _resolve_workspace(inputs: dict) -> str:
+    """Resolve and validate the execution cwd against the workspace boundary."""
+    configured_root = os.environ.get("LANCELOT_WORKSPACE")
+    requested = inputs.get("cwd")
+
+    if configured_root:
+        root = Path(configured_root).resolve()
+    elif requested:
+        root = Path(requested).resolve()
+    else:
+        root = Path.cwd().resolve()
+
+    target = Path(requested).resolve() if requested else root
+
+    if not target.exists() or not target.is_dir():
+        raise ValueError(f"Invalid command cwd: {target}")
+
+    if configured_root and not _is_within_workspace(target, root):
+        raise ValueError(f"Command cwd '{target}' is outside workspace boundary '{root}'")
+
+    return str(target)
+
+
+def _is_within_workspace(path: Path, workspace: Path) -> bool:
+    """Return True when path is within workspace, including the workspace root."""
+    try:
+        path.relative_to(workspace)
+        return True
+    except ValueError:
+        return path == workspace

@@ -206,7 +206,10 @@ def check_timeouts(
                         hs.handshake_id, hs.target_instance_id,
                     )
             except (ValueError, TypeError):
-                pass
+                logger.debug(
+                    "Ignoring malformed Soul handshake timestamp for %s",
+                    getattr(hs, "handshake_id", ""),
+                )
 
     return timed_out
 

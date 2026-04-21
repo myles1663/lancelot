@@ -1,6 +1,6 @@
 # Time-Travel Debugging
 
-**Feature flag:** `FEATURE_TIME_TRAVEL` (default: false)
+**Feature flag:** `FEATURE_TIME_TRAVEL` (default: `false`)
 
 Time-Travel Debugging allows operators to inspect, replay, and fork past quest executions under full Soul governance. Every operation produces auditable receipts and respects the Soul's `fork_permissions` block.
 
@@ -13,19 +13,19 @@ Time-Travel Debugging allows operators to inspect, replay, and fork past quest e
 | Mode | Description | Soul Gate | Receipts |
 |------|-------------|-----------|----------|
 | **INSPECT** | Read-only state viewing at any receipt | Always allowed | `TIME_TRAVEL_INSPECT` |
-| **REPLAY** | Re-execute unchanged quest under current Soul, new quest_id | `allow_fork` required | `QUEST_REPLAYED` |
-| **FORK** | Modify inputs and re-execute, Soul-validated field restrictions | `allow_fork` + field validation | `QUEST_FORKED` |
+| **REPLAY** | Re-execute an unchanged quest under the current Soul with a new `quest_id` | `allow_fork` required | `QUEST_REPLAYED` |
+| **FORK** | Modify inputs and re-execute with Soul-validated field restrictions | `allow_fork` plus field validation | `QUEST_FORKED` |
 
-### Fork Creation Pipeline (8 Stages)
+### Fork Creation Pipeline
 
-1. **Receipt Selection** — validate source quest exists, retrieve receipt chain
-2. **State Modification** — validate requested field changes
-3. **Soul Validation** — evaluate against `fork_permissions` (allow_fork, modifiable_fields, prohibited_modifications)
-4. **Risk Reclassification** — re-tier under current Soul (uses max source tier)
-5. **T3 Approval Gate** — request and check trust tier approval
-6. **Fork Quest Creation** — mint new quest_id, link to source
-7. **Governed Execution** — actual re-execution through the TaskRun pipeline using the live runtime Soul
-8. **Fork Receipt** — emit `QUEST_FORKED` receipt
+1. **Receipt Selection** - validate the source quest exists and retrieve its receipt chain.
+2. **State Modification** - validate requested field changes.
+3. **Soul Validation** - evaluate `fork_permissions` (`allow_fork`, `modifiable_fields`, `prohibited_modifications`).
+4. **Risk Reclassification** - re-tier under the current Soul using the max source tier.
+5. **T3 Approval Gate** - request and check the aggregate Trust Ledger approval tier.
+6. **Fork Quest Creation** - mint a new `quest_id` and link it to the source.
+7. **Governed Execution** - re-execute through the TaskRun pipeline using the live runtime Soul.
+8. **Fork Receipt** - emit `QUEST_FORKED`.
 
 ---
 
@@ -52,16 +52,17 @@ fork_permissions:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `allow_fork` | bool | `false` | Master switch for fork/replay operations |
-| `require_approval_tier` | int (0-3) | `3` | Minimum trust tier for approval |
-| `modifiable_fields` | list[str] | `[]` | Receipt fields that may be changed in a fork. Empty = replay only |
-| `prohibited_modifications` | list[str] | identity/provenance fields | Fields that can NEVER be modified — enforced architecturally |
+| `allow_fork` | bool | `false` | Master switch for fork and replay operations |
+| `require_approval_tier` | int (0-3) | `3` | Minimum aggregate Trust Ledger approval tier required for approval |
+| `modifiable_fields` | list[str] | `[]` | Receipt fields that may be changed in a fork. Empty means replay only |
+| `prohibited_modifications` | list[str] | identity and provenance fields | Fields that can never be modified |
 
-**Key rules:**
-- `allow_fork: false` (default) blocks all fork and replay operations
-- INSPECT is always allowed regardless of `allow_fork`
-- `prohibited_modifications` are hardcoded defaults that protect audit chain integrity
-- `modifiable_fields` supports prefix matching: `"inputs"` allows `"inputs.query"`
+**Key rules**
+
+- `allow_fork: false` blocks all fork and replay operations.
+- INSPECT is always allowed regardless of `allow_fork`.
+- `prohibited_modifications` protect audit-chain integrity.
+- `modifiable_fields` supports prefix matching, so `"inputs"` allows `"inputs.query"`.
 
 ---
 
@@ -85,22 +86,22 @@ Base path: `/api/timetravel`
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/status` | Subsystem status (enabled, fork_allowed, approval tier) |
+| `GET` | `/status` | Subsystem status (enabled, fork allowed, approval tier) |
 | `GET` | `/quest/{quest_id}/receipts` | Full receipt chain for a quest |
 | `GET` | `/receipt/{receipt_id}/snapshot` | Governance state snapshot at a receipt |
-| `POST` | `/inspect` | Create read-only inspection |
+| `POST` | `/inspect` | Create a read-only inspection |
 | `POST` | `/replay` | Replay a quest (requires identity) |
 | `POST` | `/fork` | Fork a quest with modifications (requires identity) |
 
 ### Authentication
 
-- Browser requests use the authenticated War Room session cookie
-- API clients use the configured bearer/API-key auth path
-- Replay and fork derive operator identity from the authenticated request; they no longer trust legacy `X-Operator-ID` headers
+- Browser requests use the authenticated War Room session cookie.
+- API clients use the configured bearer or API-key auth path.
+- Replay and fork derive operator identity from the authenticated request and do not trust legacy `X-Operator-ID` headers.
 
 ### Runtime Status Contract
 
-`GET /api/timetravel/status` now exposes runtime readiness explicitly instead of only reporting `enabled`:
+`GET /api/timetravel/status` exposes runtime readiness explicitly:
 
 - `engine_ready`
 - `quest_executor_ready`
@@ -110,47 +111,24 @@ Base path: `/api/timetravel`
 - `degraded_reasons`
 - `runtime_errors`
 
-If the live Soul cannot be resolved, or replay/fork execution is not wired to the governed quest executor, the status surface now degrades explicitly instead of quietly behaving as if replay/fork were still operational.
-
-### Example: Inspect
-
-```bash
-curl -X POST http://localhost:8000/api/timetravel/inspect \
-  -H "Content-Type: application/json" \
-  -d '{"receipt_id": "abc123"}'
-```
-
-### Example: Fork
-
-```bash
-curl -X POST http://localhost:8000/api/timetravel/fork \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $LANCELOT_API_TOKEN" \
-  -d '{
-    "source_quest_id": "quest-uuid",
-    "modifications": {"inputs.query": "new prompt"}
-  }'
-```
+If the live Soul cannot be resolved, or replay and fork execution are not wired to the governed quest executor, the status surface degrades explicitly instead of quietly behaving as if the subsystem were operational.
 
 ---
 
 ## War Room UI
 
-The **Time-Travel Debugger** page is accessible from the DEBUGGING section in the sidebar.
+The **Time-Travel Debugger** page is available from the DEBUGGING section in the sidebar.
 
 ### Components
 
-1. **Quest Search** — Enter a Quest ID to load its receipt DAG
-2. **DAG Navigator** — SVG-based receipt chain visualization:
-   - Color-coded nodes (green=success, red=failure, amber=pending)
-   - Parent-child edges showing receipt relationships
-   - Click a node to inspect its state
-3. **Receipt Detail** — Expandable inputs/outputs for the selected receipt
-4. **State Inspector** — Governance snapshot at the selected receipt:
+1. **Quest Search** - enter a Quest ID to load its receipt DAG.
+2. **DAG Navigator** - SVG-based receipt-chain visualization with parent-child edges.
+3. **Receipt Detail** - expandable inputs and outputs for the selected receipt.
+4. **State Inspector** - governance snapshot at the selected receipt:
    - Soul version, trust tier, kill switch state
    - Cost data (tokens, receipts, duration)
    - Governance context flags (Soul, APL, Trust active)
-5. **Fork/Replay Modal** — Mode toggle, JSON modification editor, approval tier display
+5. **Fork/Replay Modal** - mode toggle, JSON modification editor, approval tier display.
 
 ---
 
@@ -158,21 +136,23 @@ The **Time-Travel Debugger** page is accessible from the DEBUGGING section in th
 
 The `StateSnapshotReader` reconstructs governance context at any point in time:
 
-- **Soul version** — determined from most recent `SOUL_UPDATED` receipt
-- **Kill switches** — replayed from `KILL_SWITCH_ISSUED`/`KILL_SWITCH_LIFTED` receipts
-- **Trust tier** — current effective tier from trust ledger
-- **Cost data** — aggregated token/receipt/duration stats
-- **Feature flags** — current flag state snapshot
-- **Receipt chain** — all quest receipts up to the snapshot point
+- **Soul version** - determined from the most recent `SOUL_UPDATED` receipt.
+- **Kill switches** - replayed from `KILL_SWITCH_ISSUED` and `KILL_SWITCH_LIFTED` receipts.
+- **Trust tier** - aggregate approval tier derived from the current Trust Ledger state.
+- **Cost data** - aggregated token, receipt, and duration stats.
+- **Feature flags** - current flag-state snapshot.
+- **Receipt chain** - all quest receipts up to the snapshot point.
+
+When the live Trust Ledger instance is available, Time Travel reads it directly. If not, it reloads persisted state from `lancelot_data/governance/trust_ledger.json`.
 
 ---
 
 ## Architecture Notes
 
-- Fork/replay operations always run under the **current Soul**, never the historical one
-- Each fork/replay creates a **new quest_id** — never reuses the source quest_id
-- The T3 approval gate uses synchronous trust tier checking (async War Room approval planned)
-- Replay and fork now fail closed if the governed quest executor is not configured; they no longer emit success-shaped receipts with an empty execution result
-- `FORK_SOUL_REJECTED` receipts are emitted by the system, not the operator
-- Fork operations are always classified as T3 (Synthesis tier)
-- Cost accounting is isolated per fork quest_id
+- Fork and replay operations always run under the **current Soul**, never the historical one.
+- Each fork and replay creates a **new quest_id** and never reuses the source quest.
+- The T3 approval gate uses synchronous Trust Ledger approval-tier checking. Async War Room approval remains planned.
+- Replay and fork fail closed if the governed quest executor is not configured.
+- `FORK_SOUL_REJECTED` receipts are emitted by the system, not the operator.
+- Fork operations are always classified as T3 (Synthesis tier).
+- Cost accounting is isolated per fork quest.

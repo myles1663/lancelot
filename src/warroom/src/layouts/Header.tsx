@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { VitalsBar } from './VitalsBar'
 import { logout } from '@/api/auth'
 import { ChangePasswordModal } from '@/components/ChangePasswordModal'
+import { getErrorMessage } from '@/utils/errors'
+import { emitWarRoomNotification } from '@/utils/notifications'
 
 interface HeaderProps {
   sidebarCollapsed: boolean
@@ -29,8 +31,12 @@ export function Header({ sidebarCollapsed, onToggleSidebar }: HeaderProps) {
 
   const handleSignOut = async () => {
     setUserMenuOpen(false)
-    await logout()
-    navigate('/login', { replace: true })
+    try {
+      await logout()
+      navigate('/login', { replace: true })
+    } catch (error) {
+      emitWarRoomNotification(getErrorMessage(error, 'Sign out failed'), 'high')
+    }
   }
 
   return (

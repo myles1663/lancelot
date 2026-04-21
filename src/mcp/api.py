@@ -27,7 +27,7 @@ import time
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability
 
@@ -97,6 +97,7 @@ def _check_initialized():
 # ── Request Models ───────────────────────────────────────────
 
 class RegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     server_id: str
     name: str
     endpoint: str
@@ -107,9 +108,11 @@ class RegisterRequest(BaseModel):
     network_domains: list = []
 
 class StatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     status: str
 
 class CredentialRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     vault_key: str
     value: str
     type: str = "api_key"
@@ -294,6 +297,7 @@ async def server_detail(server_id: str):
         "tools": [],  # Populated by test endpoint
         "soul_permitted": soul_permitted,
         "kill_switch_active": kill.allowed,
+        "kill_switch": kill.to_dict(),
         "network_allowed": network_allowed,
     }
 

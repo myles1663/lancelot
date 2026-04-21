@@ -1,5 +1,5 @@
 """
-Skill Executor — runtime interface and execution adapter (Prompt 8 / B3-B4).
+Skill executor runtime interface and execution adapter.
 
 Defines the skill execution contract and safely loads/runs skills.
 

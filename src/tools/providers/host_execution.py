@@ -20,7 +20,8 @@ Security model:
 - Command denylist still enforced
 - Output bounded to prevent memory exhaustion
 - Timeouts enforced via subprocess
-- Workspace boundary checks for file ops
+- Workspace boundary checks for shell exec and file ops
+- Generic shell parsing disabled (`shell=False`); Windows shell builtins use explicit `cmd.exe /c`
 - NO container isolation
 - NO network restrictions
 """
@@ -31,13 +32,11 @@ import hashlib
 import logging
 import os
 import shlex
-import shutil
 import subprocess
 import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.tools.contracts import (
@@ -51,6 +50,8 @@ from src.tools.contracts import (
 )
 
 logger = logging.getLogger(__name__)
+WINDOWS_SHELL_BUILTINS = {"echo", "dir", "type", "set", "ver"}
+WINDOWS_SHELL_BLOCKED_CHARS = {'&', '|', ';', '<', '>', '(', ')'}
 
 
 # =============================================================================
@@ -80,7 +81,7 @@ class HostExecConfig:
         "chown -R",
     ])
 
-    # Command allowlist (empty = allow all)
+    # Command allowlist (empty = do not impose an allowlist beyond the denylist)
     command_allowlist: List[str] = field(default_factory=list)
 
 
@@ -184,13 +185,33 @@ class HostExecutionProvider(BaseProvider):
                     run_env[key] = value
 
         # Resolve working directory
-        work_dir = cwd if cwd and os.path.isdir(cwd) else self._workspace or "."
+        work_dir_error, work_dir = self._resolve_working_dir(cwd)
+        if work_dir_error:
+            return ExecResult(
+                exit_code=126,
+                stdout="",
+                stderr=work_dir_error,
+                duration_ms=int((time.time() - start_time) * 1000),
+                command=cmd_str,
+                working_dir=cwd,
+            )
+
+        command_error, exec_args = self._prepare_command(command)
+        if command_error:
+            return ExecResult(
+                exit_code=126,
+                stdout="",
+                stderr=command_error,
+                duration_ms=int((time.time() - start_time) * 1000),
+                command=cmd_str,
+                working_dir=work_dir,
+            )
 
         # Execute directly on host
         try:
             result = subprocess.run(
-                cmd_str,
-                shell=True,
+                exec_args,
+                shell=False,
                 cwd=work_dir,
                 env=run_env,
                 capture_output=True,
@@ -268,7 +289,7 @@ class HostExecutionProvider(BaseProvider):
 
     def diff(self, workspace: str, ref: Optional[str] = None) -> str:
         """Get diff output."""
-        cmd = "git diff" if ref is None else f"git diff {shlex.quote(ref)}"
+        cmd = ["git", "diff"] if ref is None else ["git", "diff", ref]
         result = self.run(cmd, workspace)
         if not result.success:
             return f"Error: {result.stderr}"
@@ -294,7 +315,7 @@ class HostExecutionProvider(BaseProvider):
                 f.write(patch)
 
             if dry_run:
-                result = self.run("git apply --check .tmp_patch 2>&1", workspace)
+                result = self.run(["git", "apply", "--check", ".tmp_patch"], workspace)
                 return PatchResult(
                     success=result.exit_code == 0,
                     files_changed=[],
@@ -309,7 +330,7 @@ class HostExecutionProvider(BaseProvider):
                 if os.path.exists(full_path):
                     before_hashes[filepath] = self._hash_file(full_path)
 
-            result = self.run("git apply .tmp_patch", workspace)
+            result = self.run(["git", "apply", ".tmp_patch"], workspace)
 
             if result.exit_code != 0:
                 return PatchResult(
@@ -351,29 +372,27 @@ class HostExecutionProvider(BaseProvider):
             return "Error: host_execution.commit requires an explicit file list"
 
         for f in files:
-            self.run(f"git add {shlex.quote(f)}", workspace)
+            self.run(["git", "add", f], workspace)
 
-        safe_message = shlex.quote(message)
-        result = self.run(f"git commit -m {safe_message}", workspace)
+        result = self.run(["git", "commit", "-m", message], workspace)
 
         if result.exit_code != 0:
             return f"Error: {result.stderr}"
 
-        hash_result = self.run("git rev-parse HEAD", workspace)
+        hash_result = self.run(["git", "rev-parse", "HEAD"], workspace)
         return hash_result.stdout.strip()
 
     def branch(self, workspace: str, name: str, checkout: bool = True) -> bool:
         """Create and optionally checkout a branch."""
-        safe_name = shlex.quote(name)
         if checkout:
-            result = self.run(f"git checkout -b {safe_name}", workspace)
+            result = self.run(["git", "checkout", "-b", name], workspace)
         else:
-            result = self.run(f"git branch {safe_name}", workspace)
+            result = self.run(["git", "branch", name], workspace)
         return result.exit_code == 0
 
     def checkout(self, workspace: str, ref: str) -> bool:
         """Checkout a ref (branch, tag, commit)."""
-        result = self.run(f"git checkout {shlex.quote(ref)}", workspace)
+        result = self.run(["git", "checkout", ref], workspace)
         return result.exit_code == 0
 
     # =========================================================================
@@ -469,22 +488,25 @@ class HostExecutionProvider(BaseProvider):
         workspace = os.path.dirname(path) or "."
         filename = os.path.basename(path)
 
-        diff_path = os.path.join(workspace, ".tmp_diff")
-        with open(diff_path, "w") as f:
-            f.write(diff)
-
         try:
-            result = self.run(f"patch {filename} < .tmp_diff", workspace)
-            if result.exit_code != 0:
+            command = ["patch", filename]
+            proc = subprocess.run(
+                command,
+                cwd=workspace,
+                input=diff,
+                capture_output=True,
+                text=True,
+                timeout=self.config.default_timeout_s,
+            )
+            if proc.returncode != 0:
                 return FileChange(path=path, action="error", hash_before=hash_before)
             hash_after = self._hash_file(path)
             return FileChange(
                 path=path, action="modified",
                 hash_before=hash_before, hash_after=hash_after,
             )
-        finally:
-            if os.path.exists(diff_path):
-                os.remove(diff_path)
+        except Exception:
+            return FileChange(path=path, action="error", hash_before=hash_before)
 
     def delete(self, path: str) -> FileChange:
         """Delete a file."""
@@ -543,6 +565,56 @@ class HostExecutionProvider(BaseProvider):
         if len(output) <= max_chars:
             return output, False
         return output[:max_chars] + "\n... (truncated)", True
+
+    def _resolve_working_dir(self, cwd: str) -> Tuple[Optional[str], str]:
+        """Resolve cwd and enforce configured workspace boundaries."""
+        target = cwd if cwd and os.path.isdir(cwd) else self._workspace or "."
+
+        try:
+            abs_target = os.path.realpath(target)
+        except Exception:
+            return f"Invalid working directory: {target}", target
+
+        if self._workspace:
+            abs_workspace = os.path.realpath(self._workspace)
+            if abs_target != abs_workspace and not abs_target.startswith(abs_workspace + os.sep):
+                return f"Working directory '{target}' is outside workspace boundary", abs_target
+
+        if not os.path.isdir(abs_target):
+            return f"Invalid working directory: {target}", abs_target
+
+        return None, abs_target
+
+    def _prepare_command(self, command: Union[str, List[str]]) -> Tuple[Optional[str], List[str]]:
+        """Prepare a subprocess argv list without relying on shell=True."""
+        if isinstance(command, list):
+            if not command:
+                return "Empty command", []
+            return None, command
+
+        if not command.strip():
+            return "Empty command", []
+
+        if os.name == "nt":
+            try:
+                parts = shlex.split(command, posix=False)
+            except ValueError as e:
+                return f"Invalid command syntax: {e}", []
+
+            if not parts:
+                return "Empty command", []
+
+            binary = os.path.basename(parts[0]).lower()
+            if binary in WINDOWS_SHELL_BUILTINS:
+                if any(char in command for char in WINDOWS_SHELL_BLOCKED_CHARS):
+                    return "Blocked shell metacharacter in Windows builtin command", []
+                return None, ["cmd.exe", "/d", "/s", "/c", command]
+            return None, parts
+
+        try:
+            return None, shlex.split(command)
+        except ValueError as e:
+            return f"Invalid command syntax: {e}", []
 
     def _hash_file(self, path: str) -> str:
         """Compute SHA-256 hash of file contents."""

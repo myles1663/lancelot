@@ -1,5 +1,5 @@
 """
-Control-Plane API Endpoints (v4 Upgrade — Prompts 6 & 15 + Fix Pack V1)
+Control plane API endpoints for status, onboarding, routing, and tokens.
 
 Provides /system/status, /onboarding/*, /router/*, /warroom/*, and /tokens/*
 endpoints for the War Room and any other control surface.
@@ -10,11 +10,12 @@ All responses use safe error handling — no stack traces leak to clients.
 import os
 import time
 import logging
-from typing import Optional
+from typing import Any, Optional
 from collections import deque
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability, resolve_authenticated_identity
 
@@ -27,6 +28,11 @@ from src.core.runtime_pause import (
     init_runtime_pause,
     pause_runtime,
     resume_runtime,
+)
+from src.core.model_usage_policy import (
+    get_model_usage_status,
+    init_model_usage_policy,
+    update_model_usage_policy,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,6 +87,58 @@ class _WarRoomArtifactStore:
 _war_room_artifacts = _WarRoomArtifactStore(_ARTIFACT_STORE_MAX_ITEMS)
 
 
+class UpdateModelUsagePolicyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    local_execution_mode: Optional[str] = None
+    frontier_scrub_mode: Optional[str] = None
+
+
+class RuntimePauseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: Optional[str] = Field(
+        default=None,
+        description="Operator-supplied pause reason.",
+    )
+
+
+class OnboardingCommandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    command: Optional[str] = Field(
+        default=None,
+        description="Recovery command such as STATUS, BACK, or RESET ONBOARDING.",
+    )
+
+
+class WarRoomArtifactRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: str
+    content: dict[str, Any]
+    id: Optional[str] = Field(
+        default=None,
+        description="Deprecated client field. Artifact IDs are generated server-side.",
+    )
+    session_id: Optional[str] = Field(
+        default=None,
+        description="Deprecated client field. Session is derived server-side for API writes.",
+    )
+    operator_id: Optional[str] = Field(
+        default=None,
+        description="Deprecated client field. Operator identity is derived server-side.",
+    )
+    source: Optional[str] = Field(
+        default=None,
+        description="Deprecated client field. API writes are always stored as source=api.",
+    )
+
+
+class TokenRevokeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: Optional[str] = Field(
+        default=None,
+        description="Optional operator-supplied revocation reason.",
+    )
+
+
 def init_control_plane(data_dir: str) -> None:
     """Initialise the control-plane with a data directory.
 
@@ -91,6 +149,7 @@ def init_control_plane(data_dir: str) -> None:
     _startup_time = time.time()
     _war_room_artifacts.clear()
     init_runtime_pause(data_dir)
+    init_model_usage_policy(data_dir)
 
     # Fix Pack V1: Try to initialize token store for War Room endpoints
     try:
@@ -204,14 +263,6 @@ def _safe_error(status_code: int, message: str) -> JSONResponse:
     )
 
 
-async def _read_optional_json_body(request: Request) -> dict:
-    """Read a JSON body when present, but treat an empty body as {}."""
-    raw = await request.body()
-    if not raw or not raw.strip():
-        return {}
-    return await request.json()
-
-
 # ------------------------------------------------------------------
 # /system/status
 # ------------------------------------------------------------------
@@ -221,6 +272,7 @@ async def system_status():
     """Full system provisioning status for the War Room."""
     try:
         snap = get_snapshot()
+        model_usage = get_model_usage_status()
         uptime = round(time.time() - _startup_time, 1) if _startup_time else 0
 
         return {
@@ -229,6 +281,11 @@ async def system_status():
                 "flagship_provider": snap.flagship_provider,
                 "credential_status": snap.credential_status,
                 "local_model_status": snap.local_model_status,
+                "local_model_runtime_status": model_usage.get("local_model_status"),
+                "local_model_runtime_ready": model_usage.get("local_model_ready"),
+                "local_model_runtime_loaded": model_usage.get("local_model_loaded"),
+                "local_model_last_verified_at": model_usage.get("local_model_last_verified_at"),
+                "local_model_last_error": model_usage.get("local_model_last_error"),
                 "is_ready": snap.is_ready,
             },
             "cooldown": {
@@ -237,6 +294,7 @@ async def system_status():
                 "reason": snap.last_error if snap.state == OnboardingState.COOLDOWN else None,
             },
             "runtime_pause": get_runtime_pause_status(),
+            "model_usage_policy": model_usage,
             "uptime_seconds": uptime,
         }
     except Exception as exc:
@@ -261,12 +319,11 @@ async def runtime_pause_status():
         Depends(require_operator_capability("platform.admin")),
     ],
 )
-async def runtime_pause(request: Request):
+async def runtime_pause(request: Request, body: RuntimePauseRequest | None = None):
     """Pause new runtime work across ingress paths."""
     try:
         identity = resolve_authenticated_identity(request)
-        body = await _read_optional_json_body(request)
-        reason = str(body.get("reason", "")).strip()
+        reason = (body.reason if body and body.reason is not None else "").strip()
         if not reason:
             return _safe_error(400, "Missing pause reason")
 
@@ -342,15 +399,14 @@ async def runtime_resume(request: Request):
         Depends(require_operator_capability("platform.admin")),
     ],
 )
-async def runtime_emergency_stop(request: Request):
+async def runtime_emergency_stop(request: Request, body: RuntimePauseRequest | None = None):
     """Pause new runtime work and stop active local execution."""
     try:
         if _runtime_emergency_stop_handler is None:
             return _safe_error(503, "Emergency stop engine not configured")
 
         identity = resolve_authenticated_identity(request)
-        body = await _read_optional_json_body(request)
-        reason = str(body.get("reason", "")).strip()
+        reason = (body.reason if body and body.reason is not None else "").strip()
         if not reason:
             return _safe_error(400, "Missing emergency stop reason")
 
@@ -391,15 +447,69 @@ async def runtime_emergency_stop(request: Request):
         return _safe_error(500, "Failed to execute emergency stop")
 
 
+@router.get("/system/model-policy", dependencies=[Depends(require_authenticated_request)])
+async def system_model_policy():
+    """Return the persisted local-model usage policy and live availability state."""
+    try:
+        return get_model_usage_status()
+    except Exception as exc:
+        logger.error("system_model_policy error: %s", exc)
+        return _safe_error(500, "Failed to retrieve model usage policy")
+
+
+@router.put(
+    "/system/model-policy",
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("platform.admin")),
+    ],
+)
+async def update_system_model_policy(request: Request, body: UpdateModelUsagePolicyRequest):
+    """Persist local execution and frontier scrub policy."""
+    try:
+        if body.local_execution_mode is None and body.frontier_scrub_mode is None:
+            return _safe_error(400, "No model usage policy changes supplied")
+
+        state = update_model_usage_policy(
+            local_execution_mode=body.local_execution_mode,
+            frontier_scrub_mode=body.frontier_scrub_mode,
+        )
+
+        try:
+            from src.core.governance_receipts import emit_governance_receipt
+            from src.shared.receipts import ActionType
+
+            emit_governance_receipt(
+                request,
+                ActionType.SYSTEM,
+                action_name="update_model_usage_policy",
+                inputs={
+                    "local_execution_mode": body.local_execution_mode,
+                    "frontier_scrub_mode": body.frontier_scrub_mode,
+                },
+                outputs=state,
+            )
+        except Exception as exc:
+            logger.warning("Failed to emit model usage policy receipt: %s", exc)
+
+        return state
+    except ValueError as exc:
+        return _safe_error(400, str(exc))
+    except Exception as exc:
+        logger.error("update_system_model_policy error: %s", exc)
+        return _safe_error(500, "Failed to update model usage policy")
+
+
 # ------------------------------------------------------------------
 # /onboarding/*
 # ------------------------------------------------------------------
 
-@router.get("/onboarding/status")
+@router.get("/onboarding/status", dependencies=[Depends(require_authenticated_request)])
 async def onboarding_status():
     """Detailed onboarding snapshot for the War Room recovery panel."""
     try:
         snap = get_snapshot()
+        model_usage = get_model_usage_status()
         # V27: Read provider mode from env
         provider_mode = os.environ.get("LANCELOT_PROVIDER_MODE", "sdk")
         return {
@@ -408,6 +518,14 @@ async def onboarding_status():
             "provider_mode": provider_mode,
             "credential_status": snap.credential_status,
             "local_model_status": snap.local_model_status,
+            "local_model_runtime_status": model_usage.get("local_model_status"),
+            "local_model_runtime_ready": model_usage.get("local_model_ready"),
+            "local_model_runtime_loaded": model_usage.get("local_model_loaded"),
+            "local_model_last_verified_at": model_usage.get("local_model_last_verified_at"),
+            "local_model_last_checked_at": model_usage.get("local_model_last_checked_at"),
+            "local_model_last_error": model_usage.get("local_model_last_error"),
+            "local_model_consecutive_failures": model_usage.get("local_model_consecutive_failures"),
+            "local_model_last_smoke_elapsed_ms": model_usage.get("local_model_last_smoke_elapsed_ms"),
             "is_ready": snap.is_ready,
             "cooldown_active": snap.is_in_cooldown(),
             "cooldown_remaining": round(snap.cooldown_remaining(), 1),
@@ -423,6 +541,7 @@ async def onboarding_status():
 @router.post("/onboarding/command")
 async def onboarding_command(
     request: Request,
+    body: OnboardingCommandRequest | None = None,
     _auth: None = Depends(require_authenticated_request),
     _authz: None = Depends(require_operator_capability("onboarding.admin")),
 ):
@@ -431,8 +550,7 @@ async def onboarding_command(
     Payload: ``{"command": "STATUS"}``
     """
     try:
-        data = await request.json()
-        command = data.get("command", "").strip()
+        command = (body.command if body and body.command is not None else "").strip()
 
         if not command:
             return _safe_error(400, "Missing 'command' field")
@@ -514,7 +632,7 @@ async def onboarding_reset(
 
 
 # ------------------------------------------------------------------
-# /router/* — Model Router War Room panel (Prompt 15)
+# /router/* — Model router panel for the War Room.
 # ------------------------------------------------------------------
 
 @router.get("/router/decisions", dependencies=[Depends(require_authenticated_request)])
@@ -548,7 +666,7 @@ async def router_stats():
 
 
 # ------------------------------------------------------------------
-# /usage/* — Usage & Cost Telemetry panel (Prompt 17)
+# /usage/* — Usage and cost telemetry panel.
 # ------------------------------------------------------------------
 
 @router.get("/usage/summary", dependencies=[Depends(require_authenticated_request)])
@@ -651,12 +769,12 @@ async def usage_reset():
         Depends(require_operator_capability("platform.admin")),
     ],
 )
-async def warroom_store_artifact(request: Request):
+async def warroom_store_artifact(request: Request, body: WarRoomArtifactRequest | None = None):
     """Persist a trusted, structured War Room artifact."""
     try:
-        data = await request.json()
-        if not data:
+        if body is None:
             return _safe_error(400, "Missing artifact data")
+        data = body.model_dump(exclude_none=True)
         identity = resolve_authenticated_identity(request)
         operator_id = identity.operator_id or (
             resolve_operator_id(identity.display_name) if identity.display_name else ""
@@ -737,13 +855,12 @@ async def tokens_get(token_id: str):
 
 
 @router.post("/tokens/{token_id}/revoke", dependencies=[Depends(require_authenticated_request), Depends(require_operator_capability("platform.admin"))])
-async def tokens_revoke(token_id: str, request: Request):
+async def tokens_revoke(token_id: str, request: Request, body: TokenRevokeRequest | None = None):
     """Revoke an ExecutionToken."""
     try:
         if _token_store is None:
             return _safe_error(400, "Token store not initialised")
-        data = await request.json()
-        reason = data.get("reason", "Manual revocation via control plane")
+        reason = body.reason if body and body.reason else "Manual revocation via control plane"
         success = _token_store.revoke(token_id, reason)
         if success:
             return {"status": "revoked", "token_id": token_id, "reason": reason}

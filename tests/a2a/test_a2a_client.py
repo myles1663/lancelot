@@ -17,6 +17,7 @@ from src.a2a.types import (
     AgentCard, AgentCardSkill, RemoteAgent, A2ATaskStatus,
 )
 from src.a2a.client import A2AClient
+from src.core.outbound_http import OutboundNetworkError
 
 
 def _make_agent(
@@ -83,6 +84,11 @@ def _mock_httpx_client(response_data=None, raise_on_get=None, raise_on_post=None
     return mock_httpx, mock_client_instance
 
 
+@pytest.fixture(autouse=True)
+def allow_outbound_requests(monkeypatch):
+    monkeypatch.setattr("src.a2a.client.assert_url_allowed", lambda url, **kwargs: url)
+
+
 # ── fetch_agent_card ────────────────────────────────────────
 
 class TestFetchAgentCard:
@@ -118,6 +124,18 @@ class TestFetchAgentCard:
             client = A2AClient(receipt_service=svc)
             client.fetch_agent_card("https://agent.example.com/.well-known/agent.json")
         svc.create.assert_called_once()
+
+    def test_blocked_by_network_allowlist_returns_none(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.a2a.client.assert_url_allowed",
+            lambda url, **kwargs: (_ for _ in ()).throw(
+                OutboundNetworkError("A2A agent card fetch blocked by network allowlist")
+            ),
+        )
+
+        client = A2AClient()
+
+        assert client.fetch_agent_card("https://blocked.example.com/agent.json") is None
 
 
 # ── send_task ───────────────────────────────────────────────
@@ -173,6 +191,19 @@ class TestSendTask:
             result = client.send_task(agent, "Do this", "task-1")
         assert result["status"] == A2ATaskStatus.FAILED.value
         assert "error" in result
+
+    def test_blocked_task_submission_returns_failed(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.a2a.client.assert_url_allowed",
+            lambda url, **kwargs: (_ for _ in ()).throw(
+                OutboundNetworkError("A2A task submission blocked by network allowlist")
+            ),
+        )
+
+        result = A2AClient().send_task(_make_agent(), "Do this", "task-1")
+
+        assert result["status"] == A2ATaskStatus.FAILED.value
+        assert "network allowlist" in result["error"]
 
 
 # ── poll_task_status ────────────────────────────────────────

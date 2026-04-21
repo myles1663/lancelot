@@ -17,11 +17,12 @@ services:
       - PYTHONUNBUFFERED=1
       # - GOOGLE_APPLICATION_CREDENTIALS=/home/lancelot/.config/gcloud/application_default_credentials.json
       - LOCAL_LLM_URL=http://local-llm:8080
+      - LANCELOT_DATA_DIR=/home/lancelot/data
       - LANCELOT_WORKSPACE=/home/lancelot/workspace
       - PYTHONPATH=/home/lancelot/app/src/core:/home/lancelot/app/src/ui:/home/lancelot/app/src/agents:/home/lancelot/app/src/memory:/home/lancelot/app/src/shared:/home/lancelot/app/src/integrations:/home/lancelot/app/src:/home/lancelot/app
-      # Host Agent bridge — set HOST_AGENT_TOKEN in .env to match host_agent
+      # Host Agent bridge — HOST_AGENT_TOKEN must be explicitly configured in .env
       - HOST_AGENT_URL=http://host.docker.internal:9111
-      - HOST_AGENT_TOKEN=${HOST_AGENT_TOKEN:-lancelot-host-agent}
+      - HOST_AGENT_TOKEN=${HOST_AGENT_TOKEN:-}
       # F-001: Docker socket proxy — no direct socket mount
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
     depends_on:
@@ -82,16 +83,19 @@ services:
     build:
       context: ./local_models
       dockerfile: Dockerfile
+      args:
+        LOCAL_LLM_WHEEL_VARIANT: ${LOCAL_LLM_WHEEL_VARIANT:-cpu}
+        LOCAL_LLM_WHEEL_VERSION: ${LOCAL_LLM_WHEEL_VERSION:-0.3.19}
     container_name: lancelot_local_llm
     volumes:
       # Model weights — downloaded during onboarding, never baked into image
       - ./local_models/weights:/home/llm/models:ro
     environment:
       - LOCAL_MODELS_DIR=/home/llm/models
-      - LOCAL_MODEL_CTX=4096
-      - LOCAL_MODEL_THREADS=4
-      - LOCAL_MODEL_GPU_LAYERS=15
-      - LOCAL_LLM_PORT=8080
+      - LOCAL_MODEL_CTX=${LOCAL_MODEL_CTX:-4096}
+      - LOCAL_MODEL_THREADS=${LOCAL_MODEL_THREADS:-4}
+      - LOCAL_MODEL_GPU_LAYERS=${LOCAL_MODEL_GPU_LAYERS:-0}
+      - LOCAL_LLM_PORT=${LOCAL_LLM_PORT:-8080}
     # Fix Pack V8: GPU access for CUDA offload
     deploy:
       resources:

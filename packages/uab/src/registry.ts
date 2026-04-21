@@ -12,7 +12,7 @@
  *   - Scales to 1000+ apps: Map is O(1), JSON file is just a snapshot
  *   - Framework-independent: any agent can use this
  *
- * SPDX-License-Identifier: BSL-1.0
+ * SPDX-License-Identifier: BUSL-1.1
  * Licensor: Myles Russell Hamilton
  */
 

@@ -94,11 +94,12 @@ class TestLogFeatureFlags:
     """log_feature_flags emits a log line."""
 
     def test_logs_at_info_level(self, caplog):
-        with caplog.at_level(logging.INFO, logger="src.core.feature_flags"):
+        with caplog.at_level(logging.INFO):
             log_feature_flags()
-        assert "Feature flags:" in caplog.text
-        assert "SOUL=" in caplog.text
-        assert "SKILLS=" in caplog.text
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("Feature flags:" in message for message in messages)
+        assert any("SOUL=" in message for message in messages)
+        assert any("SKILLS=" in message for message in messages)
 
 
 class TestBootWithFlagsDisabled:
@@ -276,6 +277,11 @@ def _write_sched_config(tmp_path, jobs=None):
     return str(config_dir)
 
 
+def _noop_skill(_name: str, _inputs: dict) -> dict:
+    """Minimal executor used by legacy hardening coverage for successful runs."""
+    return {"status": "ok"}
+
+
 class TestSchedulerGatingRegressions:
     """Gating pipeline blocks jobs correctly."""
 
@@ -297,7 +303,7 @@ class TestSchedulerGatingRegressions:
 
     def test_gate_passes_allows_execution(self, svc):
         gate = Gate(name="ready_check", check_fn=lambda: True)
-        executor = JobExecutor(svc, gates=[gate])
+        executor = JobExecutor(svc, skill_execute_fn=_noop_skill, gates=[gate])
         result = executor.execute_job("test_job")
         assert result.executed is True
         assert result.success is True
@@ -342,7 +348,7 @@ class TestSchedulerGatingRegressions:
         assert result.skipped is True
 
     def test_receipt_emitted_on_execution(self, svc):
-        executor = JobExecutor(svc)
+        executor = JobExecutor(svc, skill_execute_fn=_noop_skill)
         result = executor.execute_job("test_job")
         assert result.receipt is not None
         assert result.receipt["event"] == "scheduled_job_run"

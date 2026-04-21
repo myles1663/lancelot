@@ -179,7 +179,6 @@ export async function promptWarRoomAuthModel() {
 export async function promptWarRoomUsername() {
   return await input({
     message: 'Choose a War Room username:',
-    default: 'admin',
     validate: (val) => {
       if (!val || val.trim().length < 2) {
         return 'Username must be at least 2 characters';
@@ -271,8 +270,14 @@ export async function promptOidcBaseUrl() {
 
 export async function promptOidcAllowedGroups() {
   return await input({
-    message: 'Enter allowed OIDC groups (comma-separated), or leave blank to allow any authenticated user:',
-    default: '',
+    message: 'Enter allowed OIDC groups (comma-separated), or type "open" to explicitly allow any authenticated user:',
+    validate: (val) => {
+      const trimmed = String(val || '').trim();
+      if (!trimmed) {
+        return 'At least one allowed OIDC group is required unless you explicitly type "open".';
+      }
+      return true;
+    },
   });
 }
 
@@ -291,7 +296,7 @@ export async function promptConfirm(config) {
   console.log(chalk.gray(`    Comms:      ${commsInfo?.name || config.commsType}`));
   const warRoomLabel = config.warRoomAuthModel === 'oidc'
     ? `Enterprise SSO via ${config.oidcIssuerUrl || 'OIDC'}`
-    : `${config.warRoomUser || 'admin'} / ${'*'.repeat((config.warRoomPassword || '').length)}`;
+    : `${config.warRoomUser || '(custom username)'} / ${'*'.repeat((config.warRoomPassword || '').length)}`;
   console.log(chalk.gray(`    War Room:   ${warRoomLabel}`));
   if (config.hasGpu) {
     console.log(chalk.gray(`    GPU:        ${config.gpuName} (${config.gpuLayers} layers)`));

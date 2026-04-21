@@ -8,6 +8,7 @@ and rollback wiring for verification failures.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -27,6 +28,7 @@ class VerificationJob:
     task_id: str = ""
     step_index: int = 0
     capability: str = ""
+    goal: str = ""
     output: Any = None
     risk_tier: RiskTier = RiskTier.T1_REVERSIBLE
     submitted_at: str = field(
@@ -73,11 +75,17 @@ class AsyncVerificationQueue:
     ):
         """
         Args:
-            verify_fn: Callable(capability, output) -> bool. If None, auto-passes.
+            verify_fn: Callable that returns a boolean verification verdict.
+                Supported signatures are:
+                - verify_fn(job)
+                - verify_fn(capability, output)
+                - verify_fn(capability, output, goal)
+                If omitted, async verification fails closed.
             config: Async verification configuration.
             on_failure: Optional callback for verification failures.
         """
         self._verify_fn = verify_fn
+        self._verify_arg_mode = self._resolve_verify_arg_mode(verify_fn)
         self._config = config
         self._on_failure = on_failure
         self._queue: list[VerificationJob] = []
@@ -136,13 +144,45 @@ class AsyncVerificationQueue:
             timed_out=False,
         )
 
+    def _resolve_verify_arg_mode(self, verify_fn: Optional[Callable]) -> Optional[int]:
+        if verify_fn is None:
+            return None
+        try:
+            signature = inspect.signature(verify_fn)
+        except (TypeError, ValueError):
+            return 2
+
+        params = list(signature.parameters.values())
+        if any(param.kind == inspect.Parameter.VAR_POSITIONAL for param in params):
+            return 3
+
+        positional = [
+            param
+            for param in params
+            if param.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+        ]
+        if len(positional) <= 1:
+            return 1
+        if len(positional) == 2:
+            return 2
+        return 3
+
+    def _invoke_verify_fn(self, job: VerificationJob) -> bool:
+        if self._verify_fn is None or self._verify_arg_mode is None:
+            raise RuntimeError("Async verification requires a verify_fn callback")
+        if self._verify_arg_mode == 1:
+            return bool(self._verify_fn(job))
+        if self._verify_arg_mode == 2:
+            return bool(self._verify_fn(job.capability, job.output))
+        return bool(self._verify_fn(job.capability, job.output, job.goal))
+
     def _verify_sync(self, job: VerificationJob) -> VerificationResult:
         """Run verification synchronously for a single job."""
         try:
-            if self._verify_fn is None:
-                passed = True
-            else:
-                passed = self._verify_fn(job.capability, job.output)
+            passed = self._invoke_verify_fn(job)
             status = (
                 VerificationStatus.ASYNC_PASSED if passed
                 else VerificationStatus.ASYNC_FAILED

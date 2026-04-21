@@ -5,6 +5,7 @@ Uses FastAPI TestClient. No real network calls.
 """
 
 import os
+import logging
 import pytest
 from typing import Any
 from cryptography.fernet import Fernet
@@ -128,6 +129,15 @@ class TestCredentialAPI:
         })
         assert resp.status_code == 404
 
+    def test_store_rejects_unexpected_fields(self, setup):
+        client, _, _ = setup
+        resp = client.post("/connectors/apitest/credentials", json={
+            "vault_key": "apitest_key",
+            "value": "sk-12345",
+            "unexpected": "deny-me",
+        })
+        assert resp.status_code == 422
+
     def test_store_undeclared_vault_key_400(self, setup):
         client, _, _ = setup
         resp = client.post("/connectors/apitest/credentials", json={
@@ -179,6 +189,26 @@ class TestCredentialAPI:
         data = resp.json()
         assert data["valid"] is False
         assert "apitest_key" in data["missing"]
+
+    def test_validate_logs_connector_validation_failure(self, setup, caplog):
+        client, _, registry = setup
+        entry = registry.get("apitest")
+        entry.connector.validate_credentials = lambda: (_ for _ in ()).throw(RuntimeError("validation exploded"))
+
+        client.post("/connectors/apitest/credentials", json={
+            "vault_key": "apitest_key", "value": "v1",
+        })
+        client.post("/connectors/apitest/credentials", json={
+            "vault_key": "apitest_secret", "value": "v2",
+        })
+
+        with caplog.at_level(logging.WARNING):
+            resp = client.post("/connectors/apitest/credentials/validate")
+
+        assert resp.status_code == 200
+        assert resp.json()["valid"] is False
+        assert resp.json()["error"] == "validation exploded"
+        assert "Credential validation failed for connector apitest" in caplog.text
 
     def test_status_never_returns_values(self, setup):
         client, _, _ = setup

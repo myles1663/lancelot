@@ -16,6 +16,26 @@ from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
 from telegram_bot import TelegramBot
 
 
+def _run(coro):
+    """Run async Telegram helpers safely even if another suite closed the default loop."""
+    created = False
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError("Event loop is closed")
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        created = True
+
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        if created:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -360,9 +380,7 @@ class TestOnActioncardEvent:
             ],
         }
 
-        asyncio.get_event_loop().run_until_complete(
-            bot_with_resolver._on_actioncard_event(event)
-        )
+        _run(bot_with_resolver._on_actioncard_event(event))
 
         # Should have sent a message (sendMessage call)
         assert mock_post.called
@@ -386,9 +404,7 @@ class TestOnActioncardEvent:
         }
 
         # Should not raise
-        asyncio.get_event_loop().run_until_complete(
-            bot_with_resolver._on_actioncard_event(event)
-        )
+        _run(bot_with_resolver._on_actioncard_event(event))
         # Store should NOT have been called (send failed)
         bot_with_resolver._action_card_store.set_telegram_message_id.assert_not_called()
 
@@ -416,9 +432,7 @@ class TestOnActioncardResolvedEvent:
             "telegram_message_id": 42,
         }
 
-        asyncio.get_event_loop().run_until_complete(
-            bot._on_actioncard_resolved_event(event)
-        )
+        _run(bot._on_actioncard_resolved_event(event))
 
         # Should have called editMessageText
         assert mock_post.called
@@ -435,9 +449,7 @@ class TestOnActioncardResolvedEvent:
         }
 
         # Should return without doing anything (no HTTP call)
-        asyncio.get_event_loop().run_until_complete(
-            bot._on_actioncard_resolved_event(event)
-        )
+        _run(bot._on_actioncard_resolved_event(event))
 
     def test_skips_without_message_id(self, bot):
         """Should skip when no telegram_message_id is present."""
@@ -447,6 +459,4 @@ class TestOnActioncardResolvedEvent:
             "telegram_message_id": None,
         }
 
-        asyncio.get_event_loop().run_until_complete(
-            bot._on_actioncard_resolved_event(event)
-        )
+        _run(bot._on_actioncard_resolved_event(event))

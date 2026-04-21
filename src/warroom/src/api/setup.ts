@@ -3,8 +3,10 @@ import type {
   SystemInfoResponse,
   VaultKeysResponse,
   VaultMaskedResponse,
+  VaultStatusResponse,
   LogsResponse,
   SetupActionResponse,
+  VaultResetResponse,
   ConfigReloadResponse,
   MemoryPurgeResponse,
   TokensListResponse,
@@ -52,9 +54,22 @@ export function fetchVaultMasked() {
   return apiGet<VaultMaskedResponse>('/api/setup/vault/masked')
 }
 
+/** GET /api/setup/vault/status */
+export function fetchVaultStatus() {
+  return apiGet<VaultStatusResponse>('/api/setup/vault/status')
+}
+
 /** DELETE /api/setup/vault/keys/{key} */
 export function deleteVaultKey(key: string) {
   return apiDelete<SetupActionResponse>(`/api/setup/vault/keys/${encodeURIComponent(key)}`)
+}
+
+/** POST /api/setup/vault/reset */
+export function resetConnectorVault(confirmationText: string) {
+  return apiPost<VaultResetResponse>('/api/setup/vault/reset', {
+    confirm: true,
+    confirmation_text: confirmationText,
+  })
 }
 
 // ── Receipt Management ───────────────────────────────────────────

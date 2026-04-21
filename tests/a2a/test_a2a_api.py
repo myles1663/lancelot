@@ -301,6 +301,14 @@ class TestRegisterAgent:
         })
         assert resp.status_code == 200
 
+    def test_register_rejects_unexpected_fields(self, client):
+        resp = client.post("/api/a2a/agents", json={
+            "agent_id": "new-agent",
+            "display_name": "New Agent",
+            "unexpected": "deny-me",
+        })
+        assert resp.status_code == 422
+
 
 class TestDelegateTask:
     def test_delegate_forwards_authenticated_identity(self, client, mock_outbound_pipeline):
@@ -445,6 +453,14 @@ class TestDelegateTask:
             "content": "Do something",
         })
         assert resp.status_code == 403
+
+    def test_delegate_rejects_unexpected_fields(self, client):
+        resp = client.post("/api/a2a/delegate", json={
+            "target_agent_id": "target",
+            "content": "Do something",
+            "unexpected": "deny-me",
+        })
+        assert resp.status_code == 422
 
 
 # ── GET /receipts ───────────────────────────────────────────

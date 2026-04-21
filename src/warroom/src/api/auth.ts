@@ -135,8 +135,11 @@ export function getOidcLoginUrl(loginPath: string): string {
 }
 
 export async function logout(): Promise<void> {
-  await fetch(`${API_BASE}/auth/logout`, {
+  const res = await fetch(`${API_BASE}/auth/logout`, {
     method: 'POST',
     credentials: 'include',
-  }).catch(() => {})
+  })
+  if (!res.ok) {
+    throw new Error('Sign out failed')
+  }
 }

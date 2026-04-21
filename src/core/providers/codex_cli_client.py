@@ -16,6 +16,50 @@ from providers.base import GenerateResult, ModelInfo, ProviderAuthError, Provide
 from providers.tool_schema import NormalizedToolDeclaration
 
 
+def _candidate_codex_homes(codex_home: str = "") -> list[Path]:
+    """Return candidate home directories for mounted Codex auth."""
+    candidates: list[Path] = []
+    seen: set[str] = set()
+
+    def _add(value: str) -> None:
+        if not value:
+            return
+        path = Path(value).expanduser()
+        key = str(path)
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(path)
+
+    _add(codex_home)
+    _add(os.getenv("LANCELOT_CODEX_HOME", ""))
+    _add(os.getenv("CODEX_HOME", ""))
+    _add("/home/lancelot")
+    _add(os.path.expanduser("~"))
+    _add("/root")
+    return candidates
+
+
+def resolve_codex_home(codex_home: str = "") -> Path:
+    """Resolve the home directory that actually contains Codex auth."""
+    candidates = _candidate_codex_homes(codex_home)
+    for home in candidates:
+        if (home / ".codex" / "auth.json").exists():
+            return home
+    return candidates[0] if candidates else Path(os.path.expanduser("~"))
+
+
+def resolve_codex_auth_file(codex_home: str = "") -> Path:
+    """Resolve the mounted Codex CLI auth file path."""
+    home = resolve_codex_home(codex_home)
+    return home / ".codex" / "auth.json"
+
+
+def has_codex_cli_auth(codex_home: str = "") -> bool:
+    """Return True when a Codex CLI auth.json is available to the runtime."""
+    return resolve_codex_auth_file(codex_home).exists()
+
+
 class CodexCLIProviderClient(ProviderClient):
     """Provider adapter backed by `codex exec`.
 
@@ -31,7 +75,7 @@ class CodexCLIProviderClient(ProviderClient):
 
     def __init__(self, workdir: str = "", codex_home: str = ""):
         self._workdir = workdir or os.getcwd()
-        self._codex_home = codex_home or os.path.expanduser("~")
+        self._codex_home = str(resolve_codex_home(codex_home))
         self._ensure_cli_ready()
 
     @property
@@ -137,7 +181,7 @@ class CodexCLIProviderClient(ProviderClient):
     def _ensure_cli_ready(self) -> None:
         if not shutil.which("codex"):
             raise ProviderAuthError("openai-codex", "codex CLI is not installed in the container")
-        auth_file = Path(self._codex_home) / ".codex" / "auth.json"
+        auth_file = resolve_codex_auth_file(self._codex_home)
         if not auth_file.exists():
             raise ProviderAuthError(
                 "openai-codex",

@@ -52,6 +52,13 @@ REQUIRED_KEYS = [
     "ready",
     "onboarding_state",
     "local_llm_ready",
+    "local_llm_loaded",
+    "local_llm_status",
+    "local_llm_last_verified_at",
+    "local_llm_last_checked_at",
+    "local_llm_last_error",
+    "local_llm_consecutive_failures",
+    "local_llm_last_smoke_elapsed_ms",
     "scheduler_running",
     "last_health_tick_at",
     "last_scheduler_tick_at",
@@ -119,6 +126,9 @@ class TestWithProvider:
                 ready=True,
                 onboarding_state="READY",
                 local_llm_ready=True,
+                local_llm_loaded=True,
+                local_llm_status="ready",
+                local_llm_last_verified_at="2026-04-17T12:00:00Z",
                 scheduler_running=True,
                 last_health_tick_at="2025-01-01T00:00:00Z",
                 last_scheduler_tick_at="2025-01-01T00:00:00Z",
@@ -130,6 +140,8 @@ class TestWithProvider:
         assert data["ready"] is True
         assert data["onboarding_state"] == "READY"
         assert data["local_llm_ready"] is True
+        assert data["local_llm_loaded"] is True
+        assert data["local_llm_status"] == "ready"
         assert data["scheduler_running"] is True
 
     def test_ready_false_with_degraded(self, client):
@@ -138,6 +150,10 @@ class TestWithProvider:
                 ready=False,
                 onboarding_state="READY",
                 local_llm_ready=False,
+                local_llm_loaded=True,
+                local_llm_status="loaded_not_ready",
+                local_llm_last_error="Inference smoke failed",
+                local_llm_consecutive_failures=2,
                 degraded_reasons=["Local LLM not responding"],
             )
 
@@ -146,6 +162,8 @@ class TestWithProvider:
         data = resp.json()
         assert data["ready"] is False
         assert "Local LLM" in data["degraded_reasons"][0]
+        assert data["local_llm_status"] == "loaded_not_ready"
+        assert data["local_llm_last_error"] == "Inference smoke failed"
 
 
 # ===================================================================
@@ -159,6 +177,8 @@ class TestHealthSnapshotModel:
         assert s.ready is False
         assert s.onboarding_state == "UNKNOWN"
         assert s.local_llm_ready is False
+        assert s.local_llm_loaded is False
+        assert s.local_llm_status == "unavailable"
         assert s.scheduler_running is False
         assert s.degraded_reasons == []
 
@@ -171,8 +191,13 @@ class TestHealthSnapshotModel:
             ready=True,
             onboarding_state="READY",
             local_llm_ready=True,
+            local_llm_loaded=True,
+            local_llm_status="ready",
+            local_llm_last_verified_at="2026-04-17T12:00:00Z",
             scheduler_running=True,
             degraded_reasons=[],
         )
         assert s.ready is True
         assert s.onboarding_state == "READY"
+        assert s.local_llm_loaded is True
+        assert s.local_llm_status == "ready"

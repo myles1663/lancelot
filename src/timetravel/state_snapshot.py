@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import os
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -82,9 +83,21 @@ class StateSnapshotReader:
         self,
         receipt_service: Any,
         soul_dir: Optional[str] = None,
+        trust_ledger: Any = None,
+        data_dir: Optional[str] = None,
     ):
         self._receipt_service = receipt_service
         self._soul_dir = soul_dir
+        self._trust_ledger = trust_ledger
+        self._data_dir = data_dir or os.environ.get("LANCELOT_DATA_DIR", "lancelot_data")
+
+    def _resolve_trust_ledger(self) -> Any:
+        if self._trust_ledger is not None:
+            return self._trust_ledger
+
+        from src.core.governance.trust_ledger import TrustLedger
+
+        return TrustLedger(data_dir=self._data_dir)
 
     def read_snapshot(self, receipt_id: str) -> StateSnapshot:
         """Build a state snapshot anchored at a specific receipt.
@@ -212,16 +225,9 @@ class StateSnapshotReader:
         so we use current state as best approximation.
         """
         try:
-            from src.core.governance.trust_ledger import TrustLedger
-            ledger = TrustLedger()
-            snapshot.trust_tier = ledger.get_effective_tier()
-            records = ledger.list_records(limit=20)
-            snapshot.trust_records = [
-                r.to_dict() if hasattr(r, "to_dict") else vars(r)
-                for r in records
-                if hasattr(r, "timestamp")
-                and r.timestamp <= snapshot.timestamp
-            ]
+            ledger = self._resolve_trust_ledger()
+            snapshot.trust_tier = ledger.get_approval_tier()
+            snapshot.trust_records = ledger.export_records()[:20]
         except Exception as e:
             logger.debug("Trust ledger unavailable for snapshot: %s", e)
 

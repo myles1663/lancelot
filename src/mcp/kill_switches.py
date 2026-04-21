@@ -28,29 +28,18 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from src.core.kill_switches import (
+    KillSwitchDecision,
+    KillSwitchScope,
+    evaluate_feature_flag_kill_switch,
+)
+
 logger = logging.getLogger(__name__)
 
 
 # ── Kill Switch Result ────────────────────────────────────────────
 
-class MCPKillSwitchResult:
-    """Result of a kill switch check."""
-
-    __slots__ = ("allowed", "switch_id", "reason")
-
-    def __init__(
-        self, allowed: bool, switch_id: str = "", reason: str = ""
-    ):
-        self.allowed = allowed
-        self.switch_id = switch_id
-        self.reason = reason
-
-    def to_dict(self):
-        return {
-            "allowed": self.allowed,
-            "switch_id": self.switch_id,
-            "reason": self.reason,
-        }
+MCPKillSwitchResult = KillSwitchDecision
 
 
 # ── Kill Switch Gate ──────────────────────────────────────────────
@@ -64,20 +53,13 @@ def check_mcp_master() -> MCPKillSwitchResult:
 
     Returns blocked result if FEATURE_MCP is disabled.
     """
-    try:
-        import feature_flags
-        enabled = getattr(feature_flags, MCP_MASTER_FLAG, False)
-    except ImportError:
-        # feature_flags not available — fail closed
-        enabled = False
-
-    if not enabled:
-        return MCPKillSwitchResult(
-            allowed=False,
-            switch_id=MCP_MASTER_FLAG,
-            reason="MCP master kill switch is OFF — all MCP invocations blocked",
-        )
-    return MCPKillSwitchResult(allowed=True, switch_id=MCP_MASTER_FLAG)
+    return evaluate_feature_flag_kill_switch(
+        flag_name=MCP_MASTER_FLAG,
+        switch_id=MCP_MASTER_FLAG,
+        scope=KillSwitchScope.MCP_MASTER,
+        missing_default=False,
+        blocked_reason="MCP master kill switch is OFF — all MCP invocations blocked",
+    )
 
 
 def check_server_switch(kill_switch_id: str) -> MCPKillSwitchResult:
@@ -92,27 +74,18 @@ def check_server_switch(kill_switch_id: str) -> MCPKillSwitchResult:
     without requiring a code change to add their flag.
     """
     if not kill_switch_id:
-        return MCPKillSwitchResult(allowed=True)
-
-    try:
-        import feature_flags
-        # Per-server flags may not exist as module globals — check
-        # persisted state directly for dynamic flags
-        flag_name = f"FEATURE_{kill_switch_id}"
-        enabled = getattr(feature_flags, flag_name, None)
-        if enabled is None:
-            # Dynamic flag — check persisted state
-            enabled = feature_flags._persisted_state.get(flag_name, True)
-    except ImportError:
-        enabled = True  # Can't check — fail open (master switch covers)
-
-    if not enabled:
         return MCPKillSwitchResult(
-            allowed=False,
-            switch_id=kill_switch_id,
-            reason=f"MCP server kill switch '{kill_switch_id}' is OFF",
+            allowed=True,
+            scope=KillSwitchScope.MCP_SERVER,
         )
-    return MCPKillSwitchResult(allowed=True, switch_id=kill_switch_id)
+
+    return evaluate_feature_flag_kill_switch(
+        flag_name=f"FEATURE_{kill_switch_id}",
+        switch_id=kill_switch_id,
+        scope=KillSwitchScope.MCP_SERVER,
+        missing_default=True,
+        blocked_reason=f"MCP server kill switch '{kill_switch_id}' is OFF",
+    )
 
 
 def check_mcp_kill_switches(
@@ -134,4 +107,4 @@ def check_mcp_kill_switches(
         if not server.allowed:
             return server
 
-    return MCPKillSwitchResult(allowed=True)
+    return MCPKillSwitchResult(allowed=True, scope=KillSwitchScope.MCP_SERVER)

@@ -3,10 +3,14 @@ import json
 import uuid
 import time
 import datetime
+import logging
 
 # Approval time-to-live in seconds
 APPROVAL_TTL = 300  # 5 minutes
 MAX_REQUESTS_PER_MINUTE = 30
+
+
+logger = logging.getLogger(__name__)
 
 
 class MCPSentry:
@@ -36,14 +40,15 @@ class MCPSentry:
                 self.pending_requests = data if isinstance(data, dict) else {}
         except Exception:
             self.pending_requests = {}
+            logger.warning("MCP Sentry: failed to load pending requests; starting empty", exc_info=True)
 
     def _save_pending_requests(self):
         """Persist pending/approved MCP requests to disk."""
         try:
             with open(self.pending_requests_file, "w", encoding="utf-8") as f:
                 json.dump(self.pending_requests, f)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("MCP Sentry: failed to persist pending requests: %s", exc)
 
     def discover_tools(self):
         """Scans mcp_configs for available tools."""
@@ -63,7 +68,7 @@ class MCPSentry:
                         else:
                             tools[config.get("name")] = config
                 except Exception as e:
-                    print(f"Error loading MCP config {filename}: {e}")
+                    logger.warning("Error loading MCP config %s: %s", filename, e)
         return tools
 
     def _cleanup_expired(self):
@@ -182,7 +187,7 @@ class MCPSentry:
             with open(self.audit_file, "a") as f:
                 f.write(log_entry)
         except Exception as e:
-            print(f"Error logging MCP permission check: {e}")
+            logger.warning("Error logging MCP permission check: %s", e)
 
     def log_execution(self, tool_name: str, params: dict, output: str):
         """Logs execution to Tier B Audit Memory."""
@@ -197,4 +202,4 @@ class MCPSentry:
             with open(self.audit_file, "a") as f:
                 f.write(log_entry)
         except Exception as e:
-            print(f"Error logging MCP execution: {e}")
+            logger.warning("Error logging MCP execution: %s", e)

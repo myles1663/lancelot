@@ -95,8 +95,8 @@ def _evaluate_incident_triggers(receipt_dict: Dict[str, Any]) -> None:
     try:
         from src.incidents.receipt_hook import on_receipt_for_incidents
         on_receipt_for_incidents(receipt_dict)
-    except ImportError:
-        pass  # Incidents module not available
+    except ImportError as exc:
+        logger.debug("Incident receipt hook unavailable; skipping incident evaluation: %s", exc)
 
 
 def _export_span(receipt_dict: Dict[str, Any]) -> None:

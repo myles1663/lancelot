@@ -1,13 +1,9 @@
-"""
-Lancelot vNext — Receipt Storage Tests
-=======================================
-Production-ready tests for the receipt system.
-Uses real SQLite database, real file operations.
-"""
+"""Receipt storage tests using real SQLite databases and file operations."""
 
 import os
 import uuid
 import time
+import json
 import shutil
 import tempfile
 import threading
@@ -16,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 
 from receipts import (
     Receipt, ReceiptService, ReceiptStatus, ActionType, CognitionTier,
-    create_receipt, get_receipt_service
+    ImmutableReceiptError, create_receipt, get_receipt_service
 )
 
 
@@ -157,7 +153,7 @@ class TestReceiptService:
         service.close()
 
     def test_create_and_get(self, service):
-        """Can create and retrieve a receipt."""
+        """Pending receipts stay staged until finalized into the immutable log."""
         receipt = create_receipt(
             ActionType.TOOL_CALL,
             "test_create",
@@ -165,15 +161,20 @@ class TestReceiptService:
         )
         
         service.create(receipt)
+        assert service.get(receipt.id) is None
+
+        completed = receipt.complete({"result": "ok"}, duration_ms=25)
+        service.update(completed)
         retrieved = service.get(receipt.id)
-        
+
         assert retrieved is not None
         assert retrieved.id == receipt.id
         assert retrieved.action_name == "test_create"
         assert retrieved.inputs["key"] == "value"
+        assert retrieved.status == ReceiptStatus.SUCCESS.value
 
     def test_update_receipt(self, service):
-        """Can update an existing receipt."""
+        """Finalizing a staged receipt writes a single immutable record."""
         receipt = create_receipt(
             ActionType.LLM_CALL,
             "generate",
@@ -196,6 +197,176 @@ class TestReceiptService:
         assert retrieved.token_count == 50
         assert retrieved.outputs["response"] == "world"
 
+    def test_finalized_receipt_cannot_be_mutated(self, service):
+        receipt = create_receipt(
+            ActionType.SYSTEM,
+            "finalize_once",
+            {"value": 1},
+        )
+        service.create(receipt)
+        service.update(receipt.complete({"result": "first"}, duration_ms=1))
+
+        with pytest.raises(ImmutableReceiptError):
+            service.update(receipt.complete({"result": "second"}, duration_ms=2))
+
+    def test_finalized_receipt_requires_staged_predecessor(self, service):
+        receipt = create_receipt(
+            ActionType.SYSTEM,
+            "direct_finalize_attempt",
+            {"value": 1},
+        )
+
+        with pytest.raises(ImmutableReceiptError):
+            service.update(receipt.complete({"result": "first"}, duration_ms=1))
+
+        assert service.get(receipt.id) is None
+
+    def test_finalized_receipt_gets_integrity_chain_fields(self, service):
+        receipt = create_receipt(
+            ActionType.SYSTEM,
+            "integrity_root",
+            {"value": 1},
+        )
+        service.create(receipt)
+        service.update(receipt.complete({"result": "ok"}, duration_ms=1))
+
+        stored = service.get(receipt.id)
+
+        assert stored is not None
+        assert stored.integrity_prev_hash == "0" * 64
+        assert stored.integrity_hash is not None
+        assert len(stored.integrity_hash) == 64
+        assert stored.integrity_key_id is not None
+        assert stored.integrity_signature is not None
+        assert len(stored.integrity_signature) == 64
+        assert service.validate_integrity_chain() == []
+
+    def test_integrity_chain_links_sequential_receipts(self, service):
+        first = create_receipt(ActionType.SYSTEM, "first", {"step": 1})
+        second = create_receipt(ActionType.SYSTEM, "second", {"step": 2})
+
+        service.create(first)
+        stored_first = service.update(first.complete({"result": "ok-1"}, duration_ms=1))
+        service.create(second)
+        stored_second = service.update(second.complete({"result": "ok-2"}, duration_ms=1))
+
+        assert stored_first.integrity_hash is not None
+        assert stored_second.integrity_prev_hash == stored_first.integrity_hash
+        assert service.validate_integrity_chain() == []
+
+    def test_validate_integrity_chain_detects_tampering(self, service):
+        first = create_receipt(ActionType.SYSTEM, "first", {"step": 1})
+        second = create_receipt(ActionType.SYSTEM, "second", {"step": 2})
+
+        service.create(first)
+        service.update(first.complete({"result": "ok-1"}, duration_ms=1))
+        service.create(second)
+        service.update(second.complete({"result": "ok-2"}, duration_ms=1))
+
+        conn = service._get_connection()
+        conn.execute(
+            "UPDATE receipts SET outputs = ? WHERE id = ?",
+            (json.dumps({"result": "tampered"}), second.id),
+        )
+        conn.commit()
+
+        issues = service.validate_integrity_chain()
+
+        assert any(
+            issue["receipt_id"] == second.id
+            and issue["issue"] == "integrity_hash_mismatch"
+            for issue in issues
+        )
+
+    def test_signed_receipt_gets_signature_fields(self, temp_data_dir, monkeypatch):
+        monkeypatch.setenv("LANCELOT_RECEIPT_HMAC_KEY", "test-receipt-secret-32-bytes-min!!")
+        monkeypatch.setenv("LANCELOT_RECEIPT_HMAC_KEY_ID", "test-key-1")
+        service = ReceiptService(data_dir=temp_data_dir)
+        try:
+            receipt = create_receipt(ActionType.SYSTEM, "signed", {"step": 1})
+            service.create(receipt)
+            stored = service.update(receipt.complete({"result": "ok"}, duration_ms=1))
+
+            assert stored.integrity_hash is not None
+            assert stored.integrity_key_id == "test-key-1"
+            assert stored.integrity_signature is not None
+            assert len(stored.integrity_signature) == 64
+            assert service.validate_integrity_chain() == []
+        finally:
+            service.close()
+
+    def test_local_signing_key_persists_across_service_restart(self, temp_data_dir):
+        first_service = ReceiptService(data_dir=temp_data_dir)
+        try:
+            receipt = create_receipt(ActionType.SYSTEM, "restart-safe", {"step": 1})
+            first_service.create(receipt)
+            first_stored = first_service.update(
+                receipt.complete({"result": "ok"}, duration_ms=1)
+            )
+            first_key_id = first_stored.integrity_key_id
+        finally:
+            first_service.close()
+
+        second_service = ReceiptService(data_dir=temp_data_dir)
+        try:
+            next_receipt = create_receipt(ActionType.SYSTEM, "restart-safe-2", {"step": 2})
+            second_service.create(next_receipt)
+            second_stored = second_service.update(
+                next_receipt.complete({"result": "ok-2"}, duration_ms=1)
+            )
+
+            assert first_key_id is not None
+            assert second_stored.integrity_key_id == first_key_id
+            assert second_stored.integrity_prev_hash == first_stored.integrity_hash
+            assert second_service.validate_integrity_chain() == []
+        finally:
+            second_service.close()
+
+    def test_validate_integrity_chain_detects_signature_tampering(self, temp_data_dir, monkeypatch):
+        monkeypatch.setenv("LANCELOT_RECEIPT_HMAC_KEY", "test-receipt-secret-32-bytes-min!!")
+        monkeypatch.setenv("LANCELOT_RECEIPT_HMAC_KEY_ID", "test-key-1")
+        service = ReceiptService(data_dir=temp_data_dir)
+        try:
+            receipt = create_receipt(ActionType.SYSTEM, "signed", {"step": 1})
+            service.create(receipt)
+            stored = service.update(receipt.complete({"result": "ok"}, duration_ms=1))
+
+            conn = service._get_connection()
+            conn.execute(
+                "UPDATE receipts SET integrity_signature = ? WHERE id = ?",
+                ("0" * 64, stored.id),
+            )
+            conn.commit()
+
+            issues = service.validate_integrity_chain()
+            assert any(
+                issue["receipt_id"] == stored.id
+                and issue["issue"] == "integrity_signature_mismatch"
+                for issue in issues
+            )
+        finally:
+            service.close()
+
+    def test_receipt_service_rejects_undersized_external_signing_keys(self, temp_data_dir, monkeypatch):
+        monkeypatch.setenv("LANCELOT_RECEIPT_HMAC_KEY", "too-short")
+        with pytest.raises(RuntimeError, match="at least 32 bytes"):
+            ReceiptService(data_dir=temp_data_dir)
+
+    def test_validate_integrity_chain_quest_scope_uses_global_chain_order(self, service):
+        quest_a = str(uuid.uuid4())
+        quest_b = str(uuid.uuid4())
+
+        first = create_receipt(ActionType.SYSTEM, "quest-a-first", {"step": 1}, quest_id=quest_a)
+        middle = create_receipt(ActionType.SYSTEM, "quest-b-middle", {"step": 2}, quest_id=quest_b)
+        last = create_receipt(ActionType.SYSTEM, "quest-a-last", {"step": 3}, quest_id=quest_a)
+
+        for receipt in (first, middle, last):
+            service.create(receipt)
+            service.update(receipt.complete({"result": receipt.action_name}, duration_ms=1))
+
+        assert service.validate_integrity_chain(quest_id=quest_a) == []
+        assert service.validate_integrity_chain(quest_id=quest_b) == []
+
     def test_list_receipts(self, service):
         """Can list receipts with pagination."""
         # Create multiple receipts
@@ -206,6 +377,7 @@ class TestReceiptService:
                 {"index": i}
             )
             service.create(receipt)
+            service.update(receipt.complete({"index": i}, duration_ms=10))
         
         # List first 5
         first_page = service.list(limit=5, offset=0)
@@ -240,7 +412,7 @@ class TestReceiptService:
         
         # Filter by status
         pending_only = service.list(status=ReceiptStatus.PENDING.value)
-        assert all(r.status == ReceiptStatus.PENDING.value for r in pending_only)
+        assert pending_only == []
 
     def test_search_receipts(self, service):
         """Can search receipts by text query."""
@@ -249,12 +421,12 @@ class TestReceiptService:
             ActionType.FILE_OP,
             "write_config_file",
             {"path": "/etc/lancelot/config.yaml"}
-        ))
+        ).complete({}, duration_ms=1))
         service.create(create_receipt(
             ActionType.TOOL_CALL,
             "send_email",
             {"to": "user@example.com"}
-        ))
+        ).complete({}, duration_ms=1))
         
         # Search by action name
         results = service.search("config")
@@ -279,10 +451,13 @@ class TestReceiptService:
                 quest_id=quest_id
             )
             service.create(receipt)
+            service.update(receipt.complete({"order": i}, duration_ms=1))
             time.sleep(0.01)  # Ensure ordering
         
         # Create unrelated receipt
-        service.create(create_receipt(ActionType.TOOL_CALL, "other", {}))
+        other = create_receipt(ActionType.TOOL_CALL, "other", {})
+        service.create(other)
+        service.update(other.complete({}, duration_ms=1))
         
         # Get quest receipts
         quest_receipts = service.get_quest_receipts(quest_id)
@@ -300,6 +475,7 @@ class TestReceiptService:
             {}
         )
         service.create(parent)
+        service.update(parent.complete({}, duration_ms=1))
         
         # Create children
         for i in range(2):
@@ -310,6 +486,7 @@ class TestReceiptService:
                 parent_id=parent.id
             )
             service.create(child)
+            service.update(child.complete({}, duration_ms=1))
         
         # Get children
         children = service.get_children(parent.id)
@@ -325,14 +502,16 @@ class TestReceiptService:
                 f"action_{i}",
                 {}
             )
+            service.create(receipt)
             if i < 3:
-                receipt = receipt.complete(
+                service.update(receipt.complete(
                     {},
                     duration_ms=100 * (i + 1),
                     token_count=50 * (i + 1)
-                )
-            service.create(receipt)
-        
+                ))
+            else:
+                service.update(receipt.fail("failed", duration_ms=100 * (i + 1)))
+
         stats = service.get_stats()
         
         assert stats["total_receipts"] == 5
@@ -340,27 +519,10 @@ class TestReceiptService:
         assert ActionType.TOOL_CALL.value in stats["by_action_type"]
         assert stats["tokens"]["total"] > 0
 
-    def test_delete_old_receipts(self, service):
-        """Can delete receipts older than threshold."""
-        # Create old receipt (manually set timestamp)
-        old_receipt = Receipt(
-            timestamp=(datetime.now(timezone.utc) - timedelta(days=60)).isoformat(),
-            action_name="old_action",
-            action_type=ActionType.SYSTEM.value
-        )
-        service.create(old_receipt)
-        
-        # Create recent receipt
-        recent_receipt = create_receipt(ActionType.SYSTEM, "recent", {})
-        service.create(recent_receipt)
-        
-        # Delete old (30 days threshold)
-        deleted = service.delete_old(days=30)
-        assert deleted == 1
-        
-        # Verify
-        assert service.get(old_receipt.id) is None
-        assert service.get(recent_receipt.id) is not None
+    def test_delete_old_receipts_blocked(self, service):
+        """Immutable receipt log cannot be pruned in place."""
+        with pytest.raises(ImmutableReceiptError):
+            service.delete_old(days=30)
 
 
 class TestThreadSafety:
@@ -380,6 +542,7 @@ class TestThreadSafety:
                         {"thread": thread_id, "index": i}
                     )
                     service.create(receipt)
+                    service.update(receipt.complete({"thread": thread_id, "index": i}, duration_ms=1))
                 results.append(thread_id)
             except Exception as e:
                 errors.append((thread_id, e))
@@ -401,7 +564,9 @@ class TestThreadSafety:
         """Can read and write concurrently."""
         # Pre-populate
         for i in range(20):
-            service.create(create_receipt(ActionType.SYSTEM, f"initial_{i}", {}))
+            receipt = create_receipt(ActionType.SYSTEM, f"initial_{i}", {})
+            service.create(receipt)
+            service.update(receipt.complete({}, duration_ms=1))
         
         read_results = []
         write_results = []
@@ -414,7 +579,9 @@ class TestThreadSafety:
         
         def writer():
             for i in range(10):
-                service.create(create_receipt(ActionType.TOOL_CALL, f"new_{i}", {}))
+                receipt = create_receipt(ActionType.TOOL_CALL, f"new_{i}", {})
+                service.create(receipt)
+                service.update(receipt.complete({}, duration_ms=1))
                 write_results.append(i)
                 time.sleep(0.001)
         

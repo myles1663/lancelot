@@ -99,21 +99,21 @@ The `MCPArgumentScreener` inspects tool arguments for 6 categories of injection:
 | **SQL Injection** | 11 | `OR '1'='1'`, `UNION SELECT`, `SLEEP()`, block comments |
 | **Path Traversal** | 8 | `../`, `..\`, URL-encoded, `/etc/passwd`, null bytes |
 | **Command Injection** | 7 | `;ls`, `\| cat`, backticks, `$()`, reverse shell, `eval/exec` |
-| **Prompt Injection** | 8 | `<\|system\|>`, `[SYSTEM]`, `IMPORTANT: ignore`, override markers |
+| **Prompt Injection** | 10 + InputSanitizer | `<\|system\|>`, `[SYSTEM]`, `IMPORTANT: ignore`, override markers, plus banned-phrase and role-injection checks |
 | **NoSQL Injection** | 3 | MongoDB `$` operators, `$where`, `this.field ==` |
 | **Size Limits** | — | Max 50KB per string, 200KB total |
 
 ### Compound Attack Detection
 
-If **2 or more** categories trigger in the same invocation, severity is elevated to **critical** and the invocation is **hard-blocked**. This catches sophisticated multi-vector attacks.
+Any detected category blocks the invocation at Gate 5. If **2 or more** categories trigger in the same invocation, severity is elevated to **critical**. This catches sophisticated multi-vector attacks while keeping single-category injection hits fail-closed.
 
 ### Severity Levels
 
 | Level | Meaning |
 |-------|---------|
 | `none` | Clean arguments |
-| `low` | Single minor match, logged |
-| `medium` | Clear pattern match, logged |
+| `low` | Low-confidence violation, blocked and logged |
+| `medium` | Clear pattern match, blocked |
 | `high` | Strong injection signal, blocked |
 | `critical` | Compound attack or dangerous pattern, hard-blocked |
 

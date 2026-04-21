@@ -1,5 +1,6 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { emitWarRoomNotification } from '@/utils/notifications'
 
 interface ChatMessageProps {
   role: 'user' | 'assistant'
@@ -91,7 +92,8 @@ export function ChatMessage({ role, content, timestamp, crusaderMode, filesCount
                     onClick={(event) => {
                       if (!href) return
                       void handleSecureDownload(event, href).catch((error) => {
-                        console.error('Workspace download failed', error)
+                        const reason = error instanceof Error ? error.message : 'Unknown error'
+                        emitWarRoomNotification(`Workspace download failed: ${reason}`, 'high')
                       })
                     }}
                   >

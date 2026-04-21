@@ -4,7 +4,7 @@
 # Patent Pending: US Provisional Application #63/982,183
 
 """
-Soul Amendments — proposal workflow objects (Prompt 4 / A4).
+Soul amendment proposal workflow objects and persistence helpers.
 
 Manages amendment proposals for the Soul document: creation,
 diff computation, and persistence.

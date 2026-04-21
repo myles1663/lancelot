@@ -257,8 +257,13 @@ class JobExecutor:
                                 and last_local.minute == now_local.minute
                             ):
                                 continue  # Already ran this minute
-                        except (ValueError, TypeError):
-                            pass
+                        except (ValueError, TypeError) as exc:
+                            logger.debug(
+                                "Ignoring malformed scheduler last_run_at %r for job %s: %s",
+                                job.last_run_at,
+                                job.id,
+                                exc,
+                            )
                     should_run = True
 
             elif job.trigger_type == "interval" and job.trigger_value:

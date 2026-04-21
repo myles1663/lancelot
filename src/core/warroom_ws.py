@@ -104,8 +104,8 @@ def _verify_ws_token(token: str) -> bool:
         from src.core.auth_api import verify_warroom_session_token
         if verify_warroom_session_token(token):
             return True
-    except ImportError:
-        pass
+    except ImportError as exc:
+        logger.debug("War Room WS session-token verification unavailable: %s", exc)
 
     return False
 
@@ -148,8 +148,8 @@ async def warroom_websocket(websocket: WebSocket) -> None:
                 # Some clients send ping first — check if dev mode allows unauthenticated
                 if _verify_ws_token(""):
                     authenticated = True
-        except (asyncio.TimeoutError, json.JSONDecodeError, WebSocketDisconnect):
-            pass
+        except (asyncio.TimeoutError, json.JSONDecodeError, WebSocketDisconnect) as exc:
+            logger.debug("War Room WS unauthenticated handshake did not complete: %s", exc)
 
     if not authenticated:
         await websocket.send_text(json.dumps({
@@ -181,8 +181,8 @@ async def warroom_websocket(websocket: WebSocket) -> None:
                     logger.debug("War Room WS received: %s", msg_type)
             except json.JSONDecodeError:
                 logger.warning("War Room WS: invalid JSON received")
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as exc:
+        logger.debug("War Room WS disconnected: %s", exc)
     except Exception as exc:
         logger.error("War Room WS error: %s", exc)
     finally:

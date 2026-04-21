@@ -1,8 +1,11 @@
 import os
 import time
+import logging
 import chromadb
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+
+logger = logging.getLogger(__name__)
 
 class LogHandler(FileSystemEventHandler):
     def __init__(self, collection):
@@ -17,7 +20,7 @@ class LogHandler(FileSystemEventHandler):
             self.process_file(event.src_path)
 
     def process_file(self, filepath):
-        print(f"Indexing file: {filepath}")
+        logger.info("Indexing file: %s", filepath)
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -36,9 +39,9 @@ class LogHandler(FileSystemEventHandler):
                 metadatas=metadatas,
                 ids=ids
             )
-            print(f"Indexed {len(chunks)} chunks from {filepath}")
+            logger.info("Indexed %d chunks from %s", len(chunks), filepath)
         except Exception as e:
-            print(f"Error processing {filepath}: {e}")
+            logger.warning("Error processing %s: %s", filepath, e)
 
 class MemoryIndexer:
     def __init__(self, data_dir="/home/lancelot/data"):
@@ -53,11 +56,11 @@ class MemoryIndexer:
         # Initialize ChromaDB
         self.client = chromadb.PersistentClient(path=self.chroma_path)
         self.collection = self.client.get_or_create_collection(name="lancelot_memory")
-        print(f"ChromaDB initialized at {self.chroma_path}")
+        logger.info("ChromaDB initialized at %s", self.chroma_path)
 
     def start_watching(self):
         # Process existing files first
-        print("Scanning for existing logs...")
+        logger.info("Scanning for existing logs in %s", self.logs_dir)
         for filename in os.listdir(self.logs_dir):
             if filename.endswith(".txt"):
                 self.process_file_init(os.path.join(self.logs_dir, filename))
@@ -66,7 +69,7 @@ class MemoryIndexer:
         observer = Observer()
         observer.schedule(event_handler, self.logs_dir, recursive=False)
         observer.start()
-        print(f"Watching directory: {self.logs_dir}")
+        logger.info("Watching directory: %s", self.logs_dir)
         try:
             while True:
                 time.sleep(1)

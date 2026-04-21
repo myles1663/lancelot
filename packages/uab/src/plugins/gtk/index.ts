@@ -36,6 +36,7 @@ import { WinUIAPlugin } from '../win-uia/index.js';
 export class GtkPlugin implements FrameworkPlugin {
   readonly framework = 'gtk4' as const;
   readonly name = 'GTK (UIA Bridge)';
+  readonly controlMethod = 'gtk-uia' as const;
   private uiaPlugin = new WinUIAPlugin();
 
   canHandle(app: DetectedApp): boolean {

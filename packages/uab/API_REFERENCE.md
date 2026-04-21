@@ -2,7 +2,7 @@
 
 Complete reference for every public interface in Universal App Bridge.
 
-> The primary API is `UABConnector` — framework-independent, instantiable, zero dependencies. Use it in any agent framework.
+> The primary API is `UABConnector` — framework-independent, instantiable, and decoupled from any specific agent runtime. Use it in any agent framework.
 
 ---
 
@@ -29,7 +29,7 @@ Complete reference for every public interface in Universal App Bridge.
 
 **Import:** `import { UABConnector } from 'universal-app-bridge'`
 
-The primary API for controlling desktop apps. Framework-independent, instantiable (not singleton), zero dependencies on any agent runtime.
+The primary API for controlling desktop apps. Framework-independent, instantiable (not singleton), and not coupled to any specific agent runtime.
 
 ### Constructor
 
@@ -82,20 +82,20 @@ const apps = await uab.scan();
 // → 79 apps found, frameworks identified, profiles persisted to registry.json
 ```
 
-**Performance:** 2-5 seconds for full system scan (batched PowerShell calls).
+**Observed performance on some current Windows test rigs:** full system scans can complete in a few seconds when batched PowerShell discovery is working well, but actual timing varies significantly by process count, PowerShell responsiveness, and host performance. Measure `scan()` on the target machine for the real expectation.
 
 #### `apps(): AppProfile[]`
 
-List all known apps from the registry. **No scan — instant.** Returns whatever is currently in the registry (from `scan()` or `load()`).
+List all known apps from the registry. **No scan required** — this is an in-memory registry lookup that returns whatever is currently in the registry (from `scan()` or `load()`).
 
 ```typescript
 const known = uab.apps();
-// → Instant (O(1) — reads from in-memory Map)
+// → O(1) lookup against the in-memory Map
 ```
 
 #### `find(query: string): Promise<AppProfile[]>`
 
-**Smart lookup:** Checks registry first (instant), falls back to live detection if not found.
+**Smart lookup:** Checks the in-memory registry first, then falls back to live detection if not found.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -103,11 +103,11 @@ const known = uab.apps();
 
 ```typescript
 const excel = await uab.find('excel');
-// Registry hit: instant (< 1ms)
-// Registry miss: live detect → register → return (~2s)
+// Registry hit: in-memory lookup
+// Registry miss: live detect → register → return (host-dependent)
 ```
 
-**The intelligence:** First call to `find("excel")` may need live detection. After that, it's always instant because the registry remembers.
+**The intelligence:** First call to `find("excel")` may need live detection. Subsequent lookups usually hit the persisted registry instead of paying the full detection path again.
 
 #### `inspectPid(pid: number): Promise<AppProfile | null>`
 
@@ -141,7 +141,7 @@ interface ConnectionInfo {
   pid: number;        // Process ID
   name: string;       // App name
   framework: string;  // Detected framework
-  method: string;     // Control method used ('cdp', 'com+uia', 'accessibility')
+  method: string;     // Control method used ('browser-cdp', 'office-com+uia', 'win-uia', 'direct-api', ...)
   elementCount: number; // Total UI elements found
 }
 ```
@@ -182,7 +182,7 @@ Get the UI element tree for a connected app. **Cached for 5 seconds.**
 ```typescript
 const tree = await uab.enumerate(pid);
 // First call: fetches from plugin (~100-500ms)
-// Repeat within 5s: instant cache hit
+// Repeat within 5s: cache hit, no fresh query
 ```
 
 #### `query(pid: number, selector: ElementSelector): Promise<UIElement[]>`
@@ -381,7 +381,7 @@ Update specific fields of an existing profile.
 
 ```typescript
 registry.update('code.exe', {
-  preferredMethod: 'cdp',
+  preferredMethod: 'browser-cdp',
   pid: 12345,
   lastSeen: Date.now()
 });
@@ -475,7 +475,18 @@ type FrameworkType =
 ### ControlMethod
 
 ```typescript
-type ControlMethod = 'direct-api' | 'uab-hook' | 'accessibility' | 'vision';
+type ControlMethod =
+  | 'chrome-extension'
+  | 'browser-cdp'
+  | 'electron-cdp'
+  | 'office-com+uia'
+  | 'qt-uia'
+  | 'gtk-uia'
+  | 'java-jab-uia'
+  | 'flutter-uia'
+  | 'win-uia'
+  | 'direct-api'
+  | 'vision';
 ```
 
 ### ElementType (32 types)
@@ -775,7 +786,7 @@ All commands output JSON. Usage: `node dist/uab/cli.js <command> [args]`
 | Command | Args | Description |
 |---------|------|-------------|
 | `scan` | `[--electron]` | Scan system, identify frameworks, register all apps |
-| `apps` | — | List known apps from registry (instant, no scan) |
+| `apps` | — | List known apps from registry (no scan) |
 | `find` | `<name>` | Smart lookup: registry first, live detection fallback |
 | `profiles` | — | Show full registry with all metadata |
 

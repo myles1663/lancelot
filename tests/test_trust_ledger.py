@@ -3,6 +3,7 @@ Tests for Prompts 42-43: TrustLedger Core + Graduation + Revocation.
 """
 
 import pytest
+from pathlib import Path
 from src.core.governance.models import RiskTier
 from src.core.governance.trust_models import (
     GraduationProposal,
@@ -196,6 +197,16 @@ class TestApplyGraduation:
         assert rec.pending_proposal is None
         assert proposal.status == "denied"
 
+    def test_resolved_proposal_cannot_be_reapplied(self, ledger):
+        ledger.get_or_create_record("cap.test", "s", RiskTier.T3_IRREVERSIBLE)
+        for _ in range(50):
+            ledger.record_success("cap.test", "s")
+        proposal = ledger.pending_proposals()[0]
+        ledger.apply_graduation(proposal.id, approved=False)
+
+        with pytest.raises(ValueError, match="no longer pending"):
+            ledger.apply_graduation(proposal.id, approved=True)
+
 
 class TestRevokeTrust:
     def test_resets_to_default_on_failure(self, ledger):
@@ -300,3 +311,37 @@ class TestSoulMinimumLifecycle:
             ledger.record_success("cap.test", "s")
         # Only the original approved proposal; no new pending ones
         assert len(ledger.pending_proposals()) == 0
+
+
+class TestPersistence:
+    def test_persists_records_across_restart(self, config, tmp_path):
+        data_dir = tmp_path / "lancelot_data"
+        ledger = TrustLedger(config, data_dir=str(data_dir))
+        ledger.get_or_create_record("cap.test", "s", RiskTier.T3_IRREVERSIBLE)
+        for _ in range(50):
+            ledger.record_success("cap.test", "s")
+        proposal = ledger.pending_proposals()[0]
+        ledger.apply_graduation(proposal.id, approved=True)
+
+        reloaded = TrustLedger(config, data_dir=str(data_dir))
+        rec = reloaded.get_record("cap.test", "s")
+        assert rec is not None
+        assert rec.current_tier == RiskTier.T2_CONTROLLED
+        assert rec.total_successes == 50
+        assert len(rec.graduation_history) == 1
+
+    def test_recovers_from_backup_when_primary_is_corrupted(self, config, tmp_path):
+        data_dir = tmp_path / "lancelot_data"
+        ledger = TrustLedger(config, data_dir=str(data_dir))
+        ledger.get_or_create_record("cap.test", "s", RiskTier.T3_IRREVERSIBLE)
+        ledger.record_success("cap.test", "s")
+
+        state_path = data_dir / "governance" / "trust_ledger.json"
+        backup_path = Path(str(state_path) + ".bak")
+        backup_path.write_text(state_path.read_text(encoding="utf-8"), encoding="utf-8")
+        state_path.write_text("{not-json", encoding="utf-8")
+
+        reloaded = TrustLedger(config, data_dir=str(data_dir))
+        rec = reloaded.get_record("cap.test", "s")
+        assert rec is not None
+        assert rec.total_successes == 1

@@ -99,6 +99,7 @@ export interface ProviderKeyInfo {
   has_key: boolean
   key_preview: string
   active: boolean
+  oauth_only?: boolean
   oauth_configured: boolean
   oauth_status: string | null
 }

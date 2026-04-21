@@ -1,10 +1,4 @@
-"""
-Heartbeat API — /health/live and /health/ready endpoints (Prompt 9 / C1-C2).
-
-Public API:
-    router        — FastAPI APIRouter with health endpoints
-    set_snapshot_provider(fn)  — register a function that returns HealthSnapshot
-"""
+"""Health API: liveness and readiness endpoints for operators and orchestration."""
 
 from __future__ import annotations
 
@@ -80,6 +74,13 @@ async def health_ready():
                 "ready": False,
                 "onboarding_state": "UNKNOWN",
                 "local_llm_ready": False,
+                "local_llm_loaded": False,
+                "local_llm_status": "unavailable",
+                "local_llm_last_verified_at": None,
+                "local_llm_last_checked_at": None,
+                "local_llm_last_error": None,
+                "local_llm_consecutive_failures": 0,
+                "local_llm_last_smoke_elapsed_ms": None,
                 "scheduler_running": False,
                 "last_health_tick_at": None,
                 "last_scheduler_tick_at": None,

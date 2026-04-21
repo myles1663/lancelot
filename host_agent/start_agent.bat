@@ -15,8 +15,16 @@ echo  Press Ctrl+C to stop.
 echo  ========================================
 echo.
 
+set "LANCELOT_ENV=%~dp0..\.env"
+if not defined HOST_AGENT_TOKEN if exist "%LANCELOT_ENV%" (
+    for /f "usebackq tokens=1,* delims==" %%A in (`findstr /B /C:"HOST_AGENT_TOKEN=" "%LANCELOT_ENV%"`) do (
+        set "HOST_AGENT_TOKEN=%%B"
+    )
+)
+
 if not defined HOST_AGENT_TOKEN (
     echo  ERROR: HOST_AGENT_TOKEN is not set.
+    echo  Add HOST_AGENT_TOKEN to the repo .env file or export it before starting the agent.
     echo  Set a strong shared token before starting the host agent.
     echo.
     pause

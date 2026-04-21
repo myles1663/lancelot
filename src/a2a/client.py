@@ -28,6 +28,7 @@ from src.a2a.types import (
     AgentCard, AgentCardSkill, RemoteAgent, AgentCardStatus,
     A2ATaskStatus,
 )
+from src.core.outbound_http import assert_url_allowed
 from src.shared.receipts import ActionType, Receipt, ReceiptStatus, CognitionTier
 
 logger = logging.getLogger(__name__)
@@ -40,8 +41,9 @@ class A2AClient:
     holds a direct connection to external A2A servers.
     """
 
-    def __init__(self, receipt_service: Any = None):
+    def __init__(self, receipt_service: Any = None, network_interceptor=None):
         self._receipt_service = receipt_service
+        self._network_interceptor = network_interceptor
 
     def fetch_agent_card(
         self,
@@ -59,6 +61,11 @@ class A2AClient:
         """
         try:
             import httpx
+            assert_url_allowed(
+                card_url,
+                component="A2A agent card fetch",
+                network_interceptor=self._network_interceptor,
+            )
             with httpx.Client(timeout=timeout) as client:
                 response = client.get(card_url)
                 response.raise_for_status()
@@ -221,6 +228,11 @@ class A2AClient:
             # Determine endpoint
             base_url = agent.agent_card_url.replace("/.well-known/agent.json", "")
             endpoint = f"{base_url}/a2a/tasks/send"
+            assert_url_allowed(
+                endpoint,
+                component="A2A task send",
+                network_interceptor=self._network_interceptor,
+            )
 
             with httpx.Client(timeout=timeout) as client:
                 response = client.post(endpoint, json=payload, headers=headers)
@@ -258,6 +270,11 @@ class A2AClient:
 
             base_url = agent.agent_card_url.replace("/.well-known/agent.json", "")
             endpoint = f"{base_url}/a2a/tasks/{task_id}"
+            assert_url_allowed(
+                endpoint,
+                component="A2A task status poll",
+                network_interceptor=self._network_interceptor,
+            )
 
             with httpx.Client(timeout=timeout) as client:
                 response = client.get(endpoint, headers=headers)

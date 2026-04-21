@@ -1,5 +1,5 @@
 """
-Onboarding Snapshot Persistence (v4 Upgrade — Prompt 1)
+Onboarding snapshot persistence for disk-backed onboarding state.
 
 Disk-backed JSON storage for onboarding state so that app restarts
 always resume correctly.  There are no dead-end states.
@@ -32,7 +32,7 @@ class OnboardingState(str, Enum):
     COOLDOWN = "COOLDOWN"
 
 
-# Ordered progression — used by BACK command (Prompt 3)
+# Ordered progression used by the BACK command.
 STATE_ORDER = list(OnboardingState)
 
 # States that are safe to go BACK from

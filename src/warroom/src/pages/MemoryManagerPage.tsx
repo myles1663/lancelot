@@ -20,6 +20,7 @@ import {
 import { validateSession } from '@/api/auth'
 import { ConfirmDialog, EmptyState } from '@/components'
 import type { CoreBlock, MemoryCommitSummary, QuarantineItem, RecentMemoryItem } from '@/types/api'
+import { emitWarRoomNotification } from '@/utils/notifications'
 
 type ConfirmState = {
   title: string
@@ -100,7 +101,11 @@ export function MemoryManagerPage() {
       .then((session) => {
         if (active && session.username) setOperatorName(session.username)
       })
-      .catch(() => {})
+      .catch(() => {
+        if (active) {
+          emitWarRoomNotification('Operator identity lookup failed; using generic operator name.', 'normal')
+        }
+      })
     return () => {
       active = false
     }

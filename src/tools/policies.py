@@ -25,8 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import yaml
-
+from src.core.network_allowlist import NetworkAllowlistService
 from src.tools.contracts import (
     Capability,
     RiskLevel,
@@ -35,22 +34,7 @@ from src.tools.contracts import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Path to network allowlist config (resolved at import time)
-_ALLOWLIST_CONFIG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "config", "network_allowlist.yaml",
-)
-
-
-def _load_network_allowlist() -> List[str]:
-    """Load allowed domains from config/network_allowlist.yaml."""
-    try:
-        with open(_ALLOWLIST_CONFIG_PATH, "r") as f:
-            data = yaml.safe_load(f) or {}
-        return [d.lower().strip() for d in data.get("domains", []) if d]
-    except Exception:
-        return []
+_NETWORK_ALLOWLIST = NetworkAllowlistService()
 
 
 # =============================================================================
@@ -573,19 +557,16 @@ class PolicyEngine:
         )
 
     def _is_domain_allowed(self, domain: str) -> bool:
-        """Check if a domain is in the network allowlist.
-
-        Supports suffix matching: 'api.github.com' matches allowlisted 'github.com'.
-        """
-        allowed = _load_network_allowlist()
+        """Check if a domain is in the canonical network allowlist."""
+        allowed = _NETWORK_ALLOWLIST.load_domains(include_core=True)
         if not allowed:
-            # Empty allowlist = allow all (no restrictions configured)
-            return True
-        domain_lower = domain.lower().strip()
-        for entry in allowed:
-            if domain_lower == entry or domain_lower.endswith("." + entry):
-                return True
-        return False
+            logger.warning(
+                "Tool Fabric network allowlist is enabled but config is empty or unavailable; "
+                "failing closed for domain '%s'",
+                domain,
+            )
+            return False
+        return _NETWORK_ALLOWLIST.is_hostname_allowed(domain, domains=allowed)
 
     # =========================================================================
     # Tool Intent Evaluation

@@ -32,24 +32,23 @@ Read the [Anti-Roadmap](docs/anti-roadmap.md) before proposing new features. Con
 ```bash
 git clone https://github.com/myles1663/lancelot.git
 cd lancelot
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
 ### Running the Test Suite
 
 ```bash
-# Run all tests
+# Run the default deterministic gate
 pytest tests/ -x
 
-# Run with timeout enforcement
-pytest tests/ -x --timeout=30
-
-# Run only unit tests (no external services)
-pytest tests/ -x -m "not integration and not slow and not docker and not local_model"
+# Run the live/integration lane explicitly
+pytest tests/ -x -m "integration or slow or docker or local_model"
 
 # Run with coverage
 pytest tests/ --cov=src --cov-report=term-missing
 ```
+
+The default `pytest` path excludes tests marked `integration`, `slow`, `docker`, and `local_model`. Those lanes must be invoked explicitly so the main gate remains deterministic.
 
 **Test markers:**
 - `integration` — Requires external services (LLM APIs, Docker)
@@ -62,6 +61,7 @@ pytest tests/ --cov=src --cov-report=term-missing
 ```bash
 docker compose up -d --build
 MSYS_NO_PATHCONV=1 docker exec lancelot_core pytest tests/ -x
+MSYS_NO_PATHCONV=1 docker exec lancelot_core pytest tests/ -x -m "integration or slow or docker or local_model"
 ```
 
 Note: On Windows with Git Bash, prefix Docker commands with `MSYS_NO_PATHCONV=1` to prevent path mangling.

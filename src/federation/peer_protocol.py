@@ -473,8 +473,8 @@ class PeerRegistrationProtocol:
                     fingerprint=expected_fingerprint,
                     role=role,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to record inbound peer registration receipt for %s: %s", instance_id, exc)
 
         if self._audit:
             try:
@@ -488,8 +488,8 @@ class PeerRegistrationProtocol:
                         "address": address,
                     },
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to write inbound peer registration audit for %s: %s", instance_id, exc)
 
         logger.info(
             "Accepted peer registration: %s (fingerprint=%s, role=%s)",
@@ -589,8 +589,8 @@ class PeerRegistrationProtocol:
                     fingerprint=expected_fingerprint,
                     role=pending.role,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to record outbound peer registration receipt for %s: %s", instance_id, exc)
 
         if self._audit:
             try:
@@ -604,8 +604,8 @@ class PeerRegistrationProtocol:
                         "address": pending.expected_target_address,
                     },
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to write outbound peer registration audit for %s: %s", instance_id, exc)
 
         self._pending.pop(registration_id, None)
         self._persist_pending()
@@ -639,8 +639,8 @@ class PeerRegistrationProtocol:
                         peer_id=instance_id,
                         reason="operator_request",
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to record peer removal receipt for %s: %s", instance_id, exc)
             if self._audit:
                 try:
                     self._audit.record(
@@ -648,8 +648,8 @@ class PeerRegistrationProtocol:
                         instance_id=instance_id,
                         details={"reason": "operator_request"},
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to write peer removal audit for %s: %s", instance_id, exc)
 
         return {
             "removed": removed,

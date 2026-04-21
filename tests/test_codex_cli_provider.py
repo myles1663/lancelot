@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from src.core.providers.codex_cli_client import CodexCLIProviderClient
+from src.core.providers.codex_cli_client import (
+    CodexCLIProviderClient,
+    has_codex_cli_auth,
+    resolve_codex_auth_file,
+)
 from src.core.providers.tool_schema import NormalizedToolDeclaration
 
 
@@ -161,9 +165,29 @@ def test_generate_with_tools_returns_final_text(monkeypatch, tmp_path):
 
 def test_missing_auth_file_raises(monkeypatch, tmp_path):
     monkeypatch.setattr("src.core.providers.codex_cli_client.shutil.which", lambda _: "/usr/bin/codex")
+    monkeypatch.delenv("LANCELOT_CODEX_HOME", raising=False)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.setattr(
+        "src.core.providers.codex_cli_client.os.path.expanduser",
+        lambda _value: str(tmp_path / "missing-home"),
+    )
 
     with pytest.raises(Exception, match="auth is not available"):
         CodexCLIProviderClient(workdir="/workspace", codex_home=str(tmp_path / "home"))
+
+
+def test_resolve_auth_file_uses_explicit_codex_home_env(monkeypatch, tmp_path):
+    mounted_home = tmp_path / "mounted-home"
+    auth_dir = mounted_home / ".codex"
+    auth_dir.mkdir(parents=True)
+    auth_file = auth_dir / "auth.json"
+    auth_file.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setenv("LANCELOT_CODEX_HOME", str(mounted_home))
+    monkeypatch.setattr("src.core.providers.codex_cli_client.os.path.expanduser", lambda _value: "/root")
+
+    assert resolve_codex_auth_file() == auth_file
+    assert has_codex_cli_auth() is True
 
 
 def test_any_mode_schema_requires_tool_calls():

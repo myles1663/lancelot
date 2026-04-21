@@ -1,13 +1,13 @@
-"""
-ModelRouter v2 — full lane routing with escalation (Prompts 15 & 16).
+﻿"""
+Model router for lane selection and escalation.
 
 Single-owner module that routes tasks to the appropriate lane:
-  1. local_redaction  — PII redaction (always local)
-  2. local_utility    — classify, extract, summarize, rag_rewrite
-  3. flagship_fast    — orchestration, tool calls, retries
-  4. flagship_deep    — planning, high-risk decisions
+  1. local_redaction  â€” local redaction lane
+  2. local_utility    â€” classify, extract, summarize, rag_rewrite
+  3. flagship_fast    â€” orchestration, tool calls, retries
+  4. flagship_deep    â€” planning, high-risk decisions
 
-Escalation from fast → deep is triggered by:
+Escalation from fast â†’ deep is triggered by:
   - Task type (plan, analyze, decide, architect, review)
   - Risk keywords in the input text
   - Fast lane failure (automatic retry on deep)
@@ -15,11 +15,11 @@ Escalation from fast → deep is triggered by:
 All routing decisions are logged and exposed to the War Room.
 
 Public API:
-    RouterDecision      — immutable record of a routing decision
+    RouterDecision      â€” immutable record of a routing decision
     ModelRouter(registry, local_client, flagship_client)
-    router.route(task_type, text, **kwargs) → RouterResult
-    router.recent_decisions  → list[RouterDecision]
-    router.stats             → dict
+    router.route(task_type, text, **kwargs) â†’ RouterResult
+    router.recent_decisions  â†’ list[RouterDecision]
+    router.stats             â†’ dict
 """
 
 import logging
@@ -31,6 +31,10 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from src.core.local_model_client import LocalModelClient, LocalModelError
+from src.core.model_usage_policy import (
+    LOCAL_EXECUTION_DISABLED,
+    get_model_usage_policy,
+)
 from src.core.provider_profile import ProfileRegistry
 from src.core.usage_tracker import UsageTracker
 
@@ -166,15 +170,22 @@ class ModelRouter:
         if forced_lane in ("flagship_fast", "flagship_deep"):
             return forced_lane, f"Lane forced to '{forced_lane}' by caller"
 
-        # Redaction always local, highest priority
+        # Redaction stays on the local redaction lane when requested
         if task_type == "redact":
             return (
                 "local_redaction",
-                "PII redaction always runs locally for privacy",
+                "PII redaction uses the local redaction lane for privacy",
             )
+
+        policy = get_model_usage_policy()
 
         # Check if it's a registered local utility task
         if self._registry.is_local_task(task_type):
+            if policy["local_execution_mode"] == LOCAL_EXECUTION_DISABLED:
+                return (
+                    "flagship_fast",
+                    f"Local execution disabled by admin policy for '{task_type}'",
+                )
             return (
                 "local_utility",
                 f"'{task_type}' is a registered local utility task",
@@ -184,7 +195,7 @@ class ModelRouter:
         if task_type in _DEEP_TASK_TYPES:
             return (
                 "flagship_deep",
-                f"'{task_type}' requires deep reasoning — escalated to deep lane",
+                f"'{task_type}' requires deep reasoning â€” escalated to deep lane",
             )
 
         # Escalation: risk keywords in input
@@ -192,7 +203,7 @@ class ModelRouter:
         if risk_word:
             return (
                 "flagship_deep",
-                f"Risk keyword '{risk_word}' detected — escalated to deep lane",
+                f"Risk keyword '{risk_word}' detected â€” escalated to deep lane",
             )
 
         # Default to flagship fast lane
@@ -308,7 +319,7 @@ class ModelRouter:
         """Execute a task on the flagship provider."""
         from src.core.flagship_client import FlagshipError
 
-        # V27: SDK mode — use ProviderClient.generate() when available
+        # V27: SDK mode â€” use ProviderClient.generate() when available
         if self._provider_client is not None:
             return self._execute_flagship_sdk(
                 task_type, text, lane, rationale, input_preview, start, **kwargs
@@ -433,8 +444,12 @@ class ModelRouter:
             if hasattr(self._flagship, '_profile'):
                 lc = self._flagship._get_lane_config(lane)
                 return lc.model
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Falling back to synthetic flagship model name for lane '%s': %s",
+                lane,
+                exc,
+            )
         return f"flagship-{lane}"
 
     # ------------------------------------------------------------------
@@ -567,8 +582,12 @@ class ModelRouter:
                     return profile.fast.model
                 elif lane == "cache" and profile.cache:
                     return profile.cache.model
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Falling back to synthetic SDK model name for lane '%s': %s",
+                lane,
+                exc,
+            )
         return f"sdk-{lane}"
 
     # ------------------------------------------------------------------
@@ -585,7 +604,7 @@ class ModelRouter:
         self._decisions.append(decision)
         self._usage.record(decision)
         logger.info(
-            "Router decision: %s → %s (%s) [%.1fms]",
+            "Router decision: %s â†’ %s (%s) [%.1fms]",
             decision.task_type,
             decision.lane,
             "ok" if decision.success else "fail",

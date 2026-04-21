@@ -101,8 +101,8 @@ def _send_file(file_path: str, caption: str, chat_id_override: str = None) -> Di
                     "bytes": len(file_bytes),
                 }
             return {"status": "error", "error": "send_document failed (check logs)"}
-    except ImportError:
-        pass
+    except ImportError as exc:
+        logger.debug("telegram_send: gateway TelegramBot document helper unavailable: %s", exc)
 
     # Fallback: direct API call
     token = os.environ.get("LANCELOT_TELEGRAM_TOKEN", "")
@@ -144,8 +144,8 @@ def _send_text(message: str, chat_id_override: str = None) -> Dict[str, Any]:
     try:
         from integrations.telegram_bot import TelegramBot
         message = TelegramBot._sanitize_for_telegram(message)
-    except ImportError:
-        pass
+    except ImportError as exc:
+        logger.debug("telegram_send: TelegramBot sanitizer unavailable: %s", exc)
 
     # Try gateway TelegramBot instance
     try:
@@ -162,8 +162,8 @@ def _send_text(message: str, chat_id_override: str = None) -> Dict[str, Any]:
                 "chat_id": target_chat,
                 "message_length": len(message),
             }
-    except ImportError:
-        pass
+    except ImportError as exc:
+        logger.debug("telegram_send: gateway TelegramBot instance unavailable: %s", exc)
 
     # Fallback: direct API call
     token = os.environ.get("LANCELOT_TELEGRAM_TOKEN", "")

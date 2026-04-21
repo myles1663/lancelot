@@ -1,6 +1,6 @@
 # V30: Response formatting helper functions extracted from orchestrator.py
 # These are pure functions — no instance state, no side effects.
-# EGOS audit Phase 1: orchestrator decomposition (conservative)
+# Kept separate so response assembly stays readable and testable.
 
 import os
 from pathlib import Path

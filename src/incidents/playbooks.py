@@ -212,8 +212,8 @@ def _load_single(path: str) -> Optional[Playbook]:
                 k: v for k, v in vs.items()
                 if k in PlaybookStep.__dataclass_fields__
             }))
-        except TypeError:
-            pass
+        except TypeError as exc:
+            logger.warning("Skipping malformed incident playbook variant step in %s: %s", path, exc)
 
     return Playbook(
         metadata=metadata,

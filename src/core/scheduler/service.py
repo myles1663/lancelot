@@ -1,5 +1,5 @@
 """
-Scheduler Service — persistent job store and management (Prompt 12 / D2-D3).
+Scheduler service for persistent job storage and lifecycle management.
 
 Uses SQLite for job persistence and provides methods for job lifecycle.
 
@@ -118,13 +118,13 @@ class SchedulerService:
             # Migration: add inputs column if missing (for existing DBs)
             try:
                 conn.execute("ALTER TABLE jobs ADD COLUMN inputs TEXT DEFAULT '{}'")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
+            except sqlite3.OperationalError as exc:
+                logger.debug("Scheduler jobs.inputs migration skipped: %s", exc)
             # Migration: add timezone column if missing (for existing DBs)
             try:
                 conn.execute("ALTER TABLE jobs ADD COLUMN timezone TEXT DEFAULT 'UTC'")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
+            except sqlite3.OperationalError as exc:
+                logger.debug("Scheduler jobs.timezone migration skipped: %s", exc)
             conn.commit()
         finally:
             conn.close()
@@ -273,8 +273,8 @@ class SchedulerService:
         tz = "UTC"
         try:
             tz = row["timezone"] or "UTC"
-        except (IndexError, KeyError):
-            pass
+        except (IndexError, KeyError) as exc:
+            logger.debug("Scheduler job row missing timezone; defaulting to UTC: %s", exc)
         return JobRecord(
             id=row["id"],
             name=row["name"],

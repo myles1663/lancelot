@@ -200,6 +200,7 @@ async function waitForCDP(port: number, maxWaitMs: number = 15000): Promise<bool
 export class BrowserPlugin implements FrameworkPlugin {
   readonly framework = 'browser' as const;
   readonly name = 'Browser (CDP)';
+  readonly controlMethod = 'browser-cdp' as const;
 
   canHandle(app: DetectedApp): boolean {
     return app.framework === 'browser';

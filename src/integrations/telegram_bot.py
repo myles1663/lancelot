@@ -16,6 +16,7 @@ import threading
 import logging
 import unicodedata
 import requests
+from src.core.outbound_http import assert_url_allowed
 
 logger = logging.getLogger("lancelot.telegram_bot")
 
@@ -33,7 +34,19 @@ class TelegramBot:
     # Stored in chat/ subdir to avoid Librarian file watcher auto-moving it
     _OFFSET_FILE = os.path.join(os.getenv("LANCELOT_DATA_DIR", "/home/lancelot/data"), "chat", "telegram_offset.txt")
 
-    def __init__(self, orchestrator=None, voice_processor=None):
+    @staticmethod
+    def _telegram_debug_dump_enabled() -> bool:
+        return os.getenv("LANCELOT_TELEGRAM_DEBUG_DUMP", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _telegram_debug_dir() -> str:
+        return os.path.join(
+            os.getenv("LANCELOT_DATA_DIR", "/home/lancelot/data"),
+            "chat",
+            "debug",
+        )
+
+    def __init__(self, orchestrator=None, voice_processor=None, network_interceptor=None):
         try:
             import secret_cache
             self.token = secret_cache.get("LANCELOT_TELEGRAM_TOKEN", "")
@@ -43,6 +56,7 @@ class TelegramBot:
             self.chat_id = os.getenv("LANCELOT_TELEGRAM_CHAT_ID", "")
         self.orchestrator = orchestrator
         self.voice_processor = voice_processor
+        self._network_interceptor = network_interceptor
         self.running = False
         self._offset = self._load_offset()  # V33: Persist across restarts
         self._receipt_service = None  # Set externally if available
@@ -54,6 +68,19 @@ class TelegramBot:
 
         if self._offset:
             logger.info("TelegramBot: Restored offset=%d from disk", self._offset)
+
+    def _guard_url(self, url: str, component: str) -> str:
+        return assert_url_allowed(
+            url,
+            component=component,
+            network_interceptor=self._network_interceptor,
+        )
+
+    def _post(self, url: str, *, component: str, **kwargs):
+        return requests.post(self._guard_url(url, component), **kwargs)
+
+    def _get(self, url: str, *, component: str, **kwargs):
+        return requests.get(self._guard_url(url, component), **kwargs)
 
     @classmethod
     def _load_offset(cls) -> int:
@@ -70,8 +97,40 @@ class TelegramBot:
             os.makedirs(os.path.dirname(self._OFFSET_FILE), exist_ok=True)
             with open(self._OFFSET_FILE, "w") as f:
                 f.write(str(self._offset))
-        except Exception:
-            pass  # Non-critical — worst case we re-process on restart
+        except Exception as exc:
+            logger.warning(
+                "TelegramBot: failed to persist offset; updates may replay after restart: %s",
+                exc,
+            )
+
+    def _write_outbound_debug_artifacts(self, text: str, target: str, chunk_count: int) -> None:
+        """Persist explicit outbound Telegram debug artifacts when enabled by policy."""
+        if not self._telegram_debug_dump_enabled():
+            return
+        debug_dir = self._telegram_debug_dir()
+        try:
+            os.makedirs(debug_dir, exist_ok=True)
+            text_path = os.path.join(debug_dir, "telegram_last_outbound_message.txt")
+            meta_path = os.path.join(debug_dir, "telegram_last_outbound_message.json")
+            with open(text_path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            with open(meta_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "target_chat_id": str(target),
+                        "length": len(text),
+                        "chunk_count": chunk_count,
+                        "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    },
+                    handle,
+                    indent=2,
+                )
+            logger.info(
+                "TelegramBot: outbound debug dump updated at %s",
+                debug_dir,
+            )
+        except Exception as exc:
+            logger.warning("TelegramBot: failed to write outbound debug artifacts: %s", exc)
 
     # ------------------------------------------------------------------
     # Public API
@@ -535,7 +594,12 @@ class TelegramBot:
                     clean = clean.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
                     payload["text"] = clean
 
-                resp = requests.post(url, json=payload, timeout=15)
+                resp = self._post(
+                    url,
+                    component="Telegram sendMessage",
+                    json=payload,
+                    timeout=15,
+                )
                 if resp.ok:
                     result = resp.json().get("result", {})
                     message_id = result.get("message_id")
@@ -582,7 +646,12 @@ class TelegramBot:
                     clean = clean.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
                     payload["text"] = clean
 
-                resp = requests.post(url, json=payload, timeout=15)
+                resp = self._post(
+                    url,
+                    component="Telegram editMessageText",
+                    json=payload,
+                    timeout=15,
+                )
                 if resp.ok:
                     return True
                 # Telegram returns error if message content is unchanged — not a real error
@@ -611,7 +680,12 @@ class TelegramBot:
             payload["text"] = text[:200]  # Telegram limit for callback answer
 
         try:
-            resp = requests.post(url, json=payload, timeout=15)
+            resp = self._post(
+                url,
+                component="Telegram answerCallbackQuery",
+                json=payload,
+                timeout=15,
+            )
             return resp.ok
         except Exception as e:
             logger.error("TelegramBot: answer_callback_query error: %s", e)
@@ -637,19 +711,15 @@ class TelegramBot:
                 logger.warning("TelegramBot: BLOCKED raw JSON message (%d chars). First 100: %s",
                                len(stripped), stripped[:100])
                 return  # Silently drop raw JSON — it's never intended for the user
-            except (json.JSONDecodeError, ValueError):
-                pass  # Not valid JSON, send normally
+            except (json.JSONDecodeError, ValueError) as exc:
+                logger.debug(
+                    "TelegramBot: outgoing message is not valid JSON; continuing with normal send: %s",
+                    exc,
+                )
 
         # V33: Debug trace — log every outgoing message (first 200 chars + length)
         logger.info("TelegramBot: send_message called — len=%d first200=%s",
                      len(text), repr(text[:200]))
-        # TEMP: dump full message to file for table alignment debugging
-        try:
-            _dbg = os.path.join(os.getenv("LANCELOT_DATA_DIR", "/home/lancelot/data"), "chat", "last_msg_debug.txt")
-            with open(_dbg, "w") as _f:
-                _f.write(text)
-        except Exception:
-            pass
 
         url = TG_API.format(token=self.token, method="sendMessage")
 
@@ -658,6 +728,7 @@ class TelegramBot:
         chunks = TelegramBot._chunk_by_lines(text, max_size=4000)
         total_chunks = len(chunks)
         failed_chunks = []
+        self._write_outbound_debug_artifacts(text, target, total_chunks)
 
         for idx, chunk in enumerate(chunks):
             sent = False
@@ -680,7 +751,12 @@ class TelegramBot:
                     }
                     if parse_mode:
                         payload["parse_mode"] = parse_mode
-                    resp = requests.post(url, json=payload, timeout=15)
+                    resp = self._post(
+                        url,
+                        component="Telegram sendMessage",
+                        json=payload,
+                        timeout=15,
+                    )
                     if resp.ok:
                         sent = True
                         break
@@ -710,11 +786,16 @@ class TelegramBot:
         while self.running:
             try:
                 url = TG_API.format(token=self.token, method="getUpdates")
-                resp = requests.post(url, json={
-                    "offset": self._offset,
-                    "timeout": 30,  # long-poll 30s
-                    "allowed_updates": ["message", "callback_query"],
-                }, timeout=40)
+                resp = self._post(
+                    url,
+                    component="Telegram getUpdates",
+                    json={
+                        "offset": self._offset,
+                        "timeout": 30,  # long-poll 30s
+                        "allowed_updates": ["message", "callback_query"],
+                    },
+                    timeout=40,
+                )
 
                 if not resp.ok:
                     logger.error("TelegramBot: Poll HTTP %s: %s", resp.status_code, resp.text[:200])
@@ -766,8 +847,9 @@ class TelegramBot:
             data = {"chat_id": target}
             if caption:
                 data["caption"] = caption[:1024]  # Telegram caption limit
-            resp = requests.post(
+            resp = self._post(
                 url,
+                component="Telegram sendDocument",
                 data=data,
                 files={"document": (filename, file_bytes, "application/octet-stream")},
                 timeout=60,
@@ -790,8 +872,9 @@ class TelegramBot:
 
         url = TG_API.format(token=self.token, method="sendVoice")
         try:
-            resp = requests.post(
+            resp = self._post(
                 url,
+                component="Telegram sendVoice",
                 data={"chat_id": target},
                 files={"voice": ("reply.ogg", audio_bytes, "audio/ogg")},
                 timeout=30,
@@ -805,7 +888,12 @@ class TelegramBot:
         """Download a file from Telegram by file_id."""
         # Step 1: Get file path
         url = TG_API.format(token=self.token, method="getFile")
-        resp = requests.get(url, params={"file_id": file_id}, timeout=15)
+        resp = self._get(
+            url,
+            component="Telegram getFile",
+            params={"file_id": file_id},
+            timeout=15,
+        )
         if not resp.ok:
             raise RuntimeError(f"getFile failed: {resp.text[:200]}")
 
@@ -815,7 +903,11 @@ class TelegramBot:
 
         # Step 2: Download file content
         download_url = f"https://api.telegram.org/file/bot{self.token}/{file_path}"
-        dl_resp = requests.get(download_url, timeout=30)
+        dl_resp = self._get(
+            download_url,
+            component="Telegram file download",
+            timeout=30,
+        )
         if not dl_resp.ok:
             raise RuntimeError(f"File download failed: {dl_resp.status_code}")
 

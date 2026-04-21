@@ -13,7 +13,7 @@ from receipts import (
     ActionType,
     CognitionTier,
     Receipt,
-    create_receipt,
+    create_finalized_receipt,
     get_receipt_service,
 )
 
@@ -59,7 +59,7 @@ def emit_bal_receipt(
             f"Must be one of: {list(_BAL_ACTION_TYPES.keys())}"
         )
 
-    receipt = create_receipt(
+    receipt = create_finalized_receipt(
         action_type=action_type,
         action_name=action_name,
         inputs=inputs,

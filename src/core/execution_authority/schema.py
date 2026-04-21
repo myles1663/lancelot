@@ -90,8 +90,12 @@ class ExecutionToken:
                 exp = datetime.fromisoformat(self.expires_at)
                 if datetime.now(timezone.utc) > exp:
                     return True
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as exc:
+                logger.debug(
+                    "Execution token has malformed expires_at %r; treating as not expired: %s",
+                    self.expires_at,
+                    exc,
+                )
         return False
 
     def allows_tool(self, tool_name: str) -> bool:

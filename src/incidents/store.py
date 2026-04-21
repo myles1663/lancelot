@@ -189,8 +189,13 @@ class IncidentStore:
                     elapsed = (now - opened).total_seconds()
                     if elapsed <= window_seconds:
                         return iid
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as exc:
+                    logger.debug(
+                        "Ignoring incident '%s' with malformed opened_at %r during window lookup: %s",
+                        iid,
+                        opened_at,
+                        exc,
+                    )
         return None
 
     def find_by_trigger_receipt(self, trigger_receipt_id: str) -> Optional[str]:

@@ -334,18 +334,13 @@ class TestReadSnapshot:
         reader = StateSnapshotReader(svc)
 
         mock_ledger = MagicMock()
-        mock_ledger.get_effective_tier.return_value = 2
-        mock_ledger.list_records.return_value = []
+        mock_ledger.get_approval_tier.return_value = 2
+        mock_ledger.export_records.return_value = [{"capability": "cap.test", "scope": "s"}]
 
-        mock_module = MagicMock()
-        mock_module.TrustLedger.return_value = mock_ledger
-
-        with patch.dict(
-            "sys.modules",
-            {"src.core.governance.trust_ledger": mock_module},
-        ):
-            reader._populate_trust_data(snap)
-            assert snap.trust_tier == 2
+        reader = StateSnapshotReader(svc, trust_ledger=mock_ledger)
+        reader._populate_trust_data(snap)
+        assert snap.trust_tier == 2
+        assert snap.trust_records == [{"capability": "cap.test", "scope": "s"}]
 
     def test_populates_metadata_with_feature_flags(self):
         snap = StateSnapshot(timestamp="2026-01-15T10:00:00Z")

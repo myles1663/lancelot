@@ -14,6 +14,7 @@ import {
 import { PageLoader } from '@/components/PageLoader'
 import { MetricCard } from '@/components/MetricCard'
 import { StatusDot } from '@/components/StatusDot'
+import { getErrorMessage } from '@/utils/errors'
 
 function boolStateLabel(value?: boolean): string {
   return value ? 'running' : 'degraded'
@@ -209,8 +210,8 @@ export function FederationOverview() {
       setSettingsMessage(result.message)
       setSettingsDirty(false)
       await refetchSettings()
-    } catch (e: any) {
-      setSettingsError(e.message || 'Failed to save federation settings')
+    } catch (error) {
+      setSettingsError(getErrorMessage(error, 'Failed to save federation settings'))
     } finally {
       setSettingsSaving(false)
     }

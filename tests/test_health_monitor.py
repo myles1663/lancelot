@@ -121,6 +121,34 @@ class TestComputeSnapshot:
         assert snapshot.scheduler_running is True
         assert snapshot.last_scheduler_tick_at == "2026-01-01T00:00:00Z"
 
+    def test_local_llm_runtime_metadata_included(self):
+        checks = [
+            HealthCheck(
+                "local_llm",
+                _always_false,
+                "Local LLM not responding",
+                snapshot_details_fn=lambda: {
+                    "local_llm_loaded": True,
+                    "local_llm_status": "loaded_not_ready",
+                    "local_llm_last_verified_at": "2026-04-17T12:00:00Z",
+                    "local_llm_last_checked_at": "2026-04-17T12:05:00Z",
+                    "local_llm_last_error": "Inference smoke failed",
+                    "local_llm_consecutive_failures": 3,
+                    "local_llm_last_smoke_elapsed_ms": 45.6,
+                },
+            ),
+        ]
+        monitor = _make_monitor(checks)
+        snapshot = monitor.compute_snapshot()
+        assert snapshot.local_llm_ready is False
+        assert snapshot.local_llm_loaded is True
+        assert snapshot.local_llm_status == "loaded_not_ready"
+        assert snapshot.local_llm_last_verified_at == "2026-04-17T12:00:00Z"
+        assert snapshot.local_llm_last_checked_at == "2026-04-17T12:05:00Z"
+        assert snapshot.local_llm_last_error == "Inference smoke failed"
+        assert snapshot.local_llm_consecutive_failures == 3
+        assert snapshot.local_llm_last_smoke_elapsed_ms == 45.6
+
     def test_no_checks_is_ready(self):
         monitor = _make_monitor(checks=[])
         snapshot = monitor.compute_snapshot()

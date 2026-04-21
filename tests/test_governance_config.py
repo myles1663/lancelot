@@ -1,4 +1,4 @@
-"""Tests for vNext4 governance config loader (Prompt 3)."""
+"""Tests for the governance config loader."""
 
 import pytest
 import os
@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "core"))
 
 from governance.config import (
     load_governance_config,
+    GovernanceConfigError,
     GovernanceConfig,
     ScopeEscalation,
     AsyncVerificationConfig,
@@ -76,6 +77,27 @@ def test_missing_config_returns_defaults():
     assert isinstance(config, GovernanceConfig)
     assert config.version == "1.0"
     assert len(config.risk_classification.defaults) == 0
+
+
+def test_empty_config_raises(tmp_path):
+    """Existing empty config files fail explicitly instead of using defaults."""
+    config_path = tmp_path / "governance.yaml"
+    config_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(GovernanceConfigError, match="empty"):
+        load_governance_config(str(config_path))
+
+
+def test_invalid_config_raises(tmp_path):
+    """Existing invalid config files fail explicitly instead of using defaults."""
+    config_path = tmp_path / "governance.yaml"
+    config_path.write_text(
+        "async_verification:\n  max_workers: 0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(GovernanceConfigError, match="failed validation"):
+        load_governance_config(str(config_path))
 
 
 def test_config_round_trip():

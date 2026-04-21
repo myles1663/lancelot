@@ -144,6 +144,34 @@ def _get_active_feature_flags() -> Set[str]:
             return set()
 
 
+def _dump_model(value):
+    """Return a plain dict for Pydantic models while preserving raw values."""
+    return value.model_dump() if hasattr(value, "model_dump") else value
+
+
+def _build_autonomy_posture(
+    base: Soul,
+    merged_allowed_autonomous: List[str],
+    merged_requires_approval: List[str],
+) -> dict:
+    return {
+        "level": base.autonomy_posture.level,
+        "description": base.autonomy_posture.description,
+        "allowed_autonomous": merged_allowed_autonomous,
+        "requires_approval": merged_requires_approval,
+    }
+
+
+def _build_scheduling_boundaries(base: Soul, merged_sched_description: str) -> dict:
+    return {
+        "max_concurrent_jobs": base.scheduling_boundaries.max_concurrent_jobs,
+        "max_job_duration_seconds": base.scheduling_boundaries.max_job_duration_seconds,
+        "no_autonomous_irreversible": base.scheduling_boundaries.no_autonomous_irreversible,
+        "require_ready_state": base.scheduling_boundaries.require_ready_state,
+        "description": merged_sched_description,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Soul merge
 # ---------------------------------------------------------------------------
@@ -233,43 +261,37 @@ def merge_soul(base: Soul, overlays: List[SoulOverlay]) -> Soul:
         version=base.version,
         mission=base.mission,
         allegiance=base.allegiance,
-        autonomy_posture={
-            "level": base.autonomy_posture.level,
-            "description": base.autonomy_posture.description,
-            "allowed_autonomous": merged_allowed_autonomous,
-            "requires_approval": merged_requires_approval,
-        },
-        risk_rules=[r.model_dump() if hasattr(r, "model_dump") else {"name": r.name, "description": r.description, "enforced": r.enforced} for r in merged_risk_rules],
-        approval_rules=base.approval_rules.model_dump() if hasattr(base.approval_rules, "model_dump") else base.approval_rules,
+        autonomy_posture=_build_autonomy_posture(
+            base,
+            merged_allowed_autonomous,
+            merged_requires_approval,
+        ),
+        risk_rules=[
+            _dump_model(r) if hasattr(r, "model_dump") else {
+                "name": r.name,
+                "description": r.description,
+                "enforced": r.enforced,
+            }
+            for r in merged_risk_rules
+        ],
+        approval_rules=_dump_model(base.approval_rules),
         tone_invariants=merged_tone_invariants,
         memory_ethics=merged_memory_ethics,
-        scheduling_boundaries={
-            "max_concurrent_jobs": base.scheduling_boundaries.max_concurrent_jobs,
-            "max_job_duration_seconds": base.scheduling_boundaries.max_job_duration_seconds,
-            "no_autonomous_irreversible": base.scheduling_boundaries.no_autonomous_irreversible,
-            "require_ready_state": base.scheduling_boundaries.require_ready_state,
-            "description": merged_sched_description,
-        },
-        spawn_budget=base.spawn_budget.model_dump() if hasattr(base.spawn_budget, "model_dump") else base.spawn_budget,
+        scheduling_boundaries=_build_scheduling_boundaries(base, merged_sched_description),
+        spawn_budget=_dump_model(base.spawn_budget),
         mcp_permissions=[
-            p.model_dump() if hasattr(p, "model_dump") else p
+            _dump_model(p)
             for p in getattr(base, "mcp_permissions", [])
         ],
-        fork_permissions=(
-            base.fork_permissions.model_dump()
-            if hasattr(base.fork_permissions, "model_dump")
-            else base.fork_permissions
-        ),
+        fork_permissions=_dump_model(base.fork_permissions),
         inbound_a2a_permissions=(
-            base.inbound_a2a_permissions.model_dump()
+            _dump_model(base.inbound_a2a_permissions)
             if getattr(base, "inbound_a2a_permissions", None) is not None
-            and hasattr(base.inbound_a2a_permissions, "model_dump")
             else getattr(base, "inbound_a2a_permissions", None)
         ),
         outbound_a2a_permissions=(
-            base.outbound_a2a_permissions.model_dump()
+            _dump_model(base.outbound_a2a_permissions)
             if getattr(base, "outbound_a2a_permissions", None) is not None
-            and hasattr(base.outbound_a2a_permissions, "model_dump")
             else getattr(base, "outbound_a2a_permissions", None)
         ),
     )

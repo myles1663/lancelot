@@ -19,7 +19,15 @@
  * @packageDocumentation
  */
 
-// ─── Core Service ────────────────────────────────────────────────
+// ─── Framework-Independent Connector ─────────────────────────────
+export { UABConnector } from './connector.js';
+export type { ConnectorOptions, ConnectionInfo } from './connector.js';
+
+// ─── App Registry ────────────────────────────────────────────────
+export { AppRegistry } from './registry.js';
+export type { AppProfile, RegistrySnapshot, RegistryOptions } from './registry.js';
+
+// ─── Core Service (Kai integration) ──────────────────────────────
 export { UABService, uab } from './service.js';
 
 // ─── Types ───────────────────────────────────────────────────────
@@ -38,9 +46,16 @@ export type {
   Subscription,
   FrameworkType,
   DetectedApp,
+  FrameworkHookDescriptor,
+  HookControlMethod,
   FrameworkPlugin,
   PluginConnection,
   ControlMethod,
+  ConcertoMethod,
+  ConcertoMethodDescriptor,
+  OperationPlan,
+  OperationPlanContext,
+  DirectApiConfig,
   ControlRoute,
   FocusedElementInfo,
   PathSelector,
@@ -51,6 +66,9 @@ export type {
   AtomicChainResult,
   SmartResolveResult,
 } from './types.js';
+
+export { FRAMEWORK_HOOKS, describeControlMethod } from './hooks.js';
+export { getConcertoMethodInventory, planOperation } from './concerto.js';
 
 // ─── Detection & Routing ────────────────────────────────────────
 export { FrameworkDetector } from './detector.js';
@@ -79,6 +97,13 @@ export type {
 export { withRetry, isRetryable, retryable, withTimeout } from './retry.js';
 export type { RetryOptions } from './retry.js';
 
+// ─── Spatial Map & Composite Engine ─────────────────────────────
+export { buildSpatialMap, SpatialIndex, renderTextMap, renderJsonMap } from './spatial.js';
+export type { SpatialElement, SpatialRow, SpatialMap, SpatialQuery, NearestResult } from './spatial.js';
+
+export { CompositeEngine } from './composite.js';
+export type { CompositeResult, CompositeOptions, UABLike } from './composite.js';
+
 // ─── Action Chains ──────────────────────────────────────────────
 export { ChainExecutor, buildFormChain, buildMenuChain } from './chains.js';
 export type {
@@ -103,41 +128,38 @@ export { QtPlugin } from './plugins/qt/index.js';
 export { GtkPlugin } from './plugins/gtk/index.js';
 export { JavaPlugin } from './plugins/java/index.js';
 export { FlutterPlugin } from './plugins/flutter/index.js';
-export { OfficePlugin } from './plugins/office/index.js';
+export {
+  OfficePlugin,
+  buildExcelWorkbookBenchmarkScript,
+  probeExcelAutomation,
+  resolveExcelWorkbookBenchmarkPaths,
+  runExcelWorkbookBenchmark,
+} from './plugins/office/index.js';
+export type {
+  ExcelAutomationProbeResult,
+  ExcelWorkbookBenchmarkManifest,
+  ExcelWorkbookBenchmarkOptions,
+  ExcelWorkbookBenchmarkPaths,
+  ExcelWorkbookBenchmarkResult,
+} from './plugins/office/index.js';
+export { DirectApiPlugin } from './plugins/direct-api/index.js';
 export { BrowserPlugin, isBrowserProcess, getBrowserDisplayName } from './plugins/browser/index.js';
 export { ChromeExtPlugin } from './plugins/chrome-ext/index.js';
 export { ExtensionWSServer } from './plugins/chrome-ext/ws-server.js';
 export { VisionPlugin } from './plugins/vision/index.js';
 
-// ─── Connector (Public API) ────────────────────────────────────
-export { UABConnector } from './connector.js';
-export type { ConnectorOptions, ConnectionInfo } from './connector.js';
-
-// ─── Registry ──────────────────────────────────────────────────
-export { AppRegistry } from './registry.js';
-export type { AppProfile, RegistrySnapshot, RegistryOptions } from './registry.js';
-
-// ─── Spatial Map ───────────────────────────────────────────────
-export { buildSpatialMap, SpatialIndex, renderTextMap, renderJsonMap } from './spatial.js';
-export type {
-  SpatialElement, SpatialRow, SpatialMap,
-  SpatialQuery, NearestResult,
-} from './spatial.js';
-
-// ─── Composite Engine ──────────────────────────────────────────
-export { CompositeEngine } from './composite.js';
-export type { CompositeResult, CompositeOptions, UABLike } from './composite.js';
-
-// ─── Environment ───────────────────────────────────────────────
+// ─── Environment Detection ──────────────────────────────────────
 export { detectEnvironment, getDefaults, resetEnvironment, env } from './environment.js';
 export type { RuntimeMode, EnvironmentInfo, EnvironmentDefaults } from './environment.js';
+
+// ─── HTTP Server (Server-Side Access) ───────────────────────────
 export { UABServer } from './server.js';
 export type { ServerOptions } from './server.js';
 
-// ─── SDK ───────────────────────────────────────────────────────
+// ─── Agent SDK ─────────────────────────────────────────────────
 export { AgentSDK, desktop } from './sdk.js';
 
-// ─── Agent Prompt ──────────────────────────────────────────────
+// ─── Agent Prompt Templates ────────────────────────────────────
 export { getAgentPrompt, getClaudeMdSnippet, getMcpConfig } from './agent-prompt.js';
 export type { PromptMode, PromptOptions } from './agent-prompt.js';
 

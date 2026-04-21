@@ -1,0 +1,6 @@
+models:
+  utility:
+    url: "https://example.invalid/smoke-model.gguf"
+    filename: "smoke-model.gguf"
+    hash: "0000000000000000000000000000000000000000000000000000000000000000"
+    size_mb: 1

@@ -4,9 +4,9 @@
 
 **Feature Flag:** `FEATURE_FEDERATION` (default: `false`)
 **Configuration:** `config/federation.yaml`
-**Codebase:** `src/federation/` (30 modules, ~9,000 lines)
+**Codebase:** `src/federation/`
 
-Lancelot Federation enables multi-instance coordination — hierarchical parent-child trees or peer-to-peer meshes — with Soul-governed task handoff, cost governance, and complete cross-instance audit trails.
+Lancelot Federation enables multi-instance coordination — hierarchical parent-child trees or peer-to-peer meshes — with Soul-governed task handoff, cost governance, and persisted cross-instance audit trails with forensic timeline reconstruction.
 
 ---
 
@@ -66,7 +66,7 @@ Mode is derived automatically from the topology shape — not configured directl
 | `contradiction_detector.py` | Receipt DAG consistency checking |
 | `receipt_manager.py` | Federation receipt emission |
 | `receipts.py` | Federation-specific receipt schema |
-| `audit.py` | Cross-instance forensic timeline reconstruction with persisted audit log |
+| `audit.py` | Persisted cross-instance audit log with forensic timeline reconstruction |
 | `graph_models.py` | Graph Builder data models |
 | `graph_api.py` | Graph Builder REST API |
 | `graph_persistence.py` | Topology document storage |

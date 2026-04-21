@@ -3,6 +3,7 @@ Tests for src.core.soul.linter — Soul invariant checks (Prompt 2 / A2).
 """
 
 import pytest
+import yaml
 from pathlib import Path
 
 from src.core.soul.store import Soul, SoulStoreError, load_active_soul
@@ -74,9 +75,14 @@ class TestCanonicalSoulPasses:
         assert isinstance(issues, list)
 
     def test_real_soul_passes_linter(self):
-        """The actual shipped soul.yaml must pass the linter."""
-        real_soul_dir = str(Path(__file__).parent.parent / "soul")
-        soul = load_active_soul(real_soul_dir)
+        """The canonical shipped v1 soul must pass the linter."""
+        canonical_soul = (
+            Path(__file__).parent.parent
+            / "soul"
+            / "soul_versions"
+            / "soul_v1.yaml"
+        )
+        soul = Soul(**yaml.safe_load(canonical_soul.read_text(encoding="utf-8")))
         issues = lint(soul)
         critical = [i for i in issues if i.severity == LintSeverity.CRITICAL]
         assert critical == [], f"Real soul has critical issues: {critical}"

@@ -27,7 +27,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability
@@ -58,6 +58,161 @@ _audit_engine = None
 _divergence_detector = None
 _transport = None
 _heartbeat_mesh = None
+
+
+class KillCommandBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    command_id: str = ""
+    command_type: str = ""
+    authority: str = ""
+    reason: str = ""
+    target_instance_id: Optional[str] = None
+    target_agent_id: Optional[str] = None
+    target_feature: Optional[str] = None
+    timeout_seconds: Optional[float] = None
+
+
+class FederationCommandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    command: KillCommandBody = Field(default_factory=KillCommandBody)
+    issuer_instance_id: str = ""
+
+
+class PauseSignalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    issuer_instance_id: str = ""
+    reason: str = ""
+    full_stop: bool = False
+
+
+class ResumeSignalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    issuer_instance_id: str = ""
+    reason: str = ""
+
+
+class HandoffInitiationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    handoff_id: str = ""
+    federation_quest_id: str = ""
+    source_instance_id: str = ""
+    task_context: Dict[str, Any] = Field(default_factory=dict)
+    soul_context: Dict[str, Any] = Field(default_factory=dict)
+    contract: Dict[str, Any] = Field(default_factory=dict)
+    receipt_chain: list[Dict[str, Any]] = Field(default_factory=list)
+
+
+class SoulConfirmationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: str = ""
+    instance_id: str = ""
+
+
+class SoulHandshakeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    remote_instance_id: str = ""
+    remote_soul_hash: str = ""
+    remote_soul_document: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SoulUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_instance_id: str = ""
+    event_id: str = ""
+    soul_document: Dict[str, Any] = Field(default_factory=dict)
+    soul_hash: str = ""
+    tier: str = "T1"
+
+
+class PeerRegistrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    registration_id: str = ""
+    instance_id: str = ""
+    public_key_hex: str = ""
+    fingerprint: str = ""
+    address: str = ""
+    role: str = "peer"
+    soul_version_hash: str = ""
+    challenge: str = ""
+    challenge_signature: str = ""
+
+
+class PeerConfirmationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    registration_id: str = ""
+    instance_id: str = ""
+    public_key_hex: str = ""
+    fingerprint: str = ""
+    challenge_response: str = ""
+    counter_challenge: str = ""
+    soul_version_hash: str = ""
+
+
+class BudgetReportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    instance_id: str = ""
+    actual_today_usd: float = 0.0
+    projected_today_usd: float = 0.0
+    daily_ceiling_usd: float = 10.0
+    active_spawns: int = 0
+    spawn_cost_rate_usd_hr: float = 0.0
+    total_tokens_today: int = 0
+
+
+class ManageRegisterPeerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_address: str = ""
+    role: str = "peer"
+
+
+class ManageHandoffRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_instance_id: str = ""
+    task_context: Dict[str, Any] = Field(default_factory=dict)
+    soul_context: Dict[str, Any] = Field(default_factory=dict)
+    contract: Dict[str, Any] = Field(default_factory=dict)
+    federation_quest_id: str = ""
+
+
+class ManageCompleteHandoffRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    handoff_id: str = ""
+    target_instance_id: str = ""
+    result: Dict[str, Any] = Field(default_factory=dict)
+    receipts: list[Dict[str, Any]] = Field(default_factory=list)
+    federation_quest_id: str = ""
+
+
+class CompletionReportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    handoff_id: str = ""
+    federation_quest_id: str = ""
+    reporting_instance_id: str = ""
+    result: Dict[str, Any] = Field(default_factory=dict)
+    receipts: list[Dict[str, Any]] = Field(default_factory=list)
+    completed_at: str = ""
+
+
+class ManageKillRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    command: KillCommandBody = Field(default_factory=KillCommandBody)
+    target_ids: Optional[list[str]] = None
 
 
 def init_federation_api(
@@ -136,6 +291,28 @@ def _summarize_circuit_breakers(states: Dict[str, Dict[str, Any]]) -> Dict[str, 
         if state_name in summary:
             summary[state_name] += 1
     return summary
+
+
+async def _parse_request_model(
+    request: Request,
+    model_cls: type[BaseModel],
+    *,
+    allow_empty: bool = False,
+) -> BaseModel:
+    if allow_empty and request.headers.get("content-length") in (None, "", "0"):
+        payload = {}
+    else:
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            if allow_empty:
+                payload = {}
+            else:
+                raise HTTPException(status_code=422, detail="Request body must be valid JSON") from exc
+    try:
+        return model_cls.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
 
 
 def _build_runtime_status() -> Dict[str, Any]:
@@ -352,6 +529,7 @@ async def _require_valid_peer_request(request: Request) -> None:
 
 
 class UpdateFederationSettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     self_address: str = ""
 
 
@@ -388,7 +566,7 @@ async def heartbeat_stream(
             try:
                 queue.put_nowait(hb)
             except asyncio.QueueFull:
-                pass
+                logger.warning("Federation heartbeat stream queue full; dropping heartbeat event")
 
         _heartbeat_emitter.subscribe(on_heartbeat)
         try:
@@ -397,7 +575,7 @@ async def heartbeat_stream(
                 data = json.dumps(hb.to_dict())
                 yield f"event: heartbeat\ndata: {data}\n\n"
         except asyncio.CancelledError:
-            pass
+            logger.debug("Federation heartbeat stream cancelled")
         finally:
             _heartbeat_emitter.unsubscribe(on_heartbeat)
 
@@ -445,7 +623,7 @@ async def receive_command(
     if not _command_relay:
         return _no_transport("command")
 
-    body = await request.json()
+    body = (await _parse_request_model(request, FederationCommandRequest)).model_dump(exclude_none=True)
     result = _command_relay.handle_kill_command(
         body,
         authenticated_instance_id=getattr(
@@ -469,7 +647,7 @@ async def receive_killswitch(
     if not _command_relay:
         return _no_transport("killswitch")
 
-    body = await request.json()
+    body = (await _parse_request_model(request, FederationCommandRequest)).model_dump(exclude_none=True)
     result = _command_relay.handle_kill_command(
         body,
         authenticated_instance_id=getattr(
@@ -493,7 +671,7 @@ async def receive_pause(
     if not _command_relay:
         return _no_transport("pause")
 
-    body = await request.json()
+    body = (await _parse_request_model(request, PauseSignalRequest)).model_dump(exclude_none=True)
     result = _command_relay.handle_pause(
         body,
         authenticated_instance_id=getattr(
@@ -517,7 +695,7 @@ async def receive_resume(
     if not _command_relay:
         return _no_transport("resume")
 
-    body = await request.json()
+    body = (await _parse_request_model(request, ResumeSignalRequest)).model_dump(exclude_none=True)
     result = _command_relay.handle_resume(
         body,
         authenticated_instance_id=getattr(
@@ -545,7 +723,7 @@ async def initiate_handoff(
     if not _handoff_protocol:
         return _no_transport("handoff/initiate")
 
-    body = await request.json()
+    body = (await _parse_request_model(request, HandoffInitiationRequest)).model_dump(exclude_none=True)
     result = _handoff_protocol.handle_handoff_initiation(
         body,
         authenticated_instance_id=getattr(
@@ -569,7 +747,7 @@ async def confirm_soul_update(
     if not _soul_transport:
         return _no_transport("soul/confirm")
 
-    body = await request.json()
+    body = (await _parse_request_model(request, SoulConfirmationRequest)).model_dump(exclude_none=True)
     result = await _soul_transport.handle_soul_confirmation(
         body,
         authenticated_instance_id=getattr(
@@ -593,7 +771,7 @@ async def complete_handoff(
     if not _handoff_protocol:
         return _no_transport("handoff/complete")
 
-    body = await request.json()
+    body = (await _parse_request_model(request, CompletionReportRequest)).model_dump(exclude_none=True)
     result = _handoff_protocol.handle_completion_report(
         body,
         authenticated_instance_id=getattr(
@@ -886,12 +1064,9 @@ async def soul_handshake(
     if not _soul_transport:
         return _no_transport("soul/handshake")
 
-    body = {}
-    try:
-        if request.headers.get("content-length") not in (None, "", "0"):
-            body = await request.json()
-    except Exception:
-        body = {}
+    body = (
+        await _parse_request_model(request, SoulHandshakeRequest, allow_empty=True)
+    ).model_dump(exclude_none=True)
 
     result = _soul_transport.handle_handshake(body)
     return JSONResponse(status_code=200, content=result)
@@ -923,7 +1098,7 @@ async def receive_soul_update(
     if not _soul_transport:
         return _no_transport("soul/update")
 
-    body = await request.json()
+    body = (await _parse_request_model(request, SoulUpdateRequest)).model_dump(exclude_none=True)
     result = _soul_transport.handle_soul_push(
         body,
         authenticated_instance_id=getattr(
@@ -948,7 +1123,7 @@ async def register_peer(request: Request):
     if not _peer_protocol:
         return _no_transport("peer/register")
 
-    body = await request.json()
+    body = (await _parse_request_model(request, PeerRegistrationRequest)).model_dump(exclude_none=True)
     result = await _peer_protocol.handle_registration_request(body)
     status = 200 if result.get("accepted") else 400
     return JSONResponse(status_code=status, content=result)
@@ -962,7 +1137,7 @@ async def confirm_peer_registration(request: Request):
     if not _peer_protocol:
         return _no_transport("peer/confirm")
 
-    body = await request.json()
+    body = (await _parse_request_model(request, PeerConfirmationRequest)).model_dump(exclude_none=True)
     result = _peer_protocol.handle_registration_confirm(body)
     status = 200 if result.get("accepted") else 400
     return JSONResponse(status_code=status, content=result)
@@ -1015,7 +1190,7 @@ async def receive_budget_report(
     if not _cost_reporter:
         return _no_transport("budget/report")
 
-    body = await request.json()
+    body = (await _parse_request_model(request, BudgetReportRequest)).model_dump(exclude_none=True)
     result = _cost_reporter.handle_cost_report(
         body,
         authenticated_instance_id=getattr(
@@ -1071,9 +1246,9 @@ async def manage_register_peer(
     if not _peer_protocol:
         return _no_transport("manage/register-peer")
 
-    body = await request.json()
-    target_address = body.get("target_address", "")
-    target_role = body.get("role", "peer")
+    body = await _parse_request_model(request, ManageRegisterPeerRequest)
+    target_address = body.target_address
+    target_role = body.role
 
     if not target_address:
         return JSONResponse(status_code=400, content={
@@ -1118,8 +1293,8 @@ async def manage_initiate_handoff(
     if not _handoff_protocol:
         return _no_transport("manage/handoff")
 
-    body = await request.json()
-    target_id = body.get("target_instance_id", "")
+    body = await _parse_request_model(request, ManageHandoffRequest)
+    target_id = body.target_instance_id
 
     if not target_id:
         return JSONResponse(status_code=400, content={
@@ -1128,10 +1303,10 @@ async def manage_initiate_handoff(
 
     handoff_result = await _handoff_protocol.initiate_handoff(
         target_instance_id=target_id,
-        task_context=body.get("task_context", {}),
-        soul_context=body.get("soul_context", {}),
-        contract=body.get("contract", {}),
-        federation_quest_id=body.get("federation_quest_id", ""),
+        task_context=body.task_context,
+        soul_context=body.soul_context,
+        contract=body.contract,
+        federation_quest_id=body.federation_quest_id,
     )
 
     status = 200 if handoff_result.success else 400
@@ -1164,8 +1339,8 @@ async def manage_complete_handoff(
     if not _handoff_protocol:
         return _no_transport("manage/complete-handoff")
 
-    body = await request.json()
-    handoff_id = body.get("handoff_id", "")
+    body = await _parse_request_model(request, ManageCompleteHandoffRequest)
+    handoff_id = body.handoff_id
 
     if not handoff_id:
         return JSONResponse(status_code=400, content={
@@ -1174,8 +1349,8 @@ async def manage_complete_handoff(
 
     success = await _handoff_protocol.report_completion(
         handoff_id=handoff_id,
-        result=body.get("result", {}),
-        receipts=body.get("receipts", []),
+        result=body.result,
+        receipts=body.receipts,
     )
 
     return JSONResponse(
@@ -1202,9 +1377,9 @@ async def manage_propagate_kill(
     if not _command_relay:
         return _no_transport("manage/kill")
 
-    body = await request.json()
-    command = body.get("command", {})
-    target_ids = body.get("target_ids")
+    body = await _parse_request_model(request, ManageKillRequest)
+    command = body.command.model_dump(exclude_none=True)
+    target_ids = body.target_ids
 
     # Build command_data in the format the relay expects
     command_data = {**command}

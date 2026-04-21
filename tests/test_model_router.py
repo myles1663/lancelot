@@ -9,6 +9,13 @@ import yaml
 from unittest.mock import MagicMock, patch
 
 from src.core.model_router import ModelRouter, RouterDecision, RouterResult
+from src.core.model_usage_policy import (
+    FRONTIER_SCRUB_REQUIRED,
+    LOCAL_EXECUTION_DISABLED,
+    LOCAL_EXECUTION_LOW_RISK_ONLY,
+    init_model_usage_policy,
+    update_model_usage_policy,
+)
 from src.core.provider_profile import ProfileRegistry
 from src.core.local_model_client import LocalModelClient, LocalModelError
 
@@ -83,6 +90,16 @@ def router(registry, mock_local):
     return ModelRouter(registry=registry, local_client=mock_local)
 
 
+@pytest.fixture(autouse=True)
+def _init_model_policy(tmp_data_dir):
+    init_model_usage_policy(str(tmp_data_dir))
+    update_model_usage_policy(
+        local_execution_mode=LOCAL_EXECUTION_LOW_RISK_ONLY,
+        frontier_scrub_mode=FRONTIER_SCRUB_REQUIRED,
+    )
+    yield
+
+
 # ===================================================================
 # Lane determination
 # ===================================================================
@@ -116,6 +133,16 @@ class TestLaneDetermination:
     def test_planning_routes_to_deep(self, router):
         result = router.route("plan", "Design a system")
         assert result.decision.lane == "flagship_deep"
+
+    def test_local_execution_disabled_routes_utility_to_flagship(self, router):
+        update_model_usage_policy(local_execution_mode=LOCAL_EXECUTION_DISABLED)
+        result = router.route("summarize", "Long text here")
+        assert result.decision.lane == "flagship_fast"
+
+    def test_redaction_stays_local_when_local_execution_disabled(self, router):
+        update_model_usage_policy(local_execution_mode=LOCAL_EXECUTION_DISABLED)
+        result = router.route("redact", "John Smith at 123 Main St")
+        assert result.decision.lane == "local_redaction"
 
 
 # ===================================================================
@@ -252,6 +279,41 @@ class TestErrorHandling:
         assert result.decision.timestamp is not None
         assert len(router.recent_decisions) == 1
 
+    def test_model_name_fallback_logs_warning(self, registry, mock_local, caplog):
+        flagship = MagicMock()
+        flagship._profile = object()
+        flagship._get_lane_config.side_effect = RuntimeError("profile unavailable")
+        flagship.complete.return_value = "ok"
+        router = ModelRouter(
+            registry=registry,
+            local_client=mock_local,
+            flagship_client=flagship,
+        )
+        with caplog.at_level("WARNING"):
+            result = router.route("conversation", "hello")
+        assert result.decision.model == "flagship-fast"
+        assert "Falling back to synthetic flagship model name" in caplog.text
+
+    def test_sdk_model_name_fallback_logs_warning(self, registry, mock_local, caplog):
+        provider_client = MagicMock()
+        provider_client.build_user_message.return_value = {"role": "user", "content": "hello"}
+        provider_client.generate.return_value = MagicMock(text="ok")
+        sdk_registry = MagicMock()
+        sdk_registry.is_local_task.return_value = False
+        sdk_registry.provider_names = ["gemini"]
+        sdk_registry.get_profile.side_effect = RuntimeError("registry unavailable")
+
+        router = ModelRouter(
+            registry=sdk_registry,
+            local_client=mock_local,
+            provider_client=provider_client,
+        )
+        with caplog.at_level("WARNING"):
+            result = router.route("conversation", "hello")
+
+        assert result.decision.model == "sdk-fast"
+        assert "Falling back to synthetic SDK model name" in caplog.text
+
 
 # ===================================================================
 # RouterDecision data
@@ -386,12 +448,14 @@ class TestControlPlaneEndpoints:
     def _setup_app(self, router, tmp_data_dir):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
+        from src.core import api_auth
         from src.core.control_plane import (
             router as cp_router,
             init_control_plane,
             set_model_router,
         )
 
+        api_auth.init_api_auth(lambda request: True)
         init_control_plane(str(tmp_data_dir))
         set_model_router(router)
 
@@ -407,6 +471,7 @@ class TestControlPlaneEndpoints:
         yield
 
         set_model_router(None)
+        api_auth.init_api_auth(None)
 
     def test_decisions_endpoint_returns_200(self):
         resp = self.client.get("/router/decisions")

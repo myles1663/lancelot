@@ -1,10 +1,13 @@
 
 import os
 import json
+import logging
 from typing import List, Optional
 from pydantic import BaseModel, Field, ConfigDict
 from google import genai
 from google.genai import types
+
+logger = logging.getLogger(__name__)
 
 class ParamItem(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -35,7 +38,7 @@ class Planner:
     def create_plan(self, goal: str, context: str) -> Optional[Plan]:
         """Generates a structured plan using Gemini."""
         if not self.client:
-            print("Planner Error: Gemini Client not initialized.")
+            logger.warning("Planner Error: Gemini Client not initialized.")
             return None
 
         prompt = f"""
@@ -106,5 +109,5 @@ class Planner:
             return Plan(**plan_data)
             
         except Exception as e:
-            print(f"Planner Error: {e}")
+            logger.warning("Planner Error: %s", e)
             return None

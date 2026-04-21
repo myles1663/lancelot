@@ -20,6 +20,7 @@ import {
   type FederationSettings,
 } from '@/api/federation'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { getErrorMessage } from '@/utils/errors'
 
 // ── Sub-components ───────────────────────────────────────────
 
@@ -86,8 +87,8 @@ function AddNodeForm({
       setNodeId(''); setName(''); setEndpoint(''); setPubKey(''); setFingerprint('')
       setSoulVersion(''); setSoulHash(''); setError('')
       onAdd()
-    } catch (e: any) {
-      setError(e.message || 'Failed to add node')
+    } catch (error) {
+      setError(getErrorMessage(error, 'Failed to add node'))
     }
   }
 
@@ -231,8 +232,8 @@ function AddEdgeForm({ nodes, onAdd }: { nodes: TopologyDocument['nodes']; onAdd
       await addEdge({ source_node_id: source, target_node_id: target, relationship_type: relType })
       setSource(''); setTarget(''); setError('')
       onAdd()
-    } catch (e: any) {
-      setError(e.message || 'Failed to add edge')
+    } catch (error) {
+      setError(getErrorMessage(error, 'Failed to add edge'))
     }
   }
 
@@ -330,8 +331,8 @@ export function GraphBuilder() {
       setGateResult(null)
       refetch()
       showMsg(`Deployed v${result.version}`)
-    } catch (e: any) {
-      showMsg(e.body?.detail || 'Deploy failed')
+    } catch (error) {
+      showMsg(getErrorMessage(error, 'Deploy failed'))
     }
   }
 

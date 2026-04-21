@@ -6,6 +6,8 @@
 
 APL learns from owner approval/denial decisions, detects repeating patterns, and auto-approves actions matching high-confidence rules. It reduces approval fatigue while maintaining safety guardrails.
 
+APL is a deterministic pattern and rule engine, not a statistical ML subsystem. It mines owner decision history for repeatable approval or denial patterns, scores them, and proposes explicit automation rules for operator review.
+
 ---
 
 ## How It Works

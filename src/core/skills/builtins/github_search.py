@@ -91,8 +91,8 @@ def _github_request(endpoint: str, params: Optional[Dict[str, str]] = None) -> D
         body = ""
         try:
             body = e.read().decode("utf-8", errors="replace")[:500]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("github_search: failed to read HTTP error body for %s: %s", endpoint, exc)
         if e.code == 403 and "rate limit" in body.lower():
             reset = e.headers.get("X-RateLimit-Reset", "unknown")
             raise RuntimeError(

@@ -18,6 +18,7 @@ import urllib.error
 from dataclasses import dataclass
 from unittest.mock import MagicMock, patch, PropertyMock
 
+from src.core import api_auth
 from src.core.model_router import ModelRouter, RouterDecision, RouterResult
 from src.core.provider_profile import ProfileRegistry
 from src.core.local_model_client import LocalModelClient, LocalModelError
@@ -231,6 +232,7 @@ class TestControlPlaneErrors:
             set_model_router,
         )
 
+        api_auth.init_api_auth(lambda request: True)
         init_control_plane(str(tmp_data_dir))
         set_model_router(router)
 
@@ -241,6 +243,7 @@ class TestControlPlaneErrors:
         yield
 
         set_model_router(None)
+        api_auth.init_api_auth(None)
 
     def test_all_endpoints_return_json(self):
         """All control-plane endpoints should return valid JSON."""
