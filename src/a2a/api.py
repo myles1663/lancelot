@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import get_api_key_identity, require_operator_capability, resolve_operator_identity
 
@@ -367,7 +368,8 @@ async def delegate_task(body: DelegateRequest, request: Request):
         raise HTTPException(status_code=503, detail="Outbound A2A pipeline not initialized")
 
     identity = _resolve_request_identity(request)
-    result = _outbound_pipeline.delegate(
+    result = await run_in_threadpool(
+        _outbound_pipeline.delegate,
         target_agent_id=body.target_agent_id,
         task_content=body.content,
         task_type=body.task_type,

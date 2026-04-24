@@ -11,8 +11,8 @@ HTTP-only transport (no stdio process spawning). Implements:
     - Status polling via GET /a2a/tasks/{task_id}
     - Credential injection from Vault references
 
-Streaming from remote agents uses polling in Phase 2.
-SSE streaming planned for Phase 3 if requested.
+Remote tasks that remain non-terminal are monitored through the bounded
+status-poll loop in the outbound governance pipeline.
 """
 
 from __future__ import annotations
@@ -256,7 +256,9 @@ class A2AClient:
     ) -> Dict[str, Any]:
         """Poll a remote agent for task status.
 
-        Used for outbound delegation monitoring (Phase 2 polling approach).
+        Used by the outbound governance pipeline for bounded delegation
+        monitoring after the initial task submission returns a non-terminal
+        status.
         """
         try:
             import httpx

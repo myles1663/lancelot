@@ -62,6 +62,14 @@ class DelegationResult:
 class OutboundPipeline:
     """10-stage outbound A2A governance pipeline."""
 
+    PENDING_TASK_STATUSES = {
+        A2ATaskStatus.SUBMITTED.value,
+        A2ATaskStatus.WORKING.value,
+        A2ATaskStatus.INPUT_REQUIRED.value,
+    }
+    STATUS_POLL_ATTEMPTS = 5
+    STATUS_POLL_INTERVAL_S = 0.2
+
     PII_PATTERNS = [
         r"\b\d{3}-\d{2}-\d{4}\b",
         r"\b\d{16}\b",
@@ -431,24 +439,16 @@ class OutboundPipeline:
         remote_task_id = response.get("id", task_id)
         status = response.get("status", A2ATaskStatus.FAILED.value)
 
-        if status in {
-            A2ATaskStatus.SUBMITTED.value,
-            A2ATaskStatus.WORKING.value,
-            A2ATaskStatus.INPUT_REQUIRED.value,
-        }:
-            for _ in range(5):
-                time.sleep(0.2)
+        if status in self.PENDING_TASK_STATUSES:
+            for _ in range(self.STATUS_POLL_ATTEMPTS):
+                time.sleep(self.STATUS_POLL_INTERVAL_S)
                 response = self._a2a_client.poll_task_status(
                     agent,
                     remote_task_id,
                     credentials=credentials,
                 )
                 status = response.get("status", A2ATaskStatus.FAILED.value)
-                if status not in {
-                    A2ATaskStatus.SUBMITTED.value,
-                    A2ATaskStatus.WORKING.value,
-                    A2ATaskStatus.INPUT_REQUIRED.value,
-                }:
+                if status not in self.PENDING_TASK_STATUSES:
                     break
 
         return response
