@@ -6,10 +6,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from src.a2a.inbound_pipeline import InboundPipeline
 from src.a2a.registry import A2ARegistry
@@ -302,3 +304,47 @@ def test_task_status_survives_server_reinitialization(monkeypatch, tmp_path):
     owner = reloaded_client.get(f"/a2a/tasks/{task_id}", headers=_headers("peer-1", "secret123"))
     assert owner.status_code == 200
     assert owner.json()["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_task_update_notification_wakes_subscribers(monkeypatch, tmp_path):
+    _active_tasks.clear()
+    a2a_server._task_update_subscribers.clear()
+    monkeypatch.setattr(a2a_server, "_task_store_file", tmp_path / "a2a_tasks.json")
+
+    updates = a2a_server._subscribe_to_task_updates("task-1")
+    try:
+        a2a_server._record_task_state("task-1", {"status": "working"})
+        await asyncio.wait_for(updates.get(), timeout=0.1)
+    finally:
+        a2a_server._unsubscribe_from_task_updates("task-1", updates)
+
+    assert "task-1" not in a2a_server._task_update_subscribers
+
+
+def test_subscribe_completed_task_returns_terminal_payload(monkeypatch, tmp_path):
+    _active_tasks.clear()
+    a2a_server._task_update_subscribers.clear()
+    monkeypatch.setattr(a2a_server, "_check_a2a_kill_switch", lambda: True)
+    app, _executor = _make_app(str(tmp_path))
+    client = TestClient(app)
+
+    submit = client.post(
+        "/a2a/tasks/send",
+        json={"message": {"role": "user", "parts": [{"type": "text", "text": "hello"}]}, "metadata": {}},
+        headers=_headers("peer-1", "secret123"),
+    )
+    assert submit.status_code == 200
+    task_id = submit.json()["id"]
+
+    with client.stream(
+        "GET",
+        f"/a2a/tasks/{task_id}/subscribe",
+        headers=_headers("peer-1", "secret123"),
+    ) as response:
+        body = response.read().decode("utf-8")
+
+    assert response.status_code == 200
+    assert '"status": "completed"' in body
+    assert '"artifacts"' in body
+    assert task_id not in a2a_server._task_update_subscribers

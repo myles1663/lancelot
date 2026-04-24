@@ -23,7 +23,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -50,8 +50,16 @@ _agent_card_generator: Any = None
 _task_executor: Any = None
 _task_store_file: Optional[Path] = None
 
-# In-memory task store (production: use receipt service for persistence)
+# Protocol task status is persisted locally for status/SSE reads. Receipts remain
+# the audit trail for governed execution.
 _active_tasks: Dict[str, Dict[str, Any]] = {}
+_task_update_subscribers: Dict[str, Set[asyncio.Queue]] = {}
+TASK_STREAM_IDLE_TIMEOUT_S = 60.0
+_TERMINAL_TASK_STATUSES = {
+    A2ATaskStatus.COMPLETED.value,
+    A2ATaskStatus.FAILED.value,
+    A2ATaskStatus.CANCELED.value,
+}
 
 
 def _get_soul():
@@ -90,6 +98,56 @@ def _save_task_state() -> None:
         )
     except Exception as exc:
         logger.warning("Failed to persist A2A task state: %s", exc)
+
+
+def _subscribe_to_task_updates(task_id: str) -> asyncio.Queue:
+    """Register one SSE subscriber for task updates."""
+    queue = asyncio.Queue(maxsize=1)
+    _task_update_subscribers.setdefault(task_id, set()).add(queue)
+    return queue
+
+
+def _unsubscribe_from_task_updates(task_id: str, queue: asyncio.Queue) -> None:
+    subscribers = _task_update_subscribers.get(task_id)
+    if not subscribers:
+        return
+    subscribers.discard(queue)
+    if not subscribers:
+        _task_update_subscribers.pop(task_id, None)
+
+
+def _notify_task_update(task_id: str) -> None:
+    """Wake SSE subscribers without polling the task store."""
+    for queue in tuple(_task_update_subscribers.get(task_id, set())):
+        if queue.full():
+            continue
+        queue.put_nowait(None)
+
+
+def _record_task_state(task_id: str, task_data: Dict[str, Any]) -> None:
+    _active_tasks[task_id] = task_data
+    _notify_task_update(task_id)
+    _save_task_state()
+
+
+def _update_task_state(task_id: str, **updates: Any) -> None:
+    _active_tasks.setdefault(task_id, {}).update(updates)
+    _notify_task_update(task_id)
+    _save_task_state()
+
+
+def _task_stream_payload(task_id: str, task_data: Dict[str, Any]) -> Dict[str, Any]:
+    payload = {
+        "id": task_id,
+        "status": task_data.get("status", A2ATaskStatus.WORKING.value),
+    }
+    if "artifacts" in task_data:
+        payload["artifacts"] = task_data.get("artifacts", [])
+    if task_data.get("message"):
+        payload["message"] = task_data["message"]
+    if task_data.get("error"):
+        payload["error"] = task_data["error"]
+    return payload
 
 
 def init_a2a_server(
@@ -208,15 +266,14 @@ async def send_task(body: TaskSendRequest, request: Request):
 
     if result.requires_approval:
         # T3 gate — task is held for approval
-        _active_tasks[task.id] = {
+        _record_task_state(task.id, {
             "task": task.to_dict(),
             "status": A2ATaskStatus.WORKING.value,
             "quest_id": result.quest_id,
             "message": "Task is under human review",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "caller_agent_id": resolved_caller.agent_id,
-        }
-        _save_task_state()
+        })
         return JSONResponse(
             status_code=202,
             content={
@@ -227,14 +284,13 @@ async def send_task(body: TaskSendRequest, request: Request):
         )
 
     # Task cleared all gates — execute as quest
-    _active_tasks[task.id] = {
+    _record_task_state(task.id, {
         "task": task.to_dict(),
         "status": A2ATaskStatus.WORKING.value,
         "quest_id": result.quest_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "caller_agent_id": resolved_caller.agent_id,
-    }
-    _save_task_state()
+    })
 
     if _task_executor is None:
         raise HTTPException(status_code=503, detail="A2A task executor not initialized")
@@ -243,9 +299,11 @@ async def send_task(body: TaskSendRequest, request: Request):
         execution = _task_executor(task=task, caller=resolved_caller, quest_id=result.quest_id)
     except Exception as exc:
         logger.error("A2A inbound execution failed for task %s: %s", task.id, exc)
-        _active_tasks[task.id]["status"] = A2ATaskStatus.FAILED.value
-        _active_tasks[task.id]["error"] = str(exc)
-        _save_task_state()
+        _update_task_state(
+            task.id,
+            status=A2ATaskStatus.FAILED.value,
+            error=str(exc),
+        )
         return JSONResponse(
             status_code=500,
             content={
@@ -257,11 +315,13 @@ async def send_task(body: TaskSendRequest, request: Request):
 
     task_status = execution.get("status", A2ATaskStatus.COMPLETED.value)
     artifacts = execution.get("artifacts", [])
-    _active_tasks[task.id]["status"] = task_status
-    _active_tasks[task.id]["artifacts"] = artifacts
+    updates = {
+        "status": task_status,
+        "artifacts": artifacts,
+    }
     if execution.get("message"):
-        _active_tasks[task.id]["message"] = execution["message"]
-    _save_task_state()
+        updates["message"] = execution["message"]
+    _update_task_state(task.id, **updates)
 
     if task_status == A2ATaskStatus.COMPLETED.value:
         _inbound_pipeline.complete_task(task, resolved_caller, result.quest_id)
@@ -302,19 +362,27 @@ async def subscribe_task(task_id: str, request: Request):
 
     async def event_stream():
         """Generate SSE events for task progress."""
-        # Send current status
-        yield f"data: {json.dumps({'id': task_id, 'status': task_data.get('status', 'working')})}\n\n"
+        updates = _subscribe_to_task_updates(task_id)
+        try:
+            while True:
+                current = _active_tasks.get(task_id, task_data)
+                payload = _task_stream_payload(task_id, current)
+                yield f"data: {json.dumps(payload)}\n\n"
 
-        # Poll for updates (simplified — production would use event bus)
-        for _ in range(60):  # 60 second max stream
-            await asyncio.sleep(1)
-            current = _active_tasks.get(task_id, {})
-            status = current.get("status", A2ATaskStatus.WORKING.value)
+                if payload["status"] in _TERMINAL_TASK_STATUSES:
+                    break
+                if await request.is_disconnected():
+                    break
 
-            if status in (A2ATaskStatus.COMPLETED.value, A2ATaskStatus.FAILED.value,
-                          A2ATaskStatus.CANCELED.value):
-                yield f"data: {json.dumps({'id': task_id, 'status': status, 'artifacts': current.get('artifacts', [])})}\n\n"
-                break
+                try:
+                    await asyncio.wait_for(updates.get(), timeout=TASK_STREAM_IDLE_TIMEOUT_S)
+                except asyncio.TimeoutError:
+                    break
+        except asyncio.CancelledError:
+            logger.debug("A2A task stream cancelled for task %s", task_id)
+            raise
+        finally:
+            _unsubscribe_from_task_updates(task_id, updates)
 
     return StreamingResponse(
         event_stream(),
