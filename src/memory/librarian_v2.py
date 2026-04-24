@@ -96,6 +96,10 @@ class LibrarianV2:
         self.observer = Observer()
         self.client = None
         self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        self._running = False
+        self._loop = None
+        self._tasks = set()
+        self._observer_started = False
         
         # Classification Categories
         self.categories = {
@@ -117,36 +121,62 @@ class LibrarianV2:
 
     def start(self):
         """Starts the filesystem watcher."""
+        if self._running:
+            logger.debug("Librarian V2 start skipped; already running.")
+            return
+
         loop = asyncio.get_running_loop()
+        self._loop = loop
+        self._running = True
         handler = LibrarianHandler(self.queue, loop)
         self.observer.schedule(handler, self.data_dir, recursive=False)
-        self.observer.start()
+        try:
+            self.observer.start()
+            self._observer_started = True
+        except Exception:
+            self._running = False
+            raise
         logger.info(f"Librarian V2 watching: {self.data_dir}")
         
         # Start background worker
-        asyncio.create_task(self._process_queue())
-        asyncio.create_task(self._periodic_cleanup())
+        self._track_task(loop.create_task(self._process_queue(), name="librarian-process-queue"))
+        self._track_task(loop.create_task(self._periodic_cleanup(), name="librarian-trash-cleanup"))
+
+    def _track_task(self, task):
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def _periodic_cleanup(self):
         """Runs trash cleanup every hour."""
-        while True:
-            await asyncio.sleep(3600)
-            self.trash_svc.cleanup()
+        try:
+            while self._running:
+                await asyncio.sleep(3600)
+                if self._running:
+                    self.trash_svc.cleanup()
+        except asyncio.CancelledError:
+            logger.debug("Librarian V2 cleanup task cancelled.")
+            raise
 
     async def _process_queue(self):
         """Consumes files from the queue."""
-        while True:
-            file_path = await self.queue.get()
-            try:
-                # Debounce fast writes
-                await asyncio.sleep(1)
-                
-                if os.path.exists(file_path):
-                    await self._organize_file(file_path)
-            except Exception as e:
-                logger.error(f"Processing error: {e}")
-            finally:
-                self.queue.task_done()
+        try:
+            while self._running:
+                file_path = await self.queue.get()
+                try:
+                    # Debounce fast writes
+                    await asyncio.sleep(1)
+
+                    if self._running and os.path.exists(file_path):
+                        await self._organize_file(file_path)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.error(f"Processing error: {e}")
+                finally:
+                    self.queue.task_done()
+        except asyncio.CancelledError:
+            logger.debug("Librarian V2 queue processor cancelled.")
+            raise
 
     # System files that the Librarian must never move
     PROTECTED_FILES = {
@@ -244,5 +274,24 @@ class LibrarianV2:
             f.write(entry)
 
     def stop(self):
-        self.observer.stop()
+        self._running = False
+        if self._tasks:
+            tasks = tuple(self._tasks)
+
+            def _cancel_tasks():
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+
+            if self._loop and not self._loop.is_closed():
+                self._loop.call_soon_threadsafe(_cancel_tasks)
+        if self._observer_started:
+            self.observer.stop()
+            try:
+                self.observer.join(timeout=5)
+            except TypeError:
+                self.observer.join()
+            self._observer_started = False
+        else:
+            logger.debug("Librarian V2 observer stop skipped; observer was not running.")
         logger.info("Librarian V2 stopped.")
