@@ -62,8 +62,13 @@ function sha256Buffer(buffer) {
 }
 
 async function sha256File(filePath) {
-  const buffer = await fsp.readFile(filePath);
-  return sha256Buffer(buffer);
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(filePath);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('error', reject);
+  });
 }
 
 function classifySecretKey(key) {

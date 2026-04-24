@@ -134,7 +134,7 @@ The system operates across four trust zones, each with distinct security control
 | Base image | `python:3.11-slim` |
 | Application user | `lancelot` (non-root, UID auto-assigned) |
 | Privilege model | Root entrypoint with `gosu` drop to `lancelot` |
-| Data volumes | `lancelot_data` (named), `lancelot_workspace` (named) |
+| Data volumes | Installer binds `./lancelot_data` and `./lancelot_workspace`; bare Compose defaults to named `lancelot_data` and `lancelot_workspace` volumes |
 | Network | `lancelot_net` bridge (inter-service only) |
 | Docker API access | Via TCP socket proxy (restricted to container lifecycle operations) |
 | Exposed ports | 8000 (gateway) |

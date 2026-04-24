@@ -677,8 +677,13 @@ The `docker-compose.yml` maps two key volumes:
 
 | Host Path | Container Path | Purpose |
 |-----------|---------------|---------|
-| `./lancelot_data` | `/home/lancelot/data` | Runtime data (receipts, databases, registries) |
-| `.` (project root) | `/home/lancelot/app` | Application code |
+| `${LANCELOT_DATA_MOUNT:-lancelot_data}` | `/home/lancelot/data` | Runtime data (receipts, databases, registries) |
+| `${LANCELOT_WORKSPACE_MOUNT:-lancelot_workspace}` | `/home/lancelot/workspace` | Shared workspace for governed file outputs |
+
+The installer sets `LANCELOT_DATA_MOUNT=./lancelot_data` and
+`LANCELOT_WORKSPACE_MOUNT=./lancelot_workspace` so bootstrap files written on
+the host are visible inside the container. If those variables are unset, Compose
+uses the named-volume defaults.
 
 ### Data directories
 

@@ -491,7 +491,12 @@ test('CLI filesystem smoke writes real config, compose, and onboarding artifacts
   assert.match(envContent, /^LOCAL_LLM_IMAGE=ghcr\.io\/myles1663\/lancelot-local-llm:llama-cpp-0\.3\.19-cpu$/m);
   assert.match(envContent, /^LOCAL_LLM_PULL_POLICY=missing$/m);
   assert.match(envContent, /^LOCAL_LLM_WHEEL_VARIANT=cpu$/m);
-  assert.match(composeContent, /lancelot_workspace:\/home\/lancelot\/workspace/);
+  assert.match(envContent, /^LANCELOT_COMMS_TYPE=none$/m);
+  assert.match(envContent, /^LANCELOT_DATA_MOUNT=\.\/lancelot_data$/m);
+  assert.match(envContent, /^LANCELOT_WORKSPACE_MOUNT=\.\/lancelot_workspace$/m);
+  assert.match(envContent, /^LOCAL_LLM_HEALTH_START_PERIOD=900s$/m);
+  assert.match(composeContent, /\$\{LANCELOT_DATA_MOUNT:-lancelot_data\}:\/home\/lancelot\/data/);
+  assert.match(composeContent, /\$\{LANCELOT_WORKSPACE_MOUNT:-lancelot_workspace\}:\/home\/lancelot\/workspace/);
   assert.doesNotMatch(composeContent, /deploy:\s*\n\s*resources:\s*\n\s*reservations:/m);
   assert.match(composeContent, /LOCAL_MODEL_GPU_LAYERS=0/);
   assert.equal(onboardingSnapshot.state, 'READY');

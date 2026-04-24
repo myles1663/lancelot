@@ -4,9 +4,10 @@ services:
     build: .
     container_name: lancelot_core
     volumes:
-      # Named volumes — managed by Docker, writable on all platforms
-      - lancelot_data:/home/lancelot/data
-      - lancelot_workspace:/home/lancelot/workspace
+      # Persistent runtime storage. Installer env uses host bind mounts;
+      # bare compose falls back to Docker-managed named volumes.
+      - ${LANCELOT_DATA_MOUNT:-lancelot_data}:/home/lancelot/data
+      - ${LANCELOT_WORKSPACE_MOUNT:-lancelot_workspace}:/home/lancelot/workspace
       - ${USERPROFILE}/.codex:/home/lancelot/.codex
       # Mount Google OAuth credentials (ADC) from host (uncomment if using Google OAuth)
       # - ${APPDATA}/gcloud/application_default_credentials.json:/home/lancelot/.config/gcloud/application_default_credentials.json:ro
@@ -125,7 +126,7 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
-      start_period: 120s
+      start_period: ${LOCAL_LLM_HEALTH_START_PERIOD:-900s}
       retries: 3
     restart: unless-stopped
     networks:

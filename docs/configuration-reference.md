@@ -92,6 +92,7 @@ At least one API key is required. You can configure one or more providers. Keys 
 | `LOCAL_MODEL_CTX` | No | `4096` | Context window size (tokens) |
 | `LOCAL_MODEL_THREADS` | No | `4` | CPU threads for inference |
 | `LOCAL_MODEL_GPU_LAYERS` | No | `0` | Number of model layers offloaded to GPU |
+| `LOCAL_LLM_HEALTH_START_PERIOD` | No | `900s` | Docker healthcheck grace period for first local-model load. Keep long enough for CPU-only Qwen startup. |
 | `LANCELOT_LOCAL_EXECUTION_MODE` | No | `low_risk_only` | Runtime usage policy for local execution: `low_risk_only` or `disabled` |
 | `LANCELOT_FRONTIER_SCRUB_MODE` | No | `required` | Runtime frontier scrub policy: `required`, `preferred`, or `disabled` |
 

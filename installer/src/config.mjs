@@ -92,6 +92,8 @@ export function generateEnvContent(config) {
     '',
     '# Deployment',
     `LANCELOT_CORE_IMAGE=${CORE_IMAGE}`,
+    'LANCELOT_DATA_MOUNT=./lancelot_data',
+    'LANCELOT_WORKSPACE_MOUNT=./lancelot_workspace',
     '',
     '# Logging',
     'LANCELOT_LOG_LEVEL=INFO',
@@ -102,6 +104,7 @@ export function generateEnvContent(config) {
     'LOCAL_LLM_DOCKERFILE=Dockerfile',
     `LOCAL_LLM_WHEEL_VARIANT=${localLlmWheelVariant}`,
     'LOCAL_LLM_WHEEL_VERSION=0.3.19',
+    'LOCAL_LLM_HEALTH_START_PERIOD=900s',
     `LOCAL_MODEL_GPU_LAYERS=${config.gpuLayers || 0}`,
     '',
     '# Feature Flags — Core',
@@ -134,7 +137,11 @@ export function generateEnvContent(config) {
     '',
   );
 
-  if (config.commsType && config.commsType !== 'skip') {
+  if (config.commsType === 'skip') {
+    lines.push('# Communications');
+    lines.push('LANCELOT_COMMS_TYPE=none');
+    lines.push('');
+  } else if (config.commsType) {
     lines.push('# Communications');
     lines.push(`LANCELOT_COMMS_TYPE=${config.commsType}`);
 
@@ -168,10 +175,18 @@ export async function patchDockerCompose(installDir, config) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Ensure workspace uses named volume (not bind mount)
+    // Keep installer-created host bootstrap/workspace paths wired into the
+    // running container while preserving named-volume defaults for bare compose.
+    if (line.includes('lancelot_data:/home/lancelot/data') ||
+        line.includes('./lancelot_data:/home/lancelot/data')) {
+      result.push('      - ${LANCELOT_DATA_MOUNT:-lancelot_data}:/home/lancelot/data');
+      continue;
+    }
+
     if (line.includes('Lancelot Workspace:/home/lancelot/workspace') ||
+        line.includes('lancelot_workspace:/home/lancelot/workspace') ||
         line.includes('./lancelot_workspace:/home/lancelot/workspace')) {
-      result.push('      - lancelot_workspace:/home/lancelot/workspace');
+      result.push('      - ${LANCELOT_WORKSPACE_MOUNT:-lancelot_workspace}:/home/lancelot/workspace');
       continue;
     }
 
