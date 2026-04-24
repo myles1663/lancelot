@@ -142,37 +142,37 @@ uab profiles
 
 ### As an HTTP Server (for remote / server-side agents)
 
-Run UAB as a REST API so agents on other machines, in containers, or in cloud environments can control desktop apps remotely:
+Run UAB as a REST API so local agents, VM-hosted agents, or containerized agents can control desktop apps through an explicit network boundary. The server binds to `127.0.0.1` by default. Any non-loopback bind, such as `0.0.0.0`, requires an API key and fails closed without one.
 
 ```bash
 # Start the server (localhost only)
 uab serve --port 3100
 
-# Listen on all interfaces (for VM or remote access)
-uab serve --port 3100 --host 0.0.0.0
+# Localhost only, with API key enforcement
+uab serve --port 3100 --api-key my-secret-key
 
-# With authentication (recommended for non-localhost)
+# Listen on all interfaces for VM or remote access
 uab serve --port 3100 --host 0.0.0.0 --api-key my-secret-key
 ```
 
 ```bash
-# From any HTTP client or remote agent:
-curl -X POST http://localhost:3100/scan
-curl -X POST http://localhost:3100/find -d '{"query":"notepad"}'
-curl -X POST http://localhost:3100/connect -d '{"target":"notepad"}'
-curl -X POST http://localhost:3100/query -d '{"pid":1234,"selector":{"type":"button"}}'
-curl -X POST http://localhost:3100/act -d '{"pid":1234,"elementId":"btn_1","action":"click"}'
-curl -X POST http://localhost:3100/plan -d '{"pid":1234,"action":"hotkey"}'
-curl -X POST http://localhost:3100/plan -d '{"pid":1234,"action":"describe","context":{"preferredRole":"connection","preferredControl":"precise","weights":{"cost":4,"control":4,"affinity":0},"note":"Prefer structured low-cost inspection over API-backed vision"}}'
-curl -X POST http://localhost:3100/excel/probe -d '{}'
-curl -X POST http://localhost:3100/excel/benchmark -d '{"rowCount":2000,"outputPath":"data/uab-benchmarks/demo.xlsx","manifestPath":"data/uab-benchmarks/demo.benchmark.json"}'
-curl -X POST http://localhost:3100/open -d '{"target":"notepad"}'
-curl -X POST http://localhost:3100/focus -d '{"pid":1234}'
-curl -X POST http://localhost:3100/describe -d '{"pid":1234}'
+# From any HTTP client or remote agent when --api-key is configured:
+curl -X POST http://localhost:3100/scan -H "X-API-Key: my-secret-key"
+curl -X POST http://localhost:3100/find -H "X-API-Key: my-secret-key" -d '{"query":"notepad"}'
+curl -X POST http://localhost:3100/connect -H "X-API-Key: my-secret-key" -d '{"target":"notepad"}'
+curl -X POST http://localhost:3100/query -H "X-API-Key: my-secret-key" -d '{"pid":1234,"selector":{"type":"button"}}'
+curl -X POST http://localhost:3100/act -H "X-API-Key: my-secret-key" -d '{"pid":1234,"elementId":"btn_1","action":"click"}'
+curl -X POST http://localhost:3100/plan -H "X-API-Key: my-secret-key" -d '{"pid":1234,"action":"hotkey"}'
+curl -X POST http://localhost:3100/plan -H "X-API-Key: my-secret-key" -d '{"pid":1234,"action":"describe","context":{"preferredRole":"connection","preferredControl":"precise","weights":{"cost":4,"control":4,"affinity":0},"note":"Prefer structured low-cost inspection over API-backed vision"}}'
+curl -X POST http://localhost:3100/excel/probe -H "X-API-Key: my-secret-key" -d '{}'
+curl -X POST http://localhost:3100/excel/benchmark -H "X-API-Key: my-secret-key" -d '{"rowCount":2000,"outputPath":"data/uab-benchmarks/demo.xlsx","manifestPath":"data/uab-benchmarks/demo.benchmark.json"}'
+curl -X POST http://localhost:3100/open -H "X-API-Key: my-secret-key" -d '{"target":"notepad"}'
+curl -X POST http://localhost:3100/focus -H "X-API-Key: my-secret-key" -d '{"pid":1234}'
+curl -X POST http://localhost:3100/describe -H "X-API-Key: my-secret-key" -d '{"pid":1234}'
 
 # P6 — OS raw input injection for spatial gestures
-curl -X POST http://localhost:3100/drag -d '{"pid":1234,"path":[{"x":100,"y":200},{"x":300,"y":200}],"button":"left"}'
-curl -X POST http://localhost:3100/scroll -d '{"pid":1234,"x":500,"y":400,"amount":3}'
+curl -X POST http://localhost:3100/drag -H "X-API-Key: my-secret-key" -d '{"pid":1234,"path":[{"x":100,"y":200},{"x":300,"y":200}],"button":"left"}'
+curl -X POST http://localhost:3100/scroll -H "X-API-Key: my-secret-key" -d '{"pid":1234,"x":500,"y":400,"amount":3}'
 
 # Health check
 curl http://localhost:3100/health
@@ -182,7 +182,7 @@ curl http://localhost:3100/health
 // Or programmatically:
 import { UABServer } from 'universal-app-bridge/server';
 
-const server = new UABServer({ port: 3100, host: '0.0.0.0', apiKey: 'secret' });
+const server = new UABServer({ port: 3100, apiKey: 'secret' });
 await server.start();
 // Clients POST JSON to /scan, /connect, /query, /act, /open, /focus, /describe, etc.
 ```

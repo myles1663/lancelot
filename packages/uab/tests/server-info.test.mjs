@@ -5,6 +5,50 @@ import { UABServer } from '../dist/server.js';
 import { PluginManager } from '../dist/plugins/base.js';
 import { ControlRouter } from '../dist/router.js';
 
+test('server refuses unauthenticated non-loopback binding', () => {
+  assert.throws(
+    () => new UABServer({
+      port: 0,
+      host: '0.0.0.0',
+      connector: {
+        persistent: false,
+        extensionBridge: false,
+        loadProfiles: false,
+      },
+    }),
+    /refuses unauthenticated non-loopback binding/,
+  );
+
+  assert.throws(
+    () => new UABServer({
+      port: 0,
+      host: '0.0.0.0',
+      apiKey: '   ',
+      connector: {
+        persistent: false,
+        extensionBridge: false,
+        loadProfiles: false,
+      },
+    }),
+    /refuses unauthenticated non-loopback binding/,
+  );
+});
+
+test('server permits non-loopback binding when api key is configured', () => {
+  const server = new UABServer({
+    port: 0,
+    host: '0.0.0.0',
+    apiKey: 'unit-test-key',
+    connector: {
+      persistent: false,
+      extensionBridge: false,
+      loadProfiles: false,
+    },
+  });
+
+  assert.equal(server.running, false);
+});
+
 test('server info publishes hook, framework signature, and concerto inventory', async () => {
   const server = new UABServer({
     port: 0,

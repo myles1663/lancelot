@@ -1075,7 +1075,7 @@ The same skill is also written to Claude Code CLI's plugin directory at `~/.clau
 The installer (GUI or CLI) performs these steps:
 1. Detects host gateway IP (WSL/Hyper-V/vmnet adapter)
 2. Generates a persistent API key
-3. Creates a system service (Task Scheduler on Windows, launchd on macOS) bound to 0.0.0.0:3100
+3. Creates a system service (Task Scheduler on Windows, launchd on macOS) bound to `127.0.0.1:3100` by default, with explicit API-key-protected non-loopback binding for VM access
 4. Packs and registers the Chrome extension (.crx + registry keys)
 5. Writes SKILL.md to ALL agent locations (CLI + Co-work)
 6. Sets ELECTRON_ENABLE_REMOTE_DEBUGGING=1 for CDP access to Electron apps

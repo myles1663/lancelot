@@ -19,6 +19,7 @@ All notable changes to Universal App Bridge will be documented in this file.
 - The Excel benchmark now saves a real workbook artifact and verifies the saved `.xlsx` package directly on disk, so success requires the persisted file itself to contain the expected pivot table, chart, and conditional-formatting structure instead of trusting only the live Excel session.
 - The Excel benchmark now also persists a JSON proof manifest with the local COM probe result, host metadata, workbook SHA-256, and artifact verification details so successful runs leave durable evidence instead of only console output.
 - Product docs now describe the exact runtime control methods and discovery surfaces exposed by the embedded engine.
+- UAB HTTP serving now keeps `127.0.0.1` as the default bind address and refuses unauthenticated non-loopback binds; use `--api-key` with `--host 0.0.0.0` for VM or remote-agent access.
 
 ## v1.3.0 — The Concerto (P6 Raw Input Injection)
 
