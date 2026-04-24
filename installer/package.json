@@ -4,7 +4,7 @@
   "description": "Install and configure Lancelot — your AI-powered autonomous agent",
   "type": "module",
   "bin": {
-    "create-lancelot": "./bin/create-lancelot.mjs"
+    "create-lancelot": "bin/create-lancelot.mjs"
   },
   "files": [
     "bin/",
@@ -28,7 +28,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/myles1663/lancelot.git",
+    "url": "git+https://github.com/myles1663/lancelot.git",
     "directory": "installer"
   },
   "author": "myles1663",
