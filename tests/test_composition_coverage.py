@@ -1507,12 +1507,13 @@ def test_gateway_boot_support_health_monitor_reports_local_model_states(monkeypa
 
     assert objects["monitor"].started is True
     assert [check.name for check in objects["monitor"].checks] == [
+        "startup_validation",
         "llm_provider",
         "onboarding_ready",
         "local_llm",
         "scheduler",
     ]
-    assert objects["monitor"].checks[2].snapshot_details_fn()["local_llm_status"] == "ok"
+    assert objects["monitor"].checks[3].snapshot_details_fn()["local_llm_status"] == "ok"
     gbs._shutdown_health_monitor(objects)
     assert objects["monitor"].stopped is True
 
