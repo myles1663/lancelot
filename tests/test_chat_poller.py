@@ -1,4 +1,5 @@
 import os
+import time
 
 from src.integrations.chat_poller import ChatPoller
 
@@ -100,3 +101,22 @@ def test_process_messages_sends_response_and_skips_self_sent(monkeypatch, tmp_pa
     assert orchestrator.calls == [("status", "google_chat")]
     assert messages_api.created == [("spaces/AAA123", {"text": "echo:status"})]
     assert poller.last_poll_time == "2026-01-01T00:00:02Z"
+
+
+def test_stop_polling_does_not_wait_for_full_poll_interval(monkeypatch, tmp_path):
+    monkeypatch.setenv("LANCELOT_CHAT_SPACE_NAME", "spaces/AAA123")
+    monkeypatch.setattr(ChatPoller, "_init_service", lambda self: None)
+    poller = ChatPoller(str(tmp_path))
+    poller.service = _Service(_MessagesAPI())
+
+    poller.start_polling()
+    assert poller._poll_thread is not None
+    assert poller._poll_thread.is_alive()
+
+    started_at = time.perf_counter()
+    poller.stop_polling()
+    elapsed_s = time.perf_counter() - started_at
+
+    assert elapsed_s < 0.5
+    assert poller.running is False
+    assert poller._poll_thread is None

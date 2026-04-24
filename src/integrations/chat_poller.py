@@ -22,6 +22,8 @@ class ChatPoller:
         self.service = None
         self.space_name = None
         self.running = False
+        self._stop_event = threading.Event()
+        self._poll_thread = None
         self.last_poll_time = datetime.now(timezone.utc).isoformat()
         self._sent_message_ids = deque(maxlen=100)
         self._sent_message_set = set()
@@ -133,22 +135,46 @@ class ChatPoller:
             return
             
         self.running = True
-        threading.Thread(target=self._poll_loop, daemon=True).start()
+        self._stop_event.clear()
+        self._poll_thread = threading.Thread(
+            target=self._poll_loop,
+            daemon=True,
+            name="google-chat-poller",
+        )
+        self._poll_thread.start()
         logger.info(f"ChatPoller: Started polling {self.space_name}")
 
     def stop_polling(self):
+        was_running = self.running or (
+            self._poll_thread is not None and self._poll_thread.is_alive()
+        )
         self.running = False
+        self._stop_event.set()
+        if self._poll_thread is not None:
+            self._poll_thread.join(timeout=5)
+            if self._poll_thread.is_alive():
+                logger.warning("ChatPoller: Polling thread did not stop within 5s")
+                return
+            self._poll_thread = None
+        if was_running:
+            logger.info("ChatPoller: Polling stopped")
+        else:
+            logger.debug("ChatPoller: Stop skipped; polling was not running")
 
     def _poll_loop(self):
         """Main polling loop."""
-        while self.running:
-            try:
-                resp = self.service.spaces().messages().list(
-                    parent=self.space_name,
-                    pageSize=10
-                ).execute()
-                self._process_messages(resp.get('messages', []))
-            except Exception as e:
-                logger.error(f"ChatPoller: Poll error: {e}")
-                
-            time.sleep(3) # Poll interval
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    resp = self.service.spaces().messages().list(
+                        parent=self.space_name,
+                        pageSize=10
+                    ).execute()
+                    self._process_messages(resp.get('messages', []))
+                except Exception as e:
+                    logger.error(f"ChatPoller: Poll error: {e}")
+
+                if self._stop_event.wait(timeout=3):
+                    return
+        finally:
+            self.running = False
