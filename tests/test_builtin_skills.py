@@ -39,6 +39,10 @@ class TestRepoWriter:
         })
         assert result["status"] == "created"
         assert (tmp_path / "test.txt").read_text() == "Hello World"
+        assert result["workspace"] == str(tmp_path.resolve())
+        assert result["target_path"] == str((tmp_path / "test.txt").resolve())
+        assert result["relative_path"] == "test.txt"
+        assert result["write_scope"] == "custom_workspace"
 
     def test_create_file_with_subdirs(self, tmp_path):
         result = repo_writer.execute(CTX, {
@@ -118,6 +122,29 @@ class TestRepoWriter:
                 "workspace": str(tmp_path),
             })
 
+    def test_workspace_prefix_collision_blocked(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        sibling = tmp_path / "workspace-other"
+        sibling.mkdir()
+
+        with pytest.raises(ValueError, match="traversal"):
+            repo_writer.execute(CTX, {
+                "action": "create",
+                "path": "../workspace-other/escape.txt",
+                "content": "nope",
+                "workspace": str(workspace),
+            })
+
+    def test_missing_workspace_root_fails(self, tmp_path):
+        with pytest.raises(ValueError, match="Workspace root does not exist"):
+            repo_writer.execute(CTX, {
+                "action": "create",
+                "path": "test.txt",
+                "content": "data",
+                "workspace": str(tmp_path / "missing"),
+            })
+
     def test_unknown_action_fails(self, tmp_path):
         with pytest.raises(ValueError, match="Unknown action"):
             repo_writer.execute(CTX, {
@@ -184,6 +211,14 @@ class TestCommandRunner:
         result = command_runner.execute(CTX, {"command": "echo hello world"})
         assert result["return_code"] == 0
         assert "hello" in result["stdout"]
+        assert result["cwd"]
+        assert result["execution_target"] in ("local", "tool_fabric")
+
+    def test_windows_shell_builtin_rejected_in_posix_runtime(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(command_runner.os, "name", "posix")
+
+        with pytest.raises(ValueError, match="Windows shell command"):
+            command_runner._validate_command_for_runtime("type README.md", str(tmp_path))
 
 
 # =========================================================================

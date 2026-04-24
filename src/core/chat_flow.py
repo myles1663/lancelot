@@ -30,6 +30,207 @@ from orchestrator_consts import COMMAND_BLACKLIST_CHARS, COMMAND_WHITELIST
 
 _gov_logger = _logging.getLogger("src.core.orchestrator")
 
+_SHORT_ACKNOWLEDGEMENTS = {
+    "ok",
+    "okay",
+    "yes",
+    "yep",
+    "yeah",
+    "sure",
+    "alright",
+    "all right",
+    "cool",
+    "sounds good",
+    "ok sounds good",
+    "okay sounds good",
+    "looks good",
+    "that works",
+    "works for me",
+    "good to go",
+    "go for it",
+}
+
+
+def _normalize_short_turn(text: str) -> str:
+    normalized = re.sub(r"[\s,!.]+", " ", (text or "").strip().lower())
+    return normalized.strip()
+
+
+def _is_short_acknowledgement(message: str) -> bool:
+    normalized = _normalize_short_turn(message)
+    return len(normalized) <= 80 and normalized in _SHORT_ACKNOWLEDGEMENTS
+
+
+def _is_parrot_response(user_message: str, response_text: str) -> bool:
+    normalized_user = _normalize_short_turn(user_message)
+    normalized_response = _normalize_short_turn(response_text)
+    return (
+        bool(normalized_user)
+        and len(normalized_user) <= 80
+        and normalized_user == normalized_response
+    )
+
+
+def _short_acknowledgement_response() -> str:
+    return "Understood. I'll keep the current plan in focus."
+
+
+_APPROVAL_WAIT_MARKERS = (
+    "paused for commander approval",
+    "pending commander approval",
+    "waiting for commander approval",
+    "review the actioncard",
+    "approval id",
+    "approval group id",
+    "requires commander approval",
+)
+
+
+_AUTO_ESCALATION_CONTROL_PREFIXES = (
+    "completed approved governed actions:",
+    "completion contract failed:",
+)
+
+
+def _is_control_flow_response(response_text: str) -> bool:
+    """Return true for bounded governance/tool-loop responses that must not be rewritten."""
+    lowered = str(response_text or "").strip().lower()
+    return (
+        any(lowered.startswith(prefix) for prefix in _AUTO_ESCALATION_CONTROL_PREFIXES)
+        or any(marker in lowered for marker in _APPROVAL_WAIT_MARKERS)
+    )
+
+
+def _approval_wait_acknowledgement_response() -> str:
+    return (
+        "I am paused for Commander approval. Review the ActionCard in War Room, "
+        "then send `continue` after approving. No additional governed tool work "
+        "will run until that decision is recorded."
+    )
+
+
+def _previous_assistant_waiting_for_approval(self) -> bool:
+    context = getattr(self, "context_env", None)
+    history = getattr(context, "history", None)
+    if not history:
+        return False
+
+    for entry in reversed(history[-6:]):
+        if entry.get("role") != "assistant":
+            continue
+        content = str(entry.get("content") or "").lower()
+        return any(marker in content for marker in _APPROVAL_WAIT_MARKERS)
+    return False
+
+
+def _explicit_tool_or_live_inspection_request(message: str) -> bool:
+    """Return True when the request needs current repo/runtime state.
+
+    The classifier can reasonably label these as "questions", but answering
+    them from chat history makes Lancelot look hung or stale. These phrases
+    are intentional operator requests to use governed tools.
+    """
+    msg = (message or "").lower()
+    if not msg.strip():
+        return False
+
+    explicit_tool_terms = (
+        "command_runner",
+        "repo_writer",
+        "github_connector",
+        "network_client",
+        "service_runner",
+        "tool call",
+        "tool-call",
+        "use tool",
+        "use lancelot",
+        "governed connector",
+    )
+    if any(term in msg for term in explicit_tool_terms):
+        return True
+
+    live_targets = (
+        "/home/lancelot/",
+        "repo",
+        "repository",
+        "workspace",
+        "container",
+        "docker",
+        "service logs",
+        "health endpoint",
+        "actioncard",
+        "approval card",
+    )
+    live_actions = (
+        "inspect",
+        "read",
+        "list",
+        "check",
+        "verify",
+        "continue",
+        "resume",
+        "monitor",
+        "look at",
+        "search",
+        "run",
+        "execute",
+        "tail",
+    )
+    return any(target in msg for target in live_targets) and any(
+        action in msg for action in live_actions
+    )
+
+
+def _explicit_write_tool_request(message: str) -> bool:
+    msg = (message or "").lower()
+    write_terms = (
+        "repo_writer",
+        "write",
+        "edit",
+        "modify",
+        "create",
+        "delete",
+        "patch",
+        "overwrite",
+        "commit",
+        "push",
+    )
+    return _explicit_tool_or_live_inspection_request(message) and any(
+        term in msg for term in write_terms
+    )
+
+
+def _agentic_write_execution_allowed(
+    *,
+    channel: str,
+    explicit_write_request: bool,
+    needs_research: bool,
+    wants_action: bool,
+) -> bool:
+    """Return whether the agentic loop may auto-execute write-capable tool calls.
+
+    War Room is the operator-facing governed surface. Write-capable actions there
+    must remain approval-gated so grouped ActionCards can bound exact scope before
+    repo, workspace, command, or connector mutations run.
+    """
+    if channel == "warroom":
+        return False
+    return explicit_write_request or (needs_research and wants_action)
+
+
+def _latest_task_graph(self, session_id: str):
+    task_store = getattr(self, "task_store", None)
+    if not task_store:
+        return None
+    try:
+        return task_store.get_latest_graph_for_session(session_id)
+    except Exception as exc:
+        _gov_logger.warning(
+            "pending_task_graph_lookup_failed",
+            extra={"error": str(exc), "session_id": session_id},
+        )
+        return None
+
 @dataclass
 class ChatRequestContext:
     user_message: str
@@ -47,6 +248,13 @@ class ChatPhase(Enum):
     CLASSIFICATION = "classification"
     EXECUTION = "execution"
     FINALIZATION = "finalization"
+
+
+def _emit_progress(self, phase: str, message: str, **metadata: Any) -> None:
+    emitter = getattr(self, "_emit_chat_progress", None)
+    if callable(emitter):
+        emitter(phase, message, **metadata)
+
 
 def chat(
     self,
@@ -81,6 +289,7 @@ def chat(
     if hasattr(self, 'context_env') and self.context_env:
         self.context_env._current_quest_id = self._current_quest_id
     start_time = __import__("time").time()
+    _emit_progress(self, ChatPhase.PREFLIGHT.value, "Running governance preflight checks")
 
     # Governance: Check Token Limit (Estimate)
     est_input_tokens = len(user_message) // 4 + 1000 # Rough estimate
@@ -164,10 +373,43 @@ def chat(
     channel_tag = f"[via {channel}] " if channel != "api" else ""
     self.context_env.add_history("user", f"{channel_tag}{user_message}")
 
+    # Approval/proceed follow-ups and short acknowledgements are deterministic
+    # control messages. Handle them before classifier/model routing so a simple
+    # "continue" or "ok" never burns a full reasoning/model turn.
+    if (
+        self._is_proceed_message(user_message)
+        and self.task_store
+        and not _explicit_tool_or_live_inspection_request(user_message)
+    ):
+        session_id = getattr(self, '_current_session_id', '')
+        graph = _latest_task_graph(self, session_id)
+        if graph:
+            result = self._handle_approval(session_id=session_id)
+        else:
+            result = self._handle_proceed(user_message, session_id=session_id)
+        self.context_env.add_history("assistant", result)
+        return result
+
+    if _is_short_acknowledgement(user_message) and _previous_assistant_waiting_for_approval(self):
+        _gov_logger.debug("short_acknowledgement_resolved_to_approval_wait")
+        result = _approval_wait_acknowledgement_response()
+        self.context_env.add_history("assistant", result)
+        return result
+
+    if (
+        _is_short_acknowledgement(user_message)
+        and self._previous_was_substantive()
+    ):
+        _gov_logger.debug("short_acknowledgement_bypassed_generation")
+        result = _short_acknowledgement_response()
+        self.context_env.add_history("assistant", result)
+        return result
+
     # ── Honest Closure: Intent Classification + Pipeline Routing ──
     # Unified classifier — single LLM call replaces 7-function heuristic chain
     from feature_flags import FEATURE_UNIFIED_CLASSIFICATION
     _unified_result = None
+    _emit_progress(self, ChatPhase.CLASSIFICATION.value, "Classifying request and routing lane")
     if FEATURE_UNIFIED_CLASSIFICATION and self.provider:
         try:
             from unified_classifier import UnifiedClassifier
@@ -212,13 +454,6 @@ def chat(
         )
         # LLM-based intent verification for ambiguous classifications
         intent = self._verify_intent_with_llm(user_message, intent)
-
-    # Approval follow-ups should resume the pending task before other routing.
-    if self._is_proceed_message(user_message) and self.task_store:
-        session_id = getattr(self, '_current_session_id', '')
-        result = self._handle_approval(session_id=session_id)
-        self.context_env.add_history("assistant", result)
-        return result
 
     # Continuation and research rerouting
     if _unified_result is not None:
@@ -290,7 +525,19 @@ def chat(
     if _unified_result is None and intent == IntentType.KNOWLEDGE_REQUEST and self._is_continuation(user_message):
         _gov_logger.debug("knowledge_continuation_full_context")
 
+    explicit_tool_request = _explicit_tool_or_live_inspection_request(user_message)
+    explicit_write_request = _explicit_write_tool_request(user_message)
+    if explicit_tool_request:
+        _gov_logger.debug(
+            "explicit_tool_request_routed_to_agentic_loop",
+            extra={"writes_enabled": explicit_write_request},
+        )
+        intent = IntentType.KNOWLEDGE_REQUEST
+        if _unified_result is not None:
+            _unified_result.requires_tools = True
+
     if intent in (IntentType.PLAN_REQUEST, IntentType.MIXED_REQUEST):
+        _emit_progress(self, ChatPhase.EXECUTION.value, "Building governed plan artifact")
         # Route through PlanningPipeline — produces PlanArtifact same turn
         pipeline_result = self.planning_pipeline.process(user_message)
         if pipeline_result.outcome == OutcomeType.COMPLETED_WITH_PLAN_ARTIFACT:
@@ -330,6 +577,7 @@ def chat(
 
     if intent == IntentType.EXEC_REQUEST:
         # Simple action detector — skip pipeline for single-skill operations
+        _emit_progress(self, ChatPhase.EXECUTION.value, "Compiling action plan and permission scope")
         simple_artifact = self._build_simple_action_plan(user_message)
         if simple_artifact:
             self._last_plan_artifact = simple_artifact
@@ -387,6 +635,7 @@ def chat(
 
     # KNOWLEDGE_REQUEST, AMBIGUOUS, or fallback — route to LLM
     # Model Routing
+    _emit_progress(self, ChatPhase.EXECUTION.value, "Selecting governed model route")
     selected_model = self._route_model(user_message)
     _gov_logger.debug(
         "model_routed",
@@ -414,6 +663,7 @@ def chat(
         return "Error: LLM provider not initialized (Missing API Key)."
 
     try:
+        _emit_progress(self, ChatPhase.EXECUTION.value, "Compiling memory, receipts, and conversation context")
         # Get Deterministic Context (memory-augmented if enabled)
         if self._memory_enabled and self.context_compiler:
             try:
@@ -452,6 +702,7 @@ def chat(
         self.memory_summary = "See ContextEnv"
 
         system_instruction = self._build_system_instruction(crusader_mode)
+        _emit_progress(self, ChatPhase.EXECUTION.value, "Preparing governed model request")
 
         # Competitive scan — inject previous scan context if available
         _competitive_target = None
@@ -493,7 +744,9 @@ def chat(
         # When file_parts present (images/PDFs), skip local model — no vision support
         has_vision_input = bool(file_parts)
         # Use unified classifier result for continuation if available
-        is_continuation = (_unified_result.is_continuation if _unified_result else self._is_continuation(user_message))
+        is_continuation = (
+            _unified_result.is_continuation if _unified_result else self._is_continuation(user_message)
+        ) and not explicit_tool_request
 
         # Check if the previous exchange was substantive (used tools,
         # long response, or action intent). If so, follow-ups should go to
@@ -510,7 +763,7 @@ def chat(
             # skip conversational bypass — needs full context + tools.
             # Also skip local routing if previous exchange was substantive.
             _is_conv = (_unified_result.intent == "conversational" if _unified_result else self._is_conversational(user_message))
-            if _is_conv and not has_vision_input and not is_continuation and not _prev_substantive:
+            if _is_conv and not explicit_tool_request and not has_vision_input and not is_continuation and not _prev_substantive:
                 if FEATURE_LOCAL_AGENTIC and self.local_model and self.local_model.is_healthy():
                     _gov_logger.debug("conversational_message_routed_to_local_model")
                     raw_response = self._local_agentic_generate(
@@ -542,7 +795,7 @@ def chat(
             # Try local model for simple queries to save flagship tokens
             # Use unified classifier's confidence for local routing
             # Skip local model if previous exchange was substantive
-            elif not _prev_substantive and FEATURE_LOCAL_AGENTIC and (
+            elif not explicit_tool_request and not _prev_substantive and FEATURE_LOCAL_AGENTIC and (
                 (_unified_result.intent == "question" and not _unified_result.requires_tools)
                 if _unified_result else self._is_simple_for_local(user_message)
             ):
@@ -563,17 +816,34 @@ def chat(
                     # Use unified classifier's requires_tools field
                     needs_research = _unified_result.requires_tools
                     wants_action = _unified_result.intent in ("action_low_risk", "action_high_risk")
-                    allow_writes = needs_research and wants_action
+                    allow_writes = _agentic_write_execution_allowed(
+                        channel=channel,
+                        explicit_write_request=explicit_write_request,
+                        needs_research=needs_research,
+                        wants_action=wants_action,
+                    )
                 else:
                     # Force tool use for research-oriented queries
-                    needs_research = self._needs_research(user_message)
+                    needs_research = explicit_tool_request or self._needs_research(user_message)
                     # Allow writes when user expects action (code, config, setup)
                     wants_action = self._wants_action(user_message)
-                    allow_writes = needs_research and wants_action
+                    allow_writes = _agentic_write_execution_allowed(
+                        channel=channel,
+                        explicit_write_request=explicit_write_request,
+                        needs_research=needs_research,
+                        wants_action=wants_action,
+                    )
                 if needs_research:
                     _gov_logger.debug(
                         "research_query_forces_tool_use",
-                        extra={"writes_enabled": allow_writes},
+                        extra={
+                            "writes_enabled": allow_writes,
+                            "channel": channel,
+                            "write_request_gated": (
+                                channel == "warroom"
+                                and (explicit_write_request or (needs_research and wants_action))
+                            ),
+                        },
                     )
                 else:
                     _gov_logger.debug("knowledge_request_routed_to_agentic_loop")
@@ -634,6 +904,7 @@ def chat(
             and len(user_message) > 200
             and raw_response
             and len(raw_response.strip()) < 100
+            and not _is_control_flow_response(raw_response)
             and not self._is_conversational(user_message)
         ):
             _gov_logger.info(
@@ -688,7 +959,14 @@ def chat(
             )
 
         # S10: Sanitize LLM output before parsing
+        _emit_progress(self, ChatPhase.FINALIZATION.value, "Validating and assembling response")
         sanitized_response = self._validate_llm_response(raw_response)
+        if _is_parrot_response(user_message, sanitized_response):
+            _gov_logger.warning(
+                "short_turn_parrot_response_replaced",
+                extra={"message_chars": len(user_message)},
+            )
+            sanitized_response = _short_acknowledgement_response()
 
         # Store competitive scan in episodic memory (post-processing)
         if _competitive_target and sanitized_response:
@@ -787,4 +1065,16 @@ def chat(
         duration = int((__import__("time").time() - start_time) * 1000)
         if 'receipt' in locals():
             self.receipt_service.update(receipt.fail(str(e), duration))
+        error_text = str(e)
+        if (
+            e.__class__.__name__ in {"PIIScrubError", "PIIScrubPayloadError"}
+            or "Frontier scrub policy is required" in error_text
+        ):
+            return (
+                "Governance blocked frontier generation because required local "
+                "PII scrubbing is unavailable. No frontier model call was made. "
+                "Check the local-llm service/model health, or change Frontier "
+                "Scrub Mode in Setup Recovery if you intentionally want a degraded "
+                f"privacy fallback.\n\nReason: {error_text}"
+            )
         return f"Error generating response: {e}"

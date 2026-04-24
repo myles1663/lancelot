@@ -24,6 +24,409 @@ from orchestrator_consts import COMMAND_BLACKLIST_CHARS, COMMAND_WHITELIST
 
 _gov_logger = _logging.getLogger("src.core.orchestrator")
 
+
+def _pending_approval_response(
+    skill_name: str,
+    approval_id: str | None,
+    approval_count: int = 1,
+) -> str:
+    if approval_count > 1:
+        details = [f"Paused for Commander approval before running {approval_count} governed actions."]
+    else:
+        details = [f"Paused for Commander approval before running `{skill_name}`."]
+    if approval_id:
+        label = "Approval group ID" if approval_count > 1 else "Approval ID"
+        details.append(f"{label}: `{approval_id}`.")
+    details.append("Review the ActionCard in War Room, then send `continue` after approval.")
+    return "\n\n".join(details)
+
+
+_PENDING_APPROVAL_RESPONSE_MARKERS = (
+    "paused for commander approval",
+    "pending commander approval",
+    "waiting for commander approval",
+    "review the actioncard",
+    "send `continue` after approval",
+    "approval id:",
+    "approval group id:",
+)
+
+
+def _looks_like_pending_approval_response(text: str) -> bool:
+    """Detect approval prompts that are only valid if a new approval was created."""
+    lowered = str(text or "").lower()
+    return any(marker in lowered for marker in _PENDING_APPROVAL_RESPONSE_MARKERS)
+
+
+def _emit_tool_progress(self, phase: str, message: str, **metadata: Any) -> None:
+    """Publish bounded progress for the War Room command chat."""
+    emitter = getattr(self, "_emit_chat_progress", None)
+    if callable(emitter):
+        emitter(phase, message, **metadata)
+
+
+def _tool_target_key(skill_name: str, inputs: dict[str, Any] | None) -> str:
+    """Return a stable key for resolving retry failures by later successes."""
+    inputs = inputs or {}
+    if skill_name == "repo_writer":
+        action = str(inputs.get("action") or "").lower() or "unknown"
+        path = str(inputs.get("path") or "").strip()
+        if not path:
+            return f"{skill_name}:input_validation"
+        workspace = str(inputs.get("workspace") or os.getenv("LANCELOT_WORKSPACE", "default"))
+        return f"{skill_name}:{workspace}:{action}:{path}"
+    if skill_name == "command_runner":
+        command = str(inputs.get("command") or "").strip()
+        if not command:
+            return f"{skill_name}:input_validation"
+        try:
+            binary = shlex.split(command, posix=os.name != "nt")[0]
+        except Exception:
+            binary = command.split(" ", 1)[0]
+        return f"{skill_name}:{binary}:{command}"
+    if skill_name == "network_client":
+        method = str(inputs.get("method") or "GET").upper()
+        url = str(inputs.get("url") or "").strip()
+        if not url:
+            return f"{skill_name}:input_validation"
+        return f"{skill_name}:{method}:{url}"
+    return f"{skill_name}:{str(inputs)[:240]}"
+
+
+def _is_unresolved_failure_result(result: str) -> bool:
+    return result.startswith(("FAILED", "EXCEPTION", "REJECTED", "ESCALATED"))
+
+
+def _unresolved_tool_failures(tool_receipts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return failed/escalated tool receipts that were not corrected by a later success."""
+    unresolved: dict[str, dict[str, Any]] = {}
+    success_by_skill: set[str] = set()
+
+    for receipt in tool_receipts:
+        skill_name = str(receipt.get("skill") or "")
+        result = str(receipt.get("result") or "")
+        key = _tool_target_key(skill_name, receipt.get("inputs") or {})
+
+        if result == "SUCCESS":
+            success_by_skill.add(skill_name)
+            unresolved.pop(key, None)
+            unresolved.pop(f"{skill_name}:input_validation", None)
+            continue
+
+        if _is_unresolved_failure_result(result):
+            unresolved[key] = receipt
+
+    # A later success for the same skill means an earlier malformed request was corrected.
+    for skill_name in success_by_skill:
+        unresolved.pop(f"{skill_name}:input_validation", None)
+
+    return list(unresolved.values())
+
+
+def _find_successful_tool_receipt(
+    tool_receipts: list[dict[str, Any]],
+    skill_name: str,
+    inputs: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return a prior success for the same tool target within this agentic turn."""
+    target_key = _tool_target_key(skill_name, inputs or {})
+    for receipt in reversed(tool_receipts):
+        if receipt.get("result") != "SUCCESS":
+            continue
+        if str(receipt.get("skill") or "") != skill_name:
+            continue
+        if _tool_target_key(skill_name, receipt.get("inputs") or {}) == target_key:
+            return receipt
+    return None
+
+
+def _claims_completion(text: str) -> bool:
+    """Detect final responses that read as completion despite unresolved tool failures."""
+    normalized = (text or "").lower()
+    completion_markers = (
+        "completed",
+        "complete",
+        "done",
+        "finished",
+        "implemented",
+        "created",
+        "updated",
+        "fixed",
+        "pushed",
+        "committed",
+        "successfully",
+    )
+    uncertainty_markers = (
+        "could not",
+        "was not able",
+        "wasn't able",
+        "failed",
+        "blocked",
+        "pending approval",
+        "not complete",
+        "incomplete",
+    )
+    return any(marker in normalized for marker in completion_markers) and not any(
+        marker in normalized for marker in uncertainty_markers
+    )
+
+
+def _completion_contract_note(unresolved: list[dict[str, Any]]) -> str:
+    parts = []
+    for receipt in unresolved[:3]:
+        skill = receipt.get("skill") or "tool"
+        result = str(receipt.get("result") or "failed")
+        inputs = receipt.get("inputs") or {}
+        target = inputs.get("path") or inputs.get("command") or inputs.get("url") or "unspecified target"
+        parts.append(f"- {skill} on `{target}`: {result}")
+    if len(unresolved) > 3:
+        parts.append(f"- plus {len(unresolved) - 3} more unresolved tool issue(s)")
+    return "\n".join(parts)
+
+
+def _approval_context(prompt: str, skill_name: str, inputs: dict[str, Any]) -> str:
+    prompt_summary = " ".join((prompt or "").split())
+    if len(prompt_summary) > 500:
+        prompt_summary = prompt_summary[:497].rstrip() + "..."
+    input_keys = ", ".join(sorted(str(k) for k in (inputs or {}).keys())) or "none"
+    return (
+        f"User request: {prompt_summary or 'unspecified'}. "
+        f"Requested governed tool: {skill_name}. "
+        f"Input fields present: {input_keys}."
+    )
+
+
+def _approval_reason(skill_name: str) -> str:
+    if skill_name in {"repo_writer", "file_operations", "document_creator"}:
+        return "This can create or modify files in the workspace or repository."
+    if skill_name in {"command_runner", "service_runner"}:
+        return "This can execute commands or affect the runtime environment."
+    if skill_name in {"network_client", "github_connector"}:
+        return "This can reach external systems or move data across a connector boundary."
+    return "This tool is classified as a governed write or high-risk action."
+
+
+def _approval_group_reason(requests: list[dict[str, Any]]) -> str:
+    tools = {str(item.get("tool_name") or "") for item in requests}
+    if tools == {"repo_writer"}:
+        return "This grouped approval covers multiple repository file changes for the same user request."
+    if tools.issubset({"network_client", "github_connector"}):
+        return "This grouped approval covers multiple outbound connector requests for the same user request."
+    if tools == {"command_runner"}:
+        return "This grouped approval covers multiple command executions for the same user request."
+    return "This grouped approval covers multiple governed actions for the same user request."
+
+
+def _tool_planner_model(self, prompt: str) -> str:
+    provider_name = str(getattr(getattr(self, "provider", None), "provider_name", "") or "")
+    if provider_name == "openai-codex":
+        return getattr(self, "model_name", "") or self._route_model(prompt)
+    return self._route_model(prompt)
+
+
+def _tool_input_error(skill_name: str, inputs: dict[str, Any]) -> str:
+    if not isinstance(inputs, dict):
+        return f"{skill_name} inputs must be a JSON object."
+
+    required_fields = {
+        "command_runner": ("command",),
+        "repo_writer": ("action", "path"),
+        "network_client": ("method", "url"),
+        "service_runner": ("action",),
+        "document_creator": ("format", "path", "content"),
+        "schedule_job": ("action",),
+    }
+    missing = [
+        field for field in required_fields.get(skill_name, ())
+        if inputs.get(field) in (None, "")
+    ]
+    if missing:
+        return f"{skill_name} missing required input(s): {', '.join(missing)}."
+    return ""
+
+
+def _receipt_safe_payload(value: Any, limit: int = 4000) -> Any:
+    import json as _json
+
+    try:
+        rendered = _json.dumps(value, default=str, sort_keys=True)
+    except Exception:
+        rendered = str(value)
+        if len(rendered) > limit:
+            return {"truncated": True, "preview": rendered[:limit]}
+        return rendered
+    if len(rendered) > limit:
+        return {"truncated": True, "preview": rendered[:limit]}
+    try:
+        return _json.loads(rendered)
+    except Exception:
+        return rendered
+
+
+def _persist_tool_call_receipt(
+    self,
+    skill_name: str,
+    inputs: dict[str, Any],
+    result_label: str,
+    outputs: Any = None,
+    *,
+    error: str | None = None,
+    approval_id: str | None = None,
+    duration_ms: int | None = None,
+    iteration: int | None = None,
+) -> None:
+    receipt_service = getattr(self, "receipt_service", None)
+    if receipt_service is None:
+        return
+
+    label = str(result_label or "")
+    status = ReceiptStatus.SUCCESS
+    if label.startswith("ESCALATED"):
+        status = ReceiptStatus.PENDING
+    elif label.startswith(("FAILED", "EXCEPTION", "REJECTED")):
+        status = ReceiptStatus.FAILURE
+
+    metadata = {
+        "tool_name": skill_name,
+        "result": label,
+        "channel": getattr(self, "_current_channel", None),
+        "iteration": iteration,
+    }
+    if approval_id:
+        metadata["approval_id"] = approval_id
+
+    try:
+        receipt = create_finalized_receipt(
+            ActionType.TOOL_CALL,
+            skill_name,
+            {"tool": skill_name, "inputs": _receipt_safe_payload(inputs or {})},
+            outputs=_receipt_safe_payload(outputs or {}),
+            status=status,
+            tier=CognitionTier.DETERMINISTIC,
+            quest_id=getattr(self, "_current_quest_id", None),
+            metadata={k: v for k, v in metadata.items() if v is not None},
+            operator_id=getattr(self, "_current_operator_id", None) or None,
+            session_id=getattr(self, "_current_session_id", None) or None,
+            duration_ms=duration_ms,
+            error_message=error,
+        )
+        receipt_service.create(receipt)
+    except Exception as exc:
+        _gov_logger.warning(
+            "tool_call_receipt_persist_failed",
+            extra={"skill": skill_name, "error": str(exc)},
+        )
+
+
+def _collect_additional_approval_requests(
+    self,
+    remaining_tool_calls: list[Any],
+    declared_tool_names: set[str],
+    allow_writes: bool,
+) -> list[dict[str, Any]]:
+    """Create pending Sentry requests for later escalated calls in the same model batch."""
+    if allow_writes:
+        return []
+    if not remaining_tool_calls:
+        return []
+    sentry = getattr(self, "sentry", None)
+    if sentry is None:
+        return []
+    try:
+        from mcp_sentry import MCPSentry
+        if not isinstance(sentry, MCPSentry):
+            return []
+    except Exception:
+        return []
+
+    requests: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for tc in remaining_tool_calls:
+        skill_name = getattr(tc, "name", "")
+        inputs = getattr(tc, "args", {}) or {}
+        if skill_name not in declared_tool_names:
+            continue
+        if _tool_input_error(skill_name, inputs):
+            continue
+        try:
+            if self._classify_tool_call_safety(skill_name, inputs) != "escalate":
+                continue
+            perm = sentry.check_permission(skill_name, inputs)
+        except Exception as exc:
+            _gov_logger.warning(
+                "approval_batch_collection_skipped",
+                extra={"skill": skill_name, "error": str(exc)},
+            )
+            continue
+        request_id = perm.get("request_id")
+        if perm.get("status") != "PENDING" or not request_id:
+            continue
+        key = (skill_name, str(inputs))
+        if key in seen:
+            continue
+        seen.add(key)
+        requests.append({
+            "request_id": request_id,
+            "tool_name": skill_name,
+            "params": inputs,
+        })
+    return requests
+
+
+def _create_approval_card(
+    self,
+    prompt: str,
+    quest_id: str,
+    skill_name: str,
+    inputs: dict[str, Any],
+    sentry_req_id: str | None,
+    additional_requests: list[dict[str, Any]] | None = None,
+):
+    if not self.actioncard_factory:
+        return None, sentry_req_id, 1
+
+    requests = []
+    if sentry_req_id:
+        requests.append({
+            "request_id": sentry_req_id,
+            "tool_name": skill_name,
+            "params": inputs or {},
+        })
+    requests.extend(additional_requests or [])
+
+    try:
+        if len(requests) > 1 and hasattr(self.actioncard_factory, "from_sentry_request_batch"):
+            card = self.actioncard_factory.from_sentry_request_batch(
+                requests=requests,
+                quest_id=quest_id,
+                approval_context=_approval_context(prompt, "multiple governed actions", {
+                    f"{idx}:{item['tool_name']}": item.get("params", {})
+                    for idx, item in enumerate(requests, start=1)
+                }),
+                approval_reason=_approval_group_reason(requests),
+            )
+            return card, getattr(card, "card_id", None) or sentry_req_id, len(requests)
+
+        card = self.actioncard_factory.from_sentry_request(
+            req_id=sentry_req_id or f"block-{skill_name}-{quest_id[:8]}",
+            tool_name=skill_name,
+            params=inputs or {},
+            quest_id=quest_id,
+            approval_context=_approval_context(prompt, skill_name, inputs or {}),
+            approval_reason=_approval_reason(skill_name),
+        )
+        return card, sentry_req_id, 1
+    except Exception as _ac_exc:
+        _gov_logger.warning(
+            "action_card_creation_failed",
+            extra={
+                "context": "approval_card",
+                "error": str(_ac_exc),
+            },
+        )
+        return None, sentry_req_id, max(1, len(requests))
+
+
 def _agentic_generate(
     self,
     prompt: str,
@@ -110,7 +513,7 @@ def _agentic_generate(
             extra={"terms": literal_terms},
         )
 
-    full_text = f"{ctx}\n\n{prompt}{literal_guard}"
+    full_text = f"{ctx}\n\nLATEST USER REQUEST:\n{prompt}{literal_guard}"
     initial_msg = self._build_frontier_user_message(full_text, images=image_parts)
     messages = [initial_msg]
 
@@ -126,6 +529,12 @@ def _agentic_generate(
     _agentic_start_ms = int(_time.time() * 1000)
     if self.toolflow_emitter:
         self.toolflow_emitter.quest_started(_quest_id, _channel, MAX_ITERATIONS)
+    _emit_tool_progress(
+        self,
+        "execution",
+        "Starting governed tool loop",
+        max_iterations=MAX_ITERATIONS,
+    )
 
     for iteration in range(MAX_ITERATIONS):
         _gov_logger.debug(
@@ -139,6 +548,13 @@ def _agentic_generate(
         # Emit iteration_started
         if self.toolflow_emitter:
             self.toolflow_emitter.iteration_started(_quest_id, iteration + 1, _channel)
+        _emit_tool_progress(
+            self,
+            "execution",
+            "Requesting next governed step from model",
+            iteration=iteration + 1,
+            max_iterations=MAX_ITERATIONS,
+        )
 
         # Cost guard: check governance limit before each LLM call
         iter_est_tokens = sum(len(str(m)) for m in messages) // 4
@@ -169,7 +585,7 @@ def _agentic_generate(
             # reformat step after the loop completes (see below).
             result = self._llm_call_with_retry(
                 lambda: self._provider_generate_with_tools(
-                    model=self._route_model(prompt),
+                    model=_tool_planner_model(self, prompt),
                     messages=messages,
                     system_instruction=system_instruction,
                     tools=declarations,
@@ -223,7 +639,10 @@ def _agentic_generate(
                             "error_path_reformat_failed",
                             extra={"error": str(reformat_err)},
                         )
-                return self._format_tool_receipts(tool_receipts, error=str(e))
+                return self._format_tool_receipts(
+                    tool_receipts,
+                    note=f"Stopped after planner error: {e}. Results so far:",
+                )
             return f"Error during agentic generation: {e}"
 
         # Track token usage per iteration
@@ -251,14 +670,6 @@ def _agentic_generate(
                 _gov_logger.debug(
                     "agentic_loop_completed",
                     extra={"tool_call_count": len(tool_receipts)},
-                )
-
-            # Emit quest_completed
-            if self.toolflow_emitter and tool_receipts:
-                _ok = sum(1 for r in tool_receipts if r.get("result") == "SUCCESS")
-                _dur = int(_time.time() * 1000) - _agentic_start_ms
-                self.toolflow_emitter.quest_completed(
-                    _quest_id, len(tool_receipts), _ok, _dur, _channel,
                 )
 
             # Detect narration-without-content after tool-heavy loops.
@@ -342,6 +753,64 @@ def _agentic_generate(
 
             # Strip failure narration from final response (legacy fallback)
             text = self._strip_failure_narration(text)
+            _unresolved_failures = _unresolved_tool_failures(tool_receipts)
+            if (
+                tool_receipts
+                and not _unresolved_failures
+                and _looks_like_pending_approval_response(text)
+            ):
+                _gov_logger.warning(
+                    "approval_wait_response_replaced_after_successful_tools",
+                    extra={"tool_call_count": len(tool_receipts)},
+                )
+                text = self._format_tool_receipts(
+                    tool_receipts,
+                    note="Completed approved governed actions:",
+                )
+            if _unresolved_failures and _claims_completion(text):
+                _note = _completion_contract_note(_unresolved_failures)
+                _gov_logger.warning(
+                    "completion_contract_blocked_unverified_success",
+                    extra={
+                        "unresolved_count": len(_unresolved_failures),
+                        "tool_call_count": len(tool_receipts),
+                    },
+                )
+                _dur = int(_time.time() * 1000) - _agentic_start_ms
+                if self.toolflow_emitter:
+                    self.toolflow_emitter.quest_failed(
+                        _quest_id,
+                        "Completion contract failed: unresolved governed action",
+                        _dur,
+                        _channel,
+                    )
+                _emit_tool_progress(
+                    self,
+                    "finalization",
+                    "Completion contract blocked an unverified success claim",
+                    unresolved_count=len(_unresolved_failures),
+                )
+                return self._format_tool_receipts(
+                    tool_receipts,
+                    note=(
+                        "Completion contract failed: Lancelot cannot mark this complete "
+                        "while a governed action is unresolved.\n\n"
+                        f"{_note}\n\nResults so far:"
+                    ),
+                )
+
+            if self.toolflow_emitter and tool_receipts:
+                _ok = sum(1 for r in tool_receipts if r.get("result") == "SUCCESS")
+                _dur = int(_time.time() * 1000) - _agentic_start_ms
+                self.toolflow_emitter.quest_completed(
+                    _quest_id, len(tool_receipts), _ok, _dur, _channel,
+                )
+            _emit_tool_progress(
+                self,
+                "finalization",
+                "Response assembled from verified tool receipts",
+                tool_call_count=len(tool_receipts),
+            )
             return text
 
         # Append model's response to conversation (provider-native format)
@@ -360,7 +829,7 @@ def _agentic_generate(
         _DECLARED_TOOL_NAMES = {d.name for d in declarations}
 
         tool_results = []  # list of (call_id, fn_name, result_json_str)
-        for tc in result.tool_calls:
+        for tool_index, tc in enumerate(result.tool_calls):
             skill_name = tc.name
             inputs = tc.args
             _gov_logger.debug(
@@ -389,6 +858,15 @@ def _agentic_generate(
                     "inputs": inputs,
                     "result": f"REJECTED — undeclared tool '{skill_name}'",
                 })
+                _persist_tool_call_receipt(
+                    self,
+                    skill_name,
+                    inputs or {},
+                    f"REJECTED - undeclared tool '{skill_name}'",
+                    outputs=result_data,
+                    error=result_data["error"],
+                    iteration=iteration + 1,
+                )
                 # Emit tool_call_completed for rejected call
                 if self.toolflow_emitter:
                     self.toolflow_emitter.tool_call_completed(
@@ -402,7 +880,65 @@ def _agentic_generate(
                 tool_results.append((tc.id, skill_name, str(result_data)))
                 continue
 
+            input_error = _tool_input_error(skill_name, inputs or {})
+            if input_error:
+                result_data = {"error": input_error}
+                tool_receipts.append({
+                    "skill": skill_name,
+                    "inputs": inputs,
+                    "result": f"REJECTED - {input_error}",
+                })
+                _persist_tool_call_receipt(
+                    self,
+                    skill_name,
+                    inputs or {},
+                    f"REJECTED - {input_error}",
+                    outputs=result_data,
+                    error=input_error,
+                    iteration=iteration + 1,
+                )
+                if self.toolflow_emitter:
+                    self.toolflow_emitter.tool_call_completed(
+                        _quest_id, iteration + 1, skill_name,
+                        "REJECTED", input_error, _channel,
+                    )
+                _gov_logger.warning(
+                    "invalid_tool_call_rejected",
+                    extra={"skill": skill_name, "error": input_error},
+                )
+                tool_results.append((tc.id, skill_name, str(result_data)))
+                continue
+
+            prior_success = _find_successful_tool_receipt(tool_receipts, skill_name, inputs or {})
+            if prior_success:
+                result_data = {
+                    "status": "already_completed",
+                    "message": "This exact tool target already succeeded earlier in this governed run.",
+                    "tool": skill_name,
+                    "outputs": prior_success.get("outputs") or {},
+                }
+                _gov_logger.warning(
+                    "duplicate_successful_tool_call_suppressed",
+                    extra={"skill": skill_name, "iteration": iteration + 1},
+                )
+                _emit_tool_progress(
+                    self,
+                    "execution",
+                    f"Skipping duplicate governed tool already completed: {skill_name}",
+                    tool_name=skill_name,
+                    iteration=iteration + 1,
+                )
+                tool_results.append((tc.id, skill_name, str(result_data)))
+                continue
+
             # Safety classification
+            _emit_tool_progress(
+                self,
+                "governance",
+                f"Evaluating permission for {skill_name}",
+                tool_name=skill_name,
+                iteration=iteration + 1,
+            )
             safety = self._classify_tool_call_safety(skill_name, inputs)
             sentry_req_id = None
             sentry_blocked = False
@@ -454,35 +990,71 @@ def _agentic_generate(
                     "result": "ESCALATED — needs Commander approval",
                     "approval_id": sentry_req_id,
                 })
+                _persist_tool_call_receipt(
+                    self,
+                    skill_name,
+                    inputs or {},
+                    "ESCALATED - needs Commander approval",
+                    outputs=result_data,
+                    error="Requires Commander approval",
+                    approval_id=sentry_req_id,
+                    iteration=iteration + 1,
+                )
                 # Emit tool_call_blocked
                 if self.toolflow_emitter:
                     self.toolflow_emitter.tool_call_blocked(
                         _quest_id, iteration + 1, skill_name,
                         sentry_req_id or "", _channel,
+                        "Awaiting Commander approval",
                     )
-                # Create ActionCard for approval
-                if self.actioncard_factory:
-                    try:
-                        self.actioncard_factory.from_sentry_request(
-                            req_id=sentry_req_id or f"block-{skill_name}-{_quest_id[:8]}",
-                            tool_name=skill_name,
-                            params=inputs or {},
-                            quest_id=_quest_id,
-                        )
-                    except Exception as _ac_exc:
-                        _gov_logger.warning(
-                            "action_card_creation_failed",
-                            extra={
-                                "context": "agentic_loop",
-                                "error": str(_ac_exc),
-                            },
-                        )
+                additional_requests = _collect_additional_approval_requests(
+                    self,
+                    result.tool_calls[tool_index + 1:],
+                    _DECLARED_TOOL_NAMES,
+                    allow_writes,
+                )
+                _card, approval_ref, approval_count = _create_approval_card(
+                    self,
+                    prompt,
+                    _quest_id,
+                    skill_name,
+                    inputs or {},
+                    sentry_req_id,
+                    additional_requests,
+                )
+                if self.toolflow_emitter:
+                    _dur = int(_time.time() * 1000) - _agentic_start_ms
+                    self.toolflow_emitter.quest_blocked(
+                        _quest_id,
+                        "Pending Commander approval",
+                        approval_ref or sentry_req_id or "",
+                        _dur,
+                        _channel,
+                    )
+                _emit_tool_progress(
+                    self,
+                    "approval",
+                    "Waiting for Commander approval",
+                    approval_id=approval_ref or sentry_req_id,
+                    tool_name=skill_name,
+                    approval_count=approval_count,
+                )
+                return _pending_approval_response(skill_name, approval_ref, approval_count)
             else:
                 # Execute the skill
                 self.governor.log_usage("tool_calls", 1)
                 _exec_success = False
+                _exec_start_ms = int(_time.time() * 1000)
+                _emit_tool_progress(
+                    self,
+                    "execution",
+                    f"Executing governed tool: {skill_name}",
+                    tool_name=skill_name,
+                    iteration=iteration + 1,
+                )
                 try:
                     exec_result = self.skill_executor.run(skill_name, inputs)
+                    _exec_duration_ms = int(_time.time() * 1000) - _exec_start_ms
                     if exec_result.success:
                         _exec_success = True
                         result_data = exec_result.outputs or {"status": "success"}
@@ -506,6 +1078,15 @@ def _agentic_generate(
                             "result": "SUCCESS",
                             "outputs": result_data,
                         })
+                        _persist_tool_call_receipt(
+                            self,
+                            skill_name,
+                            inputs or {},
+                            "SUCCESS",
+                            outputs=result_data,
+                            duration_ms=_exec_duration_ms,
+                            iteration=iteration + 1,
+                        )
                     else:
                         # Nudge model to silently retry with alternative
                         err_msg = exec_result.error or "Unknown error"
@@ -518,7 +1099,18 @@ def _agentic_generate(
                             "inputs": inputs,
                             "result": f"FAILED: {err_msg}",
                         })
+                        _persist_tool_call_receipt(
+                            self,
+                            skill_name,
+                            inputs or {},
+                            f"FAILED: {err_msg}",
+                            outputs=result_data,
+                            error=err_msg,
+                            duration_ms=_exec_duration_ms,
+                            iteration=iteration + 1,
+                        )
                 except Exception as e:
+                    _exec_duration_ms = int(_time.time() * 1000) - _exec_start_ms
                     result_data = {
                         "error": str(e),
                         "instruction": "Tool failed. Try an alternative approach immediately — do NOT narrate the failure or say 'let me try'. Just call the next tool.",
@@ -528,6 +1120,16 @@ def _agentic_generate(
                         "inputs": inputs,
                         "result": f"EXCEPTION: {e}",
                     })
+                    _persist_tool_call_receipt(
+                        self,
+                        skill_name,
+                        inputs or {},
+                        f"EXCEPTION: {e}",
+                        outputs=result_data,
+                        error=str(e),
+                        duration_ms=_exec_duration_ms,
+                        iteration=iteration + 1,
+                    )
 
                 # Emit tool_call_completed with status from the last receipt
                 if self.toolflow_emitter and tool_receipts:
@@ -538,6 +1140,14 @@ def _agentic_generate(
                         _quest_id, iteration + 1, skill_name,
                         _result_status, _out_summary, _channel,
                     )
+                _emit_tool_progress(
+                    self,
+                    "execution",
+                    "Tool result received; validating next step",
+                    tool_name=skill_name,
+                    result=str(tool_receipts[-1].get("result", "")) if tool_receipts else None,
+                    iteration=iteration + 1,
+                )
 
                 # Record governance event for trust ledger tracking
                 try:
@@ -726,6 +1336,7 @@ def _local_agentic_generate(
     sys_msg = (
         "You are Lancelot, an autonomous AI agent. Answer the user concisely. "
         "Use tools when needed. Never claim to have done something you haven't actually done via a tool call. "
+        "Use emoji sparingly in casual or status replies when it improves clarity; keep technical output clean. "
         "You have access to tools including: schedule_job, network_client, file_operations, memory. "
         "When the user refers to a previous message or adds to a prior request, use the conversation "
         "history in context to understand what they mean."
@@ -733,10 +1344,11 @@ def _local_agentic_generate(
 
     messages = [
         {"role": "system", "content": sys_msg},
-        {"role": "user", "content": f"{ctx}\n\n{prompt}"},
+        {"role": "user", "content": f"{ctx}\n\nLATEST USER REQUEST:\n{prompt}"},
     ]
 
     tool_receipts = []
+    self._last_tool_receipts = tool_receipts
     total_est_tokens = 0
 
     for iteration in range(MAX_LOCAL_ITERATIONS):
@@ -764,7 +1376,10 @@ def _local_agentic_generate(
                 },
             )
             if tool_receipts:
-                return self._format_tool_receipts(tool_receipts, error=str(e))
+                return self._format_tool_receipts(
+                    tool_receipts,
+                    note=f"Stopped after local planner error: {e}. Results so far:",
+                )
             # Fall back to flagship model
             _gov_logger.info(
                 "local_agentic_fallback_to_flagship",
@@ -841,6 +1456,58 @@ def _local_agentic_generate(
                 },
             )
 
+            input_error = _tool_input_error(skill_name, inputs or {})
+            if input_error:
+                result_content = f"Error: {input_error}"
+                tool_receipts.append({
+                    "skill": skill_name,
+                    "inputs": inputs,
+                    "result": f"REJECTED - {input_error}",
+                })
+                _persist_tool_call_receipt(
+                    self,
+                    skill_name,
+                    inputs or {},
+                    f"REJECTED - {input_error}",
+                    outputs={"error": input_error},
+                    error=input_error,
+                    iteration=iteration + 1,
+                )
+                if self.toolflow_emitter:
+                    self.toolflow_emitter.tool_call_completed(
+                        _quest_id, iteration + 1, skill_name,
+                        "REJECTED", input_error, _channel,
+                    )
+                _gov_logger.warning(
+                    "local_invalid_tool_call_rejected",
+                    extra={"skill": skill_name, "error": input_error},
+                )
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "content": result_content,
+                })
+                continue
+
+            prior_success = _find_successful_tool_receipt(tool_receipts, skill_name, inputs or {})
+            if prior_success:
+                result_content = str({
+                    "status": "already_completed",
+                    "message": "This exact tool target already succeeded earlier in this governed run.",
+                    "tool": skill_name,
+                    "outputs": prior_success.get("outputs") or {},
+                })
+                _gov_logger.warning(
+                    "local_duplicate_successful_tool_call_suppressed",
+                    extra={"skill": skill_name, "iteration": iteration + 1},
+                )
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "content": result_content,
+                })
+                continue
+
             # Safety classification
             safety = self._classify_tool_call_safety(skill_name, inputs)
             sentry_req_id = None
@@ -888,30 +1555,34 @@ def _local_agentic_generate(
                     "result": "ESCALATED — needs Commander approval",
                     "approval_id": sentry_req_id,
                 })
-                # Create ActionCard for approval
-                if self.actioncard_factory:
-                    try:
-                        _quest_id_here = getattr(self, "_current_quest_id", None) or ""
-                        self.actioncard_factory.from_sentry_request(
-                            req_id=sentry_req_id or f"block-{skill_name}",
-                            tool_name=skill_name,
-                            params=inputs or {},
-                            quest_id=_quest_id_here,
-                        )
-                    except Exception as _ac_exc:
-                        _gov_logger.warning(
-                            "action_card_creation_failed",
-                            extra={
-                                "context": "local_agentic",
-                                "error": str(_ac_exc),
-                            },
-                        )
+                _persist_tool_call_receipt(
+                    self,
+                    skill_name,
+                    inputs or {},
+                    "ESCALATED - needs Commander approval",
+                    outputs={"message": result_content},
+                    error="Requires Commander approval",
+                    approval_id=sentry_req_id,
+                    iteration=iteration + 1,
+                )
+                _quest_id_here = getattr(self, "_current_quest_id", None) or ""
+                _card, approval_ref, approval_count = _create_approval_card(
+                    self,
+                    prompt,
+                    _quest_id_here,
+                    skill_name,
+                    inputs or {},
+                    sentry_req_id,
+                )
+                return _pending_approval_response(skill_name, approval_ref, approval_count)
             else:
                 # Execute the skill
                 self.governor.log_usage("tool_calls", 1)
                 _exec_success = False
+                _exec_start_ms = int(_time.time() * 1000)
                 try:
                     skill_result = self.skill_executor.run(skill_name, inputs)
+                    _exec_duration_ms = int(_time.time() * 1000) - _exec_start_ms
                     if skill_result.success:
                         _exec_success = True
                         result_content = str(skill_result.outputs or {"status": "success"})
@@ -923,6 +1594,15 @@ def _local_agentic_generate(
                             "result": "SUCCESS",
                             "outputs": skill_result.outputs,
                         })
+                        _persist_tool_call_receipt(
+                            self,
+                            skill_name,
+                            inputs or {},
+                            "SUCCESS",
+                            outputs=skill_result.outputs or {},
+                            duration_ms=_exec_duration_ms,
+                            iteration=iteration + 1,
+                        )
                     else:
                         result_content = f"Error: {skill_result.error}"
                         tool_receipts.append({
@@ -930,13 +1610,34 @@ def _local_agentic_generate(
                             "inputs": inputs,
                             "result": f"FAILED: {skill_result.error}",
                         })
+                        _persist_tool_call_receipt(
+                            self,
+                            skill_name,
+                            inputs or {},
+                            f"FAILED: {skill_result.error}",
+                            outputs={"error": skill_result.error},
+                            error=str(skill_result.error),
+                            duration_ms=_exec_duration_ms,
+                            iteration=iteration + 1,
+                        )
                 except Exception as e:
+                    _exec_duration_ms = int(_time.time() * 1000) - _exec_start_ms
                     result_content = f"Exception: {e}"
                     tool_receipts.append({
                         "skill": skill_name,
                         "inputs": inputs,
                         "result": f"EXCEPTION: {e}",
                     })
+                    _persist_tool_call_receipt(
+                        self,
+                        skill_name,
+                        inputs or {},
+                        f"EXCEPTION: {e}",
+                        outputs={"error": str(e)},
+                        error=str(e),
+                        duration_ms=_exec_duration_ms,
+                        iteration=iteration + 1,
+                    )
 
                 # Record governance event for trust ledger tracking
                 try:
@@ -1005,8 +1706,8 @@ def _execute_with_llm(self, graph, user_text: str = "") -> str:
         "3. If the user corrected the plan in the conversation above, follow their correction — NOT the original plan.\n"
         "4. You MUST use your tools to execute each step. For example:\n"
         "   - Use network_client (method=GET) to fetch API docs, check endpoints, research\n"
-        "   - Use command_runner to run shell commands, check system state\n"
-        "   - Use repo_writer to create/edit configuration files\n"
+        "   - Use command_runner to run one simple command at a time; no pipes or shell metacharacters\n"
+        "   - Use repo_writer to create/edit configuration files. For Lancelot source edits set workspace=/home/lancelot/app\n"
         "   - Use service_runner to manage Docker services\n"
         "5. Do NOT just describe what you would do — actually CALL the tools.\n"
         "6. Do NOT claim you have accomplished something unless you called a tool and got a result.\n"

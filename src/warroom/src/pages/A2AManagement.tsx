@@ -620,8 +620,13 @@ function ActivityTab() {
 export function A2AManagement() {
   usePageTitle('A2A Protocol')
 
-  const { data: status } = usePolling<A2AStatus>({ fetcher: fetchA2AStatus, interval: 15_000 })
-  const { data: agentList, refetch: refetchAgents } = usePolling<AgentListResponse>({ fetcher: () => fetchRemoteAgents(), interval: 10_000 })
+  const { data: status, loading: statusLoading } = usePolling<A2AStatus>({ fetcher: fetchA2AStatus, interval: 15_000 })
+  const a2aEnabled = status?.enabled === true
+  const { data: agentList, refetch: refetchAgents } = usePolling<AgentListResponse>({
+    fetcher: () => fetchRemoteAgents(),
+    interval: 10_000,
+    enabled: a2aEnabled,
+  })
 
   const [activeTab, setActiveTab] = useState<TabId>('registry')
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
@@ -662,7 +667,7 @@ export function A2AManagement() {
   }, [refetchAgents, selectedAgentId, selectAgent])
 
   // Disabled state
-  if (status && !status.enabled) {
+  if (!statusLoading && !a2aEnabled) {
     return (
       <div className="p-6">
         <h2 className="text-xl font-semibold text-text-primary mb-2">A2A Protocol</h2>

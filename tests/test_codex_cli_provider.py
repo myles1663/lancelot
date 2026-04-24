@@ -13,6 +13,7 @@ from src.core.providers.tool_schema import NormalizedToolDeclaration
 
 
 def test_generate_uses_codex_exec(monkeypatch, tmp_path):
+    monkeypatch.delenv("LANCELOT_CODEX_CLI_TIMEOUT_SECONDS", raising=False)
     home = tmp_path / "home"
     auth_dir = home / ".codex"
     auth_dir.mkdir(parents=True)
@@ -26,6 +27,7 @@ def test_generate_uses_codex_exec(monkeypatch, tmp_path):
         captured["cmd"] = cmd
         captured["env"] = env
         captured["stdin"] = stdin
+        captured["timeout"] = timeout
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr("src.core.providers.codex_cli_client.shutil.which", lambda _: "/usr/bin/codex")
@@ -39,22 +41,21 @@ def test_generate_uses_codex_exec(monkeypatch, tmp_path):
     )
 
     assert result.text == "CLI_OK"
-    assert captured["cmd"][:6] == [
-        "codex",
-        "exec",
-        "--ephemeral",
-        "--skip-git-repo-check",
-        "--sandbox",
-        "read-only",
-    ]
+    assert captured["cmd"][:4] == ["codex", "exec", "--ephemeral", "--skip-git-repo-check"]
+    assert "--sandbox" in captured["cmd"]
+    assert "read-only" in captured["cmd"]
     assert "-m" in captured["cmd"]
+    assert "enabled_tools=[]" in captured["cmd"]
+    assert 'disabled_tools=["shell","exec","apply_patch","list_dir","read_file"]' in captured["cmd"]
     assert captured["env"]["HOME"] == str(home)
     assert captured["stdin"] is subprocess.DEVNULL
+    assert captured["timeout"] == 120
     assert "SYSTEM:\nsystem prompt" in captured["cmd"][-1]
     assert "USER:\nping" in captured["cmd"][-1]
 
 
 def test_generate_with_tools_returns_tool_calls(monkeypatch, tmp_path):
+    monkeypatch.delenv("LANCELOT_CODEX_CLI_TOOL_TIMEOUT_SECONDS", raising=False)
     home = tmp_path / "home"
     auth_dir = home / ".codex"
     auth_dir.mkdir(parents=True)
@@ -79,6 +80,7 @@ def test_generate_with_tools_returns_tool_calls(monkeypatch, tmp_path):
         )
         captured["cmd"] = cmd
         captured["stdin"] = stdin
+        captured["timeout"] = timeout
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr("src.core.providers.codex_cli_client.shutil.which", lambda _: "/usr/bin/codex")
@@ -113,10 +115,169 @@ def test_generate_with_tools_returns_tool_calls(monkeypatch, tmp_path):
     assert result.text is None
     assert "--output-schema" in captured["cmd"]
     assert captured["stdin"] is subprocess.DEVNULL
+    assert captured["timeout"] == 75
     assert "must request at least one declared tool call" in captured["cmd"][-1]
     assert "current system health" in captured["cmd"][-1]
+    assert "Do not use shell metacharacters or pipelines" in captured["cmd"][-1]
+    assert "workspace='/home/lancelot/app'" in captured["cmd"][-1]
     assert "DECLARED LANCELOT TOOLS:" in captured["cmd"][-1]
     assert "TOOL[health_check]" not in captured["cmd"][-1]
+
+
+def test_generate_with_tools_retries_native_shell_sandbox_failure(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    auth_dir = home / ".codex"
+    auth_dir.mkdir(parents=True)
+    (auth_dir / "auth.json").write_text("{}", encoding="utf-8")
+
+    prompts = []
+
+    def fake_run(cmd, text, capture_output, stdin, env, timeout, check):
+        output_path = Path(cmd[cmd.index("--output-last-message") + 1])
+        prompts.append(cmd[-1])
+        if len(prompts) == 1:
+            output_path.write_text(
+                json.dumps(
+                    {
+                        "action": "final",
+                        "tool_calls": [],
+                        "final_text": "bwrap: No permissions to create a new namespace",
+                    }
+                ),
+                encoding="utf-8",
+            )
+        else:
+            output_path.write_text(
+                json.dumps(
+                    {
+                        "action": "tool_calls",
+                        "tool_calls": [
+                            {"name": "command_runner", "args_json": "{\"command\":\"pwd\"}"},
+                        ],
+                        "final_text": "",
+                    }
+                ),
+                encoding="utf-8",
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("src.core.providers.codex_cli_client.shutil.which", lambda _: "/usr/bin/codex")
+    monkeypatch.setattr("src.core.providers.codex_cli_client.subprocess.run", fake_run)
+
+    client = CodexCLIProviderClient(workdir="/workspace", codex_home=str(home))
+    result = client.generate_with_tools(
+        model="gpt-5.4-mini",
+        messages=[{"role": "user", "content": "Inspect the working directory"}],
+        system_instruction="Follow governance.",
+        tools=[
+            NormalizedToolDeclaration(
+                name="command_runner",
+                description="Run a governed command",
+                parameters={
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"],
+                },
+            ),
+        ],
+        tool_config={"mode": "ANY"},
+    )
+
+    assert len(prompts) == 2
+    assert "PLANNER RETRY:" in prompts[1]
+    assert result.tool_calls[0].name == "command_runner"
+    assert result.tool_calls[0].args == {"command": "pwd"}
+
+
+def test_generate_with_tools_uses_configured_tool_timeout(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    auth_dir = home / ".codex"
+    auth_dir.mkdir(parents=True)
+    (auth_dir / "auth.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("LANCELOT_CODEX_CLI_TOOL_TIMEOUT_SECONDS", "14")
+
+    captured = {}
+
+    def fake_run(cmd, text, capture_output, stdin, env, timeout, check):
+        output_path = Path(cmd[cmd.index("--output-last-message") + 1])
+        output_path.write_text(
+            json.dumps({"action": "final", "tool_calls": [], "final_text": "done"}),
+            encoding="utf-8",
+        )
+        captured["timeout"] = timeout
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("src.core.providers.codex_cli_client.shutil.which", lambda _: "/usr/bin/codex")
+    monkeypatch.setattr("src.core.providers.codex_cli_client.subprocess.run", fake_run)
+
+    client = CodexCLIProviderClient(workdir="/workspace", codex_home=str(home))
+    client.generate_with_tools(
+        model="gpt-5.4-mini",
+        messages=[{"role": "user", "content": "check"}],
+        system_instruction="Follow governance.",
+        tools=[
+            NormalizedToolDeclaration(
+                name="health_check",
+                description="Check system health",
+                parameters={"type": "object", "properties": {}, "required": []},
+            ),
+        ],
+    )
+
+    assert captured["timeout"] == 14
+
+
+def test_codex_timeout_returns_clear_error(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    auth_dir = home / ".codex"
+    auth_dir.mkdir(parents=True)
+    (auth_dir / "auth.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("LANCELOT_CODEX_CLI_TIMEOUT_SECONDS", "11")
+
+    def fake_run(cmd, text, capture_output, stdin, env, timeout, check):
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr("src.core.providers.codex_cli_client.shutil.which", lambda _: "/usr/bin/codex")
+    monkeypatch.setattr("src.core.providers.codex_cli_client.subprocess.run", fake_run)
+
+    client = CodexCLIProviderClient(workdir="/workspace", codex_home=str(home))
+    with pytest.raises(TimeoutError, match="codex exec timed out after 11s"):
+        client.generate(
+            model="gpt-5.4",
+            messages=[{"role": "user", "content": "ping"}],
+            system_instruction="system prompt",
+        )
+
+
+def test_tool_prompt_truncates_old_transcript_and_keeps_latest(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    auth_dir = home / ".codex"
+    auth_dir.mkdir(parents=True)
+    (auth_dir / "auth.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("LANCELOT_CODEX_CLI_MAX_TRANSCRIPT_CHARS", "1000")
+    monkeypatch.setattr("src.core.providers.codex_cli_client.shutil.which", lambda _: "/usr/bin/codex")
+
+    client = CodexCLIProviderClient(workdir="/workspace", codex_home=str(home))
+    prompt = client._render_tool_prompt(
+        system_instruction="Follow governance.",
+        messages=[
+            {"role": "user", "content": "OLD_START " + ("x" * 2500)},
+            {"role": "user", "content": "LATEST_REQUEST inspect ticket sentinel"},
+        ],
+        tools=[
+            {
+                "name": "command_runner",
+                "description": "Run commands",
+                "parameters": {"type": "object"},
+            }
+        ],
+        tool_config=None,
+    )
+
+    assert "Earlier conversation truncated" in prompt
+    assert "OLD_START" not in prompt
+    assert "LATEST USER MESSAGE (authoritative" in prompt
+    assert "LATEST_REQUEST inspect ticket sentinel" in prompt
 
 
 def test_generate_with_tools_returns_final_text(monkeypatch, tmp_path):

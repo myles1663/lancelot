@@ -38,18 +38,20 @@ class FetchError(Exception):
 # Public API
 # ---------------------------------------------------------------------------
 
-def model_path(models_dir=None, lockfile_data=None):
+def model_path(models_dir=None, lockfile_data=None, profile_name=None):
     """Return the expected local path for the model file.
 
     Args:
         models_dir: Directory where model weights are stored.
         lockfile_data: Pre-loaded lockfile dict (loads from disk if None).
+        profile_name: Optional model profile from models.lock.yaml.
 
     Returns:
         pathlib.Path to the model file (may not exist yet).
     """
+    profile_name = profile_name or os.environ.get("LOCAL_MODEL_PROFILE")
     models_dir = pathlib.Path(models_dir) if models_dir else DEFAULT_MODELS_DIR
-    info = get_model_info(lockfile_data)
+    info = get_model_info(lockfile_data, profile_name=profile_name)
     return models_dir / info["filename"]
 
 
@@ -88,7 +90,7 @@ def verify_checksum(file_path, expected_hash):
     return True
 
 
-def is_model_present(models_dir=None, lockfile_data=None):
+def is_model_present(models_dir=None, lockfile_data=None, profile_name=None):
     """Check whether the model file exists and has a valid checksum.
 
     Returns:
@@ -97,8 +99,13 @@ def is_model_present(models_dir=None, lockfile_data=None):
     if lockfile_data is None:
         lockfile_data = load_lockfile()
 
-    info = get_model_info(lockfile_data)
-    path = model_path(models_dir=models_dir, lockfile_data=lockfile_data)
+    profile_name = profile_name or os.environ.get("LOCAL_MODEL_PROFILE")
+    info = get_model_info(lockfile_data, profile_name=profile_name)
+    path = model_path(
+        models_dir=models_dir,
+        lockfile_data=lockfile_data,
+        profile_name=profile_name,
+    )
 
     if not path.exists():
         return False
@@ -113,6 +120,7 @@ def is_model_present(models_dir=None, lockfile_data=None):
 def fetch_model(
     models_dir=None,
     lockfile_data=None,
+    profile_name=None,
     progress_callback=None,
     force=False,
 ):
@@ -122,6 +130,7 @@ def fetch_model(
         models_dir: Directory to store the downloaded model.
                     Defaults to local_models/weights/.
         lockfile_data: Pre-loaded lockfile dict (loads from disk if None).
+        profile_name: Optional model profile from models.lock.yaml.
         progress_callback: Optional callable(bytes_downloaded, total_bytes)
                            called after each chunk for progress reporting.
         force: If True, re-download even if the model already exists
@@ -137,7 +146,8 @@ def fetch_model(
     if lockfile_data is None:
         lockfile_data = load_lockfile()
 
-    info = get_model_info(lockfile_data)
+    profile_name = profile_name or os.environ.get("LOCAL_MODEL_PROFILE")
+    info = get_model_info(lockfile_data, profile_name=profile_name)
     models_dir = pathlib.Path(models_dir) if models_dir else DEFAULT_MODELS_DIR
 
     # Ensure target directory exists

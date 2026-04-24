@@ -74,8 +74,8 @@ The Model Router selects the appropriate LLM lane based on task type, risk level
 
 | Priority | Lane | Models | When Used |
 |----------|------|--------|-----------|
-| 1 | `local_redaction` | Qwen3-8B (local) | Local scrub lane used when frontier scrub policy requires or prefers local redaction |
-| 2 | `local_utility` | Qwen3-8B (local) | Intent classification, summarization, JSON extraction |
+| 1 | `local_redaction` | Local scrub role router | Frontier-bound scrub cascade: deterministic pre-scrub, local region finding, local segment verification, deterministic residual validation |
+| 2 | `local_utility` | Local utility role | Intent classification, summarization, JSON extraction |
 | 3 | `flagship_fast` | Gemini Flash / GPT-4o-mini / Claude Sonnet 4.5 / Grok-3-mini / Nemotron Nano | Standard reasoning, tool calls, orchestration |
 | 4 | `flagship_deep` | Gemini Pro / GPT-4o / Claude Opus 4 / Grok-3 / Nemotron Super | Complex planning, high-risk decisions |
 | — | `cache` | Gemini 2.5 Flash / GPT-4o-mini / Claude Haiku 4.5 / Grok-3-mini / Nemotron Nano 9B | Lightweight caching and low-latency lookups |
@@ -90,6 +90,30 @@ The Model Router selects the appropriate LLM lane based on task type, risk level
 The `ProviderProfile` dataclass carries a `mode` field (`"sdk"` | `"api"`) and each `LaneConfig` now accepts an optional `thinking` dict (see Extended Thinking below). A new onboarding state, `PROVIDER_MODE_SELECTION`, appears between `HANDSHAKE` and `LOCAL_UTILITY_SETUP` to let the owner choose the provider mode at first run.
 
 When a frontier provider is selected, user prompts and tool-result payloads are governed by the frontier scrub policy before they are sent to `ProviderClient.generate()` / `generate_with_tools()`. In `required` or `preferred` mode, the runtime uses the local redaction lane when local scrubbing is available. In `required` mode, frontier egress is blocked if local scrubbing is unavailable or if the local scrub output still contains detectable structured PII. That residual-PII check now normalizes zero-width characters and common Unicode separator variants before matching, so obfuscated emails, SSNs, phone numbers, DOBs, and card numbers still fail closed. In `preferred` mode, direct frontier fallback is allowed and written as an immutable `pii_scrub_fallback` receipt, while successful structured scrubs and fail-closed blocks emit `pii_scrub_applied` and `pii_scrub_blocked` receipts respectively. The local model therefore serves two distinct runtime roles: low-grade/low-risk execution and privacy-preserving redaction before frontier egress.
+
+The local privacy path is role-based. The default deployment can run every role against the same local model service, but production operators can split the roles with `LOCAL_LLM_SCRUB_REGION_FINDER_URL`, `LOCAL_LLM_SCRUB_SEGMENT_VERIFIER_URL`, and `LOCAL_LLM_UTILITY_URL`. The intended low-latency shape is a small local model for `scrub_region_finder` that scans the full deterministic-pre-scrubbed payload and returns line regions, plus a larger local model for `scrub_segment_verifier` and `utility`. This keeps the larger model on short suspicious segments and low-risk utility tasks instead of forcing it through every large frontier payload.
+
+The default local runtime remains the known-good `qwen3-8b` profile on
+`llama_cpp_python`. Bonsai acceleration is opt-in through named lockfile
+profiles and the Prism-backed runtime. In that shape `bonsai-1.7b` serves the
+region-finder role, while `bonsai-8b` serves segment verification and local
+utility work after host-local latency validation. `ternary-bonsai-8b` remains
+pinned as an opt-in experimental profile, but operators should not enable it
+without a short verifier smoke on their target GPU/runtime. The FastAPI wrapper
+and readiness smoke remain the public contract, so a failed Prism backend
+degrades the local roles instead of silently allowing frontier egress.
+
+For large frontier payloads with privacy semantic cues, or payloads where deterministic pre-scrub already found structured PII, `LocalPIIScrubber` runs a four-stage cascade:
+
+1. Deterministic structured pre-scrub for known PII patterns.
+2. Deterministic candidate filtering to keep broad privacy words from sending harmless context through the local model.
+3. Local region-finder pass over bounded numbered windows of the pre-scrubbed payload.
+4. Local segment-verifier pass over only the flagged line ranges.
+5. Deterministic residual validation against the original text before egress.
+
+Large payloads with no deterministic PII and no privacy semantic cues take a deterministic-clean fast path. That avoids pushing ordinary engineering/status output through the local model scanner while preserving the model cascade for content that mentions credentials, accounts, tickets, customers, addresses, passwords, or related privacy terms. The region-finder role defaults to 6,000-character windows with a bounded window count so larger governed payloads get local model coverage without unbounded latency.
+
+For small payloads that do not need the cascade, the existing router/direct local-redaction path remains in place and validates the candidate against the original text. That preserves the fail-closed behavior where bad local model output is rejected rather than hidden by pre-scrubbing.
 
 That privacy boundary now exists as a dedicated subsystem: `src/core/frontier_scrubber.py`. `LocalPIIScrubber.scrub_text()` is the canonical frontier-bound text API, `scrub_payload()` handles recursive provider payload sanitization, and `status()` exposes the persisted scrub policy plus live fallback state for operators and tests.
 
@@ -541,16 +565,16 @@ SQLite-backed job scheduler supporting cron and interval triggers.
 **Token lifecycle:**
 1. **Initiation** — `POST /api/v1/providers/oauth/openai-codex/initiate` starts the PKCE flow: generates `code_verifier` + `code_challenge`, builds the OpenAI authorization URL (`auth.openai.com/oauth/authorize`), and returns it to the owner.
 2. **Callback** — `GET /auth/callback` (Gateway) receives the authorization code, exchanges it for access + refresh tokens via `auth.openai.com/oauth/token`, and stores tokens in the encrypted vault (`openai.codex.access_token`, `openai.codex.refresh_token`, `openai.codex.token_expiry`, `openai.codex.account_id`).
-3. **CLI auth source** — The official Codex CLI reads the mounted host session from `~/.codex/auth.json` inside the container (`/home/lancelot/.codex/auth.json`) so non-interactive `codex exec` calls can authenticate without an API key. The runtime resolves that mounted auth path explicitly instead of assuming the process home directory matches the mount target.
+3. **CLI auth source** — The official Codex CLI reads the mounted host session from `~/.codex/auth.json` inside the container (`/home/lancelot/.codex/auth.json`). Lancelot imports the same OAuth access token as model-transport credential material without invoking the Codex CLI agent runtime for normal turns.
 4. **Background refresh** — A daemon thread (`codex-oauth-refresh`) wakes every 2 minutes, checks token expiry, and proactively refreshes 5 minutes before the access token expires.
 5. **Revocation** — `POST /api/v1/providers/oauth/openai-codex/revoke` clears all stored tokens from the vault.
 6. **Status** — `GET /api/v1/providers/oauth/openai-codex/status` returns current token validity, expiry time, and account binding.
 
 **Client ID:** Uses OpenAI's public Codex client (`app_EMoamEEZ73f0CkXaXp7hrann`). Scopes: `openid profile email offline_access`.
 
-**Provider routing:** When `LANCELOT_PROVIDER=openai-codex`, the provider factory creates `CodexCLIProviderClient`, which runs `codex exec` in ephemeral mode and returns either normalized Lancelot tool calls or a final answer. Model profiles from `config/models.yaml` (`openai-codex` section) configure fast/deep/cache lanes.
+**Provider routing:** When `LANCELOT_PROVIDER=openai-codex`, the provider factory creates `OpenAICodexResponsesProviderClient`, which calls the ChatGPT Codex Responses backend (`https://chatgpt.com/backend-api/codex`) with Codex OAuth credentials. The standard OpenAI Platform API path remains separate; ChatGPT subscription tokens are not accepted by `api.openai.com/v1` model-request scope. If native Responses initialization cannot obtain OAuth credentials, Lancelot can fall back to `CodexCLIProviderClient` for recovery. Model profiles from `config/models.yaml` (`openai-codex` section) configure fast/deep/cache lanes.
 
-**Governed tool execution:** Codex is the planner, not the executor. Tool requests returned by `CodexCLIProviderClient.generate_with_tools()` are fed into the orchestrator's standard agentic loop, which applies the same declared-tool validation, safety classification, approval/Sentry checks, receipt emission, and `SkillExecutor` runtime used by other providers. Codex never executes shell/filesystem/network actions directly in this integration.
+**Governed tool execution:** Codex is the planner, not the executor. Function calls returned by the Codex Responses provider are fed into the orchestrator's standard agentic loop, which applies the same declared-tool validation, safety classification, approval/Sentry checks, receipt emission, and `SkillExecutor` runtime used by other providers. The CLI recovery path also retries native-tool sandbox failures as declared Lancelot tool calls instead of surfacing a raw sandbox error to the user.
 
 **Onboarding:** Option [6] in provider selection. Selecting Codex now checks for mounted host Codex auth first; when `~/.codex/auth.json` is already present on the host, onboarding marks credentials verified immediately and advances without requiring browser OAuth. Browser OAuth remains the fallback only when mounted CLI auth is unavailable, and successful fallback still sets `LANCELOT_PROVIDER=openai-codex` and `LANCELOT_AUTH_MODE=OAUTH`.
 

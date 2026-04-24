@@ -49,8 +49,13 @@ function WarRoomShellInner() {
       enqueueNotification(message, priority)
     }
 
-    // Route toolflow.* and actioncard_* events to LiveEventsContext
-    if (event.type.startsWith('toolflow.') || event.type.startsWith('actioncard_')) {
+    // Route live execution/progress events to LiveEventsContext
+    if (
+      event.type.startsWith('toolflow.') ||
+      event.type.startsWith('actioncard_') ||
+      event.type === 'chat.progress' ||
+      event.type.startsWith('chat.run_')
+    ) {
       handleLiveEvent(event)
     }
   }, [enqueueNotification, handleLiveEvent])

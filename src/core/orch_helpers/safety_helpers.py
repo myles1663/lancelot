@@ -4,28 +4,32 @@
 
 import logging
 import re
+import shlex
 
 
 logger = logging.getLogger(__name__)
 
 
-def classify_tool_call_safety(skill_name: str, inputs: dict) -> str:
+def classify_tool_call_safety(skill_name: str, inputs: dict, *, channel: str = "api") -> str:
     """Classify a tool call as 'auto' (safe, read-only) or 'escalate' (needs approval).
 
     Read-only operations execute automatically during research.
     Write operations within the workspace are auto-approved (T1 risk tier).
     Sensitive writes (.env, system config) and operations outside workspace escalate.
     """
-    READ_ONLY_COMMANDS = (
+    READ_ONLY_COMMANDS = {
         # Linux/Unix
-        "ls", "cat", "grep", "head", "tail", "find", "wc",
-        "git status", "git log", "git diff", "git branch",
-        "echo", "pwd", "whoami", "date", "df", "du",
-        "docker ps", "docker logs", "uname", "hostname",
+        "ls", "cat", "more", "grep", "rg", "head", "tail", "wc",
+        "echo", "pwd", "whoami", "date", "df", "du", "uname", "hostname",
         # Windows (read-only info commands)
         "ver", "systeminfo", "ipconfig", "netstat",
         "tasklist", "dir", "type", "where", "set",
-    )
+    }
+    READ_ONLY_GIT_SUBCOMMANDS = {
+        "status", "log", "diff", "branch", "show", "ls-files",
+        "grep", "rev-parse", "remote",
+    }
+    READ_ONLY_DOCKER_SUBCOMMANDS = {"ps", "logs", "inspect", "version", "info"}
 
     # Sensitive file patterns that always require approval
     SENSITIVE_PATTERNS = (".env", ".secret", "credentials", "token", "password", "key.pem")
@@ -42,9 +46,22 @@ def classify_tool_call_safety(skill_name: str, inputs: dict) -> str:
 
     if skill_name == "command_runner":
         cmd = inputs.get("command", "").strip()
-        for safe_prefix in READ_ONLY_COMMANDS:
-            if cmd.startswith(safe_prefix):
-                return "auto"
+        parts = _split_command(cmd)
+        if not parts:
+            return "escalate"
+        binary = parts[0].rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
+        args = parts[1:]
+
+        if binary in READ_ONLY_COMMANDS:
+            return "auto"
+        if binary == "sed" and not any(_is_sed_in_place_arg(arg) for arg in args):
+            return "auto"
+        if binary == "find" and not any(arg in {"-delete", "-exec", "-execdir", "-ok", "-okdir"} for arg in args):
+            return "auto"
+        if binary == "git" and _git_subcommand(args) in READ_ONLY_GIT_SUBCOMMANDS:
+            return "auto"
+        if binary == "docker" and args and args[0].lower() in READ_ONLY_DOCKER_SUBCOMMANDS:
+            return "auto"
         return "escalate"
 
     if skill_name == "telegram_send":
@@ -85,12 +102,47 @@ def classify_tool_call_safety(skill_name: str, inputs: dict) -> str:
             if pattern in target_path:
                 return "escalate"
 
+        # War Room is the operator-facing governed surface. Workspace/repo writes
+        # there must pause for explicit approval so ActionCards can bound scope.
+        if channel == "warroom" and action in ("create", "edit", "patch"):
+            return "escalate"
+
         # Workspace create/edit/patch operations are auto-approved (T1 risk)
         if action in ("create", "edit", "patch"):
             return "auto"
 
     # service_runner and anything else -> escalate
     return "escalate"
+
+
+def _split_command(command: str) -> list[str]:
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return []
+
+
+def _is_sed_in_place_arg(arg: str) -> bool:
+    lowered = arg.lower()
+    return lowered == "--in-place" or lowered.startswith("--in-place=") or lowered == "-i" or lowered.startswith("-i")
+
+
+def _git_subcommand(args: list[str]) -> str:
+    i = 0
+    value_options = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
+    while i < len(args):
+        arg = args[i]
+        if arg in value_options:
+            i += 2
+            continue
+        if any(arg.startswith(prefix + "=") for prefix in value_options if prefix.startswith("--")):
+            i += 1
+            continue
+        if arg.startswith("-"):
+            i += 1
+            continue
+        return arg.lower()
+    return ""
 
 
 def is_narration_without_content(text: str) -> bool:

@@ -152,6 +152,8 @@ class LibrarianV2:
     PROTECTED_FILES = {
         "USER.md", "onboarding_snapshot.json", "usage_stats.json",
         "vault.key", "receipts.db", "receipts.db-shm", "receipts.db-wal",
+        "actioncards.db", "actioncards.db-shm", "actioncards.db-wal",
+        "mcp_pending_requests.json",
         "librarian.log",
     }
 

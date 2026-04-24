@@ -62,6 +62,11 @@ The primary interaction interface — send messages to Lancelot and see governed
 - Intent classification badge showing how the message was routed
 - Model lane indicator showing which LLM handled the request
 - Crusader mode toggle for high-agency execution
+- Live governance progress cards for model routing, tool execution, approval waits, and completion/failure states
+- Text commands are queued through `POST /chat/async`; the UI shows active run state, current progress message, phase timing, and renders the final assistant message from `chat.run_*` events instead of waiting on a long HTTP request
+- Active async command runs can be cancelled from the run card; failed or cancelled runs can be retried as a new governed run
+- Inline ActionCards for approvals; cards lead with operator-readable intent/scope and keep raw tool parameters under technical details
+- Confirmed approvals surface an inline **Continue** prompt so the operator can resume the approved workflow without guessing the next chat command
 - Runtime pause/resume control for stopping new work across chat, scheduler, HIVE, A2A, and TaskRun ingress
 - Emergency stop control for forcing the runtime into paused state and collapsing live HIVE agents through the control plane
 
@@ -69,10 +74,18 @@ The primary interaction interface — send messages to Lancelot and see governed
 - The intent badge tells you how Lancelot classified your request (PLAN_REQUEST, EXEC_REQUEST, KNOWLEDGE_REQUEST, CONVERSATIONAL)
 - The lane indicator shows cost efficiency — local model calls cost nothing, flagship calls use API tokens
 - Receipt IDs in responses are clickable — use them to audit the full governance trace
+- A queued/running command means the backend accepted the request and is still executing; terminal `chat.run_completed`, `chat.run_blocked`, or `chat.run_failed` events produce the final chat response
+- The active run card shows the latest governance progress message plus recent phase timing so operators can distinguish slow model calls from approval, classification, or finalization delay
+- Cancel marks the persisted async run terminal and prevents late completion from changing the visible result. It is cooperative, so a blocking provider/tool call may still finish in the backend after the UI has been released.
+- Retry creates a new run linked to the failed/cancelled run. It re-enters the normal governance path and does not reuse prior approvals.
+- If a governed action pauses for approval, the blocked tool flow remains visible beside the ActionCard until the decision is resolved
+- If an ActionCard approval succeeds, use the inline **Continue** prompt to resume only the approved scope
 - Runtime pause blocks new work but does not cancel work already in flight; active tasks finish unless you use a stronger stop or kill control
 - Emergency stop is the stronger control: it pauses new work and issues a live local stop across the HIVE execution mesh
 - The pause button is a real control-plane action now. It reflects the persisted backend state and switches to **Resume Runtime** when the runtime is paused.
 - Emergency stop is also a real control-plane action now. It no longer relies on chat interpretation, and its source is preserved in runtime pause state and receipts.
+
+Operational details for receipt-backed completion, approval context, workspace boundaries, and long-running status troubleshooting are in [Command Center Execution Runbook](operations/runbooks/command-center-execution.md).
 
 ---
 
@@ -400,8 +413,9 @@ Setup & Recovery and the Health panel now distinguish:
 - **Install state** — whether the local model package and weights are present
 - **Runtime loaded** — whether the model process initialized successfully
 - **Runtime ready** — whether a recent local inference smoke passed
+- **Role readiness** - whether the scrub region-finder, scrub segment-verifier, and utility roles are configured, enabled, and ready
 
-If the model is loaded but not ready, Lancelot does not treat the local execution or local scrub lane as healthy.
+If the model is loaded but not ready, Lancelot does not treat the local execution or local scrub lane as healthy. If role-specific endpoints are configured, Setup & Recovery shows each role's endpoint label, model label, readiness, last error, and smoke timing so operators can distinguish "the local model is down" from "only the scrub verifier endpoint is degraded." When every enabled role-specific endpoint is ready, the top-level local model lane is considered ready even if the legacy fallback `LOCAL_LLM_URL` endpoint is unavailable.
 
 ---
 

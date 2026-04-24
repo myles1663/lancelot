@@ -6,7 +6,7 @@ Lancelot is a self-hosted AI operator for technical users who want model-driven 
 
 1. Install Docker Desktop and Node.js 18+.
 2. Run `npx create-lancelot`.
-3. The installer will collect one provider credential, build the Docker image, and start the stack.
+3. The installer will collect one provider credential, pull the prebuilt core and local-model images, and start the stack.
 4. Open http://localhost:8000.
 5. Verify liveness: `curl http://localhost:8000/health/live`
 6. Send a smoke test: `curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '{"text":"hello"}'`
@@ -17,7 +17,9 @@ Manual setup:
 git clone <repo-url>
 cd lancelot
 cp .env.example .env
-docker compose up --build
+docker compose pull lancelot-core
+docker compose pull local-llm
+docker compose up -d
 ```
 
 For installation details and provider-specific setup, see [docs/installation.md](docs/installation.md).

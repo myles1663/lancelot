@@ -161,6 +161,12 @@ class TestActionCardResolver:
         event = resolver._event_bus.publish_sync.call_args[0][0]
         assert event.type == "actioncard_resolved"
         assert event.payload["card_id"] == card.card_id
+        assert event.payload["button_id"] == "approve"
+        assert event.payload["channel"] == "warroom"
+        assert event.payload["resolved_action"] == "approve"
+        assert event.payload["resolved_channel"] == "warroom"
+        assert event.payload["quest_id"] == card.quest_id
+        assert event.payload["result_status"] == "approved"
 
     def test_creates_receipt(self, resolver, store):
         """resolve() creates an audit receipt."""

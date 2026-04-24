@@ -79,11 +79,49 @@ At least one API key is required. You can configure one or more providers. Keys 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `LOCAL_LLM_URL` | No | `http://local-llm:8080` | URL of the local GGUF model server. Must stay on loopback, `host.docker.internal`, or a single-label local service hostname such as `local-llm`. |
+| `LOCAL_MODEL_PROFILE` | No | `qwen3-8b` | Model profile selected from `local_models/models.lock.yaml`. Bonsai profiles are opt-in and require the Prism runtime. |
+| `LOCAL_LLM_ENGINE` | No | `llama_cpp_python` | Local runtime engine. Use `prism_llama_server` only with `Dockerfile.prism`, `Dockerfile.prism.cuda`, or the optional Bonsai compose services. |
+| `LOCAL_LLM_MODEL` | No | `local-llm` | Operator-visible fallback model label when the endpoint does not report its own model name. |
+| `LOCAL_LLM_DOCKERFILE` | No | `Dockerfile` | Dockerfile used by the default `local-llm` compose service. Set `Dockerfile.prism.cuda` only when replacing the default service with a GPU-backed Prism Bonsai profile. |
+| `BONSAI_LLM_DOCKERFILE` | No | `Dockerfile.prism` | Dockerfile used by the optional Bonsai compose services. `Dockerfile.prism` is CPU-only and suitable for portability smoke tests; `Dockerfile.prism.cuda` is the production GPU-backed path. |
+| `PRISM_CUDA_BASE_IMAGE` | No | `nvidia/cuda:12.3.2-devel-ubuntu22.04` | CUDA devel image used by `Dockerfile.prism.cuda`. Match this to the customer host's NVIDIA driver support. |
+| `PRISM_LLAMA_CPP_REF` | No | `d104cf1b639a909ddea521d61f7cb023c6e41f57` | Pinned PrismML llama.cpp commit used by `Dockerfile.prism.cuda`. |
+| `PRISM_CMAKE_ARGS` | No | `-DGGML_CUDA=ON` | Build flags for the Prism llama.cpp backend. Set explicitly for CPU, Metal, Vulkan, or CUDA deployments. |
+| `PRISM_CUDA_ARCHITECTURES` | No | _(unset)_ | Optional CUDA architecture list for `Dockerfile.prism.cuda`, such as `61` for GTX 10-series cards. Setting this can materially reduce source-build time. |
+| `PRISM_BUILD_JOBS` | No | `2` | Parallel build jobs for the CUDA Prism source build. Keep conservative on small customer hosts. |
 | `LOCAL_MODEL_CTX` | No | `4096` | Context window size (tokens) |
 | `LOCAL_MODEL_THREADS` | No | `4` | CPU threads for inference |
 | `LOCAL_MODEL_GPU_LAYERS` | No | `0` | Number of model layers offloaded to GPU |
 | `LANCELOT_LOCAL_EXECUTION_MODE` | No | `low_risk_only` | Runtime usage policy for local execution: `low_risk_only` or `disabled` |
 | `LANCELOT_FRONTIER_SCRUB_MODE` | No | `required` | Runtime frontier scrub policy: `required`, `preferred`, or `disabled` |
+
+#### Local Model Role Routing
+
+The default deployment uses `LOCAL_LLM_URL` for every local-model role. Operators can split the roles across multiple local model services when they want a small full-payload scrub scanner and a larger segment verifier without adding frontier latency to low-risk utility work. Role URLs are local-control-plane endpoints and must remain on loopback, `host.docker.internal`, or single-label local service names.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `LOCAL_LLM_BONSAI_1_7B_URL` | No | `LOCAL_LLM_URL` | Convenience fallback endpoint for the scrub region-finder role |
+| `LOCAL_LLM_BONSAI_8B_URL` | No | `LOCAL_LLM_URL` | Convenience fallback endpoint for the segment-verifier and utility roles |
+| `LOCAL_LLM_SCRUB_REGION_FINDER_URL` | No | `LOCAL_LLM_BONSAI_1_7B_URL`, then `LOCAL_LLM_URL` | Local endpoint used to scan a pre-scrubbed full payload and return suspicious line regions |
+| `LOCAL_LLM_SCRUB_SEGMENT_VERIFIER_URL` | No | `LOCAL_LLM_BONSAI_8B_URL`, then `LOCAL_LLM_URL` | Local endpoint used to redact only suspicious bounded segments |
+| `LOCAL_LLM_UTILITY_URL` | No | `LOCAL_LLM_BONSAI_8B_URL`, then `LOCAL_LLM_URL` | Local endpoint used for low-risk utility tasks |
+| `LOCAL_LLM_MODEL` | No | `local-llm` | Fallback operator-visible model label for all local roles when the endpoint does not report its own model name |
+| `LOCAL_LLM_SCRUB_REGION_FINDER_MODEL` | No | `LOCAL_LLM_MODEL` | Operator-visible model label for the region-finder role |
+| `LOCAL_LLM_SCRUB_SEGMENT_VERIFIER_MODEL` | No | `LOCAL_LLM_MODEL` | Operator-visible model label for the segment-verifier role |
+| `LOCAL_LLM_UTILITY_MODEL` | No | `LOCAL_LLM_MODEL` | Operator-visible model label for the utility role |
+| `LANCELOT_FRONTIER_SCRUB_CASCADE_ENABLED` | No | `true` | Enables deterministic pre-scrub, local region finding, local segment verification, and deterministic residual validation |
+| `LANCELOT_FRONTIER_SCRUB_CASCADE_MIN_CHARS` | No | `6000` | Minimum original text length that can trigger the role cascade even when deterministic pre-scrub found nothing |
+| `LANCELOT_SCRUB_REGION_FINDER_TIMEOUT_S` | No | `8.0` | Per-request timeout for the region-finder role |
+| `LANCELOT_SCRUB_SEGMENT_VERIFIER_TIMEOUT_S` | No | `10.0` | Per-request timeout for the segment-verifier role |
+| `LANCELOT_LOCAL_UTILITY_TIMEOUT_S` | No | `30.0` | Per-request timeout for the utility role |
+| `LANCELOT_SCRUB_REGION_FINDER_MAX_CHARS` | No | `6000` | Maximum numbered text payload accepted by each region-finder call. Keep this below the local region-finder context window after prompt overhead. |
+| `LANCELOT_SCRUB_REGION_FINDER_MAX_CHUNKS` | No | `8` | Maximum bounded region-finder windows attempted before the scrubber uses deterministic local validation instead of extending latency unboundedly. |
+| `LANCELOT_SCRUB_SEGMENT_VERIFIER_MAX_CHARS` | No | `8000` | Maximum suspicious segment size accepted by the verifier role |
+| `LANCELOT_LOCAL_UTILITY_MAX_CHARS` | No | `12000` | Maximum input size accepted by the utility role |
+| `LANCELOT_SCRUB_REGION_FINDER_ENABLED` | No | `true` | Enables or disables the region-finder role |
+| `LANCELOT_SCRUB_SEGMENT_VERIFIER_ENABLED` | No | `true` | Enables or disables the segment-verifier role |
+| `LANCELOT_LOCAL_UTILITY_ENABLED` | No | `true` | Enables or disables the utility role |
 
 ### Host Bridge
 
@@ -97,6 +135,7 @@ At least one API key is required. You can configure one or more providers. Keys 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `LANCELOT_LOG_LEVEL` | No | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `LANCELOT_CHAT_RUN_STALE_AFTER_S` | No | `3600` | Startup cleanup threshold for async Command Center runs that were still queued/running when the previous gateway process exited |
 
 ### Integrations
 

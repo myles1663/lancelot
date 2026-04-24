@@ -5,6 +5,8 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
+ARG UV_VERSION=0.8.22
+
 # Create a non-root user
 RUN groupadd -r lancelot && useradd -r -g lancelot -m -d /home/lancelot -s /bin/bash lancelot
 
@@ -31,8 +33,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN npm install -g @openai/codex@0.118.0
 
-# Install uv for deterministic dependency resolution
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# Install a pinned uv release from PyPI. Avoid COPY --from=ghcr.io/astral-sh/uv:latest:
+# that path is both floating and can fail on hosts with broken Docker credential helpers.
+RUN python -m pip install --no-cache-dir "uv==${UV_VERSION}"
 
 # Copy dependency files first to leverage Docker cache
 COPY pyproject.toml uv.lock ./

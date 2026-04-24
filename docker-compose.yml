@@ -1,5 +1,6 @@
 services:
   lancelot-core:
+    image: ${LANCELOT_CORE_IMAGE:-ghcr.io/myles1663/lancelot:latest}
     build: .
     container_name: lancelot_core
     volumes:
@@ -27,7 +28,7 @@ services:
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
     depends_on:
       local-llm:
-        condition: service_healthy
+        condition: service_started
       docker-socket-proxy:
         condition: service_started
     ports:
@@ -80,18 +81,32 @@ services:
       - lancelot_net
 
   local-llm:
+    image: ${LOCAL_LLM_IMAGE:-ghcr.io/myles1663/lancelot-local-llm:llama-cpp-0.3.19-cpu}
+    pull_policy: ${LOCAL_LLM_PULL_POLICY:-missing}
     build:
       context: ./local_models
-      dockerfile: Dockerfile
+      dockerfile: ${LOCAL_LLM_DOCKERFILE:-Dockerfile}
       args:
         LOCAL_LLM_WHEEL_VARIANT: ${LOCAL_LLM_WHEEL_VARIANT:-cpu}
         LOCAL_LLM_WHEEL_VERSION: ${LOCAL_LLM_WHEEL_VERSION:-0.3.19}
+        PRISM_RELEASE_TAG: ${PRISM_RELEASE_TAG:-prism-b8846-d104cf1}
+        PRISM_RELEASE_ASSET: ${PRISM_RELEASE_ASSET:-llama-prism-b8846-d104cf1-bin-ubuntu-x64.tar.gz}
+        PRISM_RELEASE_SHA256: ${PRISM_RELEASE_SHA256:-80bb9a820bb61389dc9f34c976f00afc33018d199b8ae81dd1afeaad2044ec87}
+        PRISM_CUDA_BASE_IMAGE: ${PRISM_CUDA_BASE_IMAGE:-nvidia/cuda:12.3.2-devel-ubuntu22.04}
+        PRISM_LLAMA_CPP_REPO: ${PRISM_LLAMA_CPP_REPO:-https://github.com/PrismML-Eng/llama.cpp.git}
+        PRISM_LLAMA_CPP_REF: ${PRISM_LLAMA_CPP_REF:-d104cf1b639a909ddea521d61f7cb023c6e41f57}
+        PRISM_CMAKE_ARGS: ${PRISM_CMAKE_ARGS:--DGGML_CUDA=ON}
+        PRISM_CUDA_ARCHITECTURES: ${PRISM_CUDA_ARCHITECTURES:-}
+        PRISM_BUILD_JOBS: ${PRISM_BUILD_JOBS:-2}
     container_name: lancelot_local_llm
     volumes:
       # Model weights — downloaded during onboarding, never baked into image
       - ./local_models/weights:/home/llm/models:ro
     environment:
       - LOCAL_MODELS_DIR=/home/llm/models
+      - LOCAL_MODEL_PROFILE=${LOCAL_MODEL_PROFILE:-qwen3-8b}
+      - LOCAL_LLM_ENGINE=${LOCAL_LLM_ENGINE:-llama_cpp_python}
+      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-local-llm}
       - LOCAL_MODEL_CTX=${LOCAL_MODEL_CTX:-4096}
       - LOCAL_MODEL_THREADS=${LOCAL_MODEL_THREADS:-4}
       - LOCAL_MODEL_GPU_LAYERS=${LOCAL_MODEL_GPU_LAYERS:-0}
@@ -111,6 +126,108 @@ services:
       interval: 30s
       timeout: 10s
       start_period: 120s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - lancelot_net
+
+  local-bonsai-17b:
+    profiles: ["bonsai"]
+    image: ${BONSAI_LLM_IMAGE:-ghcr.io/myles1663/lancelot-local-llm:prism-b8846-d104cf1}
+    pull_policy: ${BONSAI_LLM_PULL_POLICY:-missing}
+    build:
+      context: ./local_models
+      dockerfile: ${BONSAI_LLM_DOCKERFILE:-Dockerfile.prism}
+      args:
+        PRISM_RELEASE_TAG: ${PRISM_RELEASE_TAG:-prism-b8846-d104cf1}
+        PRISM_RELEASE_ASSET: ${PRISM_RELEASE_ASSET:-llama-prism-b8846-d104cf1-bin-ubuntu-x64.tar.gz}
+        PRISM_RELEASE_SHA256: ${PRISM_RELEASE_SHA256:-80bb9a820bb61389dc9f34c976f00afc33018d199b8ae81dd1afeaad2044ec87}
+        PRISM_CUDA_BASE_IMAGE: ${PRISM_CUDA_BASE_IMAGE:-nvidia/cuda:12.3.2-devel-ubuntu22.04}
+        PRISM_LLAMA_CPP_REPO: ${PRISM_LLAMA_CPP_REPO:-https://github.com/PrismML-Eng/llama.cpp.git}
+        PRISM_LLAMA_CPP_REF: ${PRISM_LLAMA_CPP_REF:-d104cf1b639a909ddea521d61f7cb023c6e41f57}
+        PRISM_CMAKE_ARGS: ${PRISM_CMAKE_ARGS:--DGGML_CUDA=ON}
+        PRISM_CUDA_ARCHITECTURES: ${PRISM_CUDA_ARCHITECTURES:-}
+        PRISM_BUILD_JOBS: ${PRISM_BUILD_JOBS:-2}
+    container_name: lancelot_local_bonsai_17b
+    volumes:
+      - ./local_models/weights:/home/llm/models:ro
+    environment:
+      - LOCAL_MODELS_DIR=/home/llm/models
+      - LOCAL_MODEL_PROFILE=bonsai-1.7b
+      - LOCAL_LLM_ENGINE=prism_llama_server
+      - LOCAL_LLM_MODEL=bonsai-1.7b
+      - LOCAL_MODEL_CTX=${BONSAI_17B_CTX:-32768}
+      - LOCAL_MODEL_THREADS=${BONSAI_17B_THREADS:-4}
+      - LOCAL_MODEL_GPU_LAYERS=${BONSAI_17B_GPU_LAYERS:-99}
+      - LOCAL_LLM_PORT=8080
+      - LOCAL_LLM_BACKEND_PORT=8091
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    ports:
+      - "${BONSAI_17B_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - lancelot_net
+
+  local-bonsai-8b:
+    profiles: ["bonsai"]
+    image: ${BONSAI_LLM_IMAGE:-ghcr.io/myles1663/lancelot-local-llm:prism-b8846-d104cf1}
+    pull_policy: ${BONSAI_LLM_PULL_POLICY:-missing}
+    build:
+      context: ./local_models
+      dockerfile: ${BONSAI_LLM_DOCKERFILE:-Dockerfile.prism}
+      args:
+        PRISM_RELEASE_TAG: ${PRISM_RELEASE_TAG:-prism-b8846-d104cf1}
+        PRISM_RELEASE_ASSET: ${PRISM_RELEASE_ASSET:-llama-prism-b8846-d104cf1-bin-ubuntu-x64.tar.gz}
+        PRISM_RELEASE_SHA256: ${PRISM_RELEASE_SHA256:-80bb9a820bb61389dc9f34c976f00afc33018d199b8ae81dd1afeaad2044ec87}
+        PRISM_CUDA_BASE_IMAGE: ${PRISM_CUDA_BASE_IMAGE:-nvidia/cuda:12.3.2-devel-ubuntu22.04}
+        PRISM_LLAMA_CPP_REPO: ${PRISM_LLAMA_CPP_REPO:-https://github.com/PrismML-Eng/llama.cpp.git}
+        PRISM_LLAMA_CPP_REF: ${PRISM_LLAMA_CPP_REF:-d104cf1b639a909ddea521d61f7cb023c6e41f57}
+        PRISM_CMAKE_ARGS: ${PRISM_CMAKE_ARGS:--DGGML_CUDA=ON}
+        PRISM_CUDA_ARCHITECTURES: ${PRISM_CUDA_ARCHITECTURES:-}
+        PRISM_BUILD_JOBS: ${PRISM_BUILD_JOBS:-2}
+    container_name: lancelot_local_bonsai_8b
+    volumes:
+      - ./local_models/weights:/home/llm/models:ro
+    environment:
+      - LOCAL_MODELS_DIR=/home/llm/models
+      - LOCAL_MODEL_PROFILE=${BONSAI_8B_PROFILE:-bonsai-8b}
+      - LOCAL_LLM_ENGINE=prism_llama_server
+      - LOCAL_LLM_MODEL=${BONSAI_8B_MODEL_LABEL:-bonsai-8b}
+      - LOCAL_MODEL_CTX=${BONSAI_8B_CTX:-8192}
+      - LOCAL_MODEL_THREADS=${BONSAI_8B_THREADS:-4}
+      - LOCAL_MODEL_GPU_LAYERS=${BONSAI_8B_GPU_LAYERS:-99}
+      - LOCAL_LLM_PORT=8080
+      - LOCAL_LLM_BACKEND_PORT=8091
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    ports:
+      - "${BONSAI_8B_PORT:-8082}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
       retries: 3
     restart: unless-stopped
     networks:

@@ -61,3 +61,30 @@ local_utility_tasks:
   - "summarize"
   - "redact"
   - "rag_rewrite"
+
+# ---------------------------------------------------------------------------
+# Local model role mapping
+# ---------------------------------------------------------------------------
+# These roles can share one local model service or point to separate local
+# model services through environment variables:
+#   LOCAL_LLM_SCRUB_REGION_FINDER_URL
+#   LOCAL_LLM_SCRUB_SEGMENT_VERIFIER_URL
+#   LOCAL_LLM_UTILITY_URL
+#
+# Target two-model deployment:
+#   scrub_region_finder -> Bonsai 1.7B
+#   scrub_segment_verifier + utility -> Bonsai 8B
+# ---------------------------------------------------------------------------
+local_model_roles:
+  scrub_region_finder:
+    recommended_model: "bonsai-1.7b"
+    priority: 10
+    purpose: "Full-payload local scan for suspicious PII regions"
+  scrub_segment_verifier:
+    recommended_model: "bonsai-8b"
+    priority: 9
+    purpose: "Redact and verify only suspicious scrub segments"
+  utility:
+    recommended_model: "bonsai-8b"
+    priority: 1
+    purpose: "Low-risk local classification, extraction, summarization, and routing assistance"

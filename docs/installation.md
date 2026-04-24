@@ -68,7 +68,7 @@ You need an API key from at least one provider:
 
 You can configure one or more providers. Lancelot routes between them based on task complexity and provider availability. API keys can be rotated from the War Room UI without restarting the container.
 
-For `openai-codex`, the preferred production path is not an API key. Sign in with the Codex CLI on the host first so `~/.codex/auth.json` exists and can be mounted into the container. During onboarding, selecting Codex now checks for that mounted auth file first and proceeds immediately when it is present. Browser OAuth remains available only as a fallback when mounted Codex auth is missing.
+For `openai-codex`, the production path is not an OpenAI Platform API key. Sign in with the Codex CLI on the host first so `~/.codex/auth.json` exists and can be mounted into the container. Lancelot imports that Codex OAuth token and sends model turns to the ChatGPT Codex Responses backend; the Codex CLI itself is only a recovery transport. During onboarding, selecting Codex checks for the mounted auth file and proceeds immediately when it is present. Browser OAuth remains available for token recovery.
 
 ---
 
@@ -104,7 +104,7 @@ The installer handles:
 - Repository clone
 - `.env` generation and `docker-compose.yml` patching for your hardware
 - Model download (5 GB, with resume support)
-- Docker build and startup
+- Prebuilt core-image pull, local-model image build, and startup
 - Health check verification
 
 **Installer options:**
@@ -213,10 +213,16 @@ GEMINI_API_KEY=your-key-here
 # allow any authenticated OIDC user into the War Room.
 
 # Local model settings
+LOCAL_LLM_IMAGE=ghcr.io/myles1663/lancelot-local-llm:llama-cpp-0.3.19-cpu
+LOCAL_LLM_PULL_POLICY=missing
 LOCAL_LLM_URL=http://local-llm:8080
+LOCAL_MODEL_PROFILE=qwen3-8b
+LOCAL_LLM_ENGINE=llama_cpp_python
+LOCAL_LLM_MODEL=local-llm
 LOCAL_MODEL_CTX=4096
 LOCAL_MODEL_THREADS=4
 LOCAL_MODEL_GPU_LAYERS=0
+LOCAL_LLM_DOCKERFILE=Dockerfile
 LOCAL_LLM_WHEEL_VARIANT=cpu
 LOCAL_LLM_WHEEL_VERSION=0.3.19
 
@@ -240,11 +246,14 @@ The local model is always installed as part of the supported deployment shape. I
 
 ### 4. Configure GPU (if available)
 
-If you have an NVIDIA GPU, edit `.env` to offload model layers:
+The default prebuilt local-model image is CPU-safe. The installer selects the
+staged CUDA image automatically when it detects NVIDIA support; for manual
+deployments, set the CUDA image and offload layers together:
 
 ```ini
-LOCAL_MODEL_GPU_LAYERS=15
+LOCAL_LLM_IMAGE=ghcr.io/myles1663/lancelot-local-llm:llama-cpp-0.3.19-cu123
 LOCAL_LLM_WHEEL_VARIANT=cu123
+LOCAL_MODEL_GPU_LAYERS=15
 ```
 
 The `docker-compose.yml` already includes GPU configuration. If you do **not** have an NVIDIA GPU, remove or comment out the `deploy` section under `local-llm`:
@@ -263,20 +272,31 @@ The `docker-compose.yml` already includes GPU configuration. If you do **not** h
 ### 5. Build and start
 
 ```bash
-# First build (compiles images)
-docker compose up -d --build
+# Pull prebuilt runtime images, then start
+docker compose pull lancelot-core local-llm
+docker compose up -d
 ```
 
-First build takes 3-10 minutes. Watch logs with:
+The first install still takes a few minutes because Docker pulls runtime images
+and the model weights must already be present on disk. Watch logs with:
 
 ```bash
 docker compose logs -f
 ```
 
-Wait for:
+Wait for the core runtime first:
 ```
 lancelot_core       | INFO:     Uvicorn running on http://0.0.0.0:8000
-lancelot_local_llm  | INFO:     Model loaded successfully
+```
+
+The local model may continue warming after the War Room is reachable, especially on CPU-only systems. During that period `/health/ready` reports the local LLM as degraded and Lancelot keeps local utility execution and local scrub verification disabled until the inference smoke passes.
+
+If a prebuilt local-model image is unavailable or you intentionally changed the
+runtime Dockerfile, build only that service as a fallback:
+
+```bash
+docker compose build local-llm
+docker compose up -d
 ```
 
 ### 6. Open the War Room
@@ -357,7 +377,10 @@ pip install --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu1
 
 If you skip the wheel index on Windows, `pip` / `uv` will fall back to a native source build and require Visual Studio C++ Build Tools, `nmake`, CMake, and a configured MSVC toolchain.
 
-For the Docker local-model service, the repo now builds the CPU wheel by default. Opt into CUDA explicitly with `LOCAL_LLM_WHEEL_VARIANT=cu123` only after validating that the host can complete local inference smoke reliably.
+For the Docker local-model service, supported installs pull prebuilt local-model
+images by default. Local fallback builds use the CPU wheel unless
+`LOCAL_LLM_WHEEL_VARIANT=cu123` is set explicitly and the target host passes
+local inference smoke reliably.
 
 ### Environment variables
 
@@ -381,7 +404,21 @@ Lancelot uses a local GGUF model for routine tasks that don't need cloud APIs:
 - **PII redaction** — stripping sensitive data before external API calls
 - **JSON extraction** — structured data parsing
 
-The current model is **Qwen3-8B Q4_K_M** (~5 GB).
+The default profile is **Qwen3-8B Q4_K_M** (~5 GB) because it runs on the
+standard `llama-cpp-python` container. `local_models/models.lock.yaml` also
+defines opt-in Bonsai profiles for local scrub acceleration:
+
+| Profile | Runtime | Intended use |
+|---------|---------|--------------|
+| `qwen3-8b` | `llama_cpp_python` | Default single local model |
+| `bonsai-1.7b` | `prism_llama_server` | Fast full-payload scrub region finder |
+| `bonsai-8b` | `prism_llama_server` | Recommended Bonsai verifier and utility profile after local latency validation |
+| `ternary-bonsai-8b` | `prism_llama_server` | Opt-in experimental verifier and utility profile; validate host latency before enabling |
+
+The Bonsai GGUF profiles require the PrismML llama.cpp fork. Do not point the
+standard `llama-cpp-python` image at Bonsai Q1/Q2 weights. Use the optional
+`bonsai` compose profile so the readiness probe can fail closed if the Prism
+backend cannot load.
 
 ### Download the model
 
@@ -396,6 +433,106 @@ python -c "from local_models.fetch_model import fetch_model; fetch_model()"
 ```
 
 **Manual download:** Download the GGUF file and place it in `local_models/weights/`. The expected filename is defined in `local_models/models.lock.yaml`.
+
+**Download a specific profile:**
+```bash
+LOCAL_MODEL_PROFILE=bonsai-1.7b python -c "from local_models.fetch_model import fetch_model; fetch_model()"
+LOCAL_MODEL_PROFILE=bonsai-8b python -c "from local_models.fetch_model import fetch_model; fetch_model()"
+```
+
+### Optional Bonsai runtime
+
+The Bonsai runtime has two Docker paths:
+
+| Dockerfile | Intended use |
+|------------|--------------|
+| Prebuilt `ghcr.io/myles1663/lancelot-local-llm:prism-b8846-d104cf1` | Pull-first Prism CPU runtime for portable Bonsai smoke tests and fallback validation. It is not the production latency target for scrub verification. |
+| `Dockerfile.prism` | Local build equivalent of the pinned Prism CPU release image. Use when registry access is unavailable. |
+| `Dockerfile.prism.cuda` | GPU-backed Prism source build. Use for production deployments where the local model must remain inside Docker. |
+
+To replace the default local model service with a GPU-backed Prism Bonsai profile:
+
+```ini
+LOCAL_LLM_IMAGE=lancelot-local-llm:prism-cuda-local
+LOCAL_LLM_PULL_POLICY=never
+LOCAL_LLM_DOCKERFILE=Dockerfile.prism.cuda
+LOCAL_MODEL_PROFILE=bonsai-8b
+LOCAL_LLM_ENGINE=prism_llama_server
+LOCAL_LLM_MODEL=bonsai-8b
+LOCAL_MODEL_CTX=8192
+LOCAL_MODEL_GPU_LAYERS=99
+PRISM_CUDA_BASE_IMAGE=nvidia/cuda:12.3.2-devel-ubuntu22.04
+PRISM_LLAMA_CPP_REF=d104cf1b639a909ddea521d61f7cb023c6e41f57
+PRISM_CMAKE_ARGS=-DGGML_CUDA=ON
+PRISM_CUDA_ARCHITECTURES=61
+PRISM_BUILD_JOBS=2
+```
+
+To run the two-model scrub cascade instead of replacing the default service:
+
+```ini
+COMPOSE_PROFILES=bonsai
+BONSAI_LLM_IMAGE=lancelot-local-llm:prism-cuda-local
+BONSAI_LLM_PULL_POLICY=never
+BONSAI_LLM_DOCKERFILE=Dockerfile.prism.cuda
+PRISM_CUDA_BASE_IMAGE=nvidia/cuda:12.3.2-devel-ubuntu22.04
+PRISM_LLAMA_CPP_REF=d104cf1b639a909ddea521d61f7cb023c6e41f57
+PRISM_CMAKE_ARGS=-DGGML_CUDA=ON
+PRISM_CUDA_ARCHITECTURES=61
+PRISM_BUILD_JOBS=2
+LOCAL_LLM_BONSAI_1_7B_URL=http://local-bonsai-17b:8080
+LOCAL_LLM_BONSAI_8B_URL=http://local-bonsai-8b:8080
+LOCAL_LLM_SCRUB_REGION_FINDER_URL=http://local-bonsai-17b:8080
+LOCAL_LLM_SCRUB_SEGMENT_VERIFIER_URL=http://local-bonsai-8b:8080
+LOCAL_LLM_UTILITY_URL=http://local-bonsai-8b:8080
+LOCAL_LLM_SCRUB_REGION_FINDER_MODEL=bonsai-1.7b
+LOCAL_LLM_SCRUB_SEGMENT_VERIFIER_MODEL=bonsai-8b
+LOCAL_LLM_UTILITY_MODEL=bonsai-8b
+LANCELOT_SCRUB_REGION_FINDER_MAX_CHARS=6000
+LANCELOT_SCRUB_REGION_FINDER_MAX_CHUNKS=8
+```
+
+For the CPU Prism Bonsai smoke path, keep the default `BONSAI_LLM_IMAGE` and
+pull the staged image instead of building:
+
+```bash
+COMPOSE_PROFILES=bonsai docker compose pull local-bonsai-17b local-bonsai-8b
+COMPOSE_PROFILES=bonsai docker compose up -d local-bonsai-17b local-bonsai-8b
+```
+
+`ternary-bonsai-8b` is pinned in the lockfile for operators who want to test it,
+but do not make it the default verifier without a host-local latency smoke. On
+some consumer GPUs, the Prism Vulkan path keeps the ternary 8B model mostly
+CPU-mapped and makes short verifier calls too slow for interactive governance.
+
+`Dockerfile.prism` uses a pinned PrismML llama.cpp prebuilt CPU release asset by
+default. Keep these pins stable unless the smoke test and scrub-cascade
+validation pass on the target host:
+
+```ini
+PRISM_RELEASE_TAG=prism-b8846-d104cf1
+PRISM_RELEASE_ASSET=llama-prism-b8846-d104cf1-bin-ubuntu-x64.tar.gz
+PRISM_RELEASE_SHA256=80bb9a820bb61389dc9f34c976f00afc33018d199b8ae81dd1afeaad2044ec87
+```
+
+`Dockerfile.prism.cuda` builds from the pinned Prism source commit instead of
+using the CPU release asset. The CUDA base image must be compatible with the
+customer host's NVIDIA driver. Validate compatibility before building:
+
+```bash
+docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
+```
+
+If that succeeds and a newer CUDA image fails with an error such as
+`unsatisfied condition: cuda>=12.4`, keep `PRISM_CUDA_BASE_IMAGE` on the older
+compatible CUDA line or upgrade the NVIDIA driver before selecting a newer CUDA
+base.
+
+Set `PRISM_CUDA_ARCHITECTURES` when you know the customer GPU generation. This
+keeps the source build from compiling unnecessary CUDA kernels. For example,
+GTX 10-series cards such as a GTX 1070 use `61`; newer fleet images can set a
+semicolon-separated architecture list when they need one image to cover multiple
+GPU generations.
 
 ### Verify the model
 
@@ -451,10 +588,12 @@ Lancelot routes tasks across four lanes, using local and cloud models:
 
 | Priority | Lane | Default Model | Purpose |
 |----------|------|---------------|---------|
-| 1 | `local_redaction` | Qwen3-8B (local) | Local scrub lane used when frontier scrub policy requires or prefers local redaction |
-| 2 | `local_utility` | Qwen3-8B (local) | Classify, summarize, extract |
+| 1 | `local_redaction` | Local scrub role router | Deterministic pre-scrub, local region finding, local segment verification, residual validation |
+| 2 | `local_utility` | Local utility role | Classify, summarize, extract |
 | 3 | `flagship_fast` | Gemini Flash / GPT-4o-mini / Claude Haiku / Nemotron Nano | Orchestration, tool calls |
 | 4 | `flagship_deep` | Gemini Pro / GPT-4o / Claude Sonnet / Nemotron Super | Planning, complex reasoning |
+
+By default, both local lanes use `LOCAL_LLM_URL`. Operators can split scrub and utility work across separate local services with `LOCAL_LLM_SCRUB_REGION_FINDER_URL`, `LOCAL_LLM_SCRUB_SEGMENT_VERIFIER_URL`, and `LOCAL_LLM_UTILITY_URL`. A target two-model deployment uses a small local model for full-payload region finding and an 8B local model for suspicious segment verification plus low-risk utility tasks.
 
 ### Model configuration
 
@@ -732,11 +871,27 @@ docker compose restart
 
 ```bash
 git pull origin master
-docker compose build
-docker compose up -d
+docker compose pull lancelot-core local-llm
+docker compose up -d --no-deps lancelot-core
 ```
 
 Your data in `lancelot_data/` is preserved across updates.
+
+Rebuild the local model image only when a prebuilt image is unavailable, you
+change the local-model Dockerfile, switch to a custom runtime profile, or update
+the local model runtime dependencies:
+
+```bash
+docker compose up -d --no-deps --build local-llm
+```
+
+If you are rebuilding `lancelot-core` from local source, use the one-step recreate command:
+
+```bash
+docker compose up -d --no-deps --build lancelot-core
+```
+
+Do not split that into `docker compose build lancelot-core` followed by `docker compose up -d`. In this repo shape, the separate build can leave the previously served frontend bundle live in the running container.
 
 ### Full reset (destroys data)
 
@@ -749,7 +904,7 @@ docker compose down -v
 ### Rebuild from scratch
 
 ```bash
-docker compose build --no-cache
+docker compose build --no-cache lancelot-core local-llm
 docker compose up -d
 ```
 

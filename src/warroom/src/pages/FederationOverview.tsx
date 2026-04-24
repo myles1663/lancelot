@@ -176,20 +176,24 @@ export function FederationOverview() {
     interval: 10000,
   })
 
+  const federationEnabled = status?.enabled === true
+
   const { data: settings, refetch: refetchSettings } = usePolling<FederationSettings>({
     fetcher: fetchFederationSettings,
     interval: 15000,
-    enabled: Boolean(status?.enabled),
+    enabled: federationEnabled,
   })
 
   const { data: health } = usePolling<FederationHealthSummary>({
     fetcher: fetchFederationHealth,
     interval: 10000,
+    enabled: federationEnabled,
   })
 
   const { data: topology, loading: topoLoading } = usePolling<TopologyDocument>({
     fetcher: fetchActiveTopology,
     interval: 15000,
+    enabled: federationEnabled,
   })
 
   useEffect(() => {
@@ -200,7 +204,7 @@ export function FederationOverview() {
 
   if (statusLoading) return <PageLoader />
 
-  const notEnabled = status && !status.enabled
+  const notEnabled = !statusLoading && !federationEnabled
 
   const handleSaveSettings = async () => {
     try {
@@ -245,7 +249,7 @@ export function FederationOverview() {
         </div>
       )}
 
-      {status?.enabled && (
+      {status && federationEnabled && (
         <>
           {status.runtime_degraded && (
             <div className="bg-state-error/10 border border-state-error/40 rounded-lg p-4 space-y-3">

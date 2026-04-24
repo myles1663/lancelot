@@ -10,12 +10,15 @@ Public API:
     quick_inference_check() — single-prompt sanity check, returns bool
 """
 
+import json
+import os
 import time
 import pathlib
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Optional
 
-from local_models.lockfile import load_lockfile, load_prompt_template
+from local_models.lockfile import load_lockfile, load_prompt_template, get_model_info
 from local_models.fetch_model import model_path, is_model_present, FetchError
 
 
@@ -118,10 +121,19 @@ def run_smoke_test(models_dir=None, lockfile_data=None):
     if lockfile_data is None:
         lockfile_data = load_lockfile()
 
-    result.model_name = lockfile_data["model"]["name"]
+    profile_name = os.environ.get("LOCAL_MODEL_PROFILE")
+    info = get_model_info(lockfile_data, profile_name=profile_name)
+    result.model_name = info["name"]
+
+    if info["engine"] == "prism_llama_server":
+        return _run_http_smoke(result, start)
 
     # Check model is present
-    if not is_model_present(models_dir=models_dir, lockfile_data=lockfile_data):
+    if not is_model_present(
+        models_dir=models_dir,
+        lockfile_data=lockfile_data,
+        profile_name=profile_name,
+    ):
         result.error = "Model weights not found or checksum invalid"
         result.total_elapsed_ms = _elapsed_ms(start)
         return result
@@ -156,7 +168,16 @@ def quick_inference_check(models_dir=None, lockfile_data=None):
     if lockfile_data is None:
         lockfile_data = load_lockfile()
 
-    if not is_model_present(models_dir=models_dir, lockfile_data=lockfile_data):
+    profile_name = os.environ.get("LOCAL_MODEL_PROFILE")
+    info = get_model_info(lockfile_data, profile_name=profile_name)
+    if info["engine"] == "prism_llama_server":
+        return _http_quick_inference_check()
+
+    if not is_model_present(
+        models_dir=models_dir,
+        lockfile_data=lockfile_data,
+        profile_name=profile_name,
+    ):
         return False
 
     try:
@@ -183,8 +204,14 @@ def _load_model(models_dir=None, lockfile_data=None):
             "See docs/installation.md -> Bare-Metal Python Installation -> Start the local LLM server."
         )
 
-    path = model_path(models_dir=models_dir, lockfile_data=lockfile_data)
-    rt = lockfile_data["runtime"]
+    profile_name = os.environ.get("LOCAL_MODEL_PROFILE")
+    info = get_model_info(lockfile_data, profile_name=profile_name)
+    path = model_path(
+        models_dir=models_dir,
+        lockfile_data=lockfile_data,
+        profile_name=profile_name,
+    )
+    rt = info["runtime"]
 
     return Llama(
         model_path=str(path),
@@ -205,6 +232,37 @@ def _generate(llm, prompt, max_tokens=128):
         echo=False,
     )
     return output["choices"][0]["text"]
+
+
+def _run_http_smoke(result: SmokeResult, start: float) -> SmokeResult:
+    try:
+        if not _http_quick_inference_check():
+            result.error = "Local Prism model service is not ready"
+            result.total_elapsed_ms = _elapsed_ms(start)
+            return result
+        result.model_loaded = True
+        result.prompt_results.append(PromptResult(
+            name="http_readiness",
+            passed=True,
+            output="ready",
+        ))
+        result.passed = True
+        result.total_elapsed_ms = _elapsed_ms(start)
+        return result
+    except Exception as exc:
+        result.error = f"HTTP smoke failed: {exc}"
+        result.total_elapsed_ms = _elapsed_ms(start)
+        return result
+
+
+def _http_quick_inference_check() -> bool:
+    base_url = os.environ.get("LOCAL_LLM_URL", "http://localhost:8080").rstrip("/")
+    try:
+        with urllib.request.urlopen(f"{base_url}/health", timeout=10) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return False
+    return bool(payload.get("ready") and payload.get("status") == "ok")
 
 
 def _test_prompt(llm, prompt_name, lockfile_data):

@@ -1,6 +1,7 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { emitWarRoomNotification } from '@/utils/notifications'
+import type { ChatRunReceiptProof } from '@/types/api'
 
 interface ChatMessageProps {
   role: 'user' | 'assistant'
@@ -8,9 +9,88 @@ interface ChatMessageProps {
   timestamp: string
   crusaderMode?: boolean
   filesCount?: number
+  receiptProof?: ChatRunReceiptProof | null
 }
 
-export function ChatMessage({ role, content, timestamp, crusaderMode, filesCount }: ChatMessageProps) {
+function formatApprovalState(value: ChatRunReceiptProof['approval_state']): string {
+  if (value === 'used') return 'used'
+  if (value === 'required') return 'required'
+  if (value === 'not_used') return 'not used'
+  return 'unknown'
+}
+
+function formatDegradedMode(value: ChatRunReceiptProof['degraded_mode']): string {
+  if (value === 'used') return 'used'
+  if (value === 'not_used') return 'none observed'
+  return 'unknown'
+}
+
+function formatOutcome(value: ChatRunReceiptProof['outcome']): string {
+  return value.replace(/_/g, ' ')
+}
+
+function ExecutionProof({ proof }: { proof: ChatRunReceiptProof }) {
+  if (!proof.available) {
+    return (
+      <div className="mt-3 rounded-md border border-state-warning/30 bg-state-warning/10 px-3 py-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-state-warning">
+            Execution Proof
+          </span>
+          <span className="text-[10px] font-mono text-text-muted">
+            unavailable
+          </span>
+        </div>
+        <p className="mt-1 text-[11px] text-text-muted">
+          {proof.error || 'Receipt evidence could not be loaded for this run.'}
+        </p>
+      </div>
+    )
+  }
+
+  const governedTools = proof.governed_tools.length > 0 ? proof.governed_tools.join(', ') : 'none'
+  const receiptSummary =
+    proof.linked_run_count > 1
+      ? `${proof.receipt_count} across ${proof.linked_run_count} linked runs`
+      : String(proof.receipt_count)
+
+  return (
+    <div className="mt-3 rounded-md border border-border-default bg-surface-input/70 px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+          Execution Proof
+        </span>
+        <span className="text-[10px] font-mono uppercase text-text-secondary">
+          {formatOutcome(proof.outcome)}
+        </span>
+      </div>
+      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] text-text-secondary">
+        <dt className="font-medium text-text-muted">Receipts</dt>
+        <dd className="min-w-0 break-words">{receiptSummary}</dd>
+        <dt className="font-medium text-text-muted">Tools</dt>
+        <dd className="min-w-0 break-words">{governedTools}</dd>
+        <dt className="font-medium text-text-muted">Approval</dt>
+        <dd>{formatApprovalState(proof.approval_state)}</dd>
+        <dt className="font-medium text-text-muted">Degraded</dt>
+        <dd className="min-w-0 break-words">
+          {formatDegradedMode(proof.degraded_mode)}
+          {proof.degraded_reasons.length > 0 && ` (${proof.degraded_reasons[0]})`}
+        </dd>
+        <dt className="font-medium text-text-muted">Outcome</dt>
+        <dd className="capitalize">{formatOutcome(proof.outcome)}</dd>
+      </dl>
+    </div>
+  )
+}
+
+export function ChatMessage({
+  role,
+  content,
+  timestamp,
+  crusaderMode,
+  filesCount,
+  receiptProof,
+}: ChatMessageProps) {
   const isUser = role === 'user'
 
   async function handleSecureDownload(event: React.MouseEvent<HTMLAnchorElement>, href: string) {
@@ -106,6 +186,7 @@ export function ChatMessage({ role, content, timestamp, crusaderMode, filesCount
             </ReactMarkdown>
           </div>
         )}
+        {!isUser && receiptProof && <ExecutionProof proof={receiptProof} />}
         <span className="text-[10px] text-text-muted font-mono mt-1 block">{timestamp}</span>
       </div>
     </div>

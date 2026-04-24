@@ -18,7 +18,7 @@ The installer guides you through the standard local setup process:
 6. **Repository clone** - pulls the latest Lancelot from GitHub
 7. **Configuration** - generates `.env`, patches `docker-compose.yml` for your system
 8. **Model download** - downloads the local utility model with progress and resume support
-9. **Docker build and start** - builds images, starts services, waits for health check
+9. **Docker pull and start** - pulls the prebuilt core and local-model images, starts services, waits for health check
 10. **Done** - War Room is live at `http://localhost:8000/war-room`
 
 ## Options

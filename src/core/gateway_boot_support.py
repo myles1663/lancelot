@@ -1536,6 +1536,7 @@ def _bootstrap_model_router() -> bool:
         router = ModelRouter(
             registry=ProfileRegistry(),
             local_client=getattr(main_orchestrator, "local_model", None),
+            local_roles=getattr(main_orchestrator, "local_model_roles", None),
             provider_client=main_orchestrator.provider,
         )
 

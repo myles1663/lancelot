@@ -327,3 +327,24 @@ class TestPlanCompiler:
             assert step.step_id
             assert step.type in [s.value for s in StepType]
             assert step.risk_level in ("LOW", "MED", "HIGH")
+
+
+class TestStepRequirementValidation:
+    def test_file_edit_without_repo_writer_inputs_is_not_approvable(self):
+        from src.core.tasking.authority import (
+            format_step_requirement_issues,
+            validate_graph_requirements,
+        )
+
+        step = TaskStep(
+            step_id="step-1",
+            type=StepType.FILE_EDIT.value,
+            inputs={"description": "Create a file for the demo"},
+        )
+
+        issues = validate_graph_requirements([step])
+        assert len(issues) == 1
+        rendered = format_step_requirement_issues(issues)
+        assert "repo_writer" in rendered
+        assert "'action'" in rendered
+        assert "'path'" in rendered

@@ -188,7 +188,12 @@ function OwnCardViewer() {
 
 export function A2ASection() {
   const { data: status } = usePolling<A2AStatus>({ fetcher: fetchA2AStatus, interval: 15_000 })
-  const { data: agentList, refetch } = usePolling<AgentListResponse>({ fetcher: () => fetchRemoteAgents(), interval: 10_000 })
+  const a2aEnabled = status?.enabled === true
+  const { data: agentList, refetch } = usePolling<AgentListResponse>({
+    fetcher: () => fetchRemoteAgents(),
+    interval: 10_000,
+    enabled: a2aEnabled,
+  })
   const [showRegister, setShowRegister] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [verifying, setVerifying] = useState<string | null>(null)
@@ -205,7 +210,7 @@ export function A2ASection() {
     try { await revokeRemoteAgent(agentId); refetch() } catch { /* */ }
   }, [refetch])
 
-  if (!status?.enabled) return null
+  if (!a2aEnabled || !status) return null
 
   return (
     <section className="mt-6">

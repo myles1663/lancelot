@@ -15,7 +15,7 @@ interface ActionCardComponentProps {
   resolved: boolean
   resolvedAction?: string
   resolvedChannel?: string
-  onAction: (cardId: string, buttonId: string) => void
+  onAction: (cardId: string, buttonId: string) => Promise<void> | void
 }
 
 // ── Card type badge ───────────────────────────────────────────
@@ -106,6 +106,18 @@ const BUTTON_STYLES: Record<ActionCardButtonStyle, string> = {
     'bg-surface-input hover:bg-surface-card-elevated text-text-secondary border border-border-default',
 }
 
+function splitApprovalDescription(description: string): { summary: string; details: string } {
+  const marker = '\n\nDetails:\n'
+  const idx = description.indexOf(marker)
+  if (idx === -1) {
+    return { summary: description, details: '' }
+  }
+  return {
+    summary: description.slice(0, idx).trim(),
+    details: description.slice(idx + marker.length).trim(),
+  }
+}
+
 // ── Main component ────────────────────────────────────────────
 
 export function ActionCardComponent({
@@ -120,11 +132,19 @@ export function ActionCardComponent({
   onAction,
 }: ActionCardComponentProps) {
   const [submitting, setSubmitting] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const { summary, details } = splitApprovalDescription(description)
 
-  const handleClick = (buttonId: string) => {
+  const handleClick = async (buttonId: string) => {
     if (resolved || submitting) return
     setSubmitting(buttonId)
-    onAction(cardId, buttonId)
+    setError(null)
+    try {
+      await onAction(cardId, buttonId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'ActionCard resolution failed')
+      setSubmitting(null)
+    }
   }
 
   // Find the label of the resolved button
@@ -154,8 +174,21 @@ export function ActionCardComponent({
       </div>
 
       {/* Description */}
-      {description && (
-        <p className="text-xs text-text-secondary mb-3 leading-relaxed">{description}</p>
+      {summary && (
+        <p className="text-xs text-text-secondary mb-3 leading-relaxed whitespace-pre-wrap break-words">
+          {summary}
+        </p>
+      )}
+
+      {details && (
+        <details className="mb-3 rounded border border-border-default bg-surface-input/50 px-3 py-2">
+          <summary className="cursor-pointer select-none text-[10px] font-mono uppercase tracking-wider text-text-muted">
+            Technical details
+          </summary>
+          <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed text-text-secondary">
+            {details}
+          </pre>
+        </details>
       )}
 
       {/* Buttons */}
@@ -172,6 +205,12 @@ export function ActionCardComponent({
             </button>
           ))}
         </div>
+      )}
+
+      {error && !resolved && (
+        <p className="mt-2 text-xs leading-relaxed text-state-error">
+          {error}
+        </p>
       )}
 
       {/* Resolved state */}

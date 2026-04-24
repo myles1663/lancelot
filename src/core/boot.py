@@ -42,6 +42,55 @@ class BootConfig:
     secret_cache: object | None = None
 
 
+def _publish_local_model_runtime_status(main_orchestrator) -> None:
+    """Publish local model and role readiness after policy initialization."""
+    from src.core.model_usage_policy import (
+        set_local_model_availability,
+        set_local_model_roles_status,
+    )
+
+    local_model = getattr(main_orchestrator, "local_model", None)
+    if local_model is not None:
+        try:
+            local_health = local_model.health()
+            local_ready = bool(local_health.get("ready"))
+            local_loaded = bool(local_health.get("loaded", local_ready))
+            local_reason = local_health.get("last_error") or (
+                "Local model ready" if local_ready else "Local model not ready"
+            )
+            set_local_model_availability(
+                local_ready,
+                local_reason,
+                loaded=local_loaded,
+                ready=local_ready,
+                last_verified_at=local_health.get("last_verified_at"),
+                last_checked_at=local_health.get("last_checked_at"),
+                last_error=local_health.get("last_error"),
+                consecutive_failures=local_health.get("consecutive_failures"),
+                last_smoke_elapsed_ms=local_health.get("last_smoke_elapsed_ms"),
+            )
+            if local_ready:
+                logger.info("Local model connected and ready")
+            else:
+                logger.warning("Local model loaded but not ready: %s", local_reason)
+        except Exception as local_exc:
+            set_local_model_availability(
+                False,
+                f"Local model readiness check failed: {local_exc}",
+                loaded=False,
+                ready=False,
+                last_error=str(local_exc),
+            )
+            logger.warning("Local model readiness check failed: %s", local_exc)
+
+    local_roles = getattr(main_orchestrator, "local_model_roles", None)
+    if local_roles is not None:
+        try:
+            set_local_model_roles_status(local_roles.status())
+        except Exception as role_status_exc:
+            logger.warning("Local model role status check failed: %s", role_status_exc)
+
+
 @dataclass(frozen=True)
 class BootTask:
     """Reviewable boot step metadata for the gateway composition root."""
@@ -330,43 +379,14 @@ async def boot(app, config):
         # ===== PHASE 4b: LOCAL MODEL CLIENT (V8) =====
         try:
             from feature_flags import FEATURE_LOCAL_AGENTIC
-            from src.core.model_usage_policy import set_local_model_availability
+            from src.core.local_model_roles import LocalModelRoleRouter
             from local_model_client import LocalModelClient
     
             _local_model = LocalModelClient()
             main_orchestrator.local_model = _local_model
-    
-            try:
-                local_health = _local_model.health()
-                local_ready = bool(local_health.get("ready"))
-                local_loaded = bool(local_health.get("loaded", local_ready))
-                local_reason = local_health.get("last_error") or (
-                    "Local model ready" if local_ready else "Local model not ready"
-                )
-                set_local_model_availability(
-                    local_ready,
-                    local_reason,
-                    loaded=local_loaded,
-                    ready=local_ready,
-                    last_verified_at=local_health.get("last_verified_at"),
-                    last_checked_at=local_health.get("last_checked_at"),
-                    last_error=local_health.get("last_error"),
-                    consecutive_failures=local_health.get("consecutive_failures"),
-                    last_smoke_elapsed_ms=local_health.get("last_smoke_elapsed_ms"),
-                )
-                if local_ready:
-                    logger.info("Local model connected and ready")
-                else:
-                    logger.warning("Local model loaded but not ready: %s", local_reason)
-            except Exception as local_exc:
-                set_local_model_availability(
-                    False,
-                    f"Local model readiness check failed: {local_exc}",
-                    loaded=False,
-                    ready=False,
-                    last_error=str(local_exc),
-                )
-                logger.warning("Local model readiness check failed: %s", local_exc)
+            _local_model_roles = LocalModelRoleRouter.from_env()
+            main_orchestrator.local_model_roles = _local_model_roles
+            _publish_local_model_runtime_status(main_orchestrator)
     
             if not FEATURE_LOCAL_AGENTIC:
                 logger.info("Local execution feature disabled; local model remains installed for scrub and health checks")
@@ -427,6 +447,7 @@ async def boot(app, config):
             init_control_plane(data_dir="/home/lancelot/data")
             set_runtime_control_hooks(emergency_stop_handler=_runtime_emergency_stop_handler)
             app.include_router(cp_router)
+            _publish_local_model_runtime_status(main_orchestrator)
             logger.info("Control plane initialized.")
         except Exception as e:
             logger.warning(f"Control plane initialization failed: {e}")
@@ -560,6 +581,46 @@ async def boot(app, config):
                             display_name=context.get("actor", "") or "",
                             session_id=context.get("session_id", "") or "",
                         )
+                        card = context.get("card")
+                        metadata = getattr(card, "metadata", {}) if card is not None else {}
+                        batch_request_ids = metadata.get("approval_request_ids") or []
+                        if metadata.get("approval_type") == "sentry_t3_batch" and batch_request_ids:
+                            action = "approve" if button_id == "approve" else "deny" if button_id in ("deny", "reject") else ""
+                            if not action:
+                                return {"status": "error", "message": f"Unknown button: {button_id}"}
+                            results = []
+                            failures = []
+                            for request_id in batch_request_ids:
+                                if action == "approve":
+                                    result = _approve_item_direct(
+                                        request_id,
+                                        reason="Approved via grouped ActionCard",
+                                        identity=identity if identity.operator_id and identity.display_name else None,
+                                    )
+                                else:
+                                    result = _deny_item_direct(
+                                        request_id,
+                                        reason="Denied via grouped ActionCard",
+                                        identity=identity if identity.operator_id and identity.display_name else None,
+                                    )
+                                if result:
+                                    results.append(result)
+                                else:
+                                    failures.append(request_id)
+                            if failures:
+                                return {
+                                    "status": "error",
+                                    "message": f"Could not {action} grouped request(s): {', '.join(failures)}",
+                                    "items": results,
+                                }
+                            return {
+                                "status": "approved" if action == "approve" else "denied",
+                                "message": (
+                                    f"{'Approved' if action == 'approve' else 'Denied'} "
+                                    f"{len(results)} grouped governance request(s)"
+                                ),
+                                "items": results,
+                            }
                         if button_id == "approve":
                             result = _approve_item_direct(
                                 item_id,

@@ -1,4 +1,5 @@
 import os
+import types
 
 from src.ui.onboarding import OnboardingOrchestrator
 from src.ui import onboarding as onboarding_module
@@ -8,6 +9,20 @@ def test_get_env_value_ignores_none_key(tmp_data_dir):
     orch = OnboardingOrchestrator(data_dir=str(tmp_data_dir))
 
     assert orch._get_env_value(None) is None
+
+
+def test_get_env_value_reads_bootstrapped_secret_cache(tmp_data_dir, monkeypatch):
+    monkeypatch.delenv("WARROOM_USERNAME", raising=False)
+    cache_module = types.SimpleNamespace(
+        is_bootstrapped=lambda: True,
+        get=lambda key, default="": {"WARROOM_USERNAME": "Myles"}.get(key, default),
+    )
+    monkeypatch.setitem(__import__("sys").modules, "secret_cache", cache_module)
+
+    orch = OnboardingOrchestrator(data_dir=str(tmp_data_dir))
+    orch.env_file = str(tmp_data_dir / "isolated.env")
+
+    assert orch._get_env_value("WARROOM_USERNAME") == "Myles"
 
 
 def test_infer_provider_from_keys_skips_oauth_only_entries(tmp_data_dir, monkeypatch):

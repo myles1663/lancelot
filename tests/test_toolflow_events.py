@@ -26,7 +26,7 @@ class TestToolFlowEventType:
         expected = [
             "QUEST_STARTED", "ITERATION_STARTED",
             "TOOL_CALL_STARTED", "TOOL_CALL_COMPLETED", "TOOL_CALL_BLOCKED",
-            "ITERATION_COMPLETED", "QUEST_COMPLETED", "QUEST_FAILED",
+            "ITERATION_COMPLETED", "QUEST_BLOCKED", "QUEST_COMPLETED", "QUEST_FAILED",
         ]
         for name in expected:
             assert hasattr(ToolFlowEventType, name), f"Missing: {name}"
@@ -195,6 +195,17 @@ class TestToolFlowEmitter:
         bus.publish_sync.assert_called_once()
         payload = bus.publish_sync.call_args[0][0].payload
         assert payload["approval_id"] == "approval-xyz"
+        assert payload["reason"] == "Awaiting Commander approval"
+
+    def test_quest_blocked_emits(self):
+        """quest_blocked publishes approval wait state without marking failure."""
+        emitter, bus = self._make_emitter()
+        emitter.quest_blocked("q1", "Pending Commander approval", "approval-xyz", 2100, "api")
+        bus.publish_sync.assert_called_once()
+        event = bus.publish_sync.call_args[0][0]
+        assert event.type == "toolflow.quest_blocked"
+        assert event.payload["approval_id"] == "approval-xyz"
+        assert event.payload["reason"] == "Pending Commander approval"
 
     def test_quest_completed_emits(self):
         """quest_completed publishes with summary stats."""

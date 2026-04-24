@@ -9,6 +9,11 @@ import yaml
 from unittest.mock import MagicMock, patch
 
 from src.core.model_router import ModelRouter, RouterDecision, RouterResult
+from src.core.local_model_roles import (
+    LocalModelRoleConfig,
+    ROLE_SCRUB_SEGMENT_VERIFIER,
+    ROLE_UTILITY,
+)
 from src.core.model_usage_policy import (
     FRONTIER_SCRUB_REQUIRED,
     LOCAL_EXECUTION_DISABLED,
@@ -436,6 +441,61 @@ class TestAllLocalTasks:
         d = router.recent_decisions[0]
         assert d.task_type == task_type
         assert d.id is not None
+
+    def test_role_router_sends_utility_tasks_to_utility_role(self, registry):
+        utility_client = MagicMock()
+        utility_client.summarize.return_value = "role summary"
+        verifier_client = MagicMock()
+
+        roles = MagicMock()
+        roles.config_for.return_value = LocalModelRoleConfig(
+            role=ROLE_UTILITY,
+            base_url="http://local-bonsai-8b:8080",
+            model="bonsai-8b",
+            priority=1,
+            timeout_s=30.0,
+            max_input_chars=12000,
+        )
+        roles.client_for.return_value = utility_client
+
+        router = ModelRouter(registry=registry, local_roles=roles)
+
+        result = router.route("summarize", "Long text")
+
+        assert result.executed is True
+        assert result.output == "role summary"
+        assert result.decision.model == "bonsai-8b"
+        roles.config_for.assert_called_once_with(ROLE_UTILITY)
+        roles.client_for.assert_called_once_with(ROLE_UTILITY)
+        utility_client.summarize.assert_called_once_with("Long text")
+        verifier_client.redact.assert_not_called()
+
+    def test_role_router_sends_redaction_to_segment_verifier_role(self, registry):
+        verifier_client = MagicMock()
+        verifier_client.redact.return_value = "[NAME]"
+
+        roles = MagicMock()
+        roles.config_for.return_value = LocalModelRoleConfig(
+            role=ROLE_SCRUB_SEGMENT_VERIFIER,
+            base_url="http://local-bonsai-8b:8080",
+            model="bonsai-8b",
+            priority=9,
+            timeout_s=10.0,
+            max_input_chars=8000,
+        )
+        roles.client_for.return_value = verifier_client
+
+        router = ModelRouter(registry=registry, local_roles=roles)
+
+        result = router.route("redact", "Myles Hamilton")
+
+        assert result.executed is True
+        assert result.decision.lane == "local_redaction"
+        assert result.decision.model == "bonsai-8b"
+        assert result.output == "[NAME]"
+        roles.config_for.assert_called_once_with(ROLE_SCRUB_SEGMENT_VERIFIER)
+        roles.client_for.assert_called_once_with(ROLE_SCRUB_SEGMENT_VERIFIER)
+        verifier_client.redact.assert_called_once_with("Myles Hamilton")
 
 
 # ===================================================================

@@ -336,6 +336,39 @@ class TestSkillFailure:
         assert result.receipt["event"] == "scheduled_job_failed"
         assert "not configured" in result.error
 
+    def test_skill_result_success_false_fails_closed(self, service, runtime_pause_state):
+        def failed_result(name, inputs):
+            return type("SkillResult", (), {"success": False, "error": "skill returned false"})()
+
+        executor = JobExecutor(service, failed_result, [_ready_gate()])
+        result = executor.execute_job("test_job")
+
+        assert result.success is False
+        assert result.receipt["event"] == "scheduled_job_failed"
+        assert "skill returned false" in result.error
+
+    def test_command_return_code_failure_fails_closed(self, service, runtime_pause_state):
+        def failed_command(name, inputs):
+            return type(
+                "SkillResult",
+                (),
+                {
+                    "success": True,
+                    "outputs": {
+                        "return_code": 2,
+                        "stderr": "script failed",
+                        "command": "python sync.py",
+                    },
+                },
+            )()
+
+        executor = JobExecutor(service, failed_command, [_ready_gate()])
+        result = executor.execute_job("test_job")
+
+        assert result.success is False
+        assert result.receipt["event"] == "scheduled_job_failed"
+        assert "return_code=2" in result.error
+
 
 # ===================================================================
 # Job not found

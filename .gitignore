@@ -89,6 +89,9 @@ htmlcov/
 # Demo seed script (local use only)
 scripts/seed-demo.*
 
+# Local-only applications and experiments
+/local/
+
 # Local federation topology (use tracked example instead)
 config/federation_topology.json
 !config/federation_topology.example.json

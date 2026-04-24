@@ -235,6 +235,7 @@ class LancelotOrchestrator:
         self.scheduler_service = None
         self.job_executor = None
         self.local_model = None  # Fix Pack V8: LocalModelClient for local agentic routing
+        self.local_model_roles = None  # Role router for scrub + utility local model lanes
         self.model_router = None  # Injected by gateway for local redaction + utility routing
         self.frontier_scrubber = LocalPIIScrubber()
         self.usage_tracker = None  # Injected by gateway for Cost Tracker panel
@@ -279,6 +280,28 @@ class LancelotOrchestrator:
 
         return get_model_usage_status()
 
+    def _emit_chat_progress(self, phase: str, message: str, **metadata: Any) -> None:
+        """Publish bounded chat progress for War Room without exposing payloads."""
+        try:
+            from event_bus import Event, event_bus
+        except Exception:
+            return
+
+        payload = {
+            "quest_id": getattr(self, "_current_quest_id", None),
+            "phase": phase,
+            "message": message,
+            "channel": getattr(self, "_current_channel", None),
+            "operator_id": getattr(self, "_current_operator_id", None),
+            "operator_name": getattr(self, "_current_operator_name", None),
+            "session_id": getattr(self, "_current_session_id", None),
+        }
+        payload.update({
+            key: value for key, value in metadata.items()
+            if value is not None
+        })
+        event_bus.publish_sync(Event(type="chat.progress", payload=payload))
+
     def _emit_frontier_scrub_receipt(
         self,
         *,
@@ -291,6 +314,10 @@ class LancelotOrchestrator:
         scrubbed: bool = False,
         fallback_used: bool = False,
         reason: Optional[str] = None,
+        pre_scrubbed: bool = False,
+        pre_scrub_source: Optional[str] = None,
+        local_verification_used: bool = False,
+        scrub_stages: tuple[str, ...] = (),
     ) -> None:
         """Persist frontier-scrub audit events as immutable receipts."""
         if not getattr(self, "receipt_service", None):
@@ -299,6 +326,16 @@ class LancelotOrchestrator:
         try:
             policy = self._current_model_usage_status()["frontier_scrub_mode"]
             status = ReceiptStatus.FAILURE if action_name == "pii_scrub_blocked" else ReceiptStatus.SUCCESS
+            scrub_pipeline = list(scrub_stages)
+            if not scrub_pipeline:
+                if pre_scrubbed:
+                    scrub_pipeline.append("deterministic_prescrub")
+                if local_verification_used:
+                    scrub_pipeline.append("local_model_verification")
+                if fallback_used:
+                    scrub_pipeline.append("deterministic_fallback")
+                if detected_categories or residual_categories or scrubbed:
+                    scrub_pipeline.append("deterministic_validation")
             receipt = create_finalized_receipt(
                 ActionType.VERIFICATION,
                 action_name,
@@ -313,6 +350,10 @@ class LancelotOrchestrator:
                     "scrubbed": scrubbed,
                     "fallback_used": fallback_used,
                     "residual_categories": list(residual_categories),
+                    "pre_scrubbed": pre_scrubbed,
+                    "pre_scrub_source": pre_scrub_source,
+                    "local_verification_used": local_verification_used,
+                    "scrub_pipeline": scrub_pipeline,
                 },
                 status=status,
                 tier=CognitionTier.CLASSIFICATION,
@@ -324,6 +365,10 @@ class LancelotOrchestrator:
                     "pii_categories": list(detected_categories),
                     "residual_categories": list(residual_categories),
                     "degraded_privacy": fallback_used,
+                    "pre_scrubbed": pre_scrubbed,
+                    "pre_scrub_source": pre_scrub_source,
+                    "local_verification_used": local_verification_used,
+                    "scrub_pipeline": scrub_pipeline,
                     "channel": getattr(self, "_current_channel", None),
                     "source": source,
                     "reason": reason,
@@ -349,6 +394,14 @@ class LancelotOrchestrator:
         if result.source == "policy_disabled":
             return
         if result.fallback_used:
+            self._emit_chat_progress(
+                "frontier_scrub",
+                "Local scrub fallback active; using deterministic redaction path",
+                severity="warning",
+                degraded=True,
+                degraded_reason=result.reason or "deterministic local scrub fallback used",
+                source=result.source,
+            )
             self._emit_frontier_scrub_receipt(
                 action_name="pii_scrub_fallback",
                 source=result.source,
@@ -359,6 +412,10 @@ class LancelotOrchestrator:
                 scrubbed=result.scrubbed,
                 fallback_used=True,
                 reason=result.reason,
+                pre_scrubbed=getattr(result, "pre_scrubbed", False),
+                pre_scrub_source=getattr(result, "pre_scrub_source", None),
+                local_verification_used=getattr(result, "local_verification_used", False),
+                scrub_stages=getattr(result, "scrub_stages", ()),
             )
             return
         if result.detected_categories:
@@ -372,6 +429,10 @@ class LancelotOrchestrator:
                 scrubbed=result.scrubbed,
                 fallback_used=False,
                 reason=result.reason,
+                pre_scrubbed=getattr(result, "pre_scrubbed", False),
+                pre_scrub_source=getattr(result, "pre_scrub_source", None),
+                local_verification_used=getattr(result, "local_verification_used", False),
+                scrub_stages=getattr(result, "scrub_stages", ()),
             )
 
     def _get_frontier_scrubber(self) -> LocalPIIScrubber:
@@ -383,6 +444,7 @@ class LancelotOrchestrator:
         scrubber.bind(
             model_router=getattr(self, "model_router", None),
             local_model=getattr(self, "local_model", None),
+            local_model_roles=getattr(self, "local_model_roles", None),
         )
         return scrubber
 
@@ -392,6 +454,14 @@ class LancelotOrchestrator:
         try:
             result = scrubber.scrub_text(text)
         except PIIScrubError as exc:
+            self._emit_chat_progress(
+                "frontier_scrub",
+                "Frontier payload blocked by local scrub policy",
+                severity="error",
+                degraded=True,
+                degraded_reason=str(exc),
+                source="required_policy_block",
+            )
             self._emit_frontier_scrub_receipt(
                 action_name="pii_scrub_blocked",
                 source="required_policy_block",
@@ -418,6 +488,14 @@ class LancelotOrchestrator:
         try:
             scrubbed, audit_events = scrubber.scrub_payload_with_audit(payload)
         except PIIScrubPayloadError as exc:
+            self._emit_chat_progress(
+                "frontier_scrub",
+                "Frontier payload blocked by local scrub policy",
+                severity="error",
+                degraded=True,
+                degraded_reason=exc.reason,
+                source="required_policy_block",
+            )
             self._emit_frontier_scrub_receipt(
                 action_name="pii_scrub_blocked",
                 source="required_policy_block",
@@ -431,6 +509,14 @@ class LancelotOrchestrator:
             )
             raise
         except PIIScrubError as exc:
+            self._emit_chat_progress(
+                "frontier_scrub",
+                "Frontier payload blocked by local scrub policy",
+                severity="error",
+                degraded=True,
+                degraded_reason=str(exc),
+                source="required_policy_block",
+            )
             self._emit_frontier_scrub_receipt(
                 action_name="pii_scrub_blocked",
                 source="required_policy_block",
@@ -450,6 +536,10 @@ class LancelotOrchestrator:
 
     def _build_frontier_user_message(self, text: str, images: list | None = None) -> Any:
         """Build a frontier-bound user message after local redaction."""
+        self._emit_chat_progress(
+            "frontier_scrub",
+            "Scrubbing outbound user/context payload locally",
+        )
         return self.provider.build_user_message(self._redact_for_frontier(text), images=images)
 
     def _build_frontier_tool_response_message(
@@ -457,6 +547,10 @@ class LancelotOrchestrator:
         tool_results: list[tuple[str, str, str]],
     ) -> Any:
         """Build a frontier-bound tool response message after local redaction."""
+        self._emit_chat_progress(
+            "frontier_scrub",
+            "Scrubbing tool results before frontier model handoff",
+        )
         scrubbed_results = []
         for call_id, fn_name, result_str in tool_results:
             scrubbed_results.append((call_id, fn_name, self._redact_for_frontier(str(result_str))))
@@ -471,9 +565,20 @@ class LancelotOrchestrator:
         config: Optional[dict] = None,
     ):
         """Frontier provider wrapper that enforces local scrubbing before generation."""
+        self._emit_chat_progress(
+            "frontier_scrub",
+            "Validating provider payload against local scrub policy",
+        )
+        scrubbed_messages = self._scrub_frontier_payload(messages)
+        self._emit_chat_progress(
+            "provider_call",
+            "Calling governed frontier model",
+            model=model,
+            wait_reason="provider_call",
+        )
         return self.provider.generate(
             model=model,
-            messages=self._scrub_frontier_payload(messages),
+            messages=scrubbed_messages,
             system_instruction=system_instruction,
             config=config,
         )
@@ -489,9 +594,20 @@ class LancelotOrchestrator:
         config: Optional[dict] = None,
     ):
         """Frontier provider wrapper for tool calls with local scrubbing."""
+        self._emit_chat_progress(
+            "frontier_scrub",
+            "Validating tool-capable provider payload against local scrub policy",
+        )
+        scrubbed_messages = self._scrub_frontier_payload(messages)
+        self._emit_chat_progress(
+            "provider_call",
+            "Calling governed frontier model with tools",
+            model=model,
+            wait_reason="provider_call",
+        )
         return self.provider.generate_with_tools(
             model=model,
-            messages=self._scrub_frontier_payload(messages),
+            messages=scrubbed_messages,
             system_instruction=system_instruction,
             tools=tools,
             tool_config=tool_config,
@@ -675,8 +791,17 @@ class LancelotOrchestrator:
             "do it", "set it up", "get it done", "make it happen",
             "wire it up", "hook it up", "let's go", "do this",
             "yes do it", "yes, do it",
+            "sounds good", "ok sounds good", "okay sounds good",
+            "looks good", "that works", "works for me", "go for it",
         ]
-        has_plan = self._last_plan_artifact is not None
+        has_graph = False
+        try:
+            if self.task_store:
+                session_id = getattr(self, "_current_session_id", "")
+                has_graph = self.task_store.get_latest_graph_for_session(session_id) is not None
+        except Exception as exc:
+            _logging.warning("Failed to inspect pending graph for proceed detection: %s", exc)
+        has_plan = self._last_plan_artifact is not None or has_graph
         if has_plan and any(lower.startswith(p) or lower == p for p in contextual_phrases):
             return True
 
@@ -687,7 +812,19 @@ class LancelotOrchestrator:
 
     def _request_permission(self, graph: TaskGraph) -> str:
         """Format a permission request for a TaskGraph."""
-        from src.core.tasking.authority import list_graph_authorities
+        from src.core.tasking.authority import (
+            format_step_requirement_issues,
+            list_graph_authorities,
+            validate_graph_requirements,
+        )
+
+        requirement_issues = validate_graph_requirements(graph.steps)
+        if requirement_issues:
+            return (
+                "**Cannot request approval yet:** the executable plan is missing required inputs.\n\n"
+                f"{format_step_requirement_issues(requirement_issues)}\n\n"
+                "Please provide the missing input and I will generate a new governed execution request."
+            )
 
         if self.assembler:
             authorities = list_graph_authorities(graph.steps)
@@ -714,7 +851,19 @@ class LancelotOrchestrator:
         if not graph:
             return "No pending plan to approve."
 
-        from src.core.tasking.authority import list_graph_authorities
+        from src.core.tasking.authority import (
+            format_step_requirement_issues,
+            list_graph_authorities,
+            validate_graph_requirements,
+        )
+
+        requirement_issues = validate_graph_requirements(graph.steps)
+        if requirement_issues:
+            return (
+                "Approval was not accepted because the pending plan is incomplete.\n\n"
+                f"{format_step_requirement_issues(requirement_issues)}\n\n"
+                "Please provide the missing input and I will regenerate the permission request."
+            )
 
         authorities = list_graph_authorities(graph.steps)
         tools_needed = authorities["tools"]
@@ -982,7 +1131,15 @@ class LancelotOrchestrator:
             if attr.startswith("_deep_model_valid_"):
                 delattr(self, attr)
 
-        auth_method = "OAuth" if auth_token else "API key"
+        if provider_name == "openai-codex" and has_codex_cli_auth and not auth_token:
+            provider_class = self.provider.__class__.__name__ if self.provider is not None else ""
+            auth_method = (
+                "mounted Codex OAuth token"
+                if provider_class == "OpenAICodexResponsesProviderClient"
+                else "Codex CLI auth"
+            )
+        else:
+            auth_method = "OAuth" if auth_token else "API key"
         _gov_logger.info(
             "Provider hot-swapped to %s via %s (model: %s, mode: %s)",
             provider_name,
@@ -1150,7 +1307,11 @@ class LancelotOrchestrator:
 
     def _classify_tool_call_safety(self, skill_name: str, inputs: dict) -> str:
         """Classify tool-call safety via the shared safety helper."""
-        return _classify_tool_call_safety_fn(skill_name, inputs)
+        return _classify_tool_call_safety_fn(
+            skill_name,
+            inputs,
+            channel=getattr(self, "_current_channel", "api"),
+        )
 
     # ------------------------------------------------------------------
     # Fix Pack V8: Local agentic routing

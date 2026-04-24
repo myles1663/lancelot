@@ -161,6 +161,15 @@ class TestHealth:
         assert client.is_healthy() is True
 
     @patch("urllib.request.urlopen")
+    def test_native_llama_server_health_is_normalized(self, mock_open, client):
+        mock_open.return_value = _mock_urlopen({"status": "ok"})
+        data = client.health()
+        assert data["ready"] is True
+        assert data["loaded"] is True
+        assert data["last_error"] is None
+        assert client.is_healthy() is True
+
+    @patch("urllib.request.urlopen")
     def test_is_healthy_false_on_error(self, mock_open, client):
         mock_open.side_effect = URLError("connection refused")
         assert client.is_healthy() is False
@@ -203,6 +212,15 @@ class TestComplete:
     def test_complete_returns_text(self, mock_open, client):
         mock_open.return_value = _mock_urlopen({
             "text": "Paris", "model": "test", "tokens_generated": 1, "elapsed_ms": 50.0,
+        })
+        result = client.complete("Capital of France?")
+        assert result == "Paris"
+
+    @patch("urllib.request.urlopen")
+    def test_complete_accepts_openai_style_choices(self, mock_open, client):
+        mock_open.return_value = _mock_urlopen({
+            "choices": [{"text": "Paris"}],
+            "usage": {"completion_tokens": 1},
         })
         result = client.complete("Capital of France?")
         assert result == "Paris"
@@ -280,6 +298,39 @@ class TestClassifyIntent:
         assert result == "command"
 
     @patch("urllib.request.urlopen")
+    def test_extracts_category_from_noisy_classifier_output(self, mock_open, client):
+        mock_open.return_value = _mock_urlopen({
+            "text": "the category should be one of the following: question, command",
+            "model": "m",
+            "tokens_generated": 8,
+            "elapsed_ms": 1.0,
+        })
+        result = client.classify_intent("Can you summarize this status?")
+        assert result == "question"
+
+    @patch("urllib.request.urlopen")
+    def test_noisy_classifier_label_list_uses_input_heuristic(self, mock_open, client):
+        mock_open.return_value = _mock_urlopen({
+            "text": "question, command, information, greeting, feedback, unclear",
+            "model": "m",
+            "tokens_generated": 8,
+            "elapsed_ms": 1.0,
+        })
+        result = client.classify_intent("Delete the temporary file")
+        assert result == "command"
+
+    @patch("urllib.request.urlopen")
+    def test_defaults_unclear_when_classifier_output_has_no_label(self, mock_open, client):
+        mock_open.return_value = _mock_urlopen({
+            "text": "I cannot decide",
+            "model": "m",
+            "tokens_generated": 4,
+            "elapsed_ms": 1.0,
+        })
+        result = client.classify_intent("...")
+        assert result == "unclear"
+
+    @patch("urllib.request.urlopen")
     def test_uses_low_temperature(self, mock_open, client):
         mock_open.return_value = _mock_urlopen({
             "text": "question", "model": "m", "tokens_generated": 1, "elapsed_ms": 1.0,
@@ -290,6 +341,7 @@ class TestClassifyIntent:
         sent = json.loads(request_obj.data.decode("utf-8"))
         assert sent["temperature"] == 0.0
         assert sent["max_tokens"] == 16
+        assert sent["stop"] == ["\n"]
 
     @patch("urllib.request.urlopen")
     def test_prompt_contains_input(self, mock_open, client):
@@ -465,7 +517,16 @@ class TestRagRewrite:
         assert result == "rewritten query"
 
     @patch("urllib.request.urlopen")
-    def test_uses_128_max_tokens(self, mock_open, client):
+    def test_returns_first_rewritten_line_when_model_explains(self, mock_open, client):
+        mock_open.return_value = _mock_urlopen({
+            "text": "scrub latency documentation\n\nOkay, here is why...",
+            "model": "m", "tokens_generated": 10, "elapsed_ms": 1.0,
+        })
+        result = client.rag_rewrite("find docs about scrub latency")
+        assert result == "scrub latency documentation"
+
+    @patch("urllib.request.urlopen")
+    def test_uses_96_max_tokens(self, mock_open, client):
         mock_open.return_value = _mock_urlopen({
             "text": "rewritten",
             "model": "m", "tokens_generated": 1, "elapsed_ms": 1.0,
@@ -474,7 +535,9 @@ class TestRagRewrite:
 
         request_obj = mock_open.call_args[0][0]
         sent = json.loads(request_obj.data.decode("utf-8"))
-        assert sent["max_tokens"] == 128
+        assert sent["max_tokens"] == 96
+        assert sent["temperature"] == 0.0
+        assert sent["stop"] == ["\n"]
 
 
 # ===================================================================

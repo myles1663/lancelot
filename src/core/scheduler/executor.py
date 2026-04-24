@@ -66,6 +66,43 @@ class JobExecutionResult:
     receipt: Optional[Dict[str, Any]] = None
 
 
+def _scheduled_skill_failure_reason(result: Any) -> Optional[str]:
+    """Return an operator-readable failure reason from a scheduled skill result."""
+    if result is None:
+        return None
+
+    success = getattr(result, "success", None)
+    if success is False:
+        return (
+            getattr(result, "error", None)
+            or "Scheduled skill returned success=False without an error message"
+        )
+
+    outputs = getattr(result, "outputs", None)
+    if outputs is None and isinstance(result, dict):
+        outputs = result
+
+    if isinstance(outputs, dict):
+        if str(outputs.get("status", "")).lower() == "error":
+            return str(outputs.get("error") or "Scheduled skill returned status=error")
+
+        if "return_code" in outputs:
+            try:
+                return_code = int(outputs.get("return_code"))
+            except (TypeError, ValueError):
+                return_code = 1
+            if return_code != 0:
+                detail = (
+                    outputs.get("stderr")
+                    or outputs.get("stdout")
+                    or outputs.get("command")
+                    or "no command output"
+                )
+                return f"Scheduled command exited with return_code={return_code}: {str(detail)[:500]}"
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Cron matching (no external dependency)
 # ---------------------------------------------------------------------------
@@ -481,7 +518,10 @@ class JobExecutor:
             if not self._skill_execute_fn:
                 raise RuntimeError("Scheduler skill executor is not configured")
 
-            self._skill_execute_fn(job.skill, job_inputs)
+            skill_result = self._skill_execute_fn(job.skill, job_inputs)
+            failure_reason = _scheduled_skill_failure_reason(skill_result)
+            if failure_reason:
+                raise RuntimeError(failure_reason)
 
             duration_ms = (time.monotonic() - start) * 1000
 

@@ -110,7 +110,8 @@ class ToolFlowEmitter:
 
     def tool_call_blocked(self, quest_id: str, iteration: int,
                           tool_name: str, approval_id: str,
-                          channel: str = "api") -> None:
+                          channel: str = "api",
+                          reason: str = "Awaiting Commander approval") -> None:
         """Emit when a tool call is blocked pending approval."""
         self._emit(ToolFlowEvent(
             quest_id=quest_id,
@@ -118,6 +119,21 @@ class ToolFlowEmitter:
             iteration=iteration,
             tool_name=tool_name,
             approval_id=approval_id,
+            reason=reason,
+            channel=channel,
+        ))
+
+    def quest_blocked(self, quest_id: str, reason: str,
+                      approval_id: str = "",
+                      duration_ms: int = 0,
+                      channel: str = "api") -> None:
+        """Emit when the loop pauses for an external approval decision."""
+        self._emit(ToolFlowEvent(
+            quest_id=quest_id,
+            event_type=ToolFlowEventType.QUEST_BLOCKED.value,
+            approval_id=approval_id or None,
+            reason=reason,
+            duration_ms=duration_ms,
             channel=channel,
         ))
 

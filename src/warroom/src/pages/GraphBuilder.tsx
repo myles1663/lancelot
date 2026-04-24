@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { usePolling } from '@/hooks/usePolling'
 import {
+  fetchFederationStatus,
   fetchActiveTopology,
   createTopology,
   addNode,
@@ -18,6 +19,7 @@ import {
   type TopologyVersion,
   type DeploymentGateResult,
   type FederationSettings,
+  type FederationStatus,
 } from '@/api/federation'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { getErrorMessage } from '@/utils/errors'
@@ -281,13 +283,21 @@ function AddEdgeForm({ nodes, onAdd }: { nodes: TopologyDocument['nodes']; onAdd
 // ── Main Page ────────────────────────────────────────────────
 
 export function GraphBuilder() {
+  const { data: federationStatus, loading: federationStatusLoading } = usePolling<FederationStatus>({
+    fetcher: fetchFederationStatus,
+    interval: 10000,
+  })
+  const federationEnabled = federationStatus?.enabled === true
+
   const { data: topology, refetch } = usePolling<TopologyDocument>({
     fetcher: fetchActiveTopology,
     interval: 30000,
+    enabled: federationEnabled,
   })
   const { data: federationSettings } = usePolling<FederationSettings>({
     fetcher: fetchFederationSettings,
     interval: 15000,
+    enabled: federationEnabled,
   })
 
   const [gateResult, setGateResult] = useState<DeploymentGateResult | null>(null)
@@ -299,6 +309,17 @@ export function GraphBuilder() {
   const showMsg = (msg: string) => {
     setMessage(msg)
     setTimeout(() => setMessage(''), 3000)
+  }
+
+  if (!federationStatusLoading && !federationEnabled) {
+    return (
+      <div className="p-6">
+        <h1 className="text-xl font-bold text-text-primary mb-2">Graph Builder</h1>
+        <div className="bg-surface-card border border-border-default rounded-lg p-6 text-center text-text-secondary">
+          Federation is not enabled. Set <code className="text-accent-primary font-mono text-sm">FEATURE_FEDERATION=true</code> to edit topology.
+        </div>
+      </div>
+    )
   }
 
   const handleCreate = async () => {

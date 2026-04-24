@@ -56,8 +56,12 @@ export function HiveAgentMesh() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [dialogType, setDialogType] = useState<'pause' | 'kill' | 'modify'>('kill')
   const [dialogAgentId, setDialogAgentId] = useState('')
+  const inFlightRef = useRef(false)
 
   const loadData = useCallback(async () => {
+    if (inFlightRef.current) return
+
+    inFlightRef.current = true
     try {
       const [s, r] = await Promise.all([getHiveStatus(), getHiveRoster()])
       setStatus(s)
@@ -66,6 +70,8 @@ export function HiveAgentMesh() {
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Failed to load HIVE data'
       if (!msg.includes('503')) setError(msg)
+    } finally {
+      inFlightRef.current = false
     }
   }, [])
 

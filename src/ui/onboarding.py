@@ -513,9 +513,18 @@ class OnboardingOrchestrator:
     # ------------------------------------------------------------------
 
     def _get_env_value(self, key):
-        """Read a value from .env file (not just os.environ)."""
+        """Read a value from the durable runtime configuration sources."""
         if not key:
             return None
+        try:
+            import secret_cache
+            if secret_cache.is_bootstrapped():
+                cached = secret_cache.get(key, "")
+                if cached:
+                    return cached
+        except Exception as exc:
+            logger.warning("Onboarding failed to read %s from secret cache: %s", key, exc)
+
         val = os.getenv(key)
         if val:
             return val

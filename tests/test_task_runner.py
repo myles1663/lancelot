@@ -71,6 +71,24 @@ def _make_graph_and_run(task_store, steps, token_id=""):
     return graph, run
 
 
+def _file_edit_step(step_id="s1", dependencies=None):
+    return TaskStep(
+        step_id=step_id,
+        type=StepType.FILE_EDIT.value,
+        inputs={"action": "create", "path": f"{step_id}.txt", "content": "hello"},
+        dependencies=dependencies or [],
+    )
+
+
+def _command_step(step_id="s1", dependencies=None):
+    return TaskStep(
+        step_id=step_id,
+        type=StepType.COMMAND.value,
+        inputs={"command": "echo hi"},
+        dependencies=dependencies or [],
+    )
+
+
 # =========================================================================
 # Basic Execution Tests
 # =========================================================================
@@ -79,13 +97,45 @@ def _make_graph_and_run(task_store, steps, token_id=""):
 class TestBasicExecution:
     def test_single_step_succeeds(self, runner, task_store):
         """A single non-skill step executes through a real executor path."""
-        steps = [TaskStep(step_id="s1", type=StepType.FILE_EDIT.value)]
+        steps = [
+            TaskStep(
+                step_id="s1",
+                type=StepType.FILE_EDIT.value,
+                inputs={"action": "create", "path": "demo.txt", "content": "hello"},
+            )
+        ]
         graph, run = _make_graph_and_run(task_store, steps)
 
         result = runner.run(run.id)
         assert result.status == RunStatus.SUCCEEDED.value
         assert len(result.step_results) == 1
         assert result.step_results[0].success is True
+
+    def test_missing_file_edit_inputs_fail_before_skill_executor(self, task_store, token_store, minter):
+        """Incomplete repo_writer steps fail validation before skill execution."""
+        fake_executor = _FakeSkillExecutor()
+        runner = TaskRunner(
+            task_store=task_store,
+            token_store=token_store,
+            minter=minter,
+            skill_executor=fake_executor,
+        )
+        steps = [
+            TaskStep(
+                step_id="s1",
+                type=StepType.FILE_EDIT.value,
+                inputs={"description": "Create a file for the demo"},
+            )
+        ]
+        graph, run = _make_graph_and_run(task_store, steps)
+
+        result = runner.run(run.id)
+
+        assert result.status == RunStatus.FAILED.value
+        assert fake_executor.calls == []
+        assert "repo_writer" in result.step_results[0].error
+        assert "'action'" in result.step_results[0].error
+        assert "'path'" in result.step_results[0].error
 
     def test_multi_step_all_succeed(self, runner, task_store):
         """Multiple steps execute in order and all succeed."""
@@ -95,8 +145,8 @@ class TestBasicExecution:
 
         runner.verifier = _PassingVerifier()
         steps = [
-            TaskStep(step_id="s1", type=StepType.FILE_EDIT.value),
-            TaskStep(step_id="s2", type=StepType.COMMAND.value, dependencies=["s1"]),
+            _file_edit_step("s1"),
+            _command_step("s2", dependencies=["s1"]),
             TaskStep(step_id="s3", type=StepType.VERIFY.value, dependencies=["s2"]),
         ]
         graph, run = _make_graph_and_run(task_store, steps)
@@ -137,7 +187,7 @@ class TestBasicExecution:
         init_runtime_pause(str(tmp_path))
         pause_runtime("Paused for maintenance", operator_id="op-1", operator_name="Arthur", session_id="session-1")
         try:
-            steps = [TaskStep(step_id="s1", type=StepType.FILE_EDIT.value)]
+            steps = [_file_edit_step("s1")]
             graph, run = _make_graph_and_run(task_store, steps)
             result = runner.run(run.id)
             assert result.status == RunStatus.FAILED.value
@@ -155,9 +205,9 @@ class TestHumanInputBlocked:
     def test_human_input_blocks_run(self, runner, task_store):
         """A HUMAN_INPUT step transitions the run to BLOCKED."""
         steps = [
-            TaskStep(step_id="s1", type=StepType.FILE_EDIT.value),
+            _file_edit_step("s1"),
             TaskStep(step_id="s2", type=StepType.HUMAN_INPUT.value, dependencies=["s1"]),
-            TaskStep(step_id="s3", type=StepType.COMMAND.value, dependencies=["s2"]),
+            _command_step("s3", dependencies=["s2"]),
         ]
         graph, run = _make_graph_and_run(task_store, steps)
 
@@ -190,7 +240,7 @@ class TestTokenAuthority:
         token = minter.mint_from_approval(
             scope="test", tools=[],  # Empty = all tools allowed
         )
-        steps = [TaskStep(step_id="s1", type=StepType.FILE_EDIT.value)]
+        steps = [_file_edit_step("s1")]
         graph, run = _make_graph_and_run(task_store, steps, token_id=token.id)
 
         result = runner.run(run.id)
@@ -201,7 +251,7 @@ class TestTokenAuthority:
         token = minter.mint_from_approval(
             scope="test", tools=["read_file"],  # Only read_file allowed
         )
-        steps = [TaskStep(step_id="s1", type=StepType.FILE_EDIT.value)]
+        steps = [_file_edit_step("s1")]
         graph, run = _make_graph_and_run(task_store, steps, token_id=token.id)
 
         result = runner.run(run.id)
@@ -282,8 +332,8 @@ class TestReceiptTracking:
     def test_receipts_tracked_in_run(self, runner, task_store):
         """Receipt IDs are added to TaskRun's receipts_index."""
         steps = [
-            TaskStep(step_id="s1", type=StepType.FILE_EDIT.value),
-            TaskStep(step_id="s2", type=StepType.COMMAND.value, dependencies=["s1"]),
+            _file_edit_step("s1"),
+            _command_step("s2", dependencies=["s1"]),
         ]
         graph, run = _make_graph_and_run(task_store, steps)
 
@@ -311,8 +361,8 @@ class TestDependencyOrder:
         runner.verifier = _PassingVerifier()
         steps = [
             TaskStep(step_id="s3", type=StepType.VERIFY.value, dependencies=["s1", "s2"]),
-            TaskStep(step_id="s1", type=StepType.FILE_EDIT.value),
-            TaskStep(step_id="s2", type=StepType.COMMAND.value, dependencies=["s1"]),
+            _file_edit_step("s1"),
+            _command_step("s2", dependencies=["s1"]),
         ]
         graph, run = _make_graph_and_run(task_store, steps)
 
@@ -331,8 +381,8 @@ class TestDependencyOrder:
 
         runner.verifier = _PassingVerifier()
         steps = [
-            TaskStep(step_id="s1", type=StepType.FILE_EDIT.value),
-            TaskStep(step_id="s2", type=StepType.COMMAND.value),
+            _file_edit_step("s1"),
+            _command_step("s2"),
             TaskStep(step_id="s3", type=StepType.VERIFY.value),
         ]
         graph, run = _make_graph_and_run(task_store, steps)
@@ -464,7 +514,7 @@ class TestSkillExecutorIntegration:
         )
         steps = [
             TaskStep(step_id="s1", type=StepType.FILE_EDIT.value,
-                     inputs={"path": "config.yaml", "content": "key: value"}),
+                     inputs={"action": "create", "path": "config.yaml", "content": "key: value"}),
         ]
         graph, run = _make_graph_and_run(task_store, steps)
 
@@ -571,7 +621,7 @@ class TestReceiptServiceIntegration:
             operator_id="op-123",
             operator_name="Operator",
         )
-        graph = TaskGraph(goal="test", steps=[TaskStep(step_id="s1", type=StepType.COMMAND.value)])
+        graph = TaskGraph(goal="test", steps=[_command_step("s1")])
         task_store.save_graph(graph)
         run = TaskRun(
             task_graph_id=graph.id,

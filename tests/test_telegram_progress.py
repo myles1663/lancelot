@@ -270,6 +270,27 @@ class TestQuestFailed:
         assert "quest-1" not in bridge._active_quests
 
 
+class TestQuestBlocked:
+    """Tests for quest_blocked event handling."""
+
+    def test_final_edit_with_approval_wait(self, bridge, mock_bot):
+        """Should mark approval waits without treating them as failures."""
+        _run(bridge.on_toolflow_event(_make_event("toolflow.quest_started")))
+
+        event = _make_event(
+            "toolflow.quest_blocked",
+            reason="Pending Commander approval",
+            approval_id="approval-123",
+        )
+        _run(bridge.on_toolflow_event(event))
+
+        text = mock_bot.edit_message.call_args[0][1]
+        assert "Quest waiting for approval" in text
+        assert "Pending Commander approval" in text
+        assert "approval-123" in text
+        assert "quest-1" not in bridge._active_quests
+
+
 # ---------------------------------------------------------------------------
 # Progress text building tests
 # ---------------------------------------------------------------------------
@@ -294,6 +315,12 @@ class TestBuildProgressText:
         state = {"steps": []}
         text = bridge._build_progress_text(state, status="failed")
         assert "Quest did not complete" in text
+
+    def test_blocked_header(self, bridge):
+        """Blocked status shows approval wait header."""
+        state = {"steps": []}
+        text = bridge._build_progress_text(state, status="blocked")
+        assert "Quest waiting for approval" in text
 
     def test_shows_steps_with_status_icons(self, bridge):
         """Steps should show status icons and tool names."""

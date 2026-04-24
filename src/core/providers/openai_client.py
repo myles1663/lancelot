@@ -3,7 +3,9 @@ OpenAIProviderClient — OpenAI adapter via openai SDK (v8.3.0).
 
 Implements the ProviderClient interface for OpenAI models (GPT-4o, etc.).
 Handles the OpenAI-specific message format, tool calling, and model listing.
-Supports both API key auth and Codex OAuth (ChatGPT subscription).
+The production `openai-codex` path uses `codex_responses_client.py`; this
+module's Codex OAuth branch is retained for compatibility tests and legacy
+call sites only.
 
 Public API:
     OpenAIProviderClient(api_key, auth_token, base_url)
@@ -23,15 +25,13 @@ logger = logging.getLogger(__name__)
 class OpenAIProviderClient(ProviderClient):
     """OpenAI provider adapter using the openai SDK.
 
-    Supports two auth modes:
-        1. API key → standard api.openai.com endpoint
-        2. Codex OAuth token → chatgpt.com/backend-api/codex endpoint
-           (uses ChatGPT Plus/Pro subscription for flat-rate access)
+    Supports OpenAI Platform API-key auth. The Codex OAuth branch remains for
+    older call sites; provider factory routing now selects the native Codex
+    Responses client for ChatGPT subscription auth.
     """
 
-    # Codex API base URL — uses standard OpenAI API with OAuth token
-    # (chatgpt.com/backend-api/codex is Cloudflare-protected; the OAuth
-    # token works against the regular api.openai.com endpoint)
+    # Legacy Codex Chat Completions endpoint. Normal Lancelot Codex routing
+    # uses OpenAICodexResponsesProviderClient instead.
     CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex/v1"
 
     def __init__(self, api_key: str = "", auth_token: str = "", base_url: str = ""):
@@ -181,15 +181,18 @@ class OpenAIProviderClient(ProviderClient):
     # Model discovery
     # ------------------------------------------------------------------
 
-    # Known GPT-5.4 models available via Codex subscription
+    # Legacy Codex OAuth model list retained for compatibility only.
     # Pricing: per 1M tokens → per 1K tokens (divide by 1000)
     _CODEX_MODELS = [
-        ModelInfo(id="gpt-5.1-codex", display_name="GPT-5.1 Codex", supports_tools=True,
+        ModelInfo(id="gpt-5.4", display_name="GPT-5.4", supports_tools=True,
                   capability_tier="deep", context_window=400000,
                   input_cost_per_1k=0.00125, output_cost_per_1k=0.01),
-        ModelInfo(id="gpt-5.1-codex-mini", display_name="GPT-5.1 Codex Mini", supports_tools=True,
+        ModelInfo(id="gpt-5.4-mini", display_name="GPT-5.4 Mini", supports_tools=True,
                   capability_tier="fast", context_window=400000,
                   input_cost_per_1k=0.00025, output_cost_per_1k=0.002),
+        ModelInfo(id="gpt-5.4-nano", display_name="GPT-5.4 Nano", supports_tools=True,
+                  capability_tier="fast", context_window=400000,
+                  input_cost_per_1k=0.00005, output_cost_per_1k=0.0004),
     ]
 
     def list_models(self) -> list[ModelInfo]:

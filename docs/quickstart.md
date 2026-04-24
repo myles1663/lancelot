@@ -39,7 +39,7 @@ The installer walks you through each step interactively:
 6. **Repository clone** — pulls the latest code from GitHub
 7. **Configuration** — generates your `.env` file and patches runtime config automatically
 8. **Model download** — downloads the 5GB local utility model (with progress bar)
-9. **Docker build & start** — builds images, starts services, waits for health
+9. **Docker pull/build & start** — pulls the prebuilt core image, builds the local model image, starts services, waits for health
 
 When it finishes, the **War Room** opens automatically in your default browser and you'll see:
 
@@ -75,7 +75,7 @@ http://localhost:8000
 docker compose up -d
 ```
 
-You should see the Lancelot War Room dashboard with panels for health, governance, and system status. The health dashboard should show the core runtime as ready, and the local model should show as both loaded and ready.
+You should see the Lancelot War Room dashboard with panels for health, governance, and system status. The core runtime starts as soon as its containers are up. The local model may show as degraded while the GGUF model warms; Lancelot keeps the app online and marks the local execution/scrub lane unavailable until the readiness smoke passes.
 
 ---
 
@@ -110,7 +110,7 @@ curl http://localhost:8000/health/ready
 }
 ```
 
-If `ready` is `false`, check `degraded_reasons` — it tells you exactly what's not ready yet. The local LLM can take up to 2 minutes to load the model on first start.
+If `ready` is `false`, check `degraded_reasons` — it tells you exactly what's not ready yet. The local LLM can take several minutes to load the model on CPU-only systems; during that warmup the app remains available, but local utility execution and local scrub verification stay disabled.
 
 For the local model specifically, "ready" now means more than "weights loaded." Lancelot requires a real local inference smoke to pass before it treats the local execution/scrub lane as available.
 

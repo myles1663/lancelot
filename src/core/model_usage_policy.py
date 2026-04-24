@@ -60,6 +60,7 @@ def _default_runtime_status() -> dict:
         "local_model_last_error": None,
         "local_model_consecutive_failures": 0,
         "local_model_last_smoke_elapsed_ms": None,
+        "local_model_roles": {},
         "frontier_scrub_fallback_active": False,
         "frontier_scrub_fallback_count": 0,
         "last_frontier_scrub_fallback_at": None,
@@ -210,6 +211,12 @@ def set_local_model_availability(
         _runtime_status["local_model_consecutive_failures"] = consecutive_failures
     if last_smoke_elapsed_ms is not None:
         _runtime_status["local_model_last_smoke_elapsed_ms"] = last_smoke_elapsed_ms
+
+
+def set_local_model_roles_status(roles_status: dict) -> None:
+    """Publish role-level local model status for operator visibility."""
+    if isinstance(roles_status, dict):
+        _runtime_status["local_model_roles"] = roles_status
 
 
 def clear_frontier_scrub_fallback() -> None:

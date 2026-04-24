@@ -9,11 +9,29 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Optional
 
 from providers.base import GenerateResult, ModelInfo, ProviderAuthError, ProviderClient, ToolCall
 from providers.tool_schema import NormalizedToolDeclaration
+
+
+_DEFAULT_CODEX_TIMEOUT_SECONDS = 120
+_DEFAULT_CODEX_TOOL_TIMEOUT_SECONDS = 75
+_DEFAULT_CODEX_TOOL_TRANSCRIPT_CHARS = 45000
+_DEFAULT_CODEX_LATEST_MESSAGE_CHARS = 12000
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(minimum, min(maximum, value))
 
 
 def _candidate_codex_homes(codex_home: str = "") -> list[Path]:
@@ -73,9 +91,13 @@ class CodexCLIProviderClient(ProviderClient):
         ModelInfo(id="gpt-5.4-nano", display_name="GPT-5.4 Nano", supports_tools=True, capability_tier="fast"),
     ]
 
-    def __init__(self, workdir: str = "", codex_home: str = ""):
+    def __init__(self, workdir: str = "", codex_home: str = "", auth_token: str = ""):
         self._workdir = workdir or os.getcwd()
-        self._codex_home = str(resolve_codex_home(codex_home))
+        self._auth_token = auth_token
+        if auth_token and codex_home:
+            self._codex_home = str(Path(codex_home).expanduser())
+        else:
+            self._codex_home = str(resolve_codex_home(codex_home))
         self._ensure_cli_ready()
 
     @property
@@ -90,7 +112,16 @@ class CodexCLIProviderClient(ProviderClient):
         config: Optional[dict] = None,
     ) -> GenerateResult:
         prompt = self._render_prompt(system_instruction, messages)
-        text = self._run_codex(prompt=prompt, model=model)
+        text = self._run_codex(
+            prompt=prompt,
+            model=model,
+            timeout_s=_env_int(
+                "LANCELOT_CODEX_CLI_TIMEOUT_SECONDS",
+                _DEFAULT_CODEX_TIMEOUT_SECONDS,
+                10,
+                300,
+            ),
+        )
         return GenerateResult(
             text=text,
             tool_calls=[],
@@ -122,6 +153,12 @@ class CodexCLIProviderClient(ProviderClient):
             tools=normalized_tools,
             tool_config=tool_config,
         )
+        timeout_s = _env_int(
+            "LANCELOT_CODEX_CLI_TOOL_TIMEOUT_SECONDS",
+            _DEFAULT_CODEX_TOOL_TIMEOUT_SECONDS,
+            10,
+            180,
+        )
         decision = self._run_codex_json(
             prompt=prompt,
             model=model,
@@ -129,7 +166,22 @@ class CodexCLIProviderClient(ProviderClient):
                 normalized_tools,
                 mode=str((tool_config or {}).get("mode", "AUTO")).upper(),
             ),
+            timeout_s=timeout_s,
         )
+        if self._decision_indicates_native_tool_failure(decision):
+            retry_prompt = self._render_native_tool_retry_prompt(
+                prompt=prompt,
+                decision=decision,
+            )
+            decision = self._run_codex_json(
+                prompt=retry_prompt,
+                model=model,
+                schema=self._build_tool_decision_schema(
+                    normalized_tools,
+                    mode=str((tool_config or {}).get("mode", "AUTO")).upper(),
+                ),
+                timeout_s=timeout_s,
+            )
 
         raw_content = json.dumps(decision, ensure_ascii=True)
         action = str(decision.get("action", "")).strip().lower()
@@ -182,13 +234,33 @@ class CodexCLIProviderClient(ProviderClient):
         if not shutil.which("codex"):
             raise ProviderAuthError("openai-codex", "codex CLI is not installed in the container")
         auth_file = resolve_codex_auth_file(self._codex_home)
+        if not auth_file.exists() and self._auth_token:
+            auth_file.parent.mkdir(parents=True, exist_ok=True)
+            auth_file.write_text(
+                json.dumps(
+                    {
+                        "auth_mode": "chatgpt",
+                        "OPENAI_API_KEY": None,
+                        "tokens": {"access_token": self._auth_token},
+                        "last_refresh": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    },
+                    ensure_ascii=True,
+                ),
+                encoding="utf-8",
+            )
         if not auth_file.exists():
             raise ProviderAuthError(
                 "openai-codex",
                 "Codex CLI auth is not available in the container. Mount ~/.codex into /home/lancelot/.codex.",
             )
 
-    def _run_codex(self, prompt: str, model: str, schema: Optional[dict] = None) -> str:
+    def _run_codex(
+        self,
+        prompt: str,
+        model: str,
+        schema: Optional[dict] = None,
+        timeout_s: int = _DEFAULT_CODEX_TIMEOUT_SECONDS,
+    ) -> str:
         with tempfile.TemporaryDirectory(prefix="lancelot-codex-") as temp_dir:
             temp_path = Path(temp_dir)
             output_path = temp_path / "last_message.txt"
@@ -197,6 +269,10 @@ class CodexCLIProviderClient(ProviderClient):
                 "exec",
                 "--ephemeral",
                 "--skip-git-repo-check",
+                "--config",
+                "enabled_tools=[]",
+                "--config",
+                'disabled_tools=["shell","exec","apply_patch","list_dir","read_file"]',
                 "--sandbox",
                 "read-only",
                 "--color",
@@ -217,15 +293,20 @@ class CodexCLIProviderClient(ProviderClient):
             env = os.environ.copy()
             env["HOME"] = self._codex_home
 
-            proc = subprocess.run(
-                cmd,
-                text=True,
-                capture_output=True,
-                stdin=subprocess.DEVNULL,
-                env=env,
-                timeout=300,
-                check=False,
-            )
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    text=True,
+                    capture_output=True,
+                    stdin=subprocess.DEVNULL,
+                    env=env,
+                    timeout=timeout_s,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise TimeoutError(
+                    f"codex exec timed out after {timeout_s}s for model {model or 'default'}"
+                ) from exc
 
             if proc.returncode != 0:
                 message = (proc.stderr or proc.stdout or "codex exec failed").strip()
@@ -238,8 +319,8 @@ class CodexCLIProviderClient(ProviderClient):
                 return fallback
             raise RuntimeError("codex exec returned no message")
 
-    def _run_codex_json(self, prompt: str, model: str, schema: dict) -> dict:
-        output = self._run_codex(prompt=prompt, model=model, schema=schema)
+    def _run_codex_json(self, prompt: str, model: str, schema: dict, timeout_s: int) -> dict:
+        output = self._run_codex(prompt=prompt, model=model, schema=schema, timeout_s=timeout_s)
         try:
             parsed = json.loads(output)
         except json.JSONDecodeError as exc:
@@ -314,12 +395,33 @@ class CodexCLIProviderClient(ProviderClient):
             "If a tool fails, either choose a different declared tool or produce the best final answer from successful results.",
             "If the user asks about current system health, runtime status, files, services, logs, network state, or any other live environment detail, you must call the relevant declared tool before answering.",
             "If the user asks you to perform an action in the environment, you must use the relevant declared tool instead of answering from general knowledge.",
+            "For command_runner, request one simple command at a time. Do not use shell metacharacters or pipelines such as |, ;, &&, ||, >, <, or backticks; they are blocked by governance.",
+            "For repo_writer, use workspace='/home/lancelot/app' only for explicit Lancelot self-development changes; use workspace='/home/lancelot/workspace' for user artifacts.",
             "When returning tool_calls, each item must include args_json as a compact JSON object string. Use '{}' when the tool takes no arguments.",
         ]
         if mode == "ANY":
             instructions.append("This turn must request at least one declared tool call.")
         elif mode == "NONE":
             instructions.append("This turn must return a final response and must not request tool calls.")
+
+        transcript = self._truncate_preserving_tail(
+            self._render_prompt(system_instruction, messages),
+            max_chars=_env_int(
+                "LANCELOT_CODEX_CLI_MAX_TRANSCRIPT_CHARS",
+                _DEFAULT_CODEX_TOOL_TRANSCRIPT_CHARS,
+                1000,
+                200000,
+            ),
+        )
+        latest_user_message = self._latest_user_message_tail(
+            messages,
+            max_chars=_env_int(
+                "LANCELOT_CODEX_CLI_LATEST_MESSAGE_CHARS",
+                _DEFAULT_CODEX_LATEST_MESSAGE_CHARS,
+                1000,
+                50000,
+            ),
+        )
 
         prompt = [
             "SYSTEM RULES:",
@@ -329,11 +431,70 @@ class CodexCLIProviderClient(ProviderClient):
             *tool_blocks,
             "",
             "CONVERSATION TRANSCRIPT:",
-            self._render_prompt(system_instruction, messages),
+            transcript,
+            "",
+        ]
+        if latest_user_message:
+            prompt.extend([
+                "LATEST USER MESSAGE (authoritative and not removed by transcript truncation):",
+                latest_user_message,
+                "",
+            ])
+        prompt.extend([
+            "Return only data that satisfies the JSON schema.",
+        ])
+        return "\n".join(prompt)
+
+    @staticmethod
+    def _decision_indicates_native_tool_failure(decision: dict) -> bool:
+        final_text = str(decision.get("final_text", "")).lower()
+        return any(
+            marker in final_text
+            for marker in (
+                "bwrap:",
+                "bubblewrap",
+                "no permissions to create a new namespace",
+                "native shell",
+                "codex built-in shell",
+            )
+        )
+
+    @staticmethod
+    def _render_native_tool_retry_prompt(prompt: str, decision: dict) -> str:
+        previous = json.dumps(decision, ensure_ascii=True)
+        return "\n".join([
+            prompt,
+            "",
+            "PLANNER RETRY:",
+            "Your previous response attempted a Codex native shell/filesystem tool and hit the runtime sandbox boundary.",
+            "Do not retry native Codex tools and do not explain the sandbox failure to the user.",
+            "Use the declared Lancelot tool list above instead. If live system, file, repository, or service inspection is needed, return a command_runner tool call with the exact read-only command. If a repository write is needed, return repo_writer with all required path/content/workspace fields.",
+            "Previous invalid response:",
+            previous,
             "",
             "Return only data that satisfies the JSON schema.",
-        ]
-        return "\n".join(prompt)
+        ])
+
+    @staticmethod
+    def _truncate_preserving_tail(text: str, max_chars: int) -> str:
+        if len(text) <= max_chars:
+            return text
+        marker = (
+            "[Earlier conversation truncated by Lancelot before Codex CLI planning. "
+            "Use the latest request and recent tool results below as ground truth.]\n\n"
+        )
+        return marker + text[-max_chars:]
+
+    def _latest_user_message_tail(self, messages: list, max_chars: int) -> str:
+        for message in reversed(messages or []):
+            if isinstance(message, dict):
+                role = str(message.get("role", "")).lower()
+                if role == "user":
+                    return self._truncate_preserving_tail(
+                        self._flatten_content(message.get("content")),
+                        max_chars=max_chars,
+                    )
+        return ""
 
     @staticmethod
     def _normalize_tools(tools: list) -> list[dict]:

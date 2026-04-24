@@ -852,7 +852,7 @@ def test_agentic_generate_executes_declared_tool_then_returns_final_text(monkeyp
     first = types.SimpleNamespace(
         text="",
         raw={"role": "assistant", "content": ""},
-        tool_calls=[ToolCall(name="network_client", args={"url": "https://example.invalid"}, id="call-1")],
+        tool_calls=[ToolCall(name="network_client", args={"method": "GET", "url": "https://example.invalid"}, id="call-1")],
     )
     second = types.SimpleNamespace(text="final answer", raw={"role": "assistant", "content": "final answer"}, tool_calls=[])
     runtime = _FakeToolLoopSelf(first)
@@ -868,9 +868,139 @@ def test_agentic_generate_executes_declared_tool_then_returns_final_text(monkeyp
     runtime._provider_generate_with_tools = lambda **_: results.pop(0)
 
     assert tool_loop._agentic_generate(runtime, "fetch Exact Term", force_tool_use=True) == "final answer"
-    assert calls == [("network_client", {"url": "https://example.invalid"})]
+    assert calls == [("network_client", {"method": "GET", "url": "https://example.invalid"})]
     assert runtime._last_tool_receipts[0]["result"] == "SUCCESS"
     assert ("tool_calls", 1) in runtime.governor.logged
+
+
+def test_agentic_generate_replaces_stale_approval_prompt_after_successful_tools(monkeypatch):
+    import tool_loop
+    from providers.base import ToolCall
+
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_STRUCTURED_OUTPUT", False, raising=False)
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_CLAIM_VERIFICATION", False, raising=False)
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_DEEP_REASONING_LOOP", False, raising=False)
+
+    first = types.SimpleNamespace(
+        text="",
+        raw={"role": "assistant", "content": ""},
+        tool_calls=[
+            ToolCall(
+                name="repo_writer",
+                args={"action": "create", "path": "approval/group_one.txt"},
+                id="call-1",
+            )
+        ],
+    )
+    second = types.SimpleNamespace(
+        text=(
+            "Paused for Commander approval before running 1 governed action.\n\n"
+            "Approval ID: `stale`.\n\n"
+            "Review the ActionCard in War Room, then send `continue` after approval."
+        ),
+        raw={"role": "assistant", "content": "stale approval prompt"},
+        tool_calls=[],
+    )
+    runtime = _FakeToolLoopSelf(first)
+    runtime._build_tool_declarations = lambda: [types.SimpleNamespace(name="repo_writer")]
+    runtime.skill_executor = types.SimpleNamespace(
+        run=lambda name, inputs: types.SimpleNamespace(
+            success=True,
+            outputs={"path": "/home/lancelot/workspace/approval/group_one.txt"},
+            error="",
+        )
+    )
+    results = [first, second]
+    runtime._provider_generate_with_tools = lambda **_: results.pop(0)
+
+    response = tool_loop._agentic_generate(runtime, "create approved file", force_tool_use=True)
+
+    assert response.startswith("Completed approved governed actions:")
+    assert "Approval ID" not in response
+    assert runtime._last_tool_receipts[0]["result"] == "SUCCESS"
+    assert runtime._last_tool_receipts[0]["skill"] == "repo_writer"
+
+
+def test_agentic_generate_suppresses_duplicate_successful_tool_call(monkeypatch):
+    import tool_loop
+    from providers.base import ToolCall
+
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_STRUCTURED_OUTPUT", False, raising=False)
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_CLAIM_VERIFICATION", False, raising=False)
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_DEEP_REASONING_LOOP", False, raising=False)
+
+    args = {"action": "create", "path": "approval/group_one.txt", "workspace": "/home/lancelot/workspace"}
+    first = types.SimpleNamespace(
+        text="",
+        raw={"role": "assistant", "content": ""},
+        tool_calls=[ToolCall(name="repo_writer", args=args, id="call-1")],
+    )
+    duplicate = types.SimpleNamespace(
+        text="",
+        raw={"role": "assistant", "content": ""},
+        tool_calls=[ToolCall(name="repo_writer", args=args, id="call-2")],
+    )
+    final = types.SimpleNamespace(
+        text="Done.",
+        raw={"role": "assistant", "content": "Done."},
+        tool_calls=[],
+    )
+    runtime = _FakeToolLoopSelf(first)
+    runtime._build_tool_declarations = lambda: [types.SimpleNamespace(name="repo_writer")]
+    calls = []
+    runtime.skill_executor = types.SimpleNamespace(
+        run=lambda name, inputs: (
+            calls.append((name, dict(inputs)))
+            or types.SimpleNamespace(
+                success=True,
+                outputs={"path": "/home/lancelot/workspace/approval/group_one.txt"},
+                error="",
+            )
+        )
+    )
+    results = [first, duplicate, final]
+    runtime._provider_generate_with_tools = lambda **_: results.pop(0)
+
+    response = tool_loop._agentic_generate(runtime, "create approved file", force_tool_use=True)
+
+    assert response == "Done."
+    assert calls == [("repo_writer", args)]
+    assert len(runtime._last_tool_receipts) == 1
+    assert runtime._last_tool_receipts[0]["result"] == "SUCCESS"
+
+
+def test_agentic_generate_persists_tool_call_receipt(monkeypatch):
+    import tool_loop
+    from providers.base import ToolCall
+
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_STRUCTURED_OUTPUT", False, raising=False)
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_CLAIM_VERIFICATION", False, raising=False)
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_DEEP_REASONING_LOOP", False, raising=False)
+
+    first = types.SimpleNamespace(
+        text="",
+        raw={"role": "assistant", "content": ""},
+        tool_calls=[ToolCall(name="network_client", args={"method": "GET", "url": "https://example.invalid"}, id="call-1")],
+    )
+    second = types.SimpleNamespace(text="final answer", raw={"role": "assistant", "content": "final answer"}, tool_calls=[])
+    runtime = _FakeToolLoopSelf(first)
+    runtime._build_tool_declarations = lambda: [types.SimpleNamespace(name="network_client")]
+    receipts = []
+    runtime.receipt_service = types.SimpleNamespace(create=lambda receipt: receipts.append(receipt))
+    runtime.skill_executor = types.SimpleNamespace(
+        run=lambda name, inputs: types.SimpleNamespace(success=True, outputs={"body": "ok"}, error="")
+    )
+    results = [first, second]
+    runtime._provider_generate_with_tools = lambda **_: results.pop(0)
+
+    assert tool_loop._agentic_generate(runtime, "fetch Exact Term", force_tool_use=True) == "final answer"
+    assert len(receipts) == 1
+    assert receipts[0].action_type == "tool_call"
+    assert receipts[0].action_name == "network_client"
+    assert receipts[0].status == "success"
+    assert receipts[0].inputs["tool"] == "network_client"
+    assert receipts[0].outputs["body"] == "ok"
+    assert receipts[0].metadata["tool_name"] == "network_client"
 
 
 def test_agentic_generate_rejects_hallucinated_tool_and_continues(monkeypatch):
@@ -908,9 +1038,8 @@ def test_agentic_generate_blocks_escalated_tool_without_write_permission(monkeyp
     first = types.SimpleNamespace(
         text="",
         raw={"role": "assistant", "content": ""},
-        tool_calls=[ToolCall(name="repo_writer", args={"path": "README.md"}, id="call-1")],
+        tool_calls=[ToolCall(name="repo_writer", args={"action": "edit", "path": "README.md"}, id="call-1")],
     )
-    second = types.SimpleNamespace(text="blocked summary", raw={"role": "assistant", "content": "blocked summary"}, tool_calls=[])
     runtime = _FakeToolLoopSelf(first)
     runtime._build_tool_declarations = lambda: [types.SimpleNamespace(name="repo_writer")]
     runtime._classify_tool_call_safety = lambda *_: "escalate"
@@ -918,12 +1047,126 @@ def test_agentic_generate_blocks_escalated_tool_without_write_permission(monkeyp
     runtime.actioncard_factory = types.SimpleNamespace(
         from_sentry_request=lambda **kwargs: actioncards.append(kwargs)
     )
+    results = [first]
+    runtime._provider_generate_with_tools = lambda **_: results.pop(0)
+
+    response = tool_loop._agentic_generate(runtime, "write file", allow_writes=False)
+    assert response.startswith("Paused for Commander approval")
+    assert "send `continue` after approval" in response
+    assert runtime._last_tool_receipts[0]["result"].startswith("ESCALATED")
+    assert actioncards[0]["tool_name"] == "repo_writer"
+    assert "User request: write file." in actioncards[0]["approval_context"]
+    assert "create or modify files" in actioncards[0]["approval_reason"]
+
+
+def test_tool_planning_uses_fast_model_for_codex_provider():
+    import tool_loop
+
+    runtime = _FakeToolLoopSelf(types.SimpleNamespace(text="", tool_calls=[]))
+    runtime.provider = types.SimpleNamespace(provider_name="openai-codex")
+    runtime.model_name = "gpt-5.4-mini"
+    runtime._route_model = lambda *_: "gpt-5.4"
+
+    assert tool_loop._tool_planner_model(runtime, "continue the plan") == "gpt-5.4-mini"
+
+
+def test_agentic_generate_groups_multiple_escalated_tool_calls(monkeypatch, tmp_path):
+    import tool_loop
+    from mcp_sentry import MCPSentry
+    from providers.base import ToolCall
+
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_STRUCTURED_OUTPUT", False, raising=False)
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_CLAIM_VERIFICATION", False, raising=False)
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_DEEP_REASONING_LOOP", False, raising=False)
+
+    first = types.SimpleNamespace(
+        text="",
+        raw={"role": "assistant", "content": ""},
+        tool_calls=[
+            ToolCall(name="repo_writer", args={"action": "edit", "path": "src/tickets/store.py"}, id="call-1"),
+            ToolCall(name="repo_writer", args={"action": "edit", "path": "tests/test_tickets.py"}, id="call-2"),
+        ],
+    )
+    runtime = _FakeToolLoopSelf(first)
+    runtime.sentry = MCPSentry(data_dir=str(tmp_path))
+    runtime._build_tool_declarations = lambda: [types.SimpleNamespace(name="repo_writer")]
+    runtime._classify_tool_call_safety = lambda *_: "escalate"
+    grouped = []
+    runtime.actioncard_factory = types.SimpleNamespace(
+        from_sentry_request_batch=lambda **kwargs: grouped.append(kwargs) or types.SimpleNamespace(card_id="card-1")
+    )
+    results = [first]
+    runtime._provider_generate_with_tools = lambda **_: results.pop(0)
+
+    response = tool_loop._agentic_generate(runtime, "write two files", allow_writes=False)
+
+    assert "2 governed actions" in response
+    assert "Approval group ID: `card-1`" in response
+    assert len(grouped[0]["requests"]) == 2
+    request_ids = [item["request_id"] for item in grouped[0]["requests"]]
+    assert all(req_id in runtime.sentry.pending_requests for req_id in request_ids)
+
+
+def test_agentic_generate_rejects_missing_tool_inputs_before_approval(monkeypatch):
+    import tool_loop
+    from providers.base import ToolCall
+
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_STRUCTURED_OUTPUT", False, raising=False)
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_CLAIM_VERIFICATION", False, raising=False)
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_DEEP_REASONING_LOOP", False, raising=False)
+
+    first = types.SimpleNamespace(
+        text="",
+        raw={"role": "assistant", "content": ""},
+        tool_calls=[ToolCall(name="repo_writer", args={"action": "edit"}, id="call-1")],
+    )
+    second = types.SimpleNamespace(text="fixed", raw={"role": "assistant", "content": "fixed"}, tool_calls=[])
+    runtime = _FakeToolLoopSelf(first)
+    runtime._build_tool_declarations = lambda: [types.SimpleNamespace(name="repo_writer")]
+    runtime._classify_tool_call_safety = lambda *_: (_ for _ in ()).throw(AssertionError("approval path should not run"))
+    runtime.actioncard_factory = types.SimpleNamespace(
+        from_sentry_request=lambda **_: (_ for _ in ()).throw(AssertionError("action card should not be created"))
+    )
     results = [first, second]
     runtime._provider_generate_with_tools = lambda **_: results.pop(0)
 
-    assert tool_loop._agentic_generate(runtime, "write file", allow_writes=False) == "blocked summary"
-    assert runtime._last_tool_receipts[0]["result"].startswith("ESCALATED")
-    assert actioncards[0]["tool_name"] == "repo_writer"
+    response = tool_loop._agentic_generate(runtime, "write file", allow_writes=False)
+    assert response.startswith("Completion contract failed:")
+    assert "repo_writer missing required input" in response
+    assert "missing required input" in runtime._last_tool_receipts[0]["result"]
+
+
+def test_agentic_generate_blocks_completion_claim_with_unresolved_tool_failure(monkeypatch):
+    import tool_loop
+    from providers.base import ToolCall
+
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_STRUCTURED_OUTPUT", False, raising=False)
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_CLAIM_VERIFICATION", False, raising=False)
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_DEEP_REASONING_LOOP", False, raising=False)
+
+    first = types.SimpleNamespace(
+        text="",
+        raw={"role": "assistant", "content": ""},
+        tool_calls=[ToolCall(name="command_runner", args={"command": "type README.md"}, id="call-1")],
+    )
+    second = types.SimpleNamespace(
+        text="Done.",
+        raw={"role": "assistant", "content": "Done."},
+        tool_calls=[],
+    )
+    runtime = _FakeToolLoopSelf(first)
+    runtime._build_tool_declarations = lambda: [types.SimpleNamespace(name="command_runner")]
+    runtime.skill_executor = types.SimpleNamespace(
+        run=lambda *_: types.SimpleNamespace(success=False, outputs={}, error="Windows shell command in POSIX runtime")
+    )
+    results = [first, second]
+    runtime._provider_generate_with_tools = lambda **_: results.pop(0)
+
+    response = tool_loop._agentic_generate(runtime, "inspect README", force_tool_use=True)
+
+    assert response.startswith("Completion contract failed:")
+    assert "governed action is unresolved" in response
+    assert runtime._last_tool_receipts[0]["result"].startswith("FAILED")
 
 
 def test_local_agentic_generate_falls_back_when_local_model_is_unavailable():
@@ -937,11 +1180,14 @@ def test_local_agentic_generate_falls_back_when_local_model_is_unavailable():
 def test_local_agentic_generate_returns_text_and_tracks_usage():
     import tool_loop
 
+    captured = {}
+
     class LocalModel:
         def is_healthy(self):
             return True
 
-        def chat_with_tools(self, **_):
+        def chat_with_tools(self, **kwargs):
+            captured["messages"] = kwargs["messages"]
             return {
                 "choices": [
                     {
@@ -958,8 +1204,56 @@ def test_local_agentic_generate_returns_text_and_tracks_usage():
     runtime.usage_tracker = types.SimpleNamespace(record_simple=lambda *args: usage.append(args))
 
     assert tool_loop._local_agentic_generate(runtime, "hello") == "local answer"
+    assert "emoji sparingly" in captured["messages"][0]["content"]
     assert ("tokens", 17) in runtime.governor.logged
     assert usage == [("local-llm", 17)]
+
+
+def test_local_agentic_generate_returns_when_approval_is_required():
+    import tool_loop
+
+    class LocalModel:
+        def is_healthy(self):
+            return True
+
+        def chat_with_tools(self, **_):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "function": {
+                                        "name": "repo_writer",
+                                        "arguments": "{\"action\":\"edit\",\"path\":\"README.md\"}",
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"total_tokens": 11},
+            }
+
+    actioncards = []
+    runtime = _FakeToolLoopSelf(types.SimpleNamespace(text="", tool_calls=[]))
+    runtime.local_model = LocalModel()
+    runtime._classify_tool_call_safety = lambda *_: "escalate"
+    runtime.actioncard_factory = types.SimpleNamespace(
+        from_sentry_request=lambda **kwargs: actioncards.append(kwargs)
+    )
+    runtime.skill_executor = types.SimpleNamespace(
+        run=lambda *_: (_ for _ in ()).throw(AssertionError("not called"))
+    )
+
+    response = tool_loop._local_agentic_generate(runtime, "write file")
+
+    assert response.startswith("Paused for Commander approval")
+    assert runtime._last_tool_receipts[0]["result"].startswith("ESCALATED")
+    assert actioncards[0]["approval_context"].startswith("User request: write file.")
 
 
 class _PlanRuntime:

@@ -158,6 +158,28 @@ class TestOrchestratorChatProvenance:
 
 
 class TestGatewayChatIdentityForwarding:
+    def test_orchestrator_chat_runs_off_event_loop(self, monkeypatch):
+        import asyncio
+        import time
+        import gateway
+
+        fake_orchestrator = SimpleNamespace(
+            chat=lambda *_args, **_kwargs: time.sleep(0.05) or "ok"
+        )
+        monkeypatch.setattr(gateway, "main_orchestrator", fake_orchestrator)
+
+        async def _exercise():
+            task = asyncio.create_task(gateway._run_orchestrator_chat("status"))
+            await asyncio.sleep(0.01)
+            still_running = not task.done()
+            result = await task
+            return still_running, result
+
+        still_running, result = asyncio.run(_exercise())
+
+        assert still_running is True
+        assert result == "ok"
+
     def test_chat_route_forwards_authenticated_identity(self):
         from fastapi.testclient import TestClient
         import gateway
@@ -178,7 +200,7 @@ class TestGatewayChatIdentityForwarding:
                  patch("src.core.auth_api.resolve_authenticated_identity", return_value=identity), \
                  patch.object(gateway.main_orchestrator, "chat", return_value="ok") as chat_mock:
                 client = TestClient(gateway.app)
-                response = client.post("/chat", json={"text": "status", "user": "ignored", "channel": "warroom"})
+                response = client.post("/chat", json={"text": "confirm identity forwarding", "user": "ignored", "channel": "warroom"})
 
         assert response.status_code == 200
         assert response.json()["response"] == "ok"

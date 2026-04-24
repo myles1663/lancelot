@@ -312,3 +312,29 @@ def test_scrub_frontier_payload_emits_receipts_for_nested_detected_fields():
         "root.content[0].result.email",
         "root.output.phone",
     }
+
+
+def test_large_frontier_text_receipt_records_prescrub_and_local_verification():
+    orch = _make_orchestrator()
+    orch.model_router = None
+    orch.local_model = MagicMock()
+    orch.local_model.is_healthy.return_value = True
+    orch.local_model.redact.side_effect = lambda chunk: chunk
+    text = ("Customer alice@example.com " + ("x" * 1000) + "\n") * 8
+
+    redacted = orch._redact_for_frontier(text)
+
+    assert redacted.count("[EMAIL]") == 8
+    receipt = orch.receipt_service.create.call_args.args[0]
+    assert receipt.action_name == "pii_scrub_applied"
+    assert receipt.inputs["source"] == "chunked_local_model_after_deterministic_prescrub"
+    assert receipt.outputs["pre_scrubbed"] is True
+    assert receipt.outputs["pre_scrub_source"] == "deterministic_local"
+    assert receipt.outputs["local_verification_used"] is True
+    assert receipt.outputs["scrub_pipeline"] == [
+        "deterministic_prescrub",
+        "local_model_verification",
+        "deterministic_validation",
+    ]
+    assert receipt.metadata["pre_scrubbed"] is True
+    assert receipt.metadata["local_verification_used"] is True

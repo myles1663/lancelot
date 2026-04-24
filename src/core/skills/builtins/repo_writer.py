@@ -28,6 +28,8 @@ MANIFEST = {
          "description": "File path (relative to workspace root)"},
         {"name": "content", "type": "string", "required": False,
          "description": "File content for create/edit, or patch content"},
+        {"name": "workspace", "type": "string", "required": False,
+         "description": "Write root: /home/lancelot/workspace for artifacts, /home/lancelot/app for approved self-development"},
     ],
 }
 
@@ -58,17 +60,27 @@ def execute(context, inputs: Dict[str, Any]) -> Dict[str, Any]:
 
     # Resolve to absolute path within workspace
     full_path = _resolve_safe_path(workspace, rel_path)
+    resolved_workspace = str(Path(workspace).resolve())
+    write_scope = _classify_write_scope(resolved_workspace)
 
     if action == "create":
-        return _create_file(full_path, content)
+        result = _create_file(full_path, content)
     elif action == "edit":
-        return _edit_file(full_path, content)
+        result = _edit_file(full_path, content)
     elif action == "delete":
-        return _delete_file(full_path)
+        result = _delete_file(full_path)
     elif action == "patch":
-        return _patch_file(full_path, content)
+        result = _patch_file(full_path, content)
+    else:
+        result = {"status": "error", "error": f"Unhandled action: {action}"}
 
-    return {"status": "error", "error": f"Unhandled action: {action}"}
+    result.update({
+        "workspace": resolved_workspace,
+        "relative_path": rel_path,
+        "target_path": str(full_path),
+        "write_scope": write_scope,
+    })
+    return result
 
 
 def _resolve_safe_path(workspace: str, rel_path: str) -> Path:
@@ -76,11 +88,29 @@ def _resolve_safe_path(workspace: str, rel_path: str) -> Path:
     ws = Path(workspace).resolve()
     target = (ws / rel_path).resolve()
 
+    if not ws.exists() or not ws.is_dir():
+        raise ValueError(f"Workspace root does not exist or is not a directory: {ws}")
+
     # Security: ensure target is within workspace
-    if not str(target).startswith(str(ws)):
+    try:
+        target.relative_to(ws)
+    except ValueError:
         raise ValueError(f"Path traversal blocked: '{rel_path}' escapes workspace")
 
     return target
+
+
+def _classify_write_scope(workspace: str) -> str:
+    """Classify the write boundary for receipts and operator review."""
+    normalized = Path(workspace).as_posix().rstrip("/")
+    app_root = Path(os.getenv("LANCELOT_APP_ROOT", "/home/lancelot/app")).as_posix().rstrip("/")
+    shared_root = Path(os.getenv("LANCELOT_WORKSPACE", "/home/lancelot/workspace")).as_posix().rstrip("/")
+
+    if normalized == app_root:
+        return "lancelot_self_development"
+    if normalized == shared_root:
+        return "shared_workspace_artifact"
+    return "custom_workspace"
 
 
 def _create_file(path: Path, content: str) -> Dict[str, Any]:

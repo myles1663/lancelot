@@ -47,9 +47,17 @@ import time
 import os
 import json
 import logging
+from typing import Any
 from oauth_callback_pages import render_callback_exception_page, render_callback_page
 from src.core.runtime_pause import init_runtime_pause
+from chat_runs import ChatRun, ChatRunStore
 import feature_flags as _ff
+from shared.receipts import (
+    ActionType,
+    CognitionTier,
+    create_finalized_receipt,
+    get_receipt_service,
+)
 
 # F1: Configurable log level
 LOG_LEVEL = os.getenv("LANCELOT_LOG_LEVEL", "INFO").upper()
@@ -156,6 +164,12 @@ DEV_MODE = os.getenv("LANCELOT_DEV_MODE", "").lower() in ("true", "1", "yes")
 
 # S11: Rate limiter instance
 rate_limiter = RateLimiter()
+_orchestrator_chat_lock = threading.Lock()
+_async_chat_tasks: set[asyncio.Task] = set()
+_async_chat_worker_slot_lock: asyncio.Lock | None = None
+_async_chat_worker_slot_loop: asyncio.AbstractEventLoop | None = None
+_chat_progress_subscription_registered = False
+CHAT_RUN_STALE_AFTER_SECONDS = int(os.getenv("LANCELOT_CHAT_RUN_STALE_AFTER_S", "3600"))
 
 # Long-lived services are created at import time and wired into startup phases.
 main_orchestrator = LancelotOrchestrator(data_dir="/home/lancelot/data")
@@ -167,6 +181,7 @@ mfa_guard = MFAListener()
 webhook_auth = WebhookAuthenticator()
 
 sentry = MCPSentry(data_dir="/home/lancelot/data")
+chat_run_store = ChatRunStore("/home/lancelot/data/chat/async_runs.sqlite")
 
 # Crusader Mode: session-scoped, non-persistent
 crusader_mode = CrusaderMode()
@@ -210,6 +225,32 @@ _boot_result = None
 _BOOTSTRAP_MODEL_ROUTER_IMPL = _gateway_boot_support._bootstrap_model_router
 _BOOTSTRAP_MODEL_DISCOVERY_IMPL = _gateway_boot_support._bootstrap_model_discovery
 _RESTORE_PERSISTED_PROVIDER_IMPL = _gateway_boot_support._restore_persisted_provider
+
+
+async def _run_orchestrator_chat(*args, **kwargs) -> str:
+    """Run the synchronous orchestrator turn off the FastAPI event loop.
+
+    The orchestrator keeps per-turn state on the instance, so chat turns remain
+    serialized. The important part is that WebSocket progress events can flush
+    while the worker thread is waiting on governance/model/tool work.
+    """
+    def _invoke() -> str:
+        with _orchestrator_chat_lock:
+            return main_orchestrator.chat(*args, **kwargs)
+
+    return await asyncio.to_thread(_invoke)
+
+
+def _get_async_chat_worker_slot() -> asyncio.Lock:
+    """Return the event-loop-local worker slot for governed async chat turns."""
+    global _async_chat_worker_slot_lock, _async_chat_worker_slot_loop
+
+    loop = asyncio.get_running_loop()
+    if _async_chat_worker_slot_lock is None or _async_chat_worker_slot_loop is not loop:
+        _async_chat_worker_slot_lock = asyncio.Lock()
+        _async_chat_worker_slot_loop = loop
+    return _async_chat_worker_slot_lock
+
 
 def _build_boot_config() -> BootConfig:
     return BootConfig(
@@ -331,10 +372,23 @@ async def startup_event():
     scheduler_service = _gateway_boot_support.scheduler_service
     if _boot_result is not None:
         _startup_time = _boot_result.env.startup_time or time.time()
+    _register_chat_progress_recorder()
+    stale_runs = chat_run_store.fail_stale_active_runs(
+        max_age_seconds=CHAT_RUN_STALE_AFTER_SECONDS,
+        reason="Async chat run was still active after gateway restart.",
+    )
+    if stale_runs:
+        logger.warning("Marked %d stale async chat run(s) failed after startup.", len(stale_runs))
 
 async def shutdown_event():
     global _boot_result, scheduler_service, _startup_time
 
+    for task in list(_async_chat_tasks):
+        task.cancel()
+    if _async_chat_tasks:
+        await asyncio.gather(*list(_async_chat_tasks), return_exceptions=True)
+        _async_chat_tasks.clear()
+    chat_run_store.close()
     _sync_gateway_runtime_bindings()
     await shutdown(app, _boot_result)
     scheduler_service = _gateway_boot_support.scheduler_service
@@ -390,6 +444,863 @@ def _transition_crusader_mode(action: str) -> tuple[bool, str]:
         except Exception as rollback_exc:
             logger.error("%s rollback failed: %s", failure_prefix, rollback_exc)
         return False, f"{failure_prefix} failed to refresh runtime Soul: {exc}"
+
+
+def _chat_run_payload(run: ChatRun) -> dict[str, Any]:
+    payload = run.to_dict()
+    payload["run_id"] = run.run_id
+    payload["receipt_proof"] = _build_chat_run_receipt_proof(run)
+    return payload
+
+
+_TERMINAL_CHAT_RUN_STATUSES = {"blocked", "succeeded", "failed", "cancelled"}
+_TOOL_RECEIPT_TYPES = {"tool_call", "mcp_tool_call"}
+_APPROVAL_GRANTED_TYPES = {"t3_approved", "mcp_t3_approved", "apl_rule_approved"}
+_DEGRADED_VERIFICATION_ACTIONS = {"pii_scrub_fallback"}
+
+
+def _chat_run_lineage_ids(run: ChatRun) -> list[str]:
+    lineage: list[str] = []
+    seen: set[str] = set()
+    current: ChatRun | None = run
+
+    while current is not None and current.run_id:
+        if current.run_id in seen:
+            break
+        seen.add(current.run_id)
+        lineage.append(current.run_id)
+
+        retry_of = str(current.retry_of_run_id or "").strip()
+        if not retry_of:
+            break
+        current = chat_run_store.get(retry_of)
+
+    lineage.reverse()
+    return lineage
+
+
+def _load_chat_run_receipts(run: ChatRun) -> tuple[list[Any], list[str], str | None]:
+    try:
+        receipt_service = get_receipt_service("/home/lancelot/data")
+        lineage = _chat_run_lineage_ids(run)
+        receipts: list[Any] = []
+        seen_receipt_ids: set[str] = set()
+
+        for quest_id in lineage:
+            for receipt in receipt_service.get_quest_receipts(quest_id):
+                receipt_id = str(getattr(receipt, "id", "") or "")
+                if receipt_id and receipt_id in seen_receipt_ids:
+                    continue
+                if receipt_id:
+                    seen_receipt_ids.add(receipt_id)
+                receipts.append(receipt)
+
+        return receipts, lineage, None
+    except Exception as exc:
+        logger.warning("Failed to load receipt proof for chat run %s: %s", run.run_id, exc)
+        return [], [], str(exc)
+
+
+def _build_chat_run_receipt_proof(run: ChatRun) -> dict[str, Any] | None:
+    if run.status not in _TERMINAL_CHAT_RUN_STATUSES:
+        return None
+
+    receipts, lineage, error = _load_chat_run_receipts(run)
+    if error:
+        return {
+            "available": False,
+            "receipt_count": 0,
+            "linked_run_count": max(1, len(lineage)),
+            "governed_tools": [],
+            "approval_state": "unknown",
+            "degraded_mode": "unknown",
+            "degraded_reasons": [],
+            "outcome": run.status,
+            "error": error,
+        }
+
+    governed_tools: list[str] = []
+    seen_tools: set[str] = set()
+    approval_state = "not_used"
+    degraded_mode = "not_used"
+    degraded_reasons: list[str] = []
+
+    for receipt in receipts:
+        action_type = str(getattr(receipt, "action_type", "") or "")
+        action_name = str(getattr(receipt, "action_name", "") or "")
+        receipt_status = str(getattr(receipt, "status", "") or "")
+        metadata = getattr(receipt, "metadata", None) or {}
+        outputs = getattr(receipt, "outputs", None) or {}
+        error_message = str(getattr(receipt, "error_message", "") or "")
+
+        if action_type in _TOOL_RECEIPT_TYPES:
+            tool_name = str(metadata.get("tool_name") or action_name or "").strip()
+            if tool_name and tool_name not in seen_tools:
+                seen_tools.add(tool_name)
+                governed_tools.append(tool_name)
+            if approval_state != "used" and (
+                receipt_status == "pending" or metadata.get("approval_id")
+            ):
+                approval_state = "required"
+
+        if action_type in _APPROVAL_GRANTED_TYPES:
+            approval_state = "used"
+        elif action_type == "action_card_resolved":
+            resolved_status = str(outputs.get("status") or "").lower()
+            if action_name.endswith(".approve") or resolved_status == "approved":
+                approval_state = "used"
+
+        degraded_flag = bool(metadata.get("degraded_privacy")) or bool(outputs.get("fallback_used"))
+        if action_type == "verification" and (
+            degraded_flag or action_name in _DEGRADED_VERIFICATION_ACTIONS
+        ):
+            degraded_mode = "used"
+            reason = (
+                str(metadata.get("reason") or "").strip()
+                or str(outputs.get("reason") or "").strip()
+                or error_message.strip()
+                or action_name
+            )
+            if reason and reason not in degraded_reasons:
+                degraded_reasons.append(reason)
+
+    if approval_state == "not_used" and run.status == "blocked":
+        approval_state = "required"
+
+    return {
+        "available": True,
+        "receipt_count": len(receipts),
+        "linked_run_count": max(1, len(lineage)),
+        "governed_tools": governed_tools,
+        "approval_state": approval_state,
+        "degraded_mode": degraded_mode,
+        "degraded_reasons": degraded_reasons,
+        "outcome": run.status,
+    }
+
+
+async def _optional_json_body(request: Request) -> dict[str, Any]:
+    try:
+        body = await request.json()
+    except Exception:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _can_access_chat_run(run: ChatRun, identity) -> bool:
+    auth_method = getattr(identity, "auth_method", "")
+    identity_session_id = getattr(identity, "session_id", "")
+    return bool(auth_method == "api_key" or not run.session_id or run.session_id == identity_session_id)
+
+
+def _emit_chat_run_event(event_type: str, run: ChatRun, **extra: Any) -> None:
+    try:
+        from event_bus import Event, event_bus
+
+        payload = _chat_run_payload(run)
+        payload.update(extra)
+        event_bus.publish_sync(Event(type=event_type, payload=payload))
+    except Exception as exc:
+        logger.warning("Failed to emit %s for chat run %s: %s", event_type, run.run_id, exc)
+
+
+async def _record_chat_progress_event(event) -> None:
+    payload = getattr(event, "payload", {}) or {}
+    run_id = str(payload.get("chat_run_id") or payload.get("run_id") or payload.get("quest_id") or "")
+    if not run_id:
+        return
+    phase = str(payload.get("phase") or "processing")
+    message = str(payload.get("message") or "Processing request")
+    severity = str(payload.get("severity") or "") or None
+    degraded = payload.get("degraded")
+    degraded_reason = str(payload.get("degraded_reason") or "") or None
+    progress_metadata = {
+        key: value for key, value in payload.items()
+        if key not in {
+            "chat_run_id",
+            "run_id",
+            "quest_id",
+            "phase",
+            "message",
+            "severity",
+            "degraded",
+            "degraded_reason",
+        }
+    }
+    run = _record_persisted_chat_progress(
+        run_id,
+        phase=phase,
+        message=message,
+        event_timestamp=getattr(event, "timestamp", None),
+        severity=severity,
+        degraded=bool(degraded) if degraded is not None else None,
+        degraded_reason=degraded_reason,
+        metadata=progress_metadata,
+    )
+
+
+def _record_persisted_chat_progress(
+    run_id: str,
+    *,
+    phase: str,
+    message: str,
+    event_timestamp: float | None = None,
+    severity: str | None = None,
+    degraded: bool | None = None,
+    degraded_reason: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> ChatRun | None:
+    run = chat_run_store.record_progress(
+        run_id,
+        phase=phase,
+        message=message,
+        event_timestamp=event_timestamp,
+        severity=severity,
+        degraded=degraded,
+        degraded_reason=degraded_reason,
+        metadata=metadata,
+    )
+    if run is not None and run.status not in {"succeeded", "failed", "cancelled"}:
+        _emit_chat_run_event("chat.run_progress", run)
+    return run
+
+
+def _register_chat_progress_recorder() -> None:
+    global _chat_progress_subscription_registered
+    if _chat_progress_subscription_registered:
+        return
+    try:
+        from event_bus import event_bus
+
+        event_bus.subscribe("chat.progress", _record_chat_progress_event)
+        _chat_progress_subscription_registered = True
+    except Exception as exc:
+        logger.warning("Failed to register chat progress recorder: %s", exc)
+
+
+def _summarize_local_model_role_lane(roles: dict[str, Any]) -> dict[str, Any]:
+    enabled_roles = [
+        payload for payload in (roles or {}).values()
+        if isinstance(payload, dict) and payload.get("enabled", True)
+    ]
+    if not enabled_roles:
+        return {"ready": False, "loaded": False, "status": "unavailable"}
+
+    ready = all(bool(role.get("ready")) for role in enabled_roles)
+    loaded = any(bool(role.get("loaded", role.get("ready"))) for role in enabled_roles)
+    failed = [
+        role for role in enabled_roles
+        if not role.get("ready") and role.get("last_error")
+    ]
+    verified = [
+        str(role.get("last_verified_at"))
+        for role in enabled_roles
+        if role.get("last_verified_at")
+    ]
+    checked = [
+        str(role.get("last_checked_at"))
+        for role in enabled_roles
+        if role.get("last_checked_at")
+    ]
+    smoke_times = [
+        float(role.get("last_smoke_elapsed_ms"))
+        for role in enabled_roles
+        if role.get("last_smoke_elapsed_ms") is not None
+    ]
+    return {
+        "ready": ready,
+        "loaded": loaded,
+        "status": "ok" if ready else ("degraded" if loaded else "unavailable"),
+        "last_error": "; ".join(str(role.get("last_error")) for role in failed) or None,
+        "last_verified_at": max(verified) if verified else None,
+        "last_checked_at": max(checked) if checked else None,
+        "last_smoke_elapsed_ms": max(smoke_times) if smoke_times else None,
+    }
+
+
+def _classify_chat_run_status(response_text: str) -> str:
+    text = str(response_text or "")
+    lowered = text.lower()
+    if (
+        "send `continue` after approval" in lowered
+        or "approval id:" in lowered
+        or "approval group id:" in lowered
+        or "pending_approval" in lowered
+        or "pending approval" in lowered
+    ):
+        return "blocked"
+    if text.startswith("Error:") or text.startswith("Status: FAILED") or "\nStatus: FAILED" in text:
+        return "failed"
+    return "succeeded"
+
+
+_FAST_RUNTIME_STATUS_COMMANDS = {
+    "status",
+    "/status",
+    "system status",
+    "runtime status",
+    "health",
+    "health check",
+}
+_OPERATIONAL_REPORT_TRIGGERS = (
+    "operational smoke report",
+    "operational report",
+    "runtime health report",
+    "system health report",
+    "health report for this lancelot instance",
+)
+
+
+def _normalized_command_text(message: str) -> str:
+    return " ".join(str(message or "").strip().lower().split())
+
+
+def _is_fast_runtime_command(message: str) -> bool:
+    normalized = _normalized_command_text(message)
+    if normalized in _FAST_RUNTIME_STATUS_COMMANDS:
+        return True
+    return (
+        any(trigger in normalized for trigger in _OPERATIONAL_REPORT_TRIGGERS)
+        and any(term in normalized for term in ("read-only", "health", "operational", "smoke"))
+    )
+
+
+def _preview_text(value: str, limit: int = 500) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _emit_fast_runtime_receipt(
+    *,
+    action_name: str,
+    message: str,
+    response_text: str,
+    checks: list[str],
+    degraded_conditions: list[str],
+    result: str,
+    quest_id: str | None = None,
+    identity=None,
+    channel: str = "warroom",
+) -> None:
+    try:
+        receipt_service = get_receipt_service("/home/lancelot/data")
+        operator_id = getattr(identity, "operator_id", None) if identity is not None else None
+        session_id = getattr(identity, "session_id", None) if identity is not None else None
+        receipt = create_finalized_receipt(
+            ActionType.VERIFICATION,
+            action_name,
+            {
+                "message": _preview_text(message, limit=240),
+                "checks": list(checks),
+            },
+            outputs={
+                "result": result,
+                "degraded_conditions": list(degraded_conditions),
+                "response_preview": _preview_text(response_text, limit=600),
+            },
+            tier=CognitionTier.DETERMINISTIC,
+            quest_id=quest_id,
+            metadata={
+                "fast_runtime_command": True,
+                "channel": channel,
+                "degraded": bool(degraded_conditions),
+            },
+            operator_id=operator_id,
+            session_id=session_id,
+            duration_ms=0,
+        )
+        receipt_service.create(receipt)
+    except Exception as exc:
+        logger.warning("Failed to emit fast runtime receipt %s for quest %s: %s", action_name, quest_id, exc)
+
+
+def _try_handle_fast_runtime_command(
+    message: str,
+    *,
+    quest_id: str | None = None,
+    identity=None,
+    channel: str = "warroom",
+) -> str | None:
+    """Handle exact low-risk runtime commands without a model/tool loop."""
+    normalized = _normalized_command_text(message)
+    if normalized not in _FAST_RUNTIME_STATUS_COMMANDS:
+        return _try_handle_operational_report_command(
+            message,
+            quest_id=quest_id,
+            identity=identity,
+            channel=channel,
+        )
+
+    snapshot = health_check()
+    if isinstance(snapshot, JSONResponse):
+        response_text = "Runtime status unavailable. Check `/health` and gateway logs."
+        _emit_fast_runtime_receipt(
+            action_name="runtime_status_report",
+            message=message,
+            response_text=response_text,
+            checks=["internal_health_snapshot"],
+            degraded_conditions=["gateway health unavailable"],
+            result="degraded",
+            quest_id=quest_id,
+            identity=identity,
+            channel=channel,
+        )
+        return response_text
+    components = snapshot.get("components", {})
+    local_llm = snapshot.get("local_llm", {})
+    roles = local_llm.get("roles", {}) if isinstance(local_llm, dict) else {}
+    enabled_roles = [
+        payload for payload in roles.values()
+        if isinstance(payload, dict) and payload.get("enabled", True)
+    ]
+    ready_roles = [payload for payload in enabled_roles if payload.get("ready")]
+    role_summary = (
+        f"{len(ready_roles)}/{len(enabled_roles)} roles ready"
+        if enabled_roles else "no role-specific endpoints configured"
+    )
+    degraded_conditions = [
+        f"{component}={status}"
+        for component, status in sorted(components.items())
+        if status not in {"ok", "disabled"}
+    ]
+    degraded_conditions.extend(
+        f"local_model_role:{name}={payload.get('status') or 'not ready'}"
+        for name, payload in sorted(roles.items())
+        if isinstance(payload, dict) and payload.get("enabled", True) and not payload.get("ready")
+    )
+    uptime = snapshot.get("uptime_seconds", 0)
+    response_text = "\n".join([
+        "**Runtime Status**",
+        "---",
+        f"Gateway: {components.get('gateway', 'unknown')}",
+        f"Orchestrator: {components.get('orchestrator', 'unknown')}",
+        f"Local model lane: {components.get('local_llm', 'unknown')} ({role_summary})",
+        f"Memory: {components.get('memory', 'unknown')}",
+        f"Sentry: {components.get('sentry', 'unknown')}",
+        f"Uptime: {uptime}s",
+    ])
+    _emit_fast_runtime_receipt(
+        action_name="runtime_status_report",
+        message=message,
+        response_text=response_text,
+        checks=["internal_health_snapshot", "local_model_role_health"],
+        degraded_conditions=degraded_conditions,
+        result="ok" if not degraded_conditions else "degraded",
+        quest_id=quest_id,
+        identity=identity,
+        channel=channel,
+    )
+    return response_text
+
+
+def _try_handle_operational_report_command(
+    message: str,
+    *,
+    quest_id: str | None = None,
+    identity=None,
+    channel: str = "warroom",
+) -> str | None:
+    normalized = _normalized_command_text(message)
+    if not any(trigger in normalized for trigger in _OPERATIONAL_REPORT_TRIGGERS):
+        return None
+    if not any(term in normalized for term in ("read-only", "health", "operational", "smoke")):
+        return None
+
+    snapshot = health_check()
+    if isinstance(snapshot, JSONResponse):
+        response_text = (
+            "**Operational Smoke Report**\n"
+            "---\n"
+            "Result: degraded\n"
+            "Checked: internal health snapshot\n"
+            "Gateway health could not be assembled. Check `/health` and gateway logs.\n"
+            "No repository writes, deployments, or external messages were performed."
+        )
+        _emit_fast_runtime_receipt(
+            action_name="operational_smoke_report",
+            message=message,
+            response_text=response_text,
+            checks=["internal_health_snapshot"],
+            degraded_conditions=["gateway health unavailable"],
+            result="degraded",
+            quest_id=quest_id,
+            identity=identity,
+            channel=channel,
+        )
+        return response_text
+
+    components = snapshot.get("components", {}) if isinstance(snapshot, dict) else {}
+    local_llm = snapshot.get("local_llm", {}) if isinstance(snapshot, dict) else {}
+    roles = local_llm.get("roles", {}) if isinstance(local_llm, dict) else {}
+    enabled_roles = [
+        (name, payload)
+        for name, payload in sorted((roles or {}).items())
+        if isinstance(payload, dict) and payload.get("enabled", True)
+    ]
+    ready_roles = [
+        name for name, payload in enabled_roles
+        if payload.get("ready")
+    ]
+    scheduler = _scheduler_report_snapshot()
+
+    degraded: list[str] = []
+    for component, status in sorted(components.items()):
+        if status not in {"ok", "disabled"}:
+            degraded.append(f"{component}={status}")
+    for name, payload in enabled_roles:
+        if not payload.get("ready"):
+            status = payload.get("status") or "not ready"
+            degraded.append(f"local_model_role:{name}={status}")
+    if scheduler["status"] not in {"running", "initialized"}:
+        degraded.append(f"scheduler={scheduler['status']}")
+    degraded.extend(scheduler["degraded_conditions"])
+
+    result = "ok" if not degraded else "degraded"
+    local_role_summary = (
+        f"{len(ready_roles)}/{len(enabled_roles)} roles ready"
+        if enabled_roles else "no role-specific endpoints configured"
+    )
+    scheduler_summary = (
+        f"{scheduler['status']} "
+        f"({scheduler['job_count']} jobs, {scheduler['enabled_count']} enabled, "
+        f"last tick: {scheduler['last_tick'] or 'not observed'})"
+    )
+
+    lines = [
+        "**Operational Smoke Report**",
+        "---",
+        f"Result: {result}",
+        "Checked:",
+        "- Gateway health snapshot via internal `/health` handler",
+        "- Local model role health from the role router status",
+        "- Scheduler service state and registered job records",
+        "- Visible degraded conditions from component, role, and scheduler state",
+        "",
+        "Findings:",
+        f"- Gateway: {components.get('gateway', 'unknown')}",
+        f"- Orchestrator: {components.get('orchestrator', 'unknown')}",
+        f"- Memory: {components.get('memory', 'unknown')}",
+        f"- Sentry: {components.get('sentry', 'unknown')}",
+        f"- Local model lane: {components.get('local_llm', 'unknown')} ({local_role_summary})",
+        f"- Scheduler: {scheduler_summary}",
+    ]
+
+    if enabled_roles:
+        lines.append("- Local model roles:")
+        for name, payload in enabled_roles:
+            smoke_ms = payload.get("last_smoke_elapsed_ms")
+            smoke_text = f", smoke {smoke_ms}ms" if smoke_ms is not None else ""
+            error = payload.get("last_error")
+            error_text = f", error: {error}" if error else ""
+            status = payload.get("status") or ("ready" if payload.get("ready") else "unknown")
+            lines.append(
+                f"  - {name}: {status}, ready={bool(payload.get('ready'))}{smoke_text}{error_text}"
+            )
+
+    if scheduler["jobs"]:
+        lines.append("- Scheduler jobs:")
+        for job in scheduler["jobs"][:8]:
+            last_run = job["last_run_at"] or "never"
+            last_status = job["last_run_status"] or "not run"
+            enabled = "enabled" if job["enabled"] else "disabled"
+            lines.append(
+                f"  - {job['id']}: {enabled}, trigger={job['trigger']}, "
+                f"last_run={last_run}, last_status={last_status}"
+            )
+        if len(scheduler["jobs"]) > 8:
+            lines.append(f"  - ... {len(scheduler['jobs']) - 8} additional jobs omitted")
+
+    if degraded:
+        lines.append(f"- Degraded conditions: {', '.join(degraded)}")
+    else:
+        lines.append("- Degraded conditions: none visible from these checks")
+
+    lines.append("- Write safety: no repository writes, deployments, or external messages were performed")
+    uptime = snapshot.get("uptime_seconds", 0) if isinstance(snapshot, dict) else 0
+    lines.append(f"- Uptime: {uptime}s")
+    response_text = "\n".join(lines)
+    _emit_fast_runtime_receipt(
+        action_name="operational_smoke_report",
+        message=message,
+        response_text=response_text,
+        checks=[
+            "internal_health_snapshot",
+            "local_model_role_health",
+            "scheduler_service_state",
+            "registered_scheduler_jobs",
+        ],
+        degraded_conditions=degraded,
+        result=result,
+        quest_id=quest_id,
+        identity=identity,
+        channel=channel,
+    )
+    return response_text
+
+
+def _scheduler_report_snapshot() -> dict[str, Any]:
+    service = scheduler_service or getattr(main_orchestrator, "scheduler_service", None)
+    if service is None:
+        return {
+            "status": "unavailable",
+            "last_tick": None,
+            "job_count": 0,
+            "enabled_count": 0,
+            "jobs": [],
+            "degraded_conditions": ["scheduler service is not initialized"],
+        }
+
+    try:
+        jobs = service.list_jobs()
+    except Exception as exc:
+        return {
+            "status": "error",
+            "last_tick": getattr(service, "last_scheduler_tick_at", None),
+            "job_count": 0,
+            "enabled_count": 0,
+            "jobs": [],
+            "degraded_conditions": [f"scheduler job list failed: {exc}"],
+        }
+
+    job_payloads = []
+    degraded_conditions = []
+    for job in jobs:
+        job_id = str(_job_field(job, "id", "unknown"))
+        enabled = bool(_job_field(job, "enabled", False))
+        trigger_type = str(_job_field(job, "trigger_type", "unknown"))
+        trigger_value = str(_job_field(job, "trigger_value", ""))
+        last_status = _job_field(job, "last_run_status", None)
+        if last_status and str(last_status).lower() not in {
+            "ok",
+            "success",
+            "succeeded",
+            "triggered",
+            "not run",
+        }:
+            degraded_conditions.append(f"job:{job_id} last_status={last_status}")
+        job_payloads.append({
+            "id": job_id,
+            "enabled": enabled,
+            "trigger": f"{trigger_type}:{trigger_value}" if trigger_value else trigger_type,
+            "last_run_at": _job_field(job, "last_run_at", None),
+            "last_run_status": last_status,
+        })
+
+    last_tick = getattr(service, "last_scheduler_tick_at", None)
+    return {
+        "status": "running" if last_tick else "initialized",
+        "last_tick": last_tick,
+        "job_count": len(job_payloads),
+        "enabled_count": sum(1 for job in job_payloads if job["enabled"]),
+        "jobs": job_payloads,
+        "degraded_conditions": degraded_conditions,
+    }
+
+
+def _job_field(job: Any, name: str, default: Any = None) -> Any:
+    if isinstance(job, dict):
+        return job.get(name, default)
+    return getattr(job, name, default)
+
+
+async def _execute_chat_turn(
+    message: str,
+    *,
+    user: str,
+    channel: str,
+    identity,
+    attachments=None,
+    quest_id: str | None = None,
+) -> str:
+    """Execute the existing chat semantics for sync and async callers."""
+    onboarding_orch.state = onboarding_orch._determine_state()
+
+    if onboarding_orch.state != "READY":
+        return onboarding_orch.process(user, message)
+
+    fast_response = _try_handle_fast_runtime_command(
+        message,
+        quest_id=quest_id,
+        identity=identity,
+        channel=channel,
+    )
+    if fast_response is not None:
+        return fast_response
+
+    is_trigger, action = crusader_mode.should_intercept(message)
+    if is_trigger:
+        if action == "activate":
+            ok, response_text = _transition_crusader_mode("activate")
+            if ok:
+                main_orchestrator.audit_logger.log_event(
+                    "CRUSADER_MODE_ACTIVATED",
+                    "User activated Crusader Mode",
+                    user,
+                )
+            return response_text
+
+        ok, response_text = _transition_crusader_mode("deactivate")
+        if ok:
+            main_orchestrator.audit_logger.log_event(
+                "CRUSADER_MODE_DEACTIVATED",
+                "User deactivated Crusader Mode",
+                user,
+            )
+        return response_text
+
+    operator_name = getattr(identity, "display_name", "") or user
+    operator_id = getattr(identity, "operator_id", "")
+    session_id = getattr(identity, "session_id", "")
+
+    if crusader_mode.is_active:
+        if crusader_adapter.check_auto_pause(message):
+            main_orchestrator.audit_logger.log_event(
+                "CRUSADER_AUTO_PAUSE",
+                f"Blocked: {message}",
+                user,
+            )
+            return (
+                "Authority required.\n"
+                "This operation is restricted even in Crusader Mode."
+            )
+
+        response_text = await _run_orchestrator_chat(
+            message,
+            crusader_mode=True,
+            attachments=attachments,
+            channel=channel,
+            session_id=session_id,
+            operator_id=operator_id,
+            operator_name=operator_name,
+            quest_id=quest_id,
+        )
+        return crusader_adapter.format_response(response_text)
+
+    return await _run_orchestrator_chat(
+        message,
+        attachments=attachments,
+        channel=channel,
+        session_id=session_id,
+        operator_id=operator_id,
+        operator_name=operator_name,
+        quest_id=quest_id,
+    )
+
+
+async def _execute_async_chat_run(
+    run_id: str,
+    *,
+    message: str,
+    user: str,
+    channel: str,
+    identity,
+) -> None:
+    async def _execute_in_worker_slot() -> None:
+        run = chat_run_store.mark_running(run_id)
+        if run is None:
+            logger.warning("Async chat run %s disappeared before execution started.", run_id)
+            return
+        if run.status == "cancelled":
+            logger.info("Async chat run %s was cancelled before execution started.", run_id)
+            return
+        if run.status != "running":
+            logger.info(
+                "Async chat run %s is no longer queued for execution (status=%s).",
+                run_id,
+                run.status,
+            )
+            return
+
+        _emit_chat_run_event("chat.run_started", run)
+
+        try:
+            response_text = await _execute_chat_turn(
+                message,
+                user=user,
+                channel=channel,
+                identity=identity,
+                quest_id=run_id,
+            )
+            current = chat_run_store.get(run_id)
+            if current is not None and current.status == "cancelled":
+                logger.info("Async chat run %s finished after operator cancellation; preserving cancelled state.", run_id)
+                return
+
+            status = _classify_chat_run_status(response_text)
+            if status == "blocked":
+                _record_persisted_chat_progress(
+                    run_id,
+                    phase="approval",
+                    message="Waiting for Commander approval.",
+                    metadata={"wait_reason": "approval"},
+                )
+            else:
+                _record_persisted_chat_progress(
+                    run_id,
+                    phase="finalization",
+                    message="Finalizing response and execution proof.",
+                    metadata={"wait_reason": "finalization"},
+                )
+
+            run = chat_run_store.complete(
+                run_id,
+                status=status,
+                response=response_text,
+                crusader_mode=crusader_mode.is_active,
+            )
+            if run is not None:
+                event_name = "chat.run_blocked" if status == "blocked" else (
+                    "chat.run_failed" if status == "failed" else "chat.run_completed"
+                )
+                _emit_chat_run_event(event_name, run)
+        except Exception as exc:
+            logger.exception("Async chat run failed: %s", run_id)
+            run = chat_run_store.fail(run_id, str(exc))
+            if run is not None:
+                _emit_chat_run_event("chat.run_failed", run)
+
+    if _is_fast_runtime_command(message):
+        await _execute_in_worker_slot()
+        return
+
+    queued = _record_persisted_chat_progress(
+        run_id,
+        phase="waiting_worker_slot",
+        message="Waiting for governed execution worker slot.",
+        metadata={"wait_reason": "worker_slot"},
+    )
+    if queued is None:
+        logger.warning("Async chat run %s disappeared before worker-slot wait was recorded.", run_id)
+        return
+    if queued.status == "cancelled":
+        logger.info("Async chat run %s was cancelled before worker-slot acquisition.", run_id)
+        return
+
+    async with _get_async_chat_worker_slot():
+        current = chat_run_store.get(run_id)
+        if current is not None and current.status == "cancelled":
+            logger.info("Async chat run %s was cancelled while waiting for worker slot.", run_id)
+            return
+        await _execute_in_worker_slot()
+
+
+def _track_async_chat_task(task: asyncio.Task) -> None:
+    _async_chat_tasks.add(task)
+
+    def _done(done_task: asyncio.Task) -> None:
+        _async_chat_tasks.discard(done_task)
+        try:
+            done_task.result()
+        except asyncio.CancelledError:
+            logger.info("Async chat task cancelled")
+        except Exception as exc:
+            logger.error("Async chat task crashed: %s", exc)
+
+    task.add_done_callback(_done)
+
+
 @app.get("/api/chat/history")
 async def chat_history(request: Request, limit: int = 50):
     """Return recent conversation history for War Room persistence."""
@@ -458,64 +1369,12 @@ async def chat_webhook(request: Request):
 
         logger.info(f"[{request_id}] Message from {user}: {message[:50]}...")
 
-        # Check Onboarding State
-        onboarding_orch.state = onboarding_orch._determine_state()
-
-        if onboarding_orch.state != "READY":
-            response_text = onboarding_orch.process(user, message)
-        else:
-            # --- CRUSADER MODE INTERCEPT ---
-            is_trigger, action = crusader_mode.should_intercept(message)
-
-            if is_trigger:
-                if action == "activate":
-                    ok, response_text = _transition_crusader_mode("activate")
-                    if ok:
-                        main_orchestrator.audit_logger.log_event(
-                            "CRUSADER_MODE_ACTIVATED",
-                            "User activated Crusader Mode",
-                            user
-                        )
-                else:
-                    ok, response_text = _transition_crusader_mode("deactivate")
-                    if ok:
-                        main_orchestrator.audit_logger.log_event(
-                            "CRUSADER_MODE_DEACTIVATED",
-                            "User deactivated Crusader Mode",
-                            user
-                        )
-            elif crusader_mode.is_active:
-                if crusader_adapter.check_auto_pause(message):
-                    response_text = (
-                        "Authority required.\n"
-                        "This operation is restricted even in Crusader Mode."
-                    )
-                    main_orchestrator.audit_logger.log_event(
-                        "CRUSADER_AUTO_PAUSE",
-                        f"Blocked: {message}",
-                        user
-                    )
-                else:
-                    response_text = main_orchestrator.chat(
-                        message,
-                        crusader_mode=True,
-                        channel=req_channel,
-                        session_id=identity.session_id,
-                        operator_id=identity.operator_id,
-                        operator_name=identity.display_name or user,
-                    )
-                    response_text = crusader_adapter.format_response(
-                        response_text
-                    )
-            else:
-                # Standard mode
-                response_text = main_orchestrator.chat(
-                    message,
-                    channel=req_channel,
-                    session_id=identity.session_id,
-                    operator_id=identity.operator_id,
-                    operator_name=identity.display_name or user,
-                )
+        response_text = await _execute_chat_turn(
+            message,
+            user=user,
+            channel=req_channel,
+            identity=identity,
+        )
 
         return {
             "response": response_text,
@@ -524,6 +1383,248 @@ async def chat_webhook(request: Request):
         }
     except Exception as e:
         logger.error(f"[{request_id}] Chat error: {e}")
+        return error_response(500, "Internal server error", request_id=request_id)
+
+
+@app.post("/chat/async")
+async def chat_async(request: Request):
+    """Queue a Command Center chat turn for background execution.
+
+    This endpoint is used by War Room so long-running governed work does not
+    hold the browser's HTTP request open. The legacy `/chat` endpoint remains
+    synchronous for API compatibility.
+    """
+    request_id = make_request_id()
+
+    if not verify_token(request):
+        return error_response(401, "Unauthorized", request_id=request_id)
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not rate_limiter.check(client_ip):
+        return error_response(429, "Rate limit exceeded. Try again later.", request_id=request_id)
+
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_REQUEST_SIZE:
+        return error_response(413, "Request body too large.", request_id=request_id)
+
+    try:
+        from src.core.runtime_pause import get_runtime_pause_status, is_runtime_paused
+        from src.core.auth_api import resolve_authenticated_identity
+
+        if is_runtime_paused():
+            pause_state = get_runtime_pause_status()
+            return error_response(
+                423,
+                pause_state.get("reason") or "Runtime paused by operator",
+                request_id=request_id,
+            )
+
+        identity = resolve_authenticated_identity(request)
+        body = await parse_request_model_or_error(
+            request,
+            ChatMessage,
+            request_id,
+            error_response=error_response,
+        )
+        if isinstance(body, JSONResponse):
+            return body
+
+        message = body.text
+        user = body.user
+        req_channel = body.channel
+        logger.info("[%s] Async chat queued from %s: %s...", request_id, user, message[:50])
+
+        run = chat_run_store.create(
+            request_id=request_id,
+            user=user,
+            channel=req_channel,
+            session_id=getattr(identity, "session_id", ""),
+            operator_id=getattr(identity, "operator_id", ""),
+            message=message,
+        )
+        _emit_chat_run_event("chat.run_queued", run)
+
+        task = asyncio.create_task(
+            _execute_async_chat_run(
+                run.run_id,
+                message=message,
+                user=user,
+                channel=req_channel,
+                identity=identity,
+            )
+        )
+        _track_async_chat_task(task)
+
+        return {
+            "accepted": True,
+            "response": "Queued for governed execution.",
+            "status": run.status,
+            "run_id": run.run_id,
+            "run": _chat_run_payload(run),
+            "crusader_mode": crusader_mode.is_active,
+            "request_id": request_id,
+        }
+    except Exception as e:
+        logger.error("[%s] Async chat queue error: %s", request_id, e)
+        return error_response(500, "Internal server error", request_id=request_id)
+
+
+@app.get("/api/chat/runs")
+async def list_chat_runs(request: Request, limit: int = 25):
+    """Return recent async chat runs for the authenticated session."""
+    if not verify_token(request):
+        return error_response(401, "Unauthorized")
+    try:
+        from src.core.auth_api import resolve_authenticated_identity
+
+        identity = resolve_authenticated_identity(request)
+        safe_limit = max(1, min(int(limit), 100))
+        runs = chat_run_store.list_recent(
+            limit=safe_limit,
+            session_id=getattr(identity, "session_id", ""),
+        )
+        return {"runs": [_chat_run_payload(run) for run in runs], "count": len(runs)}
+    except Exception as e:
+        logger.error("Async chat run list failed: %s", e)
+        return error_response(500, "Internal server error")
+
+
+@app.get("/api/chat/runs/{run_id}")
+async def get_chat_run(run_id: str, request: Request):
+    """Return one async chat run by ID."""
+    if not verify_token(request):
+        return error_response(401, "Unauthorized")
+    try:
+        from src.core.auth_api import resolve_authenticated_identity
+
+        identity = resolve_authenticated_identity(request)
+        run = chat_run_store.get(run_id)
+        if run is None:
+            return error_response(404, f"Chat run not found: {run_id}")
+
+        if not _can_access_chat_run(run, identity):
+            return error_response(404, f"Chat run not found: {run_id}")
+
+        return {"run": _chat_run_payload(run)}
+    except Exception as e:
+        logger.error("Async chat run lookup failed for %s: %s", run_id, e)
+        return error_response(500, "Internal server error")
+
+
+@app.post("/api/chat/runs/{run_id}/cancel")
+async def cancel_chat_run(run_id: str, request: Request):
+    """Mark an async Command Center run cancelled.
+
+    Cancellation is cooperative. A run that has entered a blocking provider or
+    tool call may finish in the worker thread later, but the persisted run stays
+    cancelled and late completion cannot overwrite the operator-visible state.
+    """
+    request_id = make_request_id()
+    if not verify_token(request):
+        return error_response(401, "Unauthorized", request_id=request_id)
+    client_ip = request.client.host if request.client else "unknown"
+    if not rate_limiter.check(client_ip):
+        return error_response(429, "Rate limit exceeded. Try again later.", request_id=request_id)
+    try:
+        from src.core.auth_api import resolve_authenticated_identity
+
+        identity = resolve_authenticated_identity(request)
+        run = chat_run_store.get(run_id)
+        if run is None or not _can_access_chat_run(run, identity):
+            return error_response(404, f"Chat run not found: {run_id}", request_id=request_id)
+        if run.status in {"succeeded", "failed"}:
+            return error_response(
+                409,
+                f"Chat run is already {run.status}; cancellation was not applied.",
+                request_id=request_id,
+            )
+
+        body = await _optional_json_body(request)
+        reason = str(body.get("reason") or "Cancelled by operator from Command Center.")
+        cancelled = chat_run_store.request_cancel(run_id, reason=reason)
+        if cancelled is None:
+            return error_response(404, f"Chat run not found: {run_id}", request_id=request_id)
+        _emit_chat_run_event("chat.run_cancelled", cancelled)
+        return {
+            "cancelled": cancelled.status == "cancelled",
+            "status": cancelled.status,
+            "run_id": cancelled.run_id,
+            "run": _chat_run_payload(cancelled),
+            "request_id": request_id,
+        }
+    except Exception as e:
+        logger.error("[%s] Async chat run cancellation failed for %s: %s", request_id, run_id, e)
+        return error_response(500, "Internal server error", request_id=request_id)
+
+
+@app.post("/api/chat/runs/{run_id}/retry")
+async def retry_chat_run(run_id: str, request: Request):
+    """Replay a failed, cancelled, or blocked async Command Center run as a new run."""
+    request_id = make_request_id()
+    if not verify_token(request):
+        return error_response(401, "Unauthorized", request_id=request_id)
+    client_ip = request.client.host if request.client else "unknown"
+    if not rate_limiter.check(client_ip):
+        return error_response(429, "Rate limit exceeded. Try again later.", request_id=request_id)
+    try:
+        from src.core.runtime_pause import get_runtime_pause_status, is_runtime_paused
+        from src.core.auth_api import resolve_authenticated_identity
+
+        if is_runtime_paused():
+            pause_state = get_runtime_pause_status()
+            return error_response(
+                423,
+                pause_state.get("reason") or "Runtime paused by operator",
+                request_id=request_id,
+            )
+
+        identity = resolve_authenticated_identity(request)
+        original = chat_run_store.get(run_id)
+        if original is None or not _can_access_chat_run(original, identity):
+            return error_response(404, f"Chat run not found: {run_id}", request_id=request_id)
+        if original.status not in {"failed", "cancelled", "blocked"}:
+            return error_response(
+                409,
+                "Only failed, cancelled, or blocked chat runs can be retried; "
+                f"current status is {original.status}.",
+                request_id=request_id,
+            )
+
+        try:
+            retry = chat_run_store.create_retry(
+                run_id,
+                request_id=request_id,
+                session_id=getattr(identity, "session_id", ""),
+                operator_id=getattr(identity, "operator_id", ""),
+            )
+        except ValueError as exc:
+            return error_response(409, str(exc), request_id=request_id)
+        if retry is None:
+            return error_response(404, f"Chat run not found: {run_id}", request_id=request_id)
+
+        _emit_chat_run_event("chat.run_queued", retry)
+        task = asyncio.create_task(
+            _execute_async_chat_run(
+                retry.run_id,
+                message=retry.message_text,
+                user=retry.user,
+                channel=retry.channel,
+                identity=identity,
+            )
+        )
+        _track_async_chat_task(task)
+
+        return {
+            "accepted": True,
+            "response": "Retry queued for governed execution.",
+            "status": retry.status,
+            "run_id": retry.run_id,
+            "run": _chat_run_payload(retry),
+            "crusader_mode": crusader_mode.is_active,
+            "request_id": request_id,
+        }
+    except Exception as e:
+        logger.error("[%s] Async chat run retry failed for %s: %s", request_id, run_id, e)
         return error_response(500, "Internal server error", request_id=request_id)
 
 
@@ -589,40 +1690,13 @@ async def chat_with_files(
 
         logger.info(f"[{request_id}] Upload from {resolved_user}: text={text[:50]}... files={len(attachments)}")
 
-        # Route through onboarding/crusader/orchestrator
-        onboarding_orch.state = onboarding_orch._determine_state()
-        if onboarding_orch.state != "READY":
-            response_text = onboarding_orch.process(resolved_user, text)
-        else:
-            is_trigger, action = crusader_mode.should_intercept(text)
-            if is_trigger:
-                if action == "activate":
-                    _ok, response_text = _transition_crusader_mode("activate")
-                else:
-                    _ok, response_text = _transition_crusader_mode("deactivate")
-            elif crusader_mode.is_active:
-                if crusader_adapter.check_auto_pause(text):
-                    response_text = "Authority required.\nThis operation is restricted even in Crusader Mode."
-                else:
-                    response_text = main_orchestrator.chat(
-                        text,
-                        crusader_mode=True,
-                        attachments=attachments,
-                        channel="warroom",
-                        session_id=identity.session_id,
-                        operator_id=identity.operator_id,
-                        operator_name=identity.display_name or resolved_user,
-                    )
-                    response_text = crusader_adapter.format_response(response_text)
-            else:
-                response_text = main_orchestrator.chat(
-                    text,
-                    attachments=attachments,
-                    channel="warroom",
-                    session_id=identity.session_id,
-                    operator_id=identity.operator_id,
-                    operator_name=identity.display_name or resolved_user,
-                )
+        response_text = await _execute_chat_turn(
+            text,
+            user=resolved_user,
+            channel="warroom",
+            identity=identity,
+            attachments=attachments,
+        )
 
         return {
             "response": response_text,
@@ -742,6 +1816,7 @@ def health_check():
         local_llm_last_checked_at = None
         local_llm_consecutive_failures = 0
         local_llm_last_smoke_elapsed_ms = None
+        local_llm_roles = {}
         if getattr(main_orchestrator, "local_model", None) is not None:
             try:
                 local_health = main_orchestrator.local_model.health()
@@ -759,6 +1834,36 @@ def health_check():
             except Exception as exc:
                 local_llm_last_error = str(exc)
                 local_llm_status = "unavailable"
+        try:
+            local_roles_router = getattr(main_orchestrator, "local_model_roles", None)
+            if local_roles_router is not None:
+                from src.core.model_usage_policy import set_local_model_roles_status
+
+                raw_roles = local_roles_router.status()
+                set_local_model_roles_status(raw_roles)
+            else:
+                from src.core.model_usage_policy import get_model_usage_status
+
+                raw_roles = get_model_usage_status().get("local_model_roles", {}) or {}
+            if isinstance(raw_roles, dict) and isinstance(raw_roles.get("roles"), dict):
+                local_llm_roles = raw_roles["roles"]
+            elif isinstance(raw_roles, dict):
+                local_llm_roles = raw_roles
+        except Exception as exc:
+            logger.debug("Local model role status unavailable during health check: %s", exc)
+        role_lane = _summarize_local_model_role_lane(local_llm_roles)
+        if not local_llm_ready and role_lane.get("ready"):
+            local_llm_ready = True
+            local_llm_loaded = True
+            local_llm_status = "ok"
+            local_llm_last_error = None
+            local_llm_last_verified_at = role_lane.get("last_verified_at")
+            local_llm_last_checked_at = role_lane.get("last_checked_at")
+            local_llm_last_smoke_elapsed_ms = role_lane.get("last_smoke_elapsed_ms")
+        elif not local_llm_ready and role_lane.get("loaded"):
+            local_llm_loaded = True
+            local_llm_status = "degraded"
+            local_llm_last_error = role_lane.get("last_error") or local_llm_last_error
         components = {
             "gateway": "ok",
             "orchestrator": "ok" if main_orchestrator.provider else "degraded",
@@ -781,6 +1886,7 @@ def health_check():
                 "last_checked_at": local_llm_last_checked_at,
                 "consecutive_failures": local_llm_consecutive_failures,
                 "last_smoke_elapsed_ms": local_llm_last_smoke_elapsed_ms,
+                "roles": local_llm_roles,
             },
             "crusader_mode": crusader_mode.is_active,
             "uptime_seconds": uptime,

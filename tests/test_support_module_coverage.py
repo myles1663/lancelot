@@ -972,7 +972,8 @@ def test_openai_provider_client_codex_refresh_retry_and_parse_paths(monkeypatch)
     assert client._auth_token == "new-token"
     assert _FakeOpenAIClient.instances[-1].kwargs["api_key"] == "new-token"
 
-    assert client.validate_model("gpt-5.1-codex") is True
+    assert client.validate_model("gpt-5.4") is True
+    assert client.validate_model("gpt-5.1-codex") is False
     assert client.validate_model("not-real") is False
     assert [model.id for model in client.list_models()]
 

@@ -27,9 +27,9 @@ FEATURE_INTENT_TEMPLATES=true
 FEATURE_BATCH_RECEIPTS=true
 ```
 
-After changing, rebuild the container:
+After changing, recreate the core container:
 ```bash
-docker compose up -d --build
+docker compose up -d --no-deps --build lancelot-core
 ```
 
 ## Invalidating the Policy Cache
@@ -134,9 +134,9 @@ To immediately disable the entire governance system:
 FEATURE_RISK_TIERED_GOVERNANCE=false
 ```
 
-Then rebuild:
+Then recreate the core container:
 ```bash
-docker compose up -d --build
+docker compose up -d --no-deps --build lancelot-core
 ```
 
 This reverts `execute_plan()` to the legacy synchronous path with zero behavioral change. All other subsystems continue to function normally.

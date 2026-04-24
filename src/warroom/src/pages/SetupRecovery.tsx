@@ -37,6 +37,7 @@ import type {
   VaultMaskedEntry,
   VaultStatusResponse,
   ExecutionToken,
+  LocalModelRoleStatus,
   ModelUsagePolicyResponse,
 } from '@/types/api'
 
@@ -50,6 +51,16 @@ const TABS = [
 ] as const
 
 type TabId = (typeof TABS)[number]['id']
+
+function normalizeLocalModelRoles(
+  rolesPayload: ModelUsagePolicyResponse['local_model_roles'],
+): Array<[string, LocalModelRoleStatus]> {
+  if (!rolesPayload) return []
+  if ('roles' in rolesPayload && rolesPayload.roles) {
+    return Object.entries(rolesPayload.roles)
+  }
+  return Object.entries(rolesPayload as Record<string, LocalModelRoleStatus>)
+}
 
 // â”€â”€ Section wrapper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -169,6 +180,7 @@ function SystemTab() {
   const [frontierScrubMode, setFrontierScrubMode] = useState('required')
   const [policySaving, setPolicySaving] = useState(false)
   const [policyResult, setPolicyResult] = useState<string | null>(null)
+  const localModelRoles = normalizeLocalModelRoles(modelPolicy?.local_model_roles)
 
   const loadModelPolicy = useCallback(async () => {
     const policy = await fetchModelUsagePolicy()
@@ -459,6 +471,32 @@ function SystemTab() {
             </p>
           </div>
         </div>
+
+        {localModelRoles.length > 0 && (
+          <div className="mt-4 border border-border-default rounded-md overflow-hidden">
+            <div className="grid grid-cols-[1.1fr_0.8fr_0.5fr_1fr_1.4fr] gap-3 px-3 py-2 bg-surface-input text-[10px] uppercase tracking-wider text-text-muted">
+              <span>Role</span>
+              <span>Status</span>
+              <span>Priority</span>
+              <span>Model</span>
+              <span>Endpoint</span>
+            </div>
+            {localModelRoles.map(([role, status]) => (
+              <div
+                key={role}
+                className="grid grid-cols-[1.1fr_0.8fr_0.5fr_1fr_1.4fr] gap-3 px-3 py-2 border-t border-border-default text-xs"
+              >
+                <span className="font-mono text-text-primary truncate">{role}</span>
+                <span className={status.ready ? 'text-state-healthy' : 'text-state-degraded'}>
+                  {status.status || (status.ready ? 'ready' : 'unavailable')}
+                </span>
+                <span className="font-mono text-text-secondary">{status.priority ?? '--'}</span>
+                <span className="font-mono text-text-muted truncate">{status.model || '--'}</span>
+                <span className="font-mono text-text-muted truncate">{status.base_url || '--'}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
         <div className="mt-3">
           <p className="text-xs text-text-muted">

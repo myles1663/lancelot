@@ -8,7 +8,7 @@ Public API:
 import logging
 from typing import Optional
 
-from providers.base import ProviderClient
+from providers.base import ProviderAuthError, ProviderClient
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +54,23 @@ def create_provider(
         return OpenAIProviderClient(api_key=api_key, **kwargs)
 
     elif provider_name == "openai-codex":
-        from providers.codex_cli_client import CodexCLIProviderClient
-        return CodexCLIProviderClient(**kwargs)
+        try:
+            from providers.codex_responses_client import OpenAICodexResponsesProviderClient
+            return OpenAICodexResponsesProviderClient(auth_token=auth_token, **kwargs)
+        except ImportError as exc:
+            logger.warning(
+                "Codex Responses provider import failed; falling back to Codex CLI transport: %s",
+                exc,
+            )
+            from providers.codex_cli_client import CodexCLIProviderClient
+            return CodexCLIProviderClient(auth_token=auth_token, **kwargs)
+        except ProviderAuthError as exc:
+            logger.warning(
+                "Codex Responses provider unavailable; falling back to Codex CLI transport: %s",
+                exc,
+            )
+            from providers.codex_cli_client import CodexCLIProviderClient
+            return CodexCLIProviderClient(auth_token=auth_token, **kwargs)
 
     elif provider_name == "anthropic":
         from providers.anthropic_client import AnthropicProviderClient

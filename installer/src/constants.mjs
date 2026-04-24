@@ -4,6 +4,16 @@
 
 export const REPO_URL = process.env.CREATE_LANCELOT_REPO_URL || 'https://github.com/myles1663/lancelot.git';
 export const DEFAULT_DIR = './lancelot';
+export const CORE_IMAGE =
+  process.env.CREATE_LANCELOT_CORE_IMAGE || 'ghcr.io/myles1663/lancelot:latest';
+export const CORE_SERVICE = 'lancelot-core';
+export const LOCAL_LLM_IMAGE =
+  process.env.CREATE_LANCELOT_LOCAL_LLM_IMAGE ||
+  'ghcr.io/myles1663/lancelot-local-llm:llama-cpp-0.3.19-cpu';
+export const LOCAL_LLM_CUDA_IMAGE =
+  process.env.CREATE_LANCELOT_LOCAL_LLM_CUDA_IMAGE ||
+  'ghcr.io/myles1663/lancelot-local-llm:llama-cpp-0.3.19-cu123';
+export const LOCAL_IMAGE_SERVICES = ['local-llm'];
 
 export const PROVIDERS = {
   gemini: {

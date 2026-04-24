@@ -23,6 +23,8 @@ from unittest.mock import MagicMock, patch
 _REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 _COMPOSE_PATH = _REPO_ROOT / "docker-compose.yml"
 _DOCKERFILE_PATH = _REPO_ROOT / "local_models" / "Dockerfile"
+_PRISM_DOCKERFILE_PATH = _REPO_ROOT / "local_models" / "Dockerfile.prism"
+_PRISM_CUDA_DOCKERFILE_PATH = _REPO_ROOT / "local_models" / "Dockerfile.prism.cuda"
 _REQUIREMENTS_PATH = _REPO_ROOT / "local_models" / "requirements-llm.txt"
 
 
@@ -46,9 +48,21 @@ class TestDockerCompose:
     def test_local_llm_build_context(self):
         svc = self.compose["services"]["local-llm"]
         assert svc["build"]["context"] == "./local_models"
-        assert svc["build"]["dockerfile"] == "Dockerfile"
+        assert svc["build"]["dockerfile"] == "${LOCAL_LLM_DOCKERFILE:-Dockerfile}"
         assert svc["build"]["args"]["LOCAL_LLM_WHEEL_VARIANT"] == "${LOCAL_LLM_WHEEL_VARIANT:-cpu}"
         assert svc["build"]["args"]["LOCAL_LLM_WHEEL_VERSION"] == "${LOCAL_LLM_WHEEL_VERSION:-0.3.19}"
+        assert "PRISM_RELEASE_TAG" in svc["build"]["args"]
+        assert "PRISM_RELEASE_SHA256" in svc["build"]["args"]
+        assert "PRISM_CUDA_BASE_IMAGE" in svc["build"]["args"]
+        assert "PRISM_LLAMA_CPP_REF" in svc["build"]["args"]
+
+    def test_local_llm_uses_prebuilt_image_with_build_fallback(self):
+        svc = self.compose["services"]["local-llm"]
+        assert svc["image"] == (
+            "${LOCAL_LLM_IMAGE:-ghcr.io/myles1663/lancelot-local-llm:llama-cpp-0.3.19-cpu}"
+        )
+        assert svc["pull_policy"] == "${LOCAL_LLM_PULL_POLICY:-missing}"
+        assert svc["build"]["context"] == "./local_models"
 
     def test_local_llm_container_name(self):
         svc = self.compose["services"]["local-llm"]
@@ -87,11 +101,11 @@ class TestDockerCompose:
         svc = self.compose["services"]["local-llm"]
         assert "lancelot_net" in svc["networks"]
 
-    def test_core_depends_on_local_llm(self):
+    def test_core_starts_while_local_llm_warms(self):
         core = self.compose["services"]["lancelot-core"]
         deps = core.get("depends_on", {})
         assert "local-llm" in deps
-        assert deps["local-llm"]["condition"] == "service_healthy"
+        assert deps["local-llm"]["condition"] == "service_started"
 
     def test_core_has_local_llm_url_env(self):
         core = self.compose["services"]["lancelot-core"]
@@ -105,9 +119,34 @@ class TestDockerCompose:
         env_list = svc.get("environment", [])
         env_str = str(env_list)
         assert "LOCAL_MODELS_DIR" in env_str
+        assert "LOCAL_MODEL_PROFILE" in env_str
+        assert "LOCAL_LLM_ENGINE" in env_str
         assert "LOCAL_MODEL_CTX" in env_str
         assert "LOCAL_MODEL_THREADS" in env_str
         assert "${LOCAL_MODEL_GPU_LAYERS:-0}" in env_str
+
+    def test_optional_bonsai_services_defined(self):
+        assert "local-bonsai-17b" in self.compose["services"]
+        assert "local-bonsai-8b" in self.compose["services"]
+        assert self.compose["services"]["local-bonsai-17b"]["profiles"] == ["bonsai"]
+        assert self.compose["services"]["local-bonsai-8b"]["profiles"] == ["bonsai"]
+
+    def test_bonsai_services_use_prism_runtime(self):
+        svc = self.compose["services"]["local-bonsai-8b"]
+        assert svc["image"] == "${BONSAI_LLM_IMAGE:-ghcr.io/myles1663/lancelot-local-llm:prism-b8846-d104cf1}"
+        assert svc["pull_policy"] == "${BONSAI_LLM_PULL_POLICY:-missing}"
+        assert svc["build"]["dockerfile"] == "${BONSAI_LLM_DOCKERFILE:-Dockerfile.prism}"
+        assert svc["build"]["args"]["PRISM_CUDA_BASE_IMAGE"] == (
+            "${PRISM_CUDA_BASE_IMAGE:-nvidia/cuda:12.3.2-devel-ubuntu22.04}"
+        )
+        assert svc["build"]["args"]["PRISM_LLAMA_CPP_REF"] == (
+            "${PRISM_LLAMA_CPP_REF:-d104cf1b639a909ddea521d61f7cb023c6e41f57}"
+        )
+        assert "PRISM_CUDA_ARCHITECTURES" in svc["build"]["args"]
+        env_str = str(svc.get("environment", []))
+        assert "LOCAL_LLM_ENGINE=prism_llama_server" in env_str
+        assert "bonsai-8b" in env_str
+        assert "NVIDIA_VISIBLE_DEVICES" in env_str
 
 
 # ===================================================================
@@ -162,6 +201,64 @@ class TestDockerfile:
         assert "weights" not in self.content.lower() or "mount" in self.content.lower()
 
 
+class TestPrismDockerfile:
+
+    @pytest.fixture(autouse=True)
+    def _load_dockerfile(self):
+        self.content = _PRISM_DOCKERFILE_PATH.read_text(encoding="utf-8")
+
+    def test_prism_dockerfile_exists(self):
+        assert _PRISM_DOCKERFILE_PATH.exists()
+
+    def test_prism_runtime_uses_pinned_prebuilt_release(self):
+        assert "PRISM_RELEASE_TAG=prism-b8846-d104cf1" in self.content
+        assert (
+            "PRISM_RELEASE_SHA256=80bb9a820bb61389dc9f34c976f00afc33018d199b8ae81dd1afeaad2044ec87"
+            in self.content
+        )
+        assert "sha256sum -c" in self.content
+        assert "git checkout" not in self.content
+
+    def test_prism_runtime_preserves_fastapi_wrapper(self):
+        assert "LOCAL_LLM_ENGINE=prism_llama_server" in self.content
+        assert "server.py" in self.content
+        assert "llama-server" in self.content
+
+
+class TestPrismCudaDockerfile:
+
+    @pytest.fixture(autouse=True)
+    def _load_dockerfile(self):
+        self.content = _PRISM_CUDA_DOCKERFILE_PATH.read_text(encoding="utf-8")
+
+    def test_prism_cuda_dockerfile_exists(self):
+        assert _PRISM_CUDA_DOCKERFILE_PATH.exists()
+
+    def test_prism_cuda_runtime_uses_cuda_devel_base(self):
+        assert "PRISM_CUDA_BASE_IMAGE=nvidia/cuda:12.3.2-devel-ubuntu22.04" in self.content
+        assert "FROM ${PRISM_CUDA_BASE_IMAGE}" in self.content
+
+    def test_prism_cuda_runtime_builds_pinned_source(self):
+        assert "PRISM_LLAMA_CPP_REF=d104cf1b639a909ddea521d61f7cb023c6e41f57" in self.content
+        assert "git checkout \"$PRISM_LLAMA_CPP_REF\"" in self.content
+        assert "sha256sum -c" not in self.content
+
+    def test_prism_cuda_runtime_enables_ggml_cuda(self):
+        assert "PRISM_CMAKE_ARGS=-DGGML_CUDA=ON" in self.content
+        assert "PRISM_CUDA_ARCHITECTURES=" in self.content
+        assert "-DCMAKE_CUDA_ARCHITECTURES=$PRISM_CUDA_ARCHITECTURES" in self.content
+        assert "LIBRARY_PATH=/usr/local/cuda/lib64/stubs" in self.content
+        assert "libcuda.so.1" in self.content
+        assert "-Wl,-rpath-link,/usr/local/cuda/lib64/stubs" in self.content
+        assert "$PRISM_CMAKE_ARGS" in self.content
+        assert "test -x /usr/local/bin/llama-server" in self.content
+
+    def test_prism_cuda_runtime_preserves_fastapi_wrapper(self):
+        assert "LOCAL_LLM_ENGINE=prism_llama_server" in self.content
+        assert "server.py" in self.content
+        assert "requirements-llm.txt" in self.content
+
+
 # ===================================================================
 # requirements-llm.txt
 # ===================================================================
@@ -208,6 +305,10 @@ class TestServerEndpoints:
         # Inject mocked model state
         self._original_llm = srv._llm
         self._original_name = srv._model_name
+        self._original_profile = srv._model_profile
+        self._original_engine = srv._engine
+        self._original_backend_url = srv._llama_server_url
+        self._original_backend_process = srv._llama_server_process
         self._original_loaded = srv._loaded_at
         self._original_readiness = dict(srv._readiness)
 
@@ -218,6 +319,10 @@ class TestServerEndpoints:
         }
         srv._llm = mock_llm
         srv._model_name = "test-model"
+        srv._model_profile = "test-profile"
+        srv._engine = srv._ENGINE_LLAMA_CPP_PYTHON
+        srv._llama_server_url = ""
+        srv._llama_server_process = None
         srv._loaded_at = time.time()
         srv._readiness.update({
             "loaded": True,
@@ -238,6 +343,10 @@ class TestServerEndpoints:
         # Restore original state
         srv._llm = self._original_llm
         srv._model_name = self._original_name
+        srv._model_profile = self._original_profile
+        srv._engine = self._original_engine
+        srv._llama_server_url = self._original_backend_url
+        srv._llama_server_process = self._original_backend_process
         srv._loaded_at = self._original_loaded
         srv._readiness.clear()
         srv._readiness.update(self._original_readiness)
@@ -250,6 +359,8 @@ class TestServerEndpoints:
         assert data["ready"] is True
         assert data["loaded"] is True
         assert data["model"] == "test-model"
+        assert data["profile"] == "test-profile"
+        assert data["engine"] == "llama_cpp_python"
         assert data["last_verified_at"] == "2026-04-17T12:00:00Z"
         assert "uptime_seconds" in data
 
@@ -332,12 +443,38 @@ class TestServerEndpoints:
         assert resp.status_code == 500
         assert resp.json()["detail"] == "Model inference failed"
 
+    def test_completions_422_on_context_window_error(self):
+        self._srv._llm.side_effect = RuntimeError(
+            "Requested tokens (4419) exceed context window of 4096"
+        )
+        resp = self.client.post("/v1/completions", json={
+            "prompt": "Too large",
+        })
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == "Context window exceeded"
+
     def test_completions_with_stop_sequences(self):
         resp = self.client.post("/v1/completions", json={
             "prompt": "Hello",
             "stop": [".", "\n"],
         })
         assert resp.status_code == 200
+
+    def test_completions_can_proxy_to_prism_backend(self):
+        self._srv._engine = self._srv._ENGINE_PRISM_LLAMA_SERVER
+        self._srv._llama_server_url = "http://127.0.0.1:8091"
+        with patch.object(self._srv, "_post_backend_json") as mock_backend:
+            mock_backend.return_value = {
+                "choices": [{"text": "proxied"}],
+                "usage": {"completion_tokens": 1},
+            }
+            resp = self.client.post("/v1/completions", json={
+                "prompt": "Hello",
+                "max_tokens": 16,
+            })
+        assert resp.status_code == 200
+        assert resp.json()["text"] == "proxied"
+        mock_backend.assert_called_once()
 
 
 # ===================================================================

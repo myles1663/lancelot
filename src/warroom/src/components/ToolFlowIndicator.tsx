@@ -10,7 +10,7 @@ interface ToolFlowIndicatorProps {
   steps: ToolFlowStep[]
   currentIteration: number
   maxIterations: number
-  status: 'running' | 'completed' | 'failed'
+  status: 'running' | 'completed' | 'failed' | 'blocked'
 }
 
 // ── Status icons (inline SVG to avoid external deps) ──────────
@@ -89,12 +89,14 @@ function QuestStatusBadge({ status }: { status: ToolFlowIndicatorProps['status']
     running: 'bg-accent-primary/20 text-accent-primary',
     completed: 'bg-state-healthy/20 text-state-healthy',
     failed: 'bg-state-error/20 text-state-error',
+    blocked: 'bg-state-warning/20 text-state-warning',
   }
 
   const labels: Record<string, string> = {
     running: 'EXECUTING',
     completed: 'COMPLETE',
     failed: 'FAILED',
+    blocked: 'WAITING',
   }
 
   return (
@@ -133,7 +135,11 @@ export function ToolFlowIndicator({
       <div className="w-full h-1 rounded-full bg-surface-input overflow-hidden mb-3">
         <div
           className={`h-full rounded-full transition-all duration-500 ${
-            status === 'failed' ? 'bg-state-error' : 'bg-accent-primary'
+            status === 'failed'
+              ? 'bg-state-error'
+              : status === 'blocked'
+                ? 'bg-state-warning'
+                : 'bg-accent-primary'
           }`}
           style={{
             width: `${Math.min(100, Math.max(0, (currentIteration / maxIterations) * 100))}%`,

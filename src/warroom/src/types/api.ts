@@ -31,6 +31,7 @@ export interface HealthCheckResponse {
     last_checked_at: string | null
     consecutive_failures: number
     last_smoke_elapsed_ms: number | null
+    roles?: Record<string, LocalModelRoleStatus>
   }
   crusader_mode: boolean
   uptime_seconds: number
@@ -129,6 +130,10 @@ export interface ModelUsagePolicyResponse {
   local_model_last_error: string | null
   local_model_consecutive_failures: number
   local_model_last_smoke_elapsed_ms: number | null
+  local_model_roles?: Record<string, LocalModelRoleStatus> | {
+    roles?: Record<string, LocalModelRoleStatus>
+    scrub_priority?: string
+  }
   frontier_scrub_fallback_active: boolean
   frontier_scrub_fallback_count: number
   last_frontier_scrub_fallback_at: number | null
@@ -143,6 +148,96 @@ export interface ChatResponse {
   response: string
   crusader_mode: boolean
   request_id: string
+}
+
+export interface LocalModelRoleStatus {
+  configured?: boolean
+  enabled?: boolean
+  model?: string
+  base_url?: string
+  priority?: number
+  ready?: boolean
+  loaded?: boolean
+  status?: string
+  last_error?: string | null
+  last_verified_at?: string | null
+  last_checked_at?: string | null
+  consecutive_failures?: number
+  last_smoke_elapsed_ms?: number | null
+}
+
+export type ChatRunStatus = 'queued' | 'running' | 'blocked' | 'succeeded' | 'failed' | 'cancelled'
+
+export interface ChatRunProgressEvent {
+  phase: string
+  message: string
+  at: string
+  elapsed_ms: number
+  severity?: 'info' | 'warning' | 'error'
+  degraded?: boolean
+  degraded_reason?: string
+  wait_reason?: string
+}
+
+export interface ChatRunReceiptProof {
+  available: boolean
+  receipt_count: number
+  linked_run_count: number
+  governed_tools: string[]
+  approval_state: 'used' | 'required' | 'not_used' | 'unknown'
+  degraded_mode: 'used' | 'not_used' | 'unknown'
+  degraded_reasons: string[]
+  outcome: ChatRunStatus
+  error?: string
+}
+
+export interface ChatRunState {
+  run_id: string
+  request_id: string
+  status: ChatRunStatus
+  user: string
+  channel: string
+  session_id: string
+  operator_id: string
+  message_preview: string
+  response: string
+  error: string
+  phase: string
+  created_at: string
+  updated_at: string
+  started_at?: string | null
+  completed_at?: string | null
+  crusader_mode: boolean
+  retry_of_run_id?: string
+  retry_count?: number
+  cancel_requested?: boolean
+  cancel_reason?: string
+  cancelled_at?: string | null
+  progress_events?: ChatRunProgressEvent[]
+  phase_timings_ms?: Record<string, number>
+  total_elapsed_ms?: number | null
+  last_progress_message?: string
+  receipt_proof?: ChatRunReceiptProof | null
+}
+
+export interface ChatAsyncResponse extends ChatResponse {
+  accepted: boolean
+  status: ChatRunStatus
+  run_id: string
+  run: ChatRunState
+}
+
+export interface ChatRunCancelResponse {
+  cancelled: boolean
+  status: ChatRunStatus
+  run_id: string
+  run: ChatRunState
+  request_id: string
+}
+
+export interface ChatRunsResponse {
+  runs: ChatRunState[]
+  count: number
 }
 
 export interface ChatUploadResponse extends ChatResponse {
@@ -751,9 +846,24 @@ export interface ToolFlowStep {
 export interface ToolFlowState {
   questId: string
   steps: ToolFlowStep[]
-  status: 'running' | 'completed' | 'failed'
+  status: 'running' | 'completed' | 'failed' | 'blocked'
   currentIteration: number
   maxIterations: number
+}
+
+// ------------------------------------------------------------------
+// Chat Progress  (chat.progress WebSocket events)
+// ------------------------------------------------------------------
+
+export interface ChatProgressState {
+  questId?: string | null
+  phase: string
+  message: string
+  timestamp: number
+  severity?: 'info' | 'warning' | 'error'
+  degraded?: boolean
+  degradedReason?: string
+  waitReason?: string
 }
 
 // ------------------------------------------------------------------
@@ -773,12 +883,16 @@ export interface ActionCardButton {
 export interface ActionCardData {
   cardId: string
   cardType: ActionCardType
+  questId?: string | null
+  sourceSystem?: string
+  sourceItemId?: string
   title: string
   description: string
   buttons: ActionCardButton[]
   resolved: boolean
   resolvedAction?: string
   resolvedChannel?: string
+  resolutionConfirmed?: boolean
   presentedAt: number
   resolvedAt?: number
 }

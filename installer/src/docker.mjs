@@ -9,11 +9,14 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import {
+  CORE_IMAGE,
+  CORE_SERVICE,
   REPO_URL,
   HEALTH_CHECK_URL,
   HEALTH_CHECK_INTERVAL_MS,
   HEALTH_CHECK_MAX_ATTEMPTS,
   HOST_AGENT_HEALTH_URL,
+  LOCAL_IMAGE_SERVICES,
 } from './constants.mjs';
 
 export async function cloneRepo(targetDir) {
@@ -40,9 +43,42 @@ export async function cloneRepo(targetDir) {
 }
 
 export async function dockerBuild(projectDir) {
-  const spinner = ora('  Building Docker images (this may take a few minutes)...').start();
+  const pullTargets = [CORE_SERVICE, ...LOCAL_IMAGE_SERVICES];
+  const imageLabels = {
+    [CORE_SERVICE]: CORE_IMAGE,
+    'local-llm': 'configured local model image',
+  };
+  const buildTargets = [];
+  const pullSpinner = ora('  Pulling prebuilt Docker images...').start();
+
+  for (const service of pullTargets) {
+    try {
+      pullSpinner.text = `  Pulling ${service} (${imageLabels[service] || 'configured image'})...`;
+      await execa('docker', ['compose', 'pull', service], {
+        cwd: projectDir,
+        timeout: 300000,
+      });
+    } catch {
+      buildTargets.push(service);
+    }
+  }
+
+  if (buildTargets.length === 0) {
+    pullSpinner.succeed('  Prebuilt Docker images ready');
+    return;
+  }
+
+  pullSpinner.warn(
+    `  Could not pull ${buildTargets.join(', ')} - falling back to a local build for those service(s)`
+  );
+
+  const buildLabel = buildTargets.includes(CORE_SERVICE)
+    ? '  Building required Docker images (this may take a few minutes)...'
+    : '  Building the local model image fallback (this may take a few minutes)...';
+  const spinner = ora(buildLabel).start();
+
   try {
-    const proc = execa('docker', ['compose', 'build'], {
+    const proc = execa('docker', ['compose', 'build', ...buildTargets], {
       cwd: projectDir,
       timeout: 600000, // 10 min
     });
@@ -56,7 +92,11 @@ export async function dockerBuild(projectDir) {
     });
 
     await proc;
-    spinner.succeed('  Docker images built');
+    if (buildTargets.includes(CORE_SERVICE)) {
+      spinner.succeed('  Required Docker images built');
+    } else {
+      spinner.succeed('  Local model image built');
+    }
   } catch (e) {
     spinner.fail('  Docker build failed');
     // Show stderr for debugging
@@ -64,7 +104,9 @@ export async function dockerBuild(projectDir) {
       console.log('\n  Build output:');
       console.log(e.stderr.split('\n').slice(-20).map(l => `    ${l}`).join('\n'));
     }
-    throw new Error('Docker build failed. Try: docker compose build --no-cache');
+    throw new Error(
+      `Docker build failed for ${buildTargets.join(', ')}. Try: docker compose build --no-cache ${buildTargets.join(' ')}`
+    );
   }
 }
 

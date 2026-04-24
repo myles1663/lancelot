@@ -125,6 +125,7 @@ _DEFAULT_CLASSIFIER_MODELS = {
     "gemini": "gemini-3-flash-preview",
     "anthropic": "claude-haiku-4-5-20251001",
     "openai": "gpt-4o-mini",
+    "openai-codex": "gpt-5.4-mini",
     "xai": "grok-2",
 }
 

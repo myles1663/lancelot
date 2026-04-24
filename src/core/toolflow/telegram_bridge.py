@@ -69,6 +69,8 @@ class TelegramProgressBridge:
                 self._on_tool_call_completed(quest_id, payload)
             elif event_type == "toolflow.tool_call_blocked":
                 self._on_tool_call_blocked(quest_id, payload)
+            elif event_type == "toolflow.quest_blocked":
+                self._on_quest_blocked(quest_id, payload)
             elif event_type == "toolflow.quest_completed":
                 self._on_quest_completed(quest_id, payload)
             elif event_type == "toolflow.quest_failed":
@@ -133,7 +135,13 @@ class TelegramProgressBridge:
         for step in reversed(state["steps"]):
             if step["tool_name"] == tool_name and step["status"] == "running":
                 result = payload.get("tool_result", "")
-                step["status"] = "done" if result != "FAILURE" else "failed"
+                step["status"] = (
+                    "failed"
+                    if str(result).startswith(("FAIL", "EXCEPTION", "REJECTED"))
+                    else "blocked"
+                    if str(result).startswith("ESCALATED")
+                    else "done"
+                )
                 step["result"] = payload.get("tool_outputs_summary", result)
                 break
 
@@ -156,6 +164,25 @@ class TelegramProgressBridge:
 
         text = self._build_progress_text(state, quest_id=quest_id, status="running")
         self._bot.edit_message(state["message_id"], text, chat_id=state["chat_id"])
+
+    def _on_quest_blocked(self, quest_id: str, payload: Dict[str, Any]) -> None:
+        """Final edit for approval waits, then clean up."""
+        state = self._active_quests.get(quest_id)
+        if not state or not state.get("message_id"):
+            self._active_quests.pop(quest_id, None)
+            return
+
+        reason = payload.get("reason", "Pending approval")
+        approval_id = payload.get("approval_id")
+        summary = f"Waiting for approval: {reason}"
+        if approval_id:
+            summary += f" ({approval_id})"
+
+        text = self._build_progress_text(
+            state, quest_id=quest_id, status="blocked", summary=summary,
+        )
+        self._bot.edit_message(state["message_id"], text, chat_id=state["chat_id"])
+        self._active_quests.pop(quest_id, None)
 
     def _on_quest_completed(self, quest_id: str, payload: Dict[str, Any]) -> None:
         """Final edit with completion summary, then clean up."""
@@ -215,6 +242,8 @@ class TelegramProgressBridge:
             lines.append("✅ Quest finished")
         elif status == "failed":
             lines.append("❌ Quest did not complete")
+        elif status == "blocked":
+            lines.append("🔒 Quest waiting for approval")
         else:
             lines.append("⏳ Processing your request...")
 

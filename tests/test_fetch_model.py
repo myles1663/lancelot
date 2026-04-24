@@ -146,6 +146,19 @@ class TestModelPath:
         path = model_path(lockfile_data=data)
         assert path.parent.name == "weights"
 
+    def test_uses_named_profile_filename(self):
+        from local_models.lockfile import load_lockfile
+        data = load_lockfile()
+        path = model_path(lockfile_data=data, profile_name="bonsai-1.7b")
+        assert path.name == "Bonsai-1.7B-Q1_0.gguf"
+
+    def test_uses_env_profile_filename(self, monkeypatch):
+        from local_models.lockfile import load_lockfile
+        monkeypatch.setenv("LOCAL_MODEL_PROFILE", "bonsai-1.7b")
+        data = load_lockfile()
+        path = model_path(lockfile_data=data)
+        assert path.name == "Bonsai-1.7B-Q1_0.gguf"
+
 
 # ===================================================================
 # is_model_present
@@ -401,3 +414,10 @@ class TestRealLockfileIntegration:
         url = data["model"]["sources"][0]["url"]
         assert url.startswith("https://")
         assert "Qwen3-8B" in url
+
+    def test_bonsai_profile_hashes_are_pinned(self):
+        from local_models.lockfile import get_model_info
+        for profile in ("bonsai-1.7b", "bonsai-8b", "ternary-bonsai-8b"):
+            info = get_model_info(profile_name=profile)
+            assert info["checksum_hash"] != "0" * 64
+            assert info["source_url"].startswith("https://huggingface.co/prism-ml/")

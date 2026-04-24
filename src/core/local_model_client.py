@@ -7,7 +7,7 @@ Single-owner module providing high-level methods for the five utility tasks:
 Talks to the local-llm Docker service over HTTP (default http://localhost:8080).
 
 Public API:
-    LocalModelClient(base_url=None)
+    LocalModelClient(base_url=None, role="utility")
     client.health()             → dict
     client.is_healthy()         → bool
     client.complete(prompt, **) → str
@@ -31,6 +31,10 @@ from local_models.lockfile import load_all_prompts
 logger = logging.getLogger(__name__)
 
 _DEFAULT_BASE_URL = "http://localhost:8080"
+_LOCAL_REDACT_TIMEOUT_S = max(
+    1.0,
+    float(os.environ.get("LANCELOT_LOCAL_REDACT_TIMEOUT_S", "10")),
+)
 _LOCAL_MODEL_ALLOWED_HOSTNAMES = frozenset({
     "localhost",
     "127.0.0.1",
@@ -47,12 +51,13 @@ class LocalModelError(Exception):
 class LocalModelClient:
     """HTTP client for the local-llm utility service."""
 
-    def __init__(self, base_url: Optional[str] = None):
+    def __init__(self, base_url: Optional[str] = None, role: str = "utility"):
         self._base_url = (
             base_url
             or os.environ.get("LOCAL_LLM_URL")
             or _DEFAULT_BASE_URL
         ).rstrip("/")
+        self.role = role
         self._prompts: Optional[dict] = None
 
     # ------------------------------------------------------------------
@@ -157,7 +162,7 @@ class LocalModelClient:
             url = self._local_url("/health")
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=10.0) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+                return _normalize_health_payload(json.loads(resp.read().decode("utf-8")))
         except LocalControlPlaneError as exc:
             raise LocalModelError(str(exc)) from exc
         except urllib.error.HTTPError as exc:
@@ -173,7 +178,7 @@ class LocalModelClient:
                     )
                 else:
                     if isinstance(parsed, dict):
-                        return parsed
+                        return _normalize_health_payload(parsed)
             raise LocalModelError(
                 f"HTTP {exc.code} from {url}: {body}"
             ) from exc
@@ -217,7 +222,7 @@ class LocalModelClient:
             payload["stop"] = stop
 
         result = self._post("/v1/completions", payload, timeout=timeout)
-        return result["text"]
+        return _completion_text(result)
 
     # ------------------------------------------------------------------
     # Utility task methods
@@ -230,8 +235,17 @@ class LocalModelClient:
         feedback, unclear.
         """
         prompt = self._render("classify_intent", input=text)
-        raw = self.complete(prompt, max_tokens=16, temperature=0.0)
-        return raw.strip().lower()
+        raw = self.complete(
+            prompt,
+            max_tokens=16,
+            temperature=0.0,
+            stop=["\n"],
+        )
+        allowed = {"question", "command", "information", "greeting", "feedback", "unclear"}
+        labels = _extract_allowed_labels(raw, allowed)
+        if len(labels) == 1:
+            return labels[0]
+        return _classify_intent_heuristically(text)
 
     def extract_json(self, text: str, schema: str) -> dict:
         """Extract structured data from text as JSON.
@@ -264,20 +278,35 @@ class LocalModelClient:
     def summarize(self, text: str) -> str:
         """Summarize text in 2-3 concise sentences."""
         prompt = self._render("summarize_internal", input=text)
-        raw = self.complete(prompt, max_tokens=256, temperature=0.1)
+        raw = self.complete(
+            prompt,
+            max_tokens=256,
+            temperature=0.1,
+            stop=["\n\n"],
+        )
         return raw.strip()
 
     def redact(self, text: str) -> str:
         """Redact PII from text, replacing with bracketed type markers."""
         prompt = self._render("redact", input=text)
-        raw = self.complete(prompt, max_tokens=512, temperature=0.0)
+        raw = self.complete(
+            prompt,
+            max_tokens=512,
+            temperature=0.0,
+            timeout=_LOCAL_REDACT_TIMEOUT_S,
+        )
         return raw.strip()
 
     def rag_rewrite(self, query: str) -> str:
         """Rewrite a query for improved vector database retrieval."""
         prompt = self._render("rag_rewrite", input=query)
-        raw = self.complete(prompt, max_tokens=128, temperature=0.1)
-        return raw.strip()
+        raw = self.complete(
+            prompt,
+            max_tokens=96,
+            temperature=0.0,
+            stop=["\n"],
+        )
+        return _first_nonempty_line(raw)
 
     def verify_routing_intent(self, text: str) -> str:
         """Verify routing intent using the local model as a second opinion.
@@ -291,13 +320,11 @@ class LocalModelClient:
         """
         prompt = self._render("verify_intent", input=text)
         raw = self.complete(prompt, max_tokens=16, temperature=0.0, timeout=10.0)
-        # Extract first valid label from potentially noisy output
-        valid_labels = {"plan", "action", "question"}
-        for word in raw.lower().split():
-            cleaned = word.strip(".,!?:;'\"\n\r")
-            if cleaned in valid_labels:
-                return cleaned
-        return "action"  # Default to action (routes to agentic loop)
+        return _extract_first_allowed_label(
+            raw,
+            {"plan", "action", "question"},
+            default="action",
+        )
 
     # ------------------------------------------------------------------
     # Fix Pack V8: Chat completions with tool/function calling
@@ -338,3 +365,84 @@ class LocalModelClient:
             payload["tool_choice"] = tool_choice
 
         return self._post("/v1/chat/completions", payload, timeout=timeout)
+
+
+def _normalize_health_payload(payload: dict) -> dict:
+    """Normalize Lancelot wrapper and native llama-server health payloads."""
+    if not isinstance(payload, dict):
+        return {"loaded": False, "ready": False, "status": "unavailable"}
+    normalized = dict(payload)
+    status = str(normalized.get("status") or "").lower()
+    if "ready" not in normalized:
+        normalized["ready"] = status == "ok"
+    if "loaded" not in normalized:
+        normalized["loaded"] = bool(normalized.get("ready")) or status == "ok"
+    if "last_error" not in normalized:
+        normalized["last_error"] = None if normalized.get("ready") else normalized.get("error")
+    return normalized
+
+
+def _completion_text(payload: dict) -> str:
+    """Extract text from Lancelot wrapper or OpenAI-style completions."""
+    if not isinstance(payload, dict):
+        raise LocalModelError("Local model returned a non-object completion payload")
+    if "text" in payload:
+        return str(payload.get("text") or "")
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices:
+        first = choices[0] or {}
+        if "text" in first:
+            return str(first.get("text") or "")
+        message = first.get("message")
+        if isinstance(message, dict):
+            return str(message.get("content") or "")
+    raise LocalModelError("Local model completion payload did not include text")
+
+
+def _extract_first_allowed_label(raw: str, allowed: set[str], *, default: str) -> str:
+    """Extract a bounded classifier label from noisy local model output."""
+    labels = _extract_allowed_labels(raw, allowed)
+    if labels:
+        return labels[0]
+    return default
+
+
+def _extract_allowed_labels(raw: str, allowed: set[str]) -> list[str]:
+    labels: list[str] = []
+    lowered = str(raw or "").lower()
+    for word in lowered.split():
+        cleaned = word.strip(".,!?:;'\"`[](){}\n\r")
+        if cleaned in allowed and cleaned not in labels:
+            labels.append(cleaned)
+    return labels
+
+
+def _first_nonempty_line(raw: str) -> str:
+    for line in str(raw or "").splitlines():
+        cleaned = line.strip()
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def _classify_intent_heuristically(text: str) -> str:
+    """Deterministic fallback when a small local model echoes the label list."""
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return "unclear"
+    if not any(ch.isalnum() for ch in lowered):
+        return "unclear"
+    if lowered in {"hi", "hello", "hey"} or lowered.startswith(("hi ", "hello ", "hey ")):
+        return "greeting"
+    if any(token in lowered for token in ("thanks", "thank you", "great job", "that worked")):
+        return "feedback"
+    if lowered.endswith("?") or lowered.split(" ", 1)[0] in {
+        "what", "why", "how", "when", "where", "who", "can", "could", "should", "would",
+    }:
+        return "question"
+    if lowered.split(" ", 1)[0] in {
+        "do", "run", "create", "write", "update", "delete", "remove", "commit", "push",
+        "summarize", "explain", "find", "check", "fix", "build", "test",
+    }:
+        return "command"
+    return "information"

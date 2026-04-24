@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { run } from '../src/index.mjs';
+import { generateEnvContent } from '../src/config.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const installerRoot = path.resolve(__dirname, '..');
@@ -48,6 +49,7 @@ function createFakeDocker(binDir) {
         'if "%1"=="info" echo Server: Docker Engine&& exit /b 0',
         'if "%1"=="compose" (',
         '  if "%2"=="version" echo Docker Compose version v2.28.0&& exit /b 0',
+        '  if "%2"=="pull" echo pulling&& exit /b 0',
         '  if "%2"=="build" echo building&& exit /b 0',
         '  if "%2"=="up" echo starting&& exit /b 0',
         '  if "%2"=="down" echo stopping&& exit /b 0',
@@ -80,6 +82,7 @@ function createFakeDocker(binDir) {
       'if [ "$1" = "--version" ]; then echo "Docker version 26.1.0"; exit 0; fi',
       'if [ "$1" = "info" ]; then echo "Server: Docker Engine"; exit 0; fi',
       'if [ "$1" = "compose" ] && [ "$2" = "version" ]; then echo "Docker Compose version v2.28.0"; exit 0; fi',
+      'if [ "$1" = "compose" ] && [ "$2" = "pull" ]; then case ",${INSTALLER_DOCKER_FAIL_PULL_TARGETS:-}," in *",$3,"*) exit 1;; esac; echo "pulling"; exit 0; fi',
       'if [ "$1" = "compose" ] && [ "$2" = "build" ]; then echo "building"; exit 0; fi',
       'if [ "$1" = "compose" ] && [ "$2" = "up" ]; then echo "starting"; exit 0; fi',
       'if [ "$1" = "compose" ] && [ "$2" = "down" ]; then echo "stopping"; exit 0; fi',
@@ -352,7 +355,7 @@ test('CLI help exposes the supported installer contract', () => {
 
 test('run completes the installer happy path and persists progress', async () => {
   const { runtime, calls, saves, errors, exits, success, execs } = createRuntime();
-  const expectedInstallDir = path.resolve(installerRoot, 'lancelot');
+  const expectedInstallDir = path.resolve('lancelot');
 
   await run({ directory: './lancelot', provider: 'openai', resume: false }, runtime);
 
@@ -485,6 +488,9 @@ test('CLI filesystem smoke writes real config, compose, and onboarding artifacts
   assert.match(envContent, /^LANCELOT_PROVIDER=openai$/m);
   assert.match(envContent, /^WARROOM_USERNAME=operator$/m);
   assert.match(envContent, /^HOST_AGENT_TOKEN=(?!lancelot-host-agent).+$/m);
+  assert.match(envContent, /^LOCAL_LLM_IMAGE=ghcr\.io\/myles1663\/lancelot-local-llm:llama-cpp-0\.3\.19-cpu$/m);
+  assert.match(envContent, /^LOCAL_LLM_PULL_POLICY=missing$/m);
+  assert.match(envContent, /^LOCAL_LLM_WHEEL_VARIANT=cpu$/m);
   assert.match(composeContent, /lancelot_workspace:\/home\/lancelot\/workspace/);
   assert.doesNotMatch(composeContent, /deploy:\s*\n\s*resources:\s*\n\s*reservations:/m);
   assert.match(composeContent, /LOCAL_MODEL_GPU_LAYERS=0/);
@@ -546,9 +552,12 @@ test('CLI smoke uses the real installer modules for clone, docker, health, and h
     assert.ok(log.calls.includes(`dockerUp:${installDir}`));
     assert.ok(log.calls.includes('waitForHealthy'));
     assert.ok(log.calls.includes(`startHostAgent:${installDir}`));
-    assert.match(dockerLog, /"compose"\s+"build"/);
-    assert.match(dockerLog, /"compose"\s+"up"\s+"-d"/);
+    assert.match(dockerLog, /"?compose"?\s+"?pull"?\s+"?lancelot-core"?/i);
+    assert.match(dockerLog, /"?compose"?\s+"?pull"?\s+"?local-llm"?/i);
+    assert.doesNotMatch(dockerLog, /"?compose"?\s+"?build"?\s+"?local-llm"?/i);
+    assert.match(dockerLog, /"?compose"?\s+"?up"?\s+"?-d"?/i);
     assert.match(envContent, /^LANCELOT_PROVIDER=openai$/m);
+    assert.match(envContent, /^LANCELOT_CORE_IMAGE=ghcr\.io\/myles1663\/lancelot:latest$/m);
     assert.equal(onboardingSnapshot.state, 'READY');
     assert.ok(readFileSync(path.join(installDir, '.git', 'HEAD'), 'utf8').includes('ref:'));
     assert.ok(healthServer.getHitCount() > 0);
@@ -557,6 +566,24 @@ test('CLI smoke uses the real installer modules for clone, docker, health, and h
     await healthServer.close();
     await hostAgentServer.close();
   }
+});
+
+test('generated env selects the staged CUDA local model image when GPU offload is enabled', () => {
+  const envContent = generateEnvContent({
+    provider: 'openai',
+    authMode: 'api_key',
+    apiKey: 'sk-test',
+    commsType: 'skip',
+    hasGpu: true,
+    gpuLayers: 15,
+    warRoomAuthModel: 'local',
+    warRoomUser: 'operator',
+    warRoomPassword: 'password123',
+  });
+
+  assert.match(envContent, /^LOCAL_LLM_IMAGE=ghcr\.io\/myles1663\/lancelot-local-llm:llama-cpp-0\.3\.19-cu123$/m);
+  assert.match(envContent, /^LOCAL_LLM_WHEEL_VARIANT=cu123$/m);
+  assert.match(envContent, /^LOCAL_MODEL_GPU_LAYERS=15$/m);
 });
 
 test('CLI resume flow uses the real isolated HOME state file and clears it after recovery', async () => {

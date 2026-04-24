@@ -502,7 +502,7 @@ async def get_host_agent_status():
     token, token_state = _get_host_agent_token_state()
     try:
         req = urllib.request.Request(_host_agent_url("/health"), method="GET")
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, timeout=0.75) as resp:
             data = _json.loads(resp.read().decode("utf-8"))
         return {
             "reachable": True,
@@ -869,7 +869,7 @@ async def set_flag(
 UAB_DAEMON_URL = os.environ.get("UAB_DAEMON_URL", "http://host.docker.internal:7900")
 
 
-def _uab_rpc(method: str, params: Optional[dict] = None, timeout: int = 3):
+def _uab_rpc(method: str, params: Optional[dict] = None, timeout: float = 0.75):
     """Call the UAB daemon JSON-RPC compatibility endpoint."""
     import urllib.request
     import json as _json

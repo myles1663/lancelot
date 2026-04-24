@@ -22,23 +22,47 @@ export function usePolling<T>({
   const [error, setError] = useState<Error | null>(null)
   const [loading, setLoading] = useState(true)
   const timerRef = useRef<ReturnType<typeof setInterval>>()
+  const inFlightRef = useRef(false)
+  const mountedRef = useRef(true)
   const fetcherRef = useRef(fetcher)
   fetcherRef.current = fetcher
 
   const doFetch = useCallback(async () => {
+    if (inFlightRef.current) return
+
+    inFlightRef.current = true
     try {
       const result = await fetcherRef.current()
-      setData(result)
-      setError(null)
+      if (mountedRef.current) {
+        setData(result)
+        setError(null)
+      }
     } catch (err) {
-      setError(err instanceof Error ? err : new Error(String(err)))
+      if (mountedRef.current) {
+        setError(err instanceof Error ? err : new Error(String(err)))
+      }
     } finally {
-      setLoading(false)
+      inFlightRef.current = false
+      if (mountedRef.current) {
+        setLoading(false)
+      }
     }
   }, [])
 
   useEffect(() => {
-    if (!enabled) return
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!enabled) {
+      setLoading(false)
+      return
+    }
+
+    setLoading(true)
     doFetch()
     timerRef.current = setInterval(doFetch, interval)
     return () => {

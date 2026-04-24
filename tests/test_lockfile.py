@@ -14,6 +14,7 @@ from local_models.lockfile import (
     validate_lockfile,
     load_prompt_template,
     load_all_prompts,
+    get_model_profile,
     get_model_info,
     LockfileError,
     LOCKFILE_PATH,
@@ -118,6 +119,12 @@ class TestRealLockfile:
     def test_real_lockfile_has_six_prompts(self):
         data = load_lockfile()
         assert len(data["prompts"]) == 6
+
+    def test_real_lockfile_has_bonsai_profiles(self):
+        data = load_lockfile()
+        assert data["default_profile"] == "qwen3-8b"
+        assert "bonsai-1.7b" in data["profiles"]
+        assert "ternary-bonsai-8b" in data["profiles"]
 
 
 # ===================================================================
@@ -332,6 +339,37 @@ class TestValidateRuntime:
 
 
 # ===================================================================
+# validate_lockfile - profiles
+# ===================================================================
+
+class TestValidateProfiles:
+
+    def test_valid_profiles_pass(self, valid_lockfile_data):
+        valid_lockfile_data["default_profile"] = "small"
+        valid_lockfile_data["profiles"] = {
+            "small": {
+                **copy.deepcopy(valid_lockfile_data["model"]),
+                "name": "small",
+                "runtime": {
+                    "engine": "prism_llama_server",
+                    "context_length": 8192,
+                    "threads": 4,
+                    "gpu_layers": 99,
+                },
+            }
+        }
+        validate_lockfile(valid_lockfile_data)
+
+    def test_default_profile_must_exist(self, valid_lockfile_data):
+        valid_lockfile_data["default_profile"] = "missing"
+        valid_lockfile_data["profiles"] = {
+            "small": copy.deepcopy(valid_lockfile_data["model"])
+        }
+        with pytest.raises(LockfileError, match="default_profile"):
+            validate_lockfile(valid_lockfile_data)
+
+
+# ===================================================================
 # validate_lockfile — prompts section
 # ===================================================================
 
@@ -423,8 +461,20 @@ class TestGetModelInfo:
         assert "huggingface" in info["source_url"]
         assert info["quantization"] == "Q4_K_M"
         assert info["format"] == "gguf"
+        assert info["engine"] == "llama.cpp"
 
     def test_model_info_from_real_lockfile(self):
         info = get_model_info()
         assert info["name"] == "qwen3-8b"
         assert info["format"] == "gguf"
+
+    def test_selects_bonsai_profile_from_real_lockfile(self):
+        info = get_model_info(profile_name="ternary-bonsai-8b")
+        assert info["name"] == "ternary-bonsai-8b"
+        assert info["filename"] == "Ternary-Bonsai-8B-Q2_0.gguf"
+        assert info["engine"] == "prism_llama_server"
+        assert info["checksum_hash"] != "0" * 64
+
+    def test_unknown_profile_raises(self):
+        with pytest.raises(LockfileError, match="Unknown local model profile"):
+            get_model_profile(profile_name="not-a-profile")

@@ -40,11 +40,12 @@ MANIFEST = {
 # Allowlisted command binaries (Linux + Windows)
 COMMAND_WHITELIST = {
     # Unix/Linux
-    "ls", "cat", "head", "tail", "find", "wc",
+    "ls", "cat", "more", "head", "tail", "find", "wc",
     "git", "docker", "echo", "date", "whoami", "pwd",
     "df", "du", "tar", "gzip", "zip", "unzip",
-    "mkdir", "cp", "mv", "grep", "sort", "uniq",
+    "mkdir", "cp", "mv", "grep", "rg", "sed", "sort", "uniq",
     "touch", "test", "true", "false", "python", "pip",
+    "env", "which",
     "npm", "node", "curl", "wget", "uname", "hostname",
     # Windows
     "dir", "ver", "systeminfo", "ipconfig", "netstat",
@@ -55,6 +56,13 @@ COMMAND_WHITELIST = {
 # Dangerous shell metacharacters
 BLOCKED_CHARS = {'&', '|', ';', '$', '`', '(', ')', '{', '}', '<', '>'}
 WINDOWS_SHELL_BUILTINS = {"echo", "dir", "type", "set", "ver"}
+WINDOWS_COMMAND_ALTERNATIVES = {
+    "dir": "ls",
+    "type": "cat",
+    "set": "env",
+    "ver": "uname -a",
+    "where": "which",
+}
 
 DEFAULT_TIMEOUT = 30
 
@@ -176,6 +184,8 @@ def _execute_via_fabric(fabric, command: str, timeout_sec: int, inputs: dict) ->
         "return_code": result.exit_code,
         "duration_ms": round(duration_ms, 2),
         "command": command,
+        "cwd": workspace,
+        "execution_target": "tool_fabric",
     }
 
 
@@ -183,6 +193,7 @@ def _execute_local(command: str, timeout_sec: int, inputs: dict) -> dict:
     """Execute command directly via subprocess (container-local)."""
     cwd = _resolve_workspace(inputs)
     binary, parts = _parse_command(command)
+    _validate_command_for_runtime(command, cwd)
 
     start = time.monotonic()
     try:
@@ -208,6 +219,8 @@ def _execute_local(command: str, timeout_sec: int, inputs: dict) -> dict:
             "return_code": result.returncode,
             "duration_ms": round(duration_ms, 2),
             "command": command,
+            "cwd": cwd,
+            "execution_target": "local",
         }
 
     except subprocess.TimeoutExpired:
@@ -247,6 +260,23 @@ def _parse_command(command: str) -> tuple[str, list[str]]:
         raise ValueError("Empty command")
 
     return os.path.basename(parts[0]), parts
+
+
+def _validate_command_for_runtime(command: str, cwd: str) -> None:
+    """Reject shell builtins that cannot execute in the current runtime."""
+    binary, _ = _parse_command(command)
+    normalized = binary.lower()
+
+    if os.name == "nt":
+        return
+
+    if normalized in WINDOWS_COMMAND_ALTERNATIVES:
+        alternative = WINDOWS_COMMAND_ALTERNATIVES[normalized]
+        raise ValueError(
+            f"Command '{binary}' is a Windows shell command but this runner is executing in "
+            f"a POSIX runtime at cwd '{cwd}'. Use '{alternative}' for this runtime, or route "
+            "the command through the host bridge when Windows host execution is required."
+        )
 
 
 def _resolve_workspace(inputs: dict) -> str:

@@ -27,6 +27,7 @@ class ToolFlowEventType(str, Enum):
     TOOL_CALL_COMPLETED = "toolflow.tool_call_completed"
     TOOL_CALL_BLOCKED = "toolflow.tool_call_blocked"
     ITERATION_COMPLETED = "toolflow.iteration_completed"
+    QUEST_BLOCKED = "toolflow.quest_blocked"
     QUEST_COMPLETED = "toolflow.quest_completed"
     QUEST_FAILED = "toolflow.quest_failed"
 
@@ -53,6 +54,7 @@ class ToolFlowEvent:
 
     # Blocked details (for TOOL_CALL_BLOCKED)
     approval_id: Optional[str] = None
+    reason: Optional[str] = None
 
     # Quest summary (for QUEST_COMPLETED / QUEST_FAILED)
     total_tool_calls: int = 0

@@ -5,6 +5,9 @@
 
 import type { ApiError } from '@/types/api'
 
+const READ_REQUEST_TIMEOUT_MS = 8000
+const MUTATION_REQUEST_TIMEOUT_MS = 60000
+
 const API_BASE = '' // Same origin — Vite proxy in dev, FastAPI static in prod
 
 export class ApiClientError extends Error {
@@ -14,6 +17,36 @@ export class ApiClientError extends Error {
   ) {
     super(body.error || `API error ${status}`)
     this.name = 'ApiClientError'
+  }
+}
+
+function timeoutError(timeoutMs: number): ApiClientError {
+  return new ApiClientError(408, {
+    error: `API request timed out after ${timeoutMs}ms`,
+    status: 408,
+  })
+}
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw timeoutError(timeoutMs)
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timeoutId)
   }
 }
 
@@ -42,61 +75,87 @@ export async function apiGet<T>(path: string, params?: Record<string, string>): 
       if (v) url.searchParams.set(k, v)
     })
   }
-  const res = await fetch(url.toString(), {
-    credentials: 'include',
-  })
+  const res = await fetchWithTimeout(
+    url.toString(),
+    { credentials: 'include' },
+    READ_REQUEST_TIMEOUT_MS,
+  )
   return handleResponse<T>(res)
 }
 
-export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
+export async function apiPost<T>(path: string, body?: unknown, timeoutMs = MUTATION_REQUEST_TIMEOUT_MS): Promise<T> {
+  const res = await fetchWithTimeout(
+    `${API_BASE}${path}`,
+    {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
     },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  })
+    timeoutMs,
+  )
   return handleResponse<T>(res)
 }
 
 export async function apiPut<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: 'PUT',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
+  const res = await fetchWithTimeout(
+    `${API_BASE}${path}`,
+    {
+      method: 'PUT',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
     },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  })
+    MUTATION_REQUEST_TIMEOUT_MS,
+  )
   return handleResponse<T>(res)
 }
 
 export async function apiPatch<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: 'PATCH',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
+  const res = await fetchWithTimeout(
+    `${API_BASE}${path}`,
+    {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
     },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  })
+    MUTATION_REQUEST_TIMEOUT_MS,
+  )
   return handleResponse<T>(res)
 }
 
 export async function apiDelete<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: 'DELETE',
-    credentials: 'include',
-  })
+  const res = await fetchWithTimeout(
+    `${API_BASE}${path}`,
+    {
+      method: 'DELETE',
+      credentials: 'include',
+    },
+    MUTATION_REQUEST_TIMEOUT_MS,
+  )
   return handleResponse<T>(res)
 }
 
-export async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: 'POST',
-    credentials: 'include',
-    body: formData,
-  })
+export async function apiPostForm<T>(
+  path: string,
+  formData: FormData,
+  timeoutMs = MUTATION_REQUEST_TIMEOUT_MS,
+): Promise<T> {
+  const res = await fetchWithTimeout(
+    `${API_BASE}${path}`,
+    {
+      method: 'POST',
+      credentials: 'include',
+      body: formData,
+    },
+    timeoutMs,
+  )
   return handleResponse<T>(res)
 }

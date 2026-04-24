@@ -31,6 +31,11 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from src.core.local_model_client import LocalModelClient, LocalModelError
+from src.core.local_model_roles import (
+    LocalModelRoleError,
+    ROLE_SCRUB_SEGMENT_VERIFIER,
+    ROLE_UTILITY,
+)
 from src.core.model_usage_policy import (
     LOCAL_EXECUTION_DISABLED,
     get_model_usage_policy,
@@ -113,11 +118,13 @@ class ModelRouter:
         self,
         registry: ProfileRegistry,
         local_client: Optional[LocalModelClient] = None,
+        local_roles: Optional[Any] = None,
         flagship_client: Optional[Any] = None,
         provider_client: Optional[Any] = None,
     ):
         self._registry = registry
         self._local = local_client
+        self._local_roles = local_roles
         self._flagship = flagship_client
         self._provider_client = provider_client  # V27: SDK-mode ProviderClient
         self._decisions: deque[RouterDecision] = deque(maxlen=_MAX_RECENT)
@@ -235,29 +242,30 @@ class ModelRouter:
         **kwargs: Any,
     ) -> RouterResult:
         """Execute a task on the local model."""
-        if self._local is None:
+        local_client, model_label, client_error = self._resolve_local_client(lane)
+        if local_client is None:
             elapsed = (time.monotonic() - start) * 1000
             decision = self._record(
                 task_type=task_type,
                 lane=lane,
-                model="local-llm",
+                model=model_label,
                 rationale=rationale,
                 elapsed_ms=elapsed,
                 success=False,
-                error="Local model client not configured",
+                error=client_error or "Local model client not configured",
                 input_preview=input_preview,
             )
             return RouterResult(decision=decision, executed=False)
 
         try:
-            output, data = self._run_local_task(task_type, text, **kwargs)
+            output, data = self._run_local_task(local_client, task_type, text, **kwargs)
             elapsed = (time.monotonic() - start) * 1000
             output_preview = str(output)[:_PREVIEW_LEN] if output else ""
 
             decision = self._record(
                 task_type=task_type,
                 lane=lane,
-                model="local-llm",
+                model=model_label,
                 rationale=rationale,
                 elapsed_ms=elapsed,
                 success=True,
@@ -270,12 +278,12 @@ class ModelRouter:
                 data=data,
                 executed=True,
             )
-        except LocalModelError as exc:
+        except (LocalModelError, LocalModelRoleError) as exc:
             elapsed = (time.monotonic() - start) * 1000
             decision = self._record(
                 task_type=task_type,
                 lane=lane,
-                model="local-llm",
+                model=model_label,
                 rationale=rationale,
                 elapsed_ms=elapsed,
                 success=False,
@@ -284,23 +292,48 @@ class ModelRouter:
             )
             return RouterResult(decision=decision, executed=False)
 
+    def _resolve_local_client(
+        self,
+        lane: str,
+    ) -> tuple[Optional[LocalModelClient], str, Optional[str]]:
+        """Resolve the role-specific local client for a local lane."""
+        if self._local_roles is not None:
+            role = (
+                ROLE_SCRUB_SEGMENT_VERIFIER
+                if lane == "local_redaction"
+                else ROLE_UTILITY
+            )
+            try:
+                config = self._local_roles.config_for(role)
+                return self._local_roles.client_for(role), config.model, None
+            except LocalModelRoleError as exc:
+                return None, role, str(exc)
+
+        if self._local is None:
+            return None, "local-llm", "Local model client not configured"
+        return self._local, "local-llm", None
+
     def _run_local_task(
-        self, task_type: str, text: str, **kwargs: Any
+        self,
+        client: LocalModelClient,
+        task_type: str,
+        text: str,
+        **kwargs: Any,
     ) -> tuple[Optional[str], Optional[dict]]:
         """Dispatch to the appropriate LocalModelClient method."""
         if task_type == "classify_intent":
-            return self._local.classify_intent(text), None
+            return client.classify_intent(text), None
         if task_type == "extract_json":
             schema = kwargs.get("schema", "{}")
-            data = self._local.extract_json(text, schema)
+            data = client.extract_json(text, schema)
             return str(data), data
         if task_type == "summarize":
-            return self._local.summarize(text), None
+            return client.summarize(text), None
         if task_type == "redact":
-            return self._local.redact(text), None
+            return client.redact(text), None
         if task_type == "rag_rewrite":
-            return self._local.rag_rewrite(text), None
-        return self._local.complete(text), None
+            return client.rag_rewrite(text), None
+        return client.complete(text), None
 
     # ------------------------------------------------------------------
     # Flagship execution

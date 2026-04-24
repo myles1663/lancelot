@@ -12,6 +12,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  LOCAL_LLM_IMAGE_NAME: ${{ github.repository }}-local-llm
 
 jobs:
   build-and-push:
@@ -53,7 +54,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
-      - name: Build and push Docker image
+      - name: Build and push core Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -64,6 +65,51 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build and push local model Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./local_models
+          file: ./local_models/Dockerfile
+          push: true
+          platforms: linux/amd64
+          build-args: |
+            LOCAL_LLM_WHEEL_VARIANT=cpu
+            LOCAL_LLM_WHEEL_VERSION=0.3.19
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.LOCAL_LLM_IMAGE_NAME }}:llama-cpp-0.3.19-cpu
+            ${{ env.REGISTRY }}/${{ env.LOCAL_LLM_IMAGE_NAME }}:${{ steps.version.outputs.version }}-llama-cpp-0.3.19-cpu
+          cache-from: type=gha,scope=local-llm
+          cache-to: type=gha,mode=max,scope=local-llm
+
+      - name: Build and push CUDA local model Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./local_models
+          file: ./local_models/Dockerfile
+          push: true
+          platforms: linux/amd64
+          build-args: |
+            LOCAL_LLM_WHEEL_VARIANT=cu123
+            LOCAL_LLM_WHEEL_VERSION=0.3.19
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.LOCAL_LLM_IMAGE_NAME }}:llama-cpp-0.3.19-cu123
+            ${{ env.REGISTRY }}/${{ env.LOCAL_LLM_IMAGE_NAME }}:${{ steps.version.outputs.version }}-llama-cpp-0.3.19-cu123
+          cache-from: type=gha,scope=local-llm-cuda
+          cache-to: type=gha,mode=max,scope=local-llm-cuda
+
+      - name: Build and push Prism local model Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./local_models
+          file: ./local_models/Dockerfile.prism
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.LOCAL_LLM_IMAGE_NAME }}:prism-b8846-d104cf1
+            ${{ env.REGISTRY }}/${{ env.LOCAL_LLM_IMAGE_NAME }}:${{ steps.version.outputs.version }}-prism-b8846-d104cf1
+          cache-from: type=gha,scope=local-llm-prism
+          cache-to: type=gha,mode=max,scope=local-llm-prism
+
       - name: Build GitHub Release body
         run: |
           cat RELEASE_NOTES.md > release-body.md
@@ -73,9 +119,12 @@ jobs:
 
           ```bash
           docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          docker pull ${{ env.REGISTRY }}/${{ env.LOCAL_LLM_IMAGE_NAME }}:${{ steps.version.outputs.version }}-llama-cpp-0.3.19-cpu
+          docker pull ${{ env.REGISTRY }}/${{ env.LOCAL_LLM_IMAGE_NAME }}:${{ steps.version.outputs.version }}-llama-cpp-0.3.19-cu123
+          docker pull ${{ env.REGISTRY }}/${{ env.LOCAL_LLM_IMAGE_NAME }}:${{ steps.version.outputs.version }}-prism-b8846-d104cf1
           ```
 
-          See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for the concise public changelog.
+          See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/master/CHANGELOG.md) for the concise public changelog.
           EOF
 
       - name: Create GitHub Release

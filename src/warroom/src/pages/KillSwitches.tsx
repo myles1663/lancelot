@@ -551,8 +551,12 @@ function HostAgentPanel() {
   const [writeEnabled, setWriteEnabled] = useState(false)
   const [writeToggling, setWriteToggling] = useState(false)
   const [writeConfirm, setWriteConfirm] = useState(false)
+  const inFlightRef = useRef(false)
 
   const poll = useCallback(async () => {
+    if (inFlightRef.current) return
+
+    inFlightRef.current = true
     try {
       const [agentRes, writeRes] = await Promise.all([fetchHostAgentStatus(), fetchHostWriteStatus()])
       setStatus(agentRes)
@@ -560,6 +564,8 @@ function HostAgentPanel() {
       setError(null)
     } catch {
       setError('Failed to check agent status')
+    } finally {
+      inFlightRef.current = false
     }
   }, [])
 
@@ -723,12 +729,20 @@ function UABPanel() {
   const [status, setStatus] = useState<UABStatus | null>(null)
   const [apps, setApps] = useState<UABConnectedApp[]>([])
   const [error, setError] = useState<string | null>(null)
+  const inFlightRef = useRef(false)
 
   const poll = useCallback(async () => {
+    if (inFlightRef.current) return
+
+    inFlightRef.current = true
     try {
       const [s, a] = await Promise.all([fetchUABStatus(), fetchUABApps()])
       setStatus(s); setApps(a.apps || []); setError(null)
-    } catch { setError('Failed to check UAB status') }
+    } catch {
+      setError('Failed to check UAB status')
+    } finally {
+      inFlightRef.current = false
+    }
   }, [])
 
   useEffect(() => { poll(); const t = setInterval(poll, 5000); return () => clearInterval(t) }, [poll])

@@ -38,3 +38,13 @@ def test_local_router_command_escalates_to_keyword_fallback_not_frontier():
 
     assert "Local utility classifier returned 'command'" in result.reasoning
     provider.generate.assert_not_called()
+
+
+def test_openai_codex_classifier_uses_codex_model_default(monkeypatch):
+    monkeypatch.delenv("CLASSIFIER_MODEL", raising=False)
+    provider = MagicMock()
+    provider.provider_name = "openai-codex"
+
+    classifier = UnifiedClassifier(provider)
+
+    assert classifier._model == "gpt-5.4-mini"

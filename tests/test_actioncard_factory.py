@@ -37,6 +37,8 @@ class TestActionCardFactory:
             tool_name="deploy_service",
             params={"service": "api", "version": "2.0"},
             quest_id="quest-123",
+            approval_context="User asked Lancelot to deploy the API service.",
+            approval_reason="This can change production service state.",
         )
         assert card.card_type == ActionCardType.APPROVAL.value
         assert card.source_system == "governance"
@@ -46,7 +48,57 @@ class TestActionCardFactory:
         assert card.buttons[0].id == "approve"
         assert card.buttons[1].id == "deny"
         assert "deploy_service" in card.title
+        assert "What I am trying to do: User asked Lancelot to deploy the API service." in card.description
+        assert "Original request context: User asked Lancelot to deploy the API service." in card.description
+        assert "Approval scope:\n- One exact `deploy_service` tool call" in card.description
+        assert "This approval does not cover:" in card.description
+        assert '"service": "api"' in card.description
         assert card.expires_at is not None
+
+    def test_from_sentry_request_summarizes_repo_write(self, factory):
+        """Approval cards lead with operator intent for repo writes."""
+        card = factory.from_sentry_request(
+            req_id="sentry-002",
+            tool_name="repo_writer",
+            params={"action": "edit", "path": "src/core/example_store.py"},
+        )
+
+        assert card.title == "Approve repository file edit: src/core/example_store.py"
+        assert "I need approval to edit `src/core/example_store.py`." in card.description
+        assert "Approval scope:\n- One exact repository file operation" in card.description
+        assert "- Target file: `src/core/example_store.py`" in card.description
+        assert "Git commits, pushes, deployments, or external calls unless separately approved" in card.description
+        assert "Tool: repo_writer" in card.description
+
+    def test_from_sentry_request_batch_groups_repo_writes(self, factory):
+        """Grouped approval cards summarize exact file scope."""
+        card = factory.from_sentry_request_batch(
+            requests=[
+                {
+                    "request_id": "req-1",
+                    "tool_name": "repo_writer",
+                    "params": {"action": "edit", "path": "src/tickets/store.py"},
+                },
+                {
+                    "request_id": "req-2",
+                    "tool_name": "repo_writer",
+                    "params": {"action": "edit", "path": "tests/test_tickets.py"},
+                },
+            ],
+            approval_context="User asked Lancelot to update a local workflow.",
+            approval_reason="This changes repository files.",
+        )
+
+        assert card.title == "Approve 2 repository file edits"
+        assert "I need approval to edit 2 repository files." in card.description
+        assert "What I am trying to do: User asked Lancelot to update a local workflow." in card.description
+        assert "Approval scope:\n- 2 exact repository file operations" in card.description
+        assert "This approval does not cover:" in card.description
+        assert "- edit `src/tickets/store.py`" in card.description
+        assert "- edit `tests/test_tickets.py`" in card.description
+        assert card.source_item_id == "batch:req-1,req-2"
+        assert card.metadata["approval_type"] == "sentry_t3_batch"
+        assert card.metadata["approval_request_ids"] == ["req-1", "req-2"]
 
     def test_from_soul_proposal(self, factory):
         """Creates correct card for soul amendment."""

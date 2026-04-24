@@ -9,6 +9,16 @@ local_models/weights/
 # Git
 .git/
 
+# Local runtime configuration and generated artifacts
+.env
+.env.*
+!.env.example
+local/
+audit_*.log
+.coverage
+.pytest_cache/
+.venv/
+
 # Python cache
 __pycache__/
 *.pyc
@@ -19,6 +29,10 @@ tests/
 
 # Installer (npm package, not needed in Docker image)
 installer/
+
+# Frontend dependency/build outputs are recreated inside Docker
+src/warroom/node_modules/
+src/warroom/dist/
 
 # Docs
 docs/

@@ -14,7 +14,11 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from src.core.tasking.authority import resolve_step_authority
+from src.core.tasking.authority import (
+    format_step_requirement_issues,
+    resolve_step_authority,
+    validate_step_requirements,
+)
 from src.core.tasking.schema import RunStatus, StepType, TaskGraph, TaskRun, TaskStep
 from src.core.tasking.store import TaskStore
 from src.core.runtime_pause import get_runtime_pause_status, is_runtime_paused
@@ -331,6 +335,10 @@ class TaskRunner:
 
         Dispatches to the appropriate skill or tool executor.
         """
+        requirement_issues = validate_step_requirements(step)
+        if requirement_issues:
+            raise RuntimeError(format_step_requirement_issues(requirement_issues))
+
         step_type = step.type
 
         if step_type == StepType.VERIFY.value:
@@ -399,6 +407,12 @@ class TaskRunner:
                     # Fallback: use description (may be a raw command string)
                     if "command" not in skill_inputs:
                         skill_inputs["command"] = skill_inputs.get("description", "")
+                if (
+                    skill_name == "repo_writer"
+                    and "path" not in skill_inputs
+                    and "file" in skill_inputs
+                ):
+                    skill_inputs["path"] = skill_inputs["file"]
 
                 skill_result = self.skill_executor.run(skill_name, skill_inputs)
                 if not skill_result.success:

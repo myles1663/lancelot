@@ -102,7 +102,7 @@ Receipts are tagged with a cognition tier indicating the level of processing inv
 Receipt inputs and outputs are sanitized before persistence:
 
 - **Secrets** are redacted (API keys, tokens, passwords replaced with `[REDACTED]`)
-- **PII** is stripped according to the configured frontier scrub policy. In `required` or `preferred` mode, Lancelot uses the local redaction lane before frontier egress when local scrubbing is available; `preferred` mode may fall back to direct frontier egress and now writes an immutable `pii_scrub_fallback` receipt instead of only surfacing that state in runtime status. Structured PII that is scrubbed locally emits `pii_scrub_applied`, and required-mode blocks emit `pii_scrub_blocked`, so the privacy boundary is auditable in the receipt log rather than only inferred from configuration.
+- **PII** is stripped according to the configured frontier scrub policy. In `required` or `preferred` mode, Lancelot uses the local redaction lane before frontier egress when local scrubbing is available; `preferred` mode may fall back to direct frontier egress and now writes an immutable `pii_scrub_fallback` receipt instead of only surfacing that state in runtime status. Structured PII that is scrubbed locally emits `pii_scrub_applied`, and required-mode blocks emit `pii_scrub_blocked`, so the privacy boundary is auditable in the receipt log rather than only inferred from configuration. Scrub receipts include the applied pipeline stages, such as deterministic pre-scrub, local region finding, local segment verification, local model verification, deterministic fallback, and deterministic residual validation.
 - **Large payloads** are truncated with size noted
 - **Binary content** is replaced with type and size metadata
 

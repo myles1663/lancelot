@@ -292,9 +292,9 @@ def _build_tool_declarations(self):
         NormalizedToolDeclaration(
             name="repo_writer",
             description=(
-                "Create, edit, or delete files in the shared workspace. "
-                "Files are written to /home/lancelot/workspace which is the shared desktop folder "
-                "the owner can access directly. Use for writing code, configuration, or documentation."
+                "Create, edit, or delete files through governed repository/file writes. "
+                "Use workspace=/home/lancelot/workspace for user artifacts. "
+                "Use workspace=/home/lancelot/app only for explicit Lancelot self-development changes."
             ),
             parameters={
                 "type": "object",
@@ -311,6 +311,11 @@ def _build_tool_declarations(self):
                     "content": {
                         "type": "string",
                         "description": "File content (for create/edit)",
+                    },
+                    "workspace": {
+                        "type": "string",
+                        "enum": ["/home/lancelot/workspace", "/home/lancelot/app"],
+                        "description": "Optional write root. Use /home/lancelot/app only for approved self-development changes.",
                     },
                 },
                 "required": ["action", "path"],
@@ -932,7 +937,11 @@ def _init_provider(self):
                     profile_exc,
                 )
             if provider_name == "openai-codex" and has_codex_cli_auth and not auth_token:
-                auth_method = "Codex CLI auth"
+                provider_class = self.provider.__class__.__name__ if self.provider is not None else ""
+                if provider_class == "OpenAICodexResponsesProviderClient":
+                    auth_method = "mounted Codex OAuth token"
+                else:
+                    auth_method = "Codex CLI auth"
             else:
                 auth_method = "OAuth" if auth_token else "API key"
             _gov_logger.info(

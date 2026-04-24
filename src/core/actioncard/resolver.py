@@ -146,9 +146,13 @@ class ActionCardResolver:
                     "card_id": card.card_id,
                     "button_id": button_id,
                     "channel": channel,
+                    "resolved_action": button_id,
+                    "resolved_channel": channel,
                     "source_system": card.source_system,
                     "source_item_id": card.source_item_id,
+                    "quest_id": card.quest_id,
                     "result": result,
+                    "result_status": result.get("status", ""),
                     "telegram_message_id": card.telegram_message_id,
                 },
             ))
