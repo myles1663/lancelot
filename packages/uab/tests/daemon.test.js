@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-import { createRpcDispatcher } from '../dist/daemon.js';
+import { createRpcDispatcher, resolveDaemonBindHost } from '../dist/daemon.js';
 
 function createConnector(overrides = {}) {
   return {
@@ -63,6 +63,10 @@ function createLegacyService(overrides = {}) {
 }
 
 async function run() {
+  assert.equal(resolveDaemonBindHost([], {}), '127.0.0.1');
+  assert.equal(resolveDaemonBindHost(['--host', '0.0.0.0'], {}), '0.0.0.0');
+  assert.equal(resolveDaemonBindHost([], { UAB_DAEMON_HOST: '192.168.1.10' }), '192.168.1.10');
+
   {
     const dispatch = createRpcDispatcher({
       connector: createConnector(),

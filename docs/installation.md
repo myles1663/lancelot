@@ -92,7 +92,7 @@ Both containers communicate on an internal bridge network (`lancelot_net`). The 
 The fastest path. Requires Docker Desktop and Node.js 18+:
 
 ```bash
-npx create-lancelot
+npx create-lancelot@latest
 ```
 
 The installer handles:
@@ -113,7 +113,7 @@ The installer handles:
 |------|-------------|
 | `-d, --directory <path>` | Install location (default: `./lancelot`) |
 | `--provider <name>` | Pre-select: `gemini`, `openai`, `anthropic`, `xai`, or `nvidia` |
-| `--resume` | Resume an interrupted installation |
+| `--resume` | Resume an interrupted installation: `npx create-lancelot@latest --resume` |
 
 When the installer finishes, it automatically opens the **War Room** in your default browser at `http://localhost:8000`.
 
@@ -424,7 +424,7 @@ backend cannot load.
 
 **Via the installer** (recommended):
 ```bash
-npx create-lancelot --resume
+npx create-lancelot@latest --resume
 ```
 
 **Via the Python fetch script:**
@@ -762,12 +762,14 @@ Should show `active_version: "v1"` and `invariants_passing: true`.
 ### 5. Chat endpoint
 
 ```bash
+TOKEN="$(grep '^LANCELOT_API_TOKEN=' .env | cut -d= -f2-)"
 curl -X POST http://localhost:8000/chat \
+  -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"text": "hello"}'
 ```
 
-Should return a governed response with receipt IDs.
+Should return a governed response with receipt IDs. For installer-managed deployments, read `LANCELOT_API_TOKEN` from the generated `.env` before running direct API smoke tests.
 
 ### 6. War Room
 
@@ -996,8 +998,10 @@ scripts\start-uab.bat
 cd packages/uab
 npm install
 npm run build
-node dist/daemon.js --port 7900
+node dist/daemon.js --host 127.0.0.1 --port 7900
 ```
+
+The compatibility daemon binds to `127.0.0.1` by default. Use `UAB_DAEMON_HOST` or `--host` only when an explicit trusted container/VM bridge requires it.
 
 **Verify:**
 ```bash

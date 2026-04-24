@@ -26,7 +26,7 @@ Before you start, make sure you have:
 Run the recommended interactive installer:
 
 ```bash
-npx create-lancelot
+npx create-lancelot@latest
 ```
 
 The installer walks you through each step interactively:
@@ -52,7 +52,7 @@ When it finishes, the **War Room** opens automatically in your default browser a
   ╚══════════════════════════════════════════╝
 ```
 
-> **Tip:** If the install is interrupted, resume with `npx create-lancelot --resume`.
+> **Tip:** If the install is interrupted, resume with `npx create-lancelot@latest --resume`.
 
 ---
 
@@ -144,7 +144,9 @@ The Soul defines what Lancelot can do autonomously (classify, summarize, redact)
 Send a message through the governed pipeline:
 
 ```bash
+TOKEN="$(grep '^LANCELOT_API_TOKEN=' .env | cut -d= -f2-)"
 curl -X POST http://localhost:8000/chat \
+  -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"text": "Summarize the key principles of good software architecture"}'
 ```
@@ -195,7 +197,9 @@ In the War Room, navigate to the governance panel to see:
 If you want to see governance in action on a real tool execution, try asking Lancelot to do something that involves the Tool Fabric:
 
 ```bash
+TOKEN="$(grep '^LANCELOT_API_TOKEN=' .env | cut -d= -f2-)"
 curl -X POST http://localhost:8000/chat \
+  -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"text": "Write a Python function that calculates fibonacci numbers and save it to workspace"}'
 ```
@@ -243,7 +247,7 @@ Now that you have a running instance:
 ```bash
 ls local_models/weights/
 ```
-If empty, re-run the installer with `npx create-lancelot --resume`, or manually download the model (see the [Installation Guide](installation.md)). If weights exist but readiness still fails, inspect `docker compose logs local-llm` for inference smoke errors.
+If empty, re-run the installer with `npx create-lancelot@latest --resume`, or manually download the model (see the [Installation Guide](installation.md)). If weights exist but readiness still fails, inspect `docker compose logs local-llm` for inference smoke errors.
 
 ### Port already in use
 

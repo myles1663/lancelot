@@ -245,6 +245,10 @@ def _init_health_monitor():
     """Initialize Health Monitor subsystem."""
     from health.monitor import HealthMonitor, HealthCheck
     from health.api import set_snapshot_provider
+    from src.core.startup_validation import (
+        startup_validation_health_details,
+        startup_validation_ready,
+    )
 
     def _local_llm_health_details():
         from src.core.model_usage_policy import set_local_model_availability
@@ -312,6 +316,12 @@ def _init_health_monitor():
             return details
 
     checks = [
+        HealthCheck(
+            name="startup_validation",
+            check_fn=startup_validation_ready,
+            degraded_reason="Startup validation failed",
+            snapshot_details_fn=startup_validation_health_details,
+        ),
         HealthCheck(
             name="llm_provider",
             check_fn=lambda: main_orchestrator.provider is not None,

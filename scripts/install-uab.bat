@@ -80,6 +80,7 @@ if not exist "%RUN_SCRIPT%" (
 
 echo  UAB directory:  %UAB_DIR%
 echo  Launcher:       %RUN_SCRIPT%
+echo  Host:           127.0.0.1
 echo  Port:           7900
 echo.
 
@@ -124,7 +125,8 @@ echo.
 echo  The UAB daemon will now:
 echo  - Run silently in the background
 echo  - Auto-start when you log in to Windows
-echo  - Accept commands from Lancelot container on port 7900
+echo  - Listen on 127.0.0.1:7900 by default
+echo  - Use UAB_DAEMON_HOST only when an explicit trusted bridge is required
 echo.
 echo  To uninstall: run scripts\uninstall-uab.bat
 echo  To check:     schtasks /Query /TN "LancelotUABDaemon"

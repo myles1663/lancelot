@@ -33,6 +33,22 @@ Local-only control-plane URLs such as `LOCAL_LLM_URL` and `HOST_AGENT_URL` are n
 
 ---
 
+## Startup Validation
+
+At boot, Lancelot validates the operator-facing configuration once and exposes the same structured report through `/health/ready` under `startup_validation`.
+
+The report separates:
+
+- `required_missing` — required production settings that are absent
+- `optional_missing` — settings that can be completed through onboarding or feature setup
+- `degraded` — missing or incomplete configuration that leaves a runtime lane unavailable
+- `blocked` — fail-closed configuration errors, such as missing production auth or local-control URLs pointed at public hosts
+- `warnings` — explicit development or recovery modes the operator should know about
+
+Readiness is false when `blocked` or `degraded` is non-empty. The process can still start so the War Room and setup surfaces can explain the problem instead of leaving the operator with only boot logs.
+
+---
+
 ## Environment Variables (`.env`)
 
 The `.env` file is the primary configuration for secrets and runtime settings. It is never committed to git.
@@ -540,6 +556,7 @@ audit:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `UAB_DAEMON_URL` | `http://host.docker.internal:7900` | UAB daemon address (for container → host communication) |
+| `UAB_DAEMON_HOST` | `127.0.0.1` | Host-side bind address for the compatibility daemon. Use `0.0.0.0` only for an explicit trusted bridge. |
 | `UAB_DAEMON_PORT` | `7900` | UAB daemon listen port (for host-side startup) |
 | `UAB_LOG_LEVEL` | `info` | Daemon log level: `debug`, `info`, `warn`, `error` |
 | `UAB_LOG_FILE` | _(none)_ | Optional daemon log file path |

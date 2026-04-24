@@ -96,8 +96,12 @@ class HealthMonitor:
                     if isinstance(details, dict):
                         snapshot_details.update(details)
                 if not ok:
-                    reason = check.degraded_reason or f"{check.name} check failed"
-                    degraded_reasons.append(reason)
+                    dynamic_reasons = snapshot_details.get(f"{check.name}_degraded_reasons")
+                    if isinstance(dynamic_reasons, list) and dynamic_reasons:
+                        degraded_reasons.extend(str(reason) for reason in dynamic_reasons)
+                    else:
+                        reason = check.degraded_reason or f"{check.name} check failed"
+                        degraded_reasons.append(reason)
             except Exception as exc:
                 results[check.name] = False
                 degraded_reasons.append(f"{check.name}: {exc}")
@@ -122,6 +126,8 @@ class HealthMonitor:
             local_llm_last_error=snapshot_details.get("local_llm_last_error"),
             local_llm_consecutive_failures=int(snapshot_details.get("local_llm_consecutive_failures", 0) or 0),
             local_llm_last_smoke_elapsed_ms=snapshot_details.get("local_llm_last_smoke_elapsed_ms"),
+            startup_validation_ready=results.get("startup_validation", True),
+            startup_validation=dict(snapshot_details.get("startup_validation", {}) or {}),
             scheduler_running=results.get("scheduler", False),
             last_health_tick_at=datetime.now(timezone.utc).isoformat(),
             last_scheduler_tick_at=snapshot_details.get("last_scheduler_tick_at"),

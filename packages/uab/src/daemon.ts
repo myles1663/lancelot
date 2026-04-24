@@ -33,7 +33,7 @@ import type {
 const log = createLogger('uab-daemon');
 
 const VERSION = '1.3.0';
-const HOST = '0.0.0.0';
+const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 7900;
 const SUPPORTED_FRAMEWORKS = [
   'electron', 'browser', 'qt5', 'qt6', 'gtk3', 'gtk4',
@@ -52,8 +52,26 @@ const STANDALONE_FEATURES = [
 ];
 
 const args = process.argv.slice(2);
+
+function argValue(argsList: string[], name: string): string | undefined {
+  const idx = argsList.indexOf(name);
+  if (idx < 0) return undefined;
+  const value = argsList[idx + 1];
+  return value && !value.startsWith('--') ? value : undefined;
+}
+
+export function resolveDaemonBindHost(
+  argsList: string[] = process.argv.slice(2),
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const requested = argValue(argsList, '--host') ?? env.UAB_DAEMON_HOST ?? DEFAULT_HOST;
+  const host = requested.trim();
+  return host || DEFAULT_HOST;
+}
+
 const portIdx = args.indexOf('--port');
 const PORT = portIdx >= 0 ? parseInt(args[portIdx + 1], 10) : DEFAULT_PORT;
+const HOST = resolveDaemonBindHost(args);
 
 export interface RpcRequest {
   jsonrpc: string;

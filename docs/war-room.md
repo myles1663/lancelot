@@ -96,6 +96,7 @@ System-wide health monitoring with subsystem-level detail.
 **Displays:**
 - Overall readiness status
 - Per-subsystem health: Soul, Skills, Scheduler, Memory, Tool Fabric, Local LLM
+- Startup validation status, including blocked/degraded configuration findings
 - Degradation history (when things went wrong and when they recovered)
 - Health check timing (last tick, interval)
 
@@ -112,7 +113,8 @@ System-wide health monitoring with subsystem-level detail.
 1. Read the `degraded_reasons` list — it tells you exactly what's wrong
 2. Check container status: `docker compose ps`
 3. Check container logs: `docker compose logs -f lancelot-core`
-4. If the local LLM is the problem, check whether it is merely loaded or actually ready. War Room now shows both states separately, along with the last readiness error and the last successful verification time.
+4. If `startup_validation` is not ready, fix the listed `blocked` items first, then the `degraded` items.
+5. If the local LLM is the problem, check whether it is merely loaded or actually ready. War Room now shows both states separately, along with the last readiness error and the last successful verification time.
 
 ---
 

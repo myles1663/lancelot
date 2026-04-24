@@ -657,16 +657,19 @@ scripts\uninstall-uab.bat
 cd packages/uab
 npm install
 npm run build
-node dist/daemon.js --port 7900
+node dist/daemon.js --host 127.0.0.1 --port 7900
 ```
 
 On Windows, the persistent install now launches `scripts\run-uab-daemon.bat` from the `LancelotUABDaemon` Scheduled Task. That avoids brittle `schtasks /TR` quoting and keeps the startup path stable even when the repo lives under a spaced directory.
+
+The daemon binds to `127.0.0.1` by default. Set `UAB_DAEMON_HOST` or pass `--host 0.0.0.0` only when a trusted local bridge explicitly requires non-loopback access.
 
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `UAB_DAEMON_URL` | `http://host.docker.internal:7900` | Daemon address (set in container `.env`) |
+| `UAB_DAEMON_HOST` | `127.0.0.1` | Host-side bind address for the compatibility daemon |
 | `UAB_DAEMON_PORT` | `7900` | Daemon listen port |
 | `UAB_LOG_LEVEL` | `info` | Daemon log level: `debug`, `info`, `warn`, `error` |
 | `UAB_LOG_FILE` | _(none)_ | Optional log file path |

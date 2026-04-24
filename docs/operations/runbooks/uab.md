@@ -56,7 +56,7 @@ scripts\start-uab.bat
 **Linux/macOS:**
 ```bash
 cd packages/uab
-node dist/daemon.js --port 7900
+node dist/daemon.js --host 127.0.0.1 --port 7900
 ```
 
 **With install (first time - Linux/macOS):**
@@ -101,6 +101,7 @@ schtasks /Query /TN "LancelotUABDaemon"
 2. `host.docker.internal` resolving? `docker exec lancelot_core ping host.docker.internal`
 3. Port 7900 not blocked by firewall?
 4. `UAB_DAEMON_URL` env var correct in `.env`?
+5. If the container cannot reach the loopback-bound daemon on your Docker runtime, set `UAB_DAEMON_HOST` to the specific trusted host interface required for that bridge. Avoid `0.0.0.0` unless the machine is otherwise firewalled.
 
 ### Framework detection failures
 

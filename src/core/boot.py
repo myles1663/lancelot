@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import inspect
 import json
 import logging
@@ -129,328 +130,365 @@ BOOT_MANIFEST: tuple[BootTask, ...] = (
     BootTask("incident_response", "optional", ("a2a_protocol",)),
 )
 
+
+def _credential_var_for_provider(provider: str) -> str:
+    from src.core.startup_validation import PROVIDER_KEY_VARS
+
+    return PROVIDER_KEY_VARS.get(provider, "")
+
+
+def _capture_event_bus_loop() -> None:
+    """Bind the running asyncio loop for cross-thread EventBus publishing."""
+    try:
+        from event_bus import event_bus as _eb
+
+        _eb.set_loop(asyncio.get_running_loop())
+    except Exception as exc:
+        logger.debug("Event bus loop capture skipped during startup: %s", exc)
+
+
+def _run_startup_validation(app, config):
+    """Validate startup configuration once and expose the report to readiness."""
+    from src.core.startup_validation import (
+        set_startup_validation_report,
+        validate_startup_environment,
+    )
+
+    report = validate_startup_environment(
+        api_token=API_TOKEN,
+        vault_configured=bool(getattr(config, "boot_vault", None)),
+    )
+    set_startup_validation_report(report)
+    app.state.startup_validation = report.to_dict()
+
+    if report.blocked:
+        logger.error(
+            "Startup validation blocked runtime readiness: %s",
+            "; ".join(report.blocked),
+        )
+    elif report.degraded:
+        logger.warning(
+            "Startup validation degraded runtime readiness: %s",
+            "; ".join(report.degraded),
+        )
+    else:
+        logger.info(
+            "Startup validation passed: provider=%s auth_provider=%s dev_mode=%s",
+            report.provider,
+            report.auth_provider,
+            report.dev_mode,
+        )
+    for warning in report.warnings:
+        logger.warning("Startup validation warning: %s", warning)
+    return report
+
+
+async def _start_core_runtime_services() -> None:
+    """Start gateway-owned services that optional subsystems attach to."""
+    librarian.start()
+    await antigravity.start()
+
+
+def _wire_runtime_services() -> None:
+    """Attach runtime-owned services to the orchestrator."""
+    main_orchestrator.sentry = sentry
+    main_orchestrator.mfa_guard = mfa_guard
+    main_orchestrator.antigravity = antigravity
+
+
+def _log_feature_flag_snapshot() -> None:
+    try:
+        from feature_flags import log_feature_flags
+
+        log_feature_flags()
+    except Exception as e:
+        logger.warning("Feature flag logging failed: %s", e)
+
+
+def _init_shared_api_auth() -> None:
+    try:
+        from src.core.api_auth import init_api_auth
+
+        init_api_auth(verify_token)
+    except Exception as e:
+        logger.warning("Shared API auth initialization failed: %s", e)
+
+
+def _apply_runtime_soul(app, active_soul) -> None:
+    """Refresh live runtime policy objects after Soul activation."""
+    main_orchestrator.soul = active_soul
+
+    risk_classifier = getattr(main_orchestrator, "_risk_classifier", None)
+    if risk_classifier is not None:
+        risk_classifier.update_soul(active_soul)
+
+    try:
+        from src.a2a.agent_card import invalidate_card
+
+        invalidate_card()
+    except Exception as exc:
+        logger.warning("A2A agent card invalidation failed after Soul update: %s", exc)
+
+    try:
+        from src.timetravel.api import update_timetravel_soul
+
+        update_timetravel_soul(active_soul)
+    except Exception as exc:
+        logger.warning("Time-Travel Soul refresh failed: %s", exc)
+
+    try:
+        from src.mcp.api import update_mcp_soul
+
+        update_mcp_soul(active_soul)
+    except Exception as exc:
+        logger.warning("MCP Soul refresh failed: %s", exc)
+
+    try:
+        hive_entry = subsystem_manager.get("hive")
+        lifecycle = hive_entry.objects.get("lifecycle") if hive_entry and hive_entry.running else None
+        if lifecycle is not None:
+            lifecycle.update_parent_soul(active_soul)
+    except Exception as exc:
+        logger.warning("HIVE Soul refresh failed: %s", exc)
+
+    app.state.active_soul = active_soul
+
+    try:
+        federation_entry = subsystem_manager.get("federation")
+        emitter = federation_entry.objects.get("emitter") if federation_entry and federation_entry.running else None
+        if emitter is not None:
+            emitter.emit_once()
+    except Exception as exc:
+        logger.warning("Federation heartbeat Soul refresh failed: %s", exc)
+
+
+def _init_runtime_soul_refresh(app) -> None:
+    def apply_runtime_soul(active_soul):
+        _apply_runtime_soul(app, active_soul)
+
+    app.state.apply_runtime_soul = apply_runtime_soul
+
+    try:
+        from soul.api import init_soul_runtime
+
+        init_soul_runtime(apply_runtime_soul)
+    except Exception as e:
+        logger.warning("Soul runtime refresh initialization failed: %s", e)
+
+
+def _include_router_by_import(app, module_name: str, attr_name: str, label: str) -> None:
+    try:
+        module = importlib.import_module(module_name)
+        app.include_router(getattr(module, attr_name))
+    except Exception as e:
+        logger.warning("%s router mount failed: %s", label, e)
+
+
+def _mount_always_on_subsystem_routers(app) -> None:
+    """Mount routers whose request paths are feature-gated elsewhere."""
+    for module_name, attr_name, label in (
+        ("memory.api", "router", "Memory API"),
+        ("soul.api", "router", "Soul API"),
+        ("soul.template_api", "router", "Soul Template API"),
+        ("scheduler_api", "router", "Scheduler API"),
+        ("health.api", "router", "Health API"),
+        ("bal.clients.api", "router", "BAL Client API"),
+        ("src.hive.api", "router", "HIVE Agent Mesh API"),
+        ("src.federation.api", "router", "Federation API"),
+        ("src.federation.graph_api", "graph_router", "Graph Builder API"),
+        ("src.mcp.api", "router", "MCP API"),
+    ):
+        _include_router_by_import(app, module_name, attr_name, label)
+
+
+def _register_subsystems() -> None:
+    """Register hot-toggle subsystem lifecycle boundaries."""
+    subsystem_manager.register("memory", "FEATURE_MEMORY_VNEXT", _init_memory, _shutdown_memory, ["/memory"])
+    subsystem_manager.register("soul", "FEATURE_SOUL", _init_soul, _shutdown_soul, ["/soul"])
+    subsystem_manager.register("skills", "FEATURE_SKILLS", _init_skills, _shutdown_skills, [])
+    subsystem_manager.register("scheduler", "FEATURE_SCHEDULER", _init_scheduler, _shutdown_scheduler, ["/api/scheduler"])
+    subsystem_manager.register("health_monitor", "FEATURE_HEALTH_MONITOR", _init_health_monitor, _shutdown_health_monitor, ["/health"])
+    subsystem_manager.register("bal", "FEATURE_BAL", _init_bal, _shutdown_bal, ["/api/v1/clients"])
+    subsystem_manager.register("host_bridge", "FEATURE_TOOLS_HOST_BRIDGE", _init_host_bridge, _shutdown_host_bridge, [])
+    subsystem_manager.register("uab_bridge", "FEATURE_TOOLS_UAB", _init_uab, _shutdown_uab, [])
+    subsystem_manager.register("hive", "FEATURE_HIVE", _init_hive, _shutdown_hive, ["/api/hive"])
+    subsystem_manager.register("federation", "FEATURE_FEDERATION", _init_federation, _shutdown_federation, ["/api/federation"])
+
+
+def _start_feature_gated_subsystems(app) -> None:
+    from feature_flags import (
+        FEATURE_FEDERATION,
+        FEATURE_HIVE,
+        FEATURE_MEMORY_VNEXT,
+        FEATURE_SCHEDULER,
+        FEATURE_SKILLS,
+        FEATURE_SOUL,
+        FEATURE_TOOLS_HOST_BRIDGE,
+        FEATURE_TOOLS_UAB,
+    )
+
+    if FEATURE_MEMORY_VNEXT:
+        try:
+            subsystem_manager.start("memory")
+        except Exception as e:
+            logger.error("Memory vNext initialization failed: %s", e)
+            main_orchestrator._memory_enabled = False
+    else:
+        logger.info("Memory vNext disabled by feature flag.")
+
+    if FEATURE_SOUL:
+        try:
+            subsystem_manager.start("soul")
+        except Exception as e:
+            logger.warning("Soul initialization failed: %s", e)
+    else:
+        logger.info("Soul disabled by feature flag.")
+
+    if FEATURE_SKILLS:
+        try:
+            subsystem_manager.start("skills")
+            from skills_api import init_skills_api, router as skills_api_router
+
+            init_skills_api(
+                factory=main_orchestrator.skill_factory,
+                registry=main_orchestrator.skill_registry,
+                executor=main_orchestrator.skill_executor,
+            )
+            app.include_router(skills_api_router)
+            logger.info("Skills API initialized.")
+        except Exception as e:
+            logger.warning("Skills initialization failed: %s", e)
+
+    if FEATURE_SCHEDULER:
+        try:
+            subsystem_manager.start("scheduler")
+        except Exception as e:
+            logger.warning("Scheduler initialization failed: %s", e)
+
+    for subsystem_name, enabled, label in (
+        ("host_bridge", FEATURE_TOOLS_HOST_BRIDGE, "Host Bridge"),
+        ("uab_bridge", FEATURE_TOOLS_UAB, "UAB Bridge"),
+    ):
+        if enabled:
+            entry = subsystem_manager.get(subsystem_name)
+            if entry and not entry.running:
+                entry.running = True
+                logger.info("%s provider marked running (booted at init)", label)
+
+    if FEATURE_HIVE:
+        try:
+            subsystem_manager.start("hive")
+        except Exception as e:
+            logger.warning("HIVE Agent Mesh initialization failed: %s", e)
+    else:
+        logger.info("HIVE Agent Mesh disabled by feature flag.")
+
+    if FEATURE_FEDERATION:
+        try:
+            subsystem_manager.start("federation")
+        except Exception as e:
+            logger.warning("Federation initialization failed: %s", e)
+    else:
+        logger.info("Federation disabled by feature flag.")
+
+
+def _init_local_model_client() -> None:
+    try:
+        from feature_flags import FEATURE_LOCAL_AGENTIC
+        from local_model_client import LocalModelClient
+        from src.core.local_model_roles import LocalModelRoleRouter
+
+        main_orchestrator.local_model = LocalModelClient()
+        main_orchestrator.local_model_roles = LocalModelRoleRouter.from_env()
+        _publish_local_model_runtime_status(main_orchestrator)
+
+        if not FEATURE_LOCAL_AGENTIC:
+            logger.info(
+                "Local execution feature disabled; local model remains installed for scrub and health checks"
+            )
+    except Exception as e:
+        try:
+            from src.core.model_usage_policy import set_local_model_availability
+
+            set_local_model_availability(
+                False,
+                f"Local model initialization failed: {e}",
+                loaded=False,
+                ready=False,
+                last_error=str(e),
+            )
+        except Exception as availability_exc:
+            logger.warning(
+                "Failed to publish local model initialization failure to usage policy state: %s",
+                availability_exc,
+            )
+        logger.warning("Local model client initialization failed: %s", e)
+
+
+def _start_bal_subsystem() -> None:
+    from feature_flags import FEATURE_BAL
+
+    if FEATURE_BAL:
+        try:
+            subsystem_manager.start("bal")
+        except Exception as e:
+            logger.warning("BAL initialization failed: %s", e)
+    else:
+        logger.info("BAL disabled by feature flag.")
+
+
+def _init_control_plane_api(app) -> None:
+    try:
+        from src.core.control_plane import init_control_plane, router as cp_router, set_runtime_control_hooks
+
+        def _runtime_emergency_stop_handler(
+            *,
+            reason: str,
+            operator_id: str = "",
+            operator_name: str = "",
+            session_id: str = "",
+        ) -> dict:
+            hive_entry = subsystem_manager.get("hive")
+            lifecycle = hive_entry.objects.get("lifecycle") if hive_entry and hive_entry.running else None
+            if lifecycle is None:
+                raise RuntimeError("HIVE emergency stop engine is not available")
+
+            collapsed = lifecycle.kill_all(
+                reason,
+                operator_id=operator_id or "operator",
+                session_id=session_id or "system",
+            )
+            return {
+                "stopped_hive_agents": len(collapsed),
+                "stopped_agent_ids": collapsed,
+                "execution_state": "emergency_stopped",
+            }
+
+        init_control_plane(data_dir="/home/lancelot/data")
+        set_runtime_control_hooks(emergency_stop_handler=_runtime_emergency_stop_handler)
+        app.include_router(cp_router)
+        _publish_local_model_runtime_status(main_orchestrator)
+        logger.info("Control plane initialized.")
+    except Exception as e:
+        logger.warning("Control plane initialization failed: %s", e)
+
+
 async def boot(app, config):
         global _startup_time
         _startup_time = time.time()
-    
-        # Capture the main event loop for cross-thread EventBus publishing
-        try:
-            from event_bus import event_bus as _eb
-            _eb.set_loop(asyncio.get_running_loop())
-        except Exception as exc:
-            logger.debug("Event bus loop capture skipped during startup: %s", exc)
-    
-        # F8: Validate environment on startup
-        _provider = os.getenv("LANCELOT_PROVIDER", "gemini")
-        _key_vars = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "xai": "XAI_API_KEY"}
-        _key_var = _key_vars.get(_provider, "GEMINI_API_KEY")
-        if not os.getenv(_key_var) and not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
-            logger.warning("No %s set. LLM features may be unavailable.", _key_var)
-        if not API_TOKEN:
-            logger.warning("LANCELOT_API_TOKEN not set. Running in dev mode (no auth required).")
-    
-        # Start core gateway-owned services before optional subsystems attach.
-        librarian.start()
-        await antigravity.start()
-    
-        # Attach runtime-owned services to the orchestrator.
-        main_orchestrator.sentry = sentry
-        main_orchestrator.mfa_guard = mfa_guard
-        main_orchestrator.antigravity = antigravity
-    
-        # ===== FEATURE FLAG LOGGING =====
-        try:
-            from feature_flags import log_feature_flags
-            log_feature_flags()
-        except Exception as e:
-            logger.warning(f"Feature flag logging failed: {e}")
-    
-        # Shared backend auth for War Room/control-plane routers.
-        try:
-            from src.core.api_auth import init_api_auth
-            init_api_auth(verify_token)
-        except Exception as e:
-            logger.warning("Shared API auth initialization failed: %s", e)
-    
-        def _apply_runtime_soul(active_soul):
-            """Refresh live runtime policy objects after Soul activation."""
-            main_orchestrator.soul = active_soul
-    
-            risk_classifier = getattr(main_orchestrator, "_risk_classifier", None)
-            if risk_classifier is not None:
-                risk_classifier.update_soul(active_soul)
-    
-            try:
-                from src.a2a.agent_card import invalidate_card
-                invalidate_card()
-            except Exception as exc:
-                logger.warning("A2A agent card invalidation failed after Soul update: %s", exc)
-    
-            try:
-                from src.timetravel.api import update_timetravel_soul
-                update_timetravel_soul(active_soul)
-            except Exception as exc:
-                logger.warning("Time-Travel Soul refresh failed: %s", exc)
-    
-            try:
-                from src.mcp.api import update_mcp_soul
-                update_mcp_soul(active_soul)
-            except Exception as exc:
-                logger.warning("MCP Soul refresh failed: %s", exc)
-    
-            try:
-                hive_entry = subsystem_manager.get("hive")
-                lifecycle = hive_entry.objects.get("lifecycle") if hive_entry and hive_entry.running else None
-                if lifecycle is not None:
-                    lifecycle.update_parent_soul(active_soul)
-            except Exception as exc:
-                logger.warning("HIVE Soul refresh failed: %s", exc)
-    
-            app.state.active_soul = active_soul
-    
-            try:
-                federation_entry = subsystem_manager.get("federation")
-                emitter = federation_entry.objects.get("emitter") if federation_entry and federation_entry.running else None
-                if emitter is not None:
-                    emitter.emit_once()
-            except Exception as exc:
-                logger.warning("Federation heartbeat Soul refresh failed: %s", exc)
-    
-        app.state.apply_runtime_soul = _apply_runtime_soul
-    
-        try:
-            from soul.api import init_soul_runtime
-            init_soul_runtime(_apply_runtime_soul)
-        except Exception as e:
-            logger.warning("Soul runtime refresh initialization failed: %s", e)
-    
-        # ===== ALWAYS MOUNT SUBSYSTEM ROUTERS =====
-        # Routes are gated by middleware when their flag is OFF.
-        try:
-            from memory.api import router as memory_router
-            app.include_router(memory_router)
-        except Exception as e:
-            logger.warning("Memory API router mount failed: %s", e)
-    
-        try:
-            from soul.api import router as soul_router
-            app.include_router(soul_router)
-        except Exception as e:
-            logger.warning("Soul API router mount failed: %s", e)
-    
-        try:
-            from soul.template_api import router as template_router
-            app.include_router(template_router)
-        except Exception as e:
-            logger.warning("Soul Template API router mount failed: %s", e)
-    
-        try:
-            from scheduler_api import router as scheduler_router
-            app.include_router(scheduler_router)
-        except Exception as e:
-            logger.warning("Scheduler API router mount failed: %s", e)
-    
-        try:
-            from health.api import router as health_api_router
-            app.include_router(health_api_router)
-        except Exception as e:
-            logger.warning("Health API router mount failed: %s", e)
-    
-        try:
-            from bal.clients.api import router as bal_client_router
-            app.include_router(bal_client_router)
-        except Exception as e:
-            logger.warning("BAL Client API router mount failed: %s", e)
-    
-        try:
-            from src.hive.api import router as hive_router
-            app.include_router(hive_router)
-        except Exception as e:
-            logger.warning("HIVE Agent Mesh API router mount failed: %s", e)
-    
-        try:
-            from src.federation.api import router as federation_router
-            app.include_router(federation_router)
-        except Exception as e:
-            logger.warning("Federation API router mount failed: %s", e)
-    
-        try:
-            from src.federation.graph_api import graph_router
-            app.include_router(graph_router)
-        except Exception as e:
-            logger.warning("Graph Builder API router mount failed: %s", e)
-    
-        try:
-            from src.mcp.api import router as mcp_router
-            app.include_router(mcp_router)
-        except Exception as e:
-            logger.warning("MCP API router mount failed: %s", e)
-    
-        # ===== REGISTER SUBSYSTEMS WITH HOT-TOGGLE MANAGER =====
-        subsystem_manager.register("memory", "FEATURE_MEMORY_VNEXT", _init_memory, _shutdown_memory, ["/memory"])
-        subsystem_manager.register("soul", "FEATURE_SOUL", _init_soul, _shutdown_soul, ["/soul"])
-        subsystem_manager.register("skills", "FEATURE_SKILLS", _init_skills, _shutdown_skills, [])
-        subsystem_manager.register("scheduler", "FEATURE_SCHEDULER", _init_scheduler, _shutdown_scheduler, ["/api/scheduler"])
-        subsystem_manager.register("health_monitor", "FEATURE_HEALTH_MONITOR", _init_health_monitor, _shutdown_health_monitor, ["/health"])
-        subsystem_manager.register("bal", "FEATURE_BAL", _init_bal, _shutdown_bal, ["/api/v1/clients"])
-    
-        # Tool Fabric provider subsystems (hot-toggle individual providers)
-        subsystem_manager.register("host_bridge", "FEATURE_TOOLS_HOST_BRIDGE", _init_host_bridge, _shutdown_host_bridge, [])
-        subsystem_manager.register("uab_bridge", "FEATURE_TOOLS_UAB", _init_uab, _shutdown_uab, [])
-        subsystem_manager.register("hive", "FEATURE_HIVE", _init_hive, _shutdown_hive, ["/api/hive"])
-        subsystem_manager.register("federation", "FEATURE_FEDERATION", _init_federation, _shutdown_federation, ["/api/federation"])
-    
-        # ===== CONDITIONALLY START SUBSYSTEMS =====
-        from feature_flags import (
-            FEATURE_MEMORY_VNEXT, FEATURE_SOUL, FEATURE_SKILLS,
-            FEATURE_SCHEDULER, FEATURE_HEALTH_MONITOR, FEATURE_BAL,
-            FEATURE_TOOLS_HOST_BRIDGE, FEATURE_TOOLS_UAB, FEATURE_HIVE,
-            FEATURE_FEDERATION,
-        )
-    
-        if FEATURE_MEMORY_VNEXT:
-            try:
-                subsystem_manager.start("memory")
-            except Exception as e:
-                logger.error("Memory vNext initialization failed: %s", e)
-                main_orchestrator._memory_enabled = False
-        else:
-            logger.info("Memory vNext disabled by feature flag.")
-    
-        if FEATURE_SOUL:
-            try:
-                subsystem_manager.start("soul")
-            except Exception as e:
-                logger.warning("Soul initialization failed: %s", e)
-        else:
-            logger.info("Soul disabled by feature flag.")
-    
-        if FEATURE_SKILLS:
-            try:
-                subsystem_manager.start("skills")
-                # Register Skills API for War Room proposal management
-                from skills_api import router as skills_api_router, init_skills_api
-                init_skills_api(
-                    factory=main_orchestrator.skill_factory,
-                    registry=main_orchestrator.skill_registry,
-                    executor=main_orchestrator.skill_executor,
-                )
-                app.include_router(skills_api_router)
-                logger.info("Skills API initialized.")
-            except Exception as e:
-                logger.warning("Skills initialization failed: %s", e)
-    
-        if FEATURE_SCHEDULER:
-            try:
-                subsystem_manager.start("scheduler")
-            except Exception as e:
-                logger.warning("Scheduler initialization failed: %s", e)
-    
-        # ===== MARK PROVIDER SUBSYSTEMS RUNNING IF ALREADY BOOTED =====
-        # _setup_default_providers() already registered these at ToolFabric init,
-        # so just mark the SubsystemManager entries as running (no double-init).
-        if FEATURE_TOOLS_HOST_BRIDGE:
-            entry = subsystem_manager.get("host_bridge")
-            if entry and not entry.running:
-                entry.running = True
-                logger.info("Host Bridge provider marked running (booted at init)")
-        if FEATURE_TOOLS_UAB:
-            entry = subsystem_manager.get("uab_bridge")
-            if entry and not entry.running:
-                entry.running = True
-                logger.info("UAB Bridge provider marked running (booted at init)")
-    
-        if FEATURE_HIVE:
-            try:
-                subsystem_manager.start("hive")
-            except Exception as e:
-                logger.warning("HIVE Agent Mesh initialization failed: %s", e)
-        else:
-            logger.info("HIVE Agent Mesh disabled by feature flag.")
-    
-        if FEATURE_FEDERATION:
-            try:
-                subsystem_manager.start("federation")
-            except Exception as e:
-                logger.warning("Federation initialization failed: %s", e)
-        else:
-            logger.info("Federation disabled by feature flag.")
-    
-        # ===== PHASE 4b: LOCAL MODEL CLIENT (V8) =====
-        try:
-            from feature_flags import FEATURE_LOCAL_AGENTIC
-            from src.core.local_model_roles import LocalModelRoleRouter
-            from local_model_client import LocalModelClient
-    
-            _local_model = LocalModelClient()
-            main_orchestrator.local_model = _local_model
-            _local_model_roles = LocalModelRoleRouter.from_env()
-            main_orchestrator.local_model_roles = _local_model_roles
-            _publish_local_model_runtime_status(main_orchestrator)
-    
-            if not FEATURE_LOCAL_AGENTIC:
-                logger.info("Local execution feature disabled; local model remains installed for scrub and health checks")
-        except Exception as e:
-            try:
-                from src.core.model_usage_policy import set_local_model_availability
-    
-                set_local_model_availability(
-                    False,
-                    f"Local model initialization failed: {e}",
-                    loaded=False,
-                    ready=False,
-                    last_error=str(e),
-                )
-            except Exception as availability_exc:
-                logger.warning(
-                    "Failed to publish local model initialization failure to usage policy state: %s",
-                    availability_exc,
-                )
-            logger.warning("Local model client initialization failed: %s", e)
-    
-        if FEATURE_BAL:
-            try:
-                subsystem_manager.start("bal")
-            except Exception as e:
-                logger.warning("BAL initialization failed: %s", e)
-        else:
-            logger.info("BAL disabled by feature flag.")
-    
-        # ===== PHASE 6: CONTROL PLANE =====
-        try:
-            from src.core.control_plane import init_control_plane, set_runtime_control_hooks
-            from src.core.control_plane import router as cp_router
-    
-            def _runtime_emergency_stop_handler(
-                *,
-                reason: str,
-                operator_id: str = "",
-                operator_name: str = "",
-                session_id: str = "",
-            ) -> dict:
-                hive_entry = subsystem_manager.get("hive")
-                lifecycle = hive_entry.objects.get("lifecycle") if hive_entry and hive_entry.running else None
-                if lifecycle is None:
-                    raise RuntimeError("HIVE emergency stop engine is not available")
-    
-                collapsed = lifecycle.kill_all(
-                    reason,
-                    operator_id=operator_id or "operator",
-                    session_id=session_id or "system",
-                )
-                return {
-                    "stopped_hive_agents": len(collapsed),
-                    "stopped_agent_ids": collapsed,
-                    "execution_state": "emergency_stopped",
-                }
-    
-            init_control_plane(data_dir="/home/lancelot/data")
-            set_runtime_control_hooks(emergency_stop_handler=_runtime_emergency_stop_handler)
-            app.include_router(cp_router)
-            _publish_local_model_runtime_status(main_orchestrator)
-            logger.info("Control plane initialized.")
-        except Exception as e:
-            logger.warning(f"Control plane initialization failed: {e}")
+        _capture_event_bus_loop()
+        startup_validation = _run_startup_validation(app, config)
+        await _start_core_runtime_services()
+        _wire_runtime_services()
+        _log_feature_flag_snapshot()
+        _init_shared_api_auth()
+        _init_runtime_soul_refresh(app)
+        _mount_always_on_subsystem_routers(app)
+        _register_subsystems()
+        _start_feature_gated_subsystems(app)
+        _init_local_model_client()
+        _start_bal_subsystem()
+        _init_control_plane_api(app)
     
         # ===== WAR ROOM APIs =====
         # Receipts API
@@ -992,6 +1030,7 @@ async def boot(app, config):
     
         # Start health monitoring after OAuth/provider recovery so the first
         # readiness snapshot reflects the settled provider state.
+        from feature_flags import FEATURE_HEALTH_MONITOR
         if FEATURE_HEALTH_MONITOR:
             try:
                 subsystem_manager.start("health_monitor")
@@ -1407,8 +1446,8 @@ async def boot(app, config):
         return BootResult(
             core=BootCore(started_steps=["gateway_boot"]),
             env=BootEnvironment(
-                provider=_provider,
-                credential_var=_key_var,
+                provider=startup_validation.provider,
+                credential_var=_credential_var_for_provider(startup_validation.provider),
                 api_token_configured=bool(API_TOKEN),
                 startup_time=_startup_time,
             ),

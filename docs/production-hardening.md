@@ -197,8 +197,12 @@ Production expectation:
 - disabled features report disabled
 - uninitialized features report not initialized
 - broken runtime paths report degraded with reasons
+- `/health/ready` includes `startup_validation.ready=true`
+- `startup_validation.blocked` and `startup_validation.degraded` are empty
 
 Healthy-looking defaults are not acceptable evidence of readiness.
+
+Startup validation is the first health surface to inspect after deployment. Treat any `blocked` finding as fail-closed misconfiguration. Treat any `degraded` finding as an explicit unavailable lane, not as a warning to ignore.
 
 ---
 
