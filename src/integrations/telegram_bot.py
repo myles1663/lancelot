@@ -58,6 +58,8 @@ class TelegramBot:
         self.voice_processor = voice_processor
         self._network_interceptor = network_interceptor
         self.running = False
+        self._stop_event = threading.Event()
+        self._poll_thread = None
         self._offset = self._load_offset()  # V33: Persist across restarts
         self._receipt_service = None  # Set externally if available
 
@@ -138,15 +140,41 @@ class TelegramBot:
 
     def start_polling(self):
         """Starts the background polling thread."""
-        if self.running or not self.token:
+        if not self.token:
+            return
+        if self.running and self._poll_thread is not None and self._poll_thread.is_alive():
+            logger.debug("TelegramBot: Polling start skipped; already running")
             return
         self.running = True
-        threading.Thread(target=self._poll_loop, daemon=True).start()
+        self._stop_event.clear()
+        self._poll_thread = threading.Thread(
+            target=self._poll_loop,
+            daemon=True,
+            name="telegram-poller",
+        )
+        self._poll_thread.start()
         logger.info(f"TelegramBot: Polling started (chat_id={self.chat_id})")
 
     def stop_polling(self):
+        was_running = self.running or (
+            self._poll_thread is not None and self._poll_thread.is_alive()
+        )
         self.running = False
-        logger.info("TelegramBot: Polling stopped.")
+        self._stop_event.set()
+        if self._poll_thread is not None:
+            self._poll_thread.join(timeout=5)
+            if self._poll_thread.is_alive():
+                logger.warning("TelegramBot: Polling thread did not stop within 5s")
+                return
+            self._poll_thread = None
+        if was_running:
+            logger.info("TelegramBot: Polling stopped.")
+        else:
+            logger.debug("TelegramBot: Stop skipped; polling was not running.")
+
+    def _wait_before_poll_retry(self, seconds: float) -> bool:
+        """Return True when polling shutdown was requested during retry backoff."""
+        return self._stop_event.wait(timeout=seconds)
 
     @staticmethod
     def _display_width(text: str) -> int:
@@ -783,7 +811,7 @@ class TelegramBot:
     def _poll_loop(self):
         """Long-polling loop using getUpdates."""
         logger.info("TelegramBot: _poll_loop thread started (running=%s)", self.running)
-        while self.running:
+        while self.running and not self._stop_event.is_set():
             try:
                 url = TG_API.format(token=self.token, method="getUpdates")
                 resp = self._post(
@@ -799,13 +827,15 @@ class TelegramBot:
 
                 if not resp.ok:
                     logger.error("TelegramBot: Poll HTTP %s: %s", resp.status_code, resp.text[:200])
-                    time.sleep(5)
+                    if self._wait_before_poll_retry(5):
+                        break
                     continue
 
                 data = resp.json()
                 if not data.get("ok"):
                     logger.error("TelegramBot: API error: %s", data)
-                    time.sleep(5)
+                    if self._wait_before_poll_retry(5):
+                        break
                     continue
 
                 updates = data.get("result", [])
@@ -822,7 +852,9 @@ class TelegramBot:
                 continue
             except Exception as e:
                 logger.error("TelegramBot: Poll error: %s", e)
-                time.sleep(5)
+                if self._wait_before_poll_retry(5):
+                    break
+        self.running = False
 
     def send_document(self, file_bytes: bytes, filename: str, chat_id: str = None, caption: str = None):
         """Sends a document/file to the configured chat."""
