@@ -1161,7 +1161,7 @@ async def boot(app, config):
                 mode="local"
             )
         
-        # ===== Phase 2: SIGHUP Secret Reload Handler =====
+        # ===== SIGHUP Secret Reload Handler =====
         import platform as _plat
         if _plat.system() != "Windows":
             import signal

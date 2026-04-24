@@ -134,7 +134,7 @@ async def security_headers_middleware(request: Request, call_next):
 
 app.middleware("http")(subsystem_gate_middleware)
 
-# --- Vault-Backed Secret Cache (Phase 1) ---
+# --- Vault-Backed Secret Cache ---
 import secret_cache
 
 _boot_vault = None
@@ -145,8 +145,8 @@ try:
         _boot_vault = _BootVault(config_path="config/vault.yaml")
         secret_cache.bootstrap(_boot_vault)
         secret_cache.scrub_environ()
-        # Phase 3: Scrub vault key itself from environ â€” closes last /proc exposure.
-        # Safe because _boot_vault already holds the cipher in memory.
+        # Remove the vault key from the process environment after the vault
+        # has loaded it; _boot_vault already holds the cipher in memory.
         if "LANCELOT_VAULT_KEY" in os.environ:
             del os.environ["LANCELOT_VAULT_KEY"]
             logger.info("LANCELOT_VAULT_KEY scrubbed from os.environ (vault cipher in memory).")
@@ -1760,7 +1760,7 @@ async def mfa_submit(request: Request):
         return error_response(500, "Internal server error", request_id=request_id)
 
 
-# â”€â”€ Phase 2: Secret Rotation Endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# --- Secret Rotation Endpoint ---
 @app.post("/api/secrets/reload")
 async def reload_secrets(request: Request):
     """Reload secrets from vault into cache without restart.
