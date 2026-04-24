@@ -301,7 +301,7 @@ export async function run(opts, runtime = DEFAULT_RUNTIME) {
     }
 
     if (!runtime.isStepComplete(completed, 'docker_build')) {
-      runtime.showStep(8, TOTAL_STEPS, 'Building and starting Lancelot');
+      runtime.showStep(8, TOTAL_STEPS, 'Pulling images and starting Lancelot');
       await runtime.dockerBuild(config.installDir);
       completed.push('docker_build');
       await runtime.saveState(completed, config);

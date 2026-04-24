@@ -38,8 +38,8 @@ The installer walks you through each step interactively:
 5. **War Room auth** — choose local credentials or enterprise OIDC
 6. **Repository clone** — pulls the latest code from GitHub
 7. **Configuration** — generates your `.env` file and patches runtime config automatically
-8. **Model download** — downloads the 5GB local utility model (with progress bar)
-9. **Docker pull/build & start** — pulls the prebuilt core image, builds the local model image, starts services, waits for health
+8. **Model weights** — downloads or verifies the local utility model weights (with progress bar)
+9. **Docker pull & start** — pulls the prebuilt core and local-model runtime images, starts services, waits for health
 
 When it finishes, the **War Room** opens automatically in your default browser and you'll see:
 

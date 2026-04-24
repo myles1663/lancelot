@@ -104,7 +104,7 @@ The installer handles:
 - Repository clone
 - `.env` generation and `docker-compose.yml` patching for your hardware
 - Model download (5 GB, with resume support)
-- Prebuilt core-image pull, local-model image build, and startup
+- Prebuilt core and local-model image pull, startup, and local-build fallback only if a required image is unavailable
 - Health check verification
 
 **Installer options:**
