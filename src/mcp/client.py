@@ -26,9 +26,10 @@ Protocol flow:
     3. Client sends JSON-RPC requests over HTTP POST
     4. Server responds with JSON-RPC results or streams via SSE
 
-This client is STATELESS per invocation — the proxy creates a connection,
-invokes a tool, and tears it down. Persistent connections may be added
-in Phase 2 if latency warrants it.
+This client is STATELESS per invocation: the proxy opens a bounded HTTP
+request, invokes one operation, and releases the connection. That keeps each
+MCP call isolated under the current policy, allowlist, credential, and timeout
+context instead of carrying long-lived transport state across governed actions.
 """
 
 from __future__ import annotations
