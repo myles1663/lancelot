@@ -156,6 +156,14 @@ class TestHealth:
         assert data["uptime_seconds"] == 42.0
 
     @patch("urllib.request.urlopen")
+    def test_health_accepts_short_timeout_for_boot_checks(self, mock_open, client):
+        mock_open.return_value = _mock_urlopen({"status": "ok", "ready": True})
+
+        client.health(timeout=0.25)
+
+        assert mock_open.call_args.kwargs["timeout"] == 0.25
+
+    @patch("urllib.request.urlopen")
     def test_is_healthy_true(self, mock_open, client):
         mock_open.return_value = _mock_urlopen({"status": "ok", "ready": True})
         assert client.is_healthy() is True

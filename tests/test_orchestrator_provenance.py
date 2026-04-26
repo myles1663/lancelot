@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import feature_flags as runtime_flags
 import orchestrator as orch_mod
+import orchestrator_generation
 from src.core.model_usage_policy import (
     FRONTIER_SCRUB_DISABLED,
     init_model_usage_policy,
@@ -105,7 +106,11 @@ class TestOrchestratorChatProvenance:
         sleeps = []
         attempts = {"count": 0}
 
-        monkeypatch.setattr(orch_mod._time, "sleep", lambda seconds: sleeps.append(seconds))
+        monkeypatch.setattr(
+            orchestrator_generation,
+            "wait_before_provider_retry",
+            lambda seconds, *_args, **_kwargs: sleeps.append(seconds),
+        )
 
         def _flaky_call():
             attempts["count"] += 1
@@ -128,7 +133,11 @@ class TestOrchestratorChatProvenance:
         provider.generate.side_effect = TimeoutError("provider timeout")
 
         orch = _build_runtime_orchestrator(tmp_path, provider)
-        monkeypatch.setattr(orch_mod._time, "sleep", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            orchestrator_generation,
+            "wait_before_provider_retry",
+            lambda *_args, **_kwargs: None,
+        )
 
         with patch.object(runtime_flags, "FEATURE_AGENTIC_LOOP", False), \
              patch.object(runtime_flags, "FEATURE_LOCAL_AGENTIC", False), \

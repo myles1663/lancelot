@@ -28,6 +28,14 @@ _PRISM_CUDA_DOCKERFILE_PATH = _REPO_ROOT / "local_models" / "Dockerfile.prism.cu
 _REQUIREMENTS_PATH = _REPO_ROOT / "local_models" / "requirements-llm.txt"
 
 
+def _compose_duration_seconds(value: object) -> int:
+    text = str(value).strip()
+    if ":-" in text and text.endswith("}"):
+        text = text.rsplit(":-", 1)[1][:-1]
+    assert text.endswith("s")
+    return int(text[:-1])
+
+
 # ===================================================================
 # docker-compose.yml validation
 # ===================================================================
@@ -81,8 +89,9 @@ class TestDockerCompose:
     def test_local_llm_healthcheck_timings(self):
         svc = self.compose["services"]["local-llm"]
         hc = svc["healthcheck"]
-        # start_period should be generous for model loading
-        assert "120s" in str(hc.get("start_period", ""))
+        # Model warmup varies by host; the default must be generous and operator-tunable.
+        assert "LOCAL_LLM_HEALTH_START_PERIOD" in str(hc.get("start_period", ""))
+        assert _compose_duration_seconds(hc.get("start_period", "")) >= 120
         assert hc.get("retries", 0) >= 3
 
     def test_local_llm_volume_mounts_weights(self):

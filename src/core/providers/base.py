@@ -13,6 +13,7 @@ Public API:
 
 import uuid
 import logging
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -45,6 +46,32 @@ def _is_auth_error(exc: Exception) -> bool:
         "api key not valid", "api_key_invalid", "missing_scope",
         "missing scopes", "insufficient permissions",
     ))
+
+
+def wait_before_provider_retry(
+    delay_seconds: float,
+    stop_event: Any | None = None,
+    *,
+    provider: str = "provider",
+) -> None:
+    """Wait between provider retries, allowing shutdown-aware callers to wake early."""
+    try:
+        delay = max(0.0, float(delay_seconds))
+    except (TypeError, ValueError):
+        delay = 0.0
+    if delay <= 0:
+        return
+
+    if stop_event is not None:
+        try:
+            stop_event.wait(delay)
+            return
+        except Exception as exc:
+            logger.debug(
+                "provider_retry_stop_event_wait_failed",
+                extra={"provider": provider, "error": str(exc)},
+            )
+    time.sleep(delay)
 
 
 # ---------------------------------------------------------------------------

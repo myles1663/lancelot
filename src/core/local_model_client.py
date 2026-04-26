@@ -35,6 +35,10 @@ _LOCAL_REDACT_TIMEOUT_S = max(
     1.0,
     float(os.environ.get("LANCELOT_LOCAL_REDACT_TIMEOUT_S", "10")),
 )
+_LOCAL_HEALTH_TIMEOUT_S = max(
+    0.1,
+    float(os.environ.get("LANCELOT_LOCAL_HEALTH_TIMEOUT_S", "1.0")),
+)
 _LOCAL_MODEL_ALLOWED_HOSTNAMES = frozenset({
     "localhost",
     "127.0.0.1",
@@ -151,7 +155,7 @@ class LocalModelClient:
     # Health
     # ------------------------------------------------------------------
 
-    def health(self) -> dict:
+    def health(self, timeout: Optional[float] = None) -> dict:
         """Return readiness status from the local-llm service.
 
         Returns readiness metadata including loaded/ready state.
@@ -161,7 +165,10 @@ class LocalModelClient:
         try:
             url = self._local_url("/health")
             req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=10.0) as resp:
+            with urllib.request.urlopen(
+                req,
+                timeout=max(0.1, float(timeout or _LOCAL_HEALTH_TIMEOUT_S)),
+            ) as resp:
                 return _normalize_health_payload(json.loads(resp.read().decode("utf-8")))
         except LocalControlPlaneError as exc:
             raise LocalModelError(str(exc)) from exc

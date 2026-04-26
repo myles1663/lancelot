@@ -73,11 +73,61 @@ Key guarantees are backed by contract tests you can run directly:
 - UAB readiness polling: [packages/uab/tests/server-readiness.test.mjs](packages/uab/tests/server-readiness.test.mjs)
 
 ```bash
-pytest tests/test_receipts.py tests/hive/test_runtime.py tests/test_kill_switch_contract.py
-cd packages/uab
-npm run build
-node --test tests/router-methods.test.mjs tests/connector-fallbacks.test.mjs tests/permissions-risk.test.mjs
-node --test tests/server-readiness.test.mjs
+# Python governance contract tests
+pytest \
+  tests/test_receipts.py \
+  tests/hive/test_runtime.py \
+  tests/test_kill_switch_contract.py \
+  tests/test_feature_f1_f8.py::TestHealthCheckEnhanced \
+  tests/test_feature_f1_f8.py::TestReadinessEndpoint \
+  tests/test_chat_runs.py::test_local_model_health_summary_accepts_ready_role_lane \
+  tests/test_chat_runs.py::test_fast_runtime_status_command_formats_health_snapshot \
+  tests/test_chat_runs.py::test_chat_run_status_classifier_identifies_operator_blocking \
+  tests/test_chat_runs.py::test_execute_async_chat_run_marks_completion_and_emits_events \
+  tests/test_chat_runs.py::test_execute_async_chat_run_does_not_overwrite_operator_cancel \
+  tests/test_chat_runs.py::test_execute_async_chat_run_keeps_fast_runtime_commands_outside_worker_slot \
+  tests/test_chat_runs.py::test_chat_progress_event_updates_async_run \
+  tests/test_chat_runs.py::test_chat_progress_event_preserves_degraded_disclosure \
+  tests/test_chat_runs.py::test_chat_run_payload_includes_receipt_proof_from_retry_lineage \
+  tests/test_chat_runs.py::test_chat_run_payload_omits_receipt_proof_for_active_runs \
+  tests/test_chat_runs.py::test_chat_async_endpoint_queues_run_without_waiting_for_result \
+  tests/test_chat_runs.py::test_chat_run_cancel_endpoint_marks_run_cancelled \
+  tests/test_chat_runs.py::test_chat_run_retry_endpoint_queues_new_run \
+  tests/test_chat_runs.py::test_chat_run_retry_endpoint_queues_blocked_run \
+  tests/test_gateway_control_routes.py \
+  tests/test_gateway_live_routes.py \
+  tests/test_token_url_hardening.py::test_live_websocket_rejects_query_param_tokens \
+  tests/test_orchestrator_approval.py \
+  tests/test_orchestrator_context.py \
+  tests/test_orchestrator_frontier.py \
+  tests/test_orchestrator_generation.py \
+  tests/test_orchestrator_governance.py \
+  tests/test_orchestrator_identity.py \
+  tests/test_orchestrator_provider.py \
+  tests/test_orchestrator_routing.py \
+  tests/test_orchestrator_response_delivery.py \
+  tests/test_tool_loop_approval.py \
+  tests/test_tool_loop_receipts.py \
+  tests/test_tool_loop_frontier.py \
+  tests/test_tool_loop_governance.py \
+  tests/test_tool_loop_completion.py \
+  tests/test_tool_loop_results.py \
+  tests/test_tool_loop_structured.py \
+  tests/test_tool_loop_local.py \
+  tests/test_composition_coverage.py::test_agentic_generate_blocks_escalated_tool_without_write_permission \
+  tests/test_composition_coverage.py::test_agentic_generate_groups_multiple_escalated_tool_calls \
+  tests/test_composition_coverage.py::test_agentic_generate_rejects_missing_tool_inputs_before_approval
+
+# UAB build and test suite
+(cd packages/uab && npm ci && npm test)
+
+# War Room frontend typecheck and production build
+(cd src/warroom && npm ci && npm run type-check && npm run build)
+
+# Docker Compose configuration validation
+if [ ! -f .env ]; then cp .env.example .env && cleanup_env=1; fi
+docker compose config --quiet
+if [ "${cleanup_env:-0}" = "1" ]; then rm .env; fi
 ```
 
 ## Development Note

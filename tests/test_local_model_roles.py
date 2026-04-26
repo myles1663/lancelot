@@ -122,6 +122,32 @@ def test_status_prefers_runtime_model_reported_by_endpoint():
     assert status["roles"][ROLE_UTILITY]["model"] == f"runtime-{ROLE_UTILITY}"
 
 
+def test_status_uses_health_timeout_not_inference_timeout():
+    clients = {}
+
+    def client_factory(*, base_url, role):
+        client = MagicMock()
+        client.health.return_value = {"ready": True, "loaded": True, "status": "ok"}
+        clients[role] = client
+        return client
+
+    configs = _configs()
+    configs[ROLE_UTILITY] = LocalModelRoleConfig(
+        role=ROLE_UTILITY,
+        base_url="http://local-verifier:8080",
+        model="bonsai-8b",
+        priority=1,
+        timeout_s=30.0,
+        max_input_chars=12000,
+        health_timeout_s=0.25,
+    )
+    router = LocalModelRoleRouter(configs, client_factory=client_factory)
+
+    router.status()
+
+    clients[ROLE_UTILITY].health.assert_called_once_with(timeout=0.25)
+
+
 def test_region_finder_default_budget_matches_bounded_bonsai_window(monkeypatch):
     monkeypatch.delenv("LANCELOT_SCRUB_REGION_FINDER_MAX_CHARS", raising=False)
 

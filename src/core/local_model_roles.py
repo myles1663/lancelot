@@ -53,6 +53,7 @@ class LocalModelRoleConfig:
     timeout_s: float
     max_input_chars: int
     enabled: bool = True
+    health_timeout_s: float = 1.0
 
     def to_dict(self) -> dict:
         return {
@@ -61,6 +62,7 @@ class LocalModelRoleConfig:
             "model": self.model,
             "priority": self.priority,
             "timeout_s": self.timeout_s,
+            "health_timeout_s": self.health_timeout_s,
             "max_input_chars": self.max_input_chars,
             "enabled": self.enabled,
         }
@@ -138,6 +140,7 @@ def load_local_model_role_configs() -> dict[str, LocalModelRoleConfig]:
     """Load role config from environment with safe single-model defaults."""
     default_url = os.environ.get("LOCAL_LLM_URL", "http://localhost:8080")
     default_model = os.environ.get("LOCAL_LLM_MODEL", "local-llm")
+    default_health_timeout = _env_float("LANCELOT_LOCAL_HEALTH_TIMEOUT_S", 1.0)
     configs = {
         ROLE_SCRUB_REGION_FINDER: LocalModelRoleConfig(
             role=ROLE_SCRUB_REGION_FINDER,
@@ -147,6 +150,10 @@ def load_local_model_role_configs() -> dict[str, LocalModelRoleConfig]:
             timeout_s=_env_float("LANCELOT_SCRUB_REGION_FINDER_TIMEOUT_S", 8.0),
             max_input_chars=_env_int("LANCELOT_SCRUB_REGION_FINDER_MAX_CHARS", 6_000),
             enabled=_env_bool("LANCELOT_SCRUB_REGION_FINDER_ENABLED", True),
+            health_timeout_s=_env_float(
+                "LANCELOT_SCRUB_REGION_FINDER_HEALTH_TIMEOUT_S",
+                default_health_timeout,
+            ),
         ),
         ROLE_SCRUB_SEGMENT_VERIFIER: LocalModelRoleConfig(
             role=ROLE_SCRUB_SEGMENT_VERIFIER,
@@ -156,6 +163,10 @@ def load_local_model_role_configs() -> dict[str, LocalModelRoleConfig]:
             timeout_s=_env_float("LANCELOT_SCRUB_SEGMENT_VERIFIER_TIMEOUT_S", 10.0),
             max_input_chars=_env_int("LANCELOT_SCRUB_SEGMENT_VERIFIER_MAX_CHARS", 8_000),
             enabled=_env_bool("LANCELOT_SCRUB_SEGMENT_VERIFIER_ENABLED", True),
+            health_timeout_s=_env_float(
+                "LANCELOT_SCRUB_SEGMENT_VERIFIER_HEALTH_TIMEOUT_S",
+                default_health_timeout,
+            ),
         ),
         ROLE_UTILITY: LocalModelRoleConfig(
             role=ROLE_UTILITY,
@@ -165,6 +176,10 @@ def load_local_model_role_configs() -> dict[str, LocalModelRoleConfig]:
             timeout_s=_env_float("LANCELOT_LOCAL_UTILITY_TIMEOUT_S", 30.0),
             max_input_chars=_env_int("LANCELOT_LOCAL_UTILITY_MAX_CHARS", 12_000),
             enabled=_env_bool("LANCELOT_LOCAL_UTILITY_ENABLED", True),
+            health_timeout_s=_env_float(
+                "LANCELOT_LOCAL_UTILITY_HEALTH_TIMEOUT_S",
+                default_health_timeout,
+            ),
         ),
     }
     return configs
@@ -222,7 +237,7 @@ class LocalModelRoleRouter:
             }
             if config.enabled:
                 try:
-                    health = self.client_for(role).health()
+                    health = self.client_for(role).health(timeout=config.health_timeout_s)
                     payload.update({
                         "ready": bool(health.get("ready")),
                         "loaded": bool(health.get("loaded", health.get("ready"))),

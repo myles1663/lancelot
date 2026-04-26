@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import inspect
@@ -132,14 +132,14 @@ BOOT_MANIFEST: tuple[BootTask, ...] = (
 async def boot(app, config):
         global _startup_time
         _startup_time = time.time()
-
+    
         # Capture the main event loop for cross-thread EventBus publishing
         try:
             from event_bus import event_bus as _eb
             _eb.set_loop(asyncio.get_running_loop())
         except Exception as exc:
             logger.debug("Event bus loop capture skipped during startup: %s", exc)
-
+    
         # F8: Validate environment on startup
         _provider = os.getenv("LANCELOT_PROVIDER", "gemini")
         _key_vars = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "xai": "XAI_API_KEY"}
@@ -148,56 +148,56 @@ async def boot(app, config):
             logger.warning("No %s set. LLM features may be unavailable.", _key_var)
         if not API_TOKEN:
             logger.warning("LANCELOT_API_TOKEN not set. Running in dev mode (no auth required).")
-
+    
         # Start core gateway-owned services before optional subsystems attach.
         librarian.start()
         await antigravity.start()
-
+    
         # Attach runtime-owned services to the orchestrator.
         main_orchestrator.sentry = sentry
         main_orchestrator.mfa_guard = mfa_guard
         main_orchestrator.antigravity = antigravity
-
+    
         # ===== FEATURE FLAG LOGGING =====
         try:
             from feature_flags import log_feature_flags
             log_feature_flags()
         except Exception as e:
             logger.warning(f"Feature flag logging failed: {e}")
-
+    
         # Shared backend auth for War Room/control-plane routers.
         try:
             from src.core.api_auth import init_api_auth
             init_api_auth(verify_token)
         except Exception as e:
             logger.warning("Shared API auth initialization failed: %s", e)
-
+    
         def _apply_runtime_soul(active_soul):
             """Refresh live runtime policy objects after Soul activation."""
             main_orchestrator.soul = active_soul
-
+    
             risk_classifier = getattr(main_orchestrator, "_risk_classifier", None)
             if risk_classifier is not None:
                 risk_classifier.update_soul(active_soul)
-
+    
             try:
                 from src.a2a.agent_card import invalidate_card
                 invalidate_card()
             except Exception as exc:
                 logger.warning("A2A agent card invalidation failed after Soul update: %s", exc)
-
+    
             try:
                 from src.timetravel.api import update_timetravel_soul
                 update_timetravel_soul(active_soul)
             except Exception as exc:
                 logger.warning("Time-Travel Soul refresh failed: %s", exc)
-
+    
             try:
                 from src.mcp.api import update_mcp_soul
                 update_mcp_soul(active_soul)
             except Exception as exc:
                 logger.warning("MCP Soul refresh failed: %s", exc)
-
+    
             try:
                 hive_entry = subsystem_manager.get("hive")
                 lifecycle = hive_entry.objects.get("lifecycle") if hive_entry and hive_entry.running else None
@@ -205,9 +205,9 @@ async def boot(app, config):
                     lifecycle.update_parent_soul(active_soul)
             except Exception as exc:
                 logger.warning("HIVE Soul refresh failed: %s", exc)
-
+    
             app.state.active_soul = active_soul
-
+    
             try:
                 federation_entry = subsystem_manager.get("federation")
                 emitter = federation_entry.objects.get("emitter") if federation_entry and federation_entry.running else None
@@ -215,15 +215,15 @@ async def boot(app, config):
                     emitter.emit_once()
             except Exception as exc:
                 logger.warning("Federation heartbeat Soul refresh failed: %s", exc)
-
+    
         app.state.apply_runtime_soul = _apply_runtime_soul
-
+    
         try:
             from soul.api import init_soul_runtime
             init_soul_runtime(_apply_runtime_soul)
         except Exception as e:
             logger.warning("Soul runtime refresh initialization failed: %s", e)
-
+    
         # ===== ALWAYS MOUNT SUBSYSTEM ROUTERS =====
         # Routes are gated by middleware when their flag is OFF.
         try:
@@ -231,61 +231,61 @@ async def boot(app, config):
             app.include_router(memory_router)
         except Exception as e:
             logger.warning("Memory API router mount failed: %s", e)
-
+    
         try:
             from soul.api import router as soul_router
             app.include_router(soul_router)
         except Exception as e:
             logger.warning("Soul API router mount failed: %s", e)
-
+    
         try:
             from soul.template_api import router as template_router
             app.include_router(template_router)
         except Exception as e:
             logger.warning("Soul Template API router mount failed: %s", e)
-
+    
         try:
             from scheduler_api import router as scheduler_router
             app.include_router(scheduler_router)
         except Exception as e:
             logger.warning("Scheduler API router mount failed: %s", e)
-
+    
         try:
             from health.api import router as health_api_router
             app.include_router(health_api_router)
         except Exception as e:
             logger.warning("Health API router mount failed: %s", e)
-
+    
         try:
             from bal.clients.api import router as bal_client_router
             app.include_router(bal_client_router)
         except Exception as e:
             logger.warning("BAL Client API router mount failed: %s", e)
-
+    
         try:
             from src.hive.api import router as hive_router
             app.include_router(hive_router)
         except Exception as e:
             logger.warning("HIVE Agent Mesh API router mount failed: %s", e)
-
+    
         try:
             from src.federation.api import router as federation_router
             app.include_router(federation_router)
         except Exception as e:
             logger.warning("Federation API router mount failed: %s", e)
-
+    
         try:
             from src.federation.graph_api import graph_router
             app.include_router(graph_router)
         except Exception as e:
             logger.warning("Graph Builder API router mount failed: %s", e)
-
+    
         try:
             from src.mcp.api import router as mcp_router
             app.include_router(mcp_router)
         except Exception as e:
             logger.warning("MCP API router mount failed: %s", e)
-
+    
         # ===== REGISTER SUBSYSTEMS WITH HOT-TOGGLE MANAGER =====
         subsystem_manager.register("memory", "FEATURE_MEMORY_VNEXT", _init_memory, _shutdown_memory, ["/memory"])
         subsystem_manager.register("soul", "FEATURE_SOUL", _init_soul, _shutdown_soul, ["/soul"])
@@ -293,13 +293,13 @@ async def boot(app, config):
         subsystem_manager.register("scheduler", "FEATURE_SCHEDULER", _init_scheduler, _shutdown_scheduler, ["/api/scheduler"])
         subsystem_manager.register("health_monitor", "FEATURE_HEALTH_MONITOR", _init_health_monitor, _shutdown_health_monitor, ["/health"])
         subsystem_manager.register("bal", "FEATURE_BAL", _init_bal, _shutdown_bal, ["/api/v1/clients"])
-
+    
         # Tool Fabric provider subsystems (hot-toggle individual providers)
         subsystem_manager.register("host_bridge", "FEATURE_TOOLS_HOST_BRIDGE", _init_host_bridge, _shutdown_host_bridge, [])
         subsystem_manager.register("uab_bridge", "FEATURE_TOOLS_UAB", _init_uab, _shutdown_uab, [])
         subsystem_manager.register("hive", "FEATURE_HIVE", _init_hive, _shutdown_hive, ["/api/hive"])
         subsystem_manager.register("federation", "FEATURE_FEDERATION", _init_federation, _shutdown_federation, ["/api/federation"])
-
+    
         # ===== CONDITIONALLY START SUBSYSTEMS =====
         from feature_flags import (
             FEATURE_MEMORY_VNEXT, FEATURE_SOUL, FEATURE_SKILLS,
@@ -307,7 +307,7 @@ async def boot(app, config):
             FEATURE_TOOLS_HOST_BRIDGE, FEATURE_TOOLS_UAB, FEATURE_HIVE,
             FEATURE_FEDERATION,
         )
-
+    
         if FEATURE_MEMORY_VNEXT:
             try:
                 subsystem_manager.start("memory")
@@ -316,7 +316,7 @@ async def boot(app, config):
                 main_orchestrator._memory_enabled = False
         else:
             logger.info("Structured memory disabled by feature flag.")
-
+    
         if FEATURE_SOUL:
             try:
                 subsystem_manager.start("soul")
@@ -324,7 +324,7 @@ async def boot(app, config):
                 logger.warning("Soul initialization failed: %s", e)
         else:
             logger.info("Soul disabled by feature flag.")
-
+    
         if FEATURE_SKILLS:
             try:
                 subsystem_manager.start("skills")
@@ -339,13 +339,13 @@ async def boot(app, config):
                 logger.info("Skills API initialized.")
             except Exception as e:
                 logger.warning("Skills initialization failed: %s", e)
-
+    
         if FEATURE_SCHEDULER:
             try:
                 subsystem_manager.start("scheduler")
             except Exception as e:
                 logger.warning("Scheduler initialization failed: %s", e)
-
+    
         # ===== MARK PROVIDER SUBSYSTEMS RUNNING IF ALREADY BOOTED =====
         # _setup_default_providers() already registered these at ToolFabric init,
         # so just mark the SubsystemManager entries as running (no double-init).
@@ -359,7 +359,7 @@ async def boot(app, config):
             if entry and not entry.running:
                 entry.running = True
                 logger.info("UAB Bridge provider marked running (booted at init)")
-
+    
         if FEATURE_HIVE:
             try:
                 subsystem_manager.start("hive")
@@ -367,7 +367,7 @@ async def boot(app, config):
                 logger.warning("HIVE Agent Mesh initialization failed: %s", e)
         else:
             logger.info("HIVE Agent Mesh disabled by feature flag.")
-
+    
         if FEATURE_FEDERATION:
             try:
                 subsystem_manager.start("federation")
@@ -375,25 +375,25 @@ async def boot(app, config):
                 logger.warning("Federation initialization failed: %s", e)
         else:
             logger.info("Federation disabled by feature flag.")
-
+    
         # ===== LOCAL MODEL CLIENT =====
         try:
             from feature_flags import FEATURE_LOCAL_AGENTIC
             from src.core.local_model_roles import LocalModelRoleRouter
             from local_model_client import LocalModelClient
-
+    
             _local_model = LocalModelClient()
             main_orchestrator.local_model = _local_model
             _local_model_roles = LocalModelRoleRouter.from_env()
             main_orchestrator.local_model_roles = _local_model_roles
             _publish_local_model_runtime_status(main_orchestrator)
-
+    
             if not FEATURE_LOCAL_AGENTIC:
                 logger.info("Local execution feature disabled; local model remains installed for scrub and health checks")
         except Exception as e:
             try:
                 from src.core.model_usage_policy import set_local_model_availability
-
+    
                 set_local_model_availability(
                     False,
                     f"Local model initialization failed: {e}",
@@ -407,7 +407,7 @@ async def boot(app, config):
                     availability_exc,
                 )
             logger.warning("Local model client initialization failed: %s", e)
-
+    
         if FEATURE_BAL:
             try:
                 subsystem_manager.start("bal")
@@ -415,12 +415,12 @@ async def boot(app, config):
                 logger.warning("BAL initialization failed: %s", e)
         else:
             logger.info("BAL disabled by feature flag.")
-
+    
         # ===== PHASE 6: CONTROL PLANE =====
         try:
             from src.core.control_plane import init_control_plane, set_runtime_control_hooks
             from src.core.control_plane import router as cp_router
-
+    
             def _runtime_emergency_stop_handler(
                 *,
                 reason: str,
@@ -432,7 +432,7 @@ async def boot(app, config):
                 lifecycle = hive_entry.objects.get("lifecycle") if hive_entry and hive_entry.running else None
                 if lifecycle is None:
                     raise RuntimeError("HIVE emergency stop engine is not available")
-
+    
                 collapsed = lifecycle.kill_all(
                     reason,
                     operator_id=operator_id or "operator",
@@ -443,7 +443,7 @@ async def boot(app, config):
                     "stopped_agent_ids": collapsed,
                     "execution_state": "emergency_stopped",
                 }
-
+    
             init_control_plane(data_dir="/home/lancelot/data")
             set_runtime_control_hooks(emergency_stop_handler=_runtime_emergency_stop_handler)
             app.include_router(cp_router)
@@ -451,7 +451,7 @@ async def boot(app, config):
             logger.info("Control plane initialized.")
         except Exception as e:
             logger.warning(f"Control plane initialization failed: {e}")
-
+    
         # ===== WAR ROOM APIs =====
         # Receipts API
         try:
@@ -465,7 +465,7 @@ async def boot(app, config):
             logger.info("Receipts API initialized.")
         except Exception as e:
             logger.warning(f"Receipts API initialization failed: {e}")
-
+    
         # Compliance Export API
         try:
             from compliance.api import router as compliance_router, init_compliance_api
@@ -481,8 +481,8 @@ async def boot(app, config):
                 logger.warning("Compliance Export API skipped: receipt service not available")
         except Exception as e:
             logger.warning(f"Compliance Export API initialization failed: {e}")
-
-        # Governance + Trust + APL APIs Ã¢â‚¬â€ wire to existing subsystem instances
+    
+        # Governance + Trust + APL APIs â€” wire to existing subsystem instances
         _trust_ledger_inst = getattr(main_orchestrator, 'trust_ledger', None)
         _rule_engine_inst = None
         _decision_log_inst = None
@@ -492,7 +492,7 @@ async def boot(app, config):
             _decision_log_inst = getattr(main_orchestrator, 'decision_log', None)
         except ImportError as exc:
             logger.debug("Governance rule engine unavailable during API wiring: %s", exc)
-
+    
         try:
             from governance_api import router as gov_router, init_governance_api
             init_governance_api(
@@ -505,7 +505,7 @@ async def boot(app, config):
             logger.info("Governance API initialized.")
         except Exception as e:
             logger.warning(f"Governance API initialization failed: {e}")
-
+    
         try:
             from trust_api import router as trust_router, init_trust_api
             init_trust_api(trust_ledger=_trust_ledger_inst)
@@ -513,7 +513,7 @@ async def boot(app, config):
             logger.info("Trust API initialized.")
         except Exception as e:
             logger.warning(f"Trust API initialization failed: {e}")
-
+    
         try:
             from apl_api import router as apl_router, init_apl_api
             init_apl_api(rule_engine=_rule_engine_inst, decision_log=_decision_log_inst)
@@ -521,7 +521,7 @@ async def boot(app, config):
             logger.info("APL API initialized.")
         except Exception as e:
             logger.warning(f"APL API initialization failed: {e}")
-
+    
         # ===== TOOLS API =====
         try:
             from tools_api import router as tools_router, init_tools_api
@@ -530,7 +530,7 @@ async def boot(app, config):
             logger.info("Tools API initialized.")
         except Exception as e:
             logger.warning(f"Tools API initialization failed: {e}")
-
+    
         # ===== FLAGS API =====
         try:
             from flags_api import router as flags_router, init_flags_api
@@ -539,28 +539,28 @@ async def boot(app, config):
             logger.info("Flags API initialized.")
         except Exception as e:
             logger.warning(f"Flags API initialization failed: {e}")
-
+    
         # ===== TOOL FLOW STREAMING + ACTION CARDS =====
         try:
             from feature_flags import FEATURE_TOOL_FLOW_STREAMING, FEATURE_ACTION_CARDS
             from event_bus import event_bus as _event_bus
-
-            # Tool Flow Streaming Ã¢â‚¬â€ emitter injected into orchestrator
+    
+            # Tool Flow Streaming â€” emitter injected into orchestrator
             if FEATURE_TOOL_FLOW_STREAMING:
                 from toolflow.emitter import ToolFlowEmitter
                 _toolflow_emitter = ToolFlowEmitter(event_bus=_event_bus, enabled=True)
                 main_orchestrator.toolflow_emitter = _toolflow_emitter
-                logger.info("ToolFlow streaming enabled Ã¢â‚¬â€ emitter injected into orchestrator")
+                logger.info("ToolFlow streaming enabled â€” emitter injected into orchestrator")
             else:
                 logger.info("ToolFlow streaming disabled by feature flag")
-
-            # ActionCards Ã¢â‚¬â€ store, factory, resolver, API
+    
+            # ActionCards â€” store, factory, resolver, API
             if FEATURE_ACTION_CARDS:
                 from actioncard.store import ActionCardStore
                 from actioncard.factory import ActionCardFactory
                 from actioncard.resolver import ActionCardResolver
                 from actioncard_api import router as actioncard_router, init_actioncard_api
-
+    
                 _ac_store = ActionCardStore(data_dir=main_orchestrator.data_dir)
                 _ac_factory = ActionCardFactory(card_store=_ac_store, event_bus=_event_bus)
                 _ac_resolver = ActionCardResolver(
@@ -568,13 +568,13 @@ async def boot(app, config):
                     event_bus=_event_bus,
                     receipt_service=main_orchestrator.receipt_service,
                 )
-
+    
                 # Register approval handlers for each subsystem
                 # Governance (sentry) handler
                 try:
                     from governance_api import _approve_item_direct, _deny_item_direct
                     from src.core.operator_identity import OperatorIdentity
-
+    
                     def _gov_handler(item_id, button_id, **context):
                         identity = OperatorIdentity(
                             operator_id=context.get("operator_id", "") or "",
@@ -639,7 +639,7 @@ async def boot(app, config):
                     _ac_resolver.register_handler("governance", _gov_handler)
                 except Exception as _e:
                     logger.debug("Governance handler not available for ActionCards: %s", _e)
-
+    
                 # Scheduler handler
                 try:
                     if main_orchestrator.job_executor:
@@ -657,11 +657,11 @@ async def boot(app, config):
                         _ac_resolver.register_handler("scheduler", _sched_handler)
                 except Exception as _e:
                     logger.debug("Scheduler handler not available for ActionCards: %s", _e)
-
+    
                 # Soul handler
                 try:
                     from soul.api import _approve_proposal_direct, _reject_proposal_direct
-
+    
                     def _soul_handler(proposal_id, button_id, **context):
                         actor = context.get("actor", "") or context.get("operator_id", "") or "operator"
                         if button_id == "approve":
@@ -676,7 +676,7 @@ async def boot(app, config):
                     _ac_resolver.register_handler("soul", _soul_handler)
                 except Exception as _e:
                     logger.debug("Soul handler not available for ActionCards: %s", _e)
-
+    
                 # Skills handler
                 try:
                     def _skills_handler(proposal_id, button_id, **context):
@@ -698,15 +698,15 @@ async def boot(app, config):
                     _ac_resolver.register_handler("skills", _skills_handler)
                 except Exception as _e:
                     logger.debug("Skills handler not available for ActionCards: %s", _e)
-
+    
                 init_actioncard_api(_ac_store, _ac_resolver)
                 app.include_router(actioncard_router)
-
+    
                 # Store references for use by other subsystems
                 app.state.actioncard_store = _ac_store
                 app.state.actioncard_factory = _ac_factory
                 app.state.actioncard_resolver = _ac_resolver
-
+    
                 # Wire ActionCard factory into approval subsystems
                 try:
                     from soul.api import init_soul_actioncards
@@ -720,13 +720,13 @@ async def boot(app, config):
                     logger.debug("Skills ActionCard wiring skipped: %s", _e)
                 # Wire ActionCard factory into orchestrator for sentry escalation cards
                 main_orchestrator.actioncard_factory = _ac_factory
-
-                logger.info("ActionCards enabled Ã¢â‚¬â€ store, factory, resolver, API initialized")
+    
+                logger.info("ActionCards enabled â€” store, factory, resolver, API initialized")
             else:
                 logger.info("ActionCards disabled by feature flag")
         except Exception as e:
             logger.warning("ToolFlow/ActionCards initialization failed: %s", e)
-
+    
         # ===== CONNECTORS SUBSYSTEM =====
         # Always mount the management API so War Room can list/configure connectors.
         # Connector registration in the runtime registry is gated by FEATURE_CONNECTORS.
@@ -738,10 +738,10 @@ async def boot(app, config):
             from connectors.runtime import ConnectorRuntime
             from connectors.credential_api import router as cred_router, init_credential_api
             from connectors_api import router as connectors_mgmt_router, init_connectors_api
-
+    
             _connector_registry = ConnectorRegistry(config_path="config/connectors.yaml")
             _connector_vault = _boot_vault if _boot_vault else ConnectorVault(config_path="config/vault.yaml")
-
+    
             # Register enabled connectors even when credentials are missing so
             # operators can see configuration gaps instead of hidden connectors.
             from feature_flags import FEATURE_CONNECTORS
@@ -755,7 +755,7 @@ async def boot(app, config):
                                 google_connector_disabled_reason,
                                 is_google_connector_enabled,
                             )
-
+    
                             _backend = _ccfg.get("backend")
                             if not is_google_connector_enabled(_cid, _backend):
                                 logger.info(
@@ -764,7 +764,7 @@ async def boot(app, config):
                                     google_connector_disabled_reason(_cid, _backend),
                                 )
                                 continue
-
+    
                             _conn = register_connector_with_vault_access(
                                 _connector_registry,
                                 _connector_vault,
@@ -778,20 +778,20 @@ async def boot(app, config):
                                     logger.info(f"Connector registered but pending credentials: {_cid}")
                         except Exception as _e:
                             logger.warning(f"Failed to register connector {_cid}: {_e}")
-
+    
             _connector_policy_engine = None
             try:
                 from src.tools.fabric import get_tool_fabric
                 _connector_policy_engine = getattr(get_tool_fabric(), "_policy_engine", None)
             except Exception as _e:
                 logger.debug("Connector policy engine unavailable: %s", _e)
-
+    
             # Mount management APIs even if governed execution wiring later degrades.
             init_credential_api(_connector_registry, _connector_vault)
             init_connectors_api(_connector_registry, _connector_vault)
             app.include_router(cred_router)
             app.include_router(connectors_mgmt_router)
-
+    
             try:
                 _connector_runtime = ConnectorRuntime(
                     registry=_connector_registry,
@@ -803,17 +803,17 @@ async def boot(app, config):
                 )
                 for _entry in _connector_registry.list_connectors():
                     _connector_runtime.register_connector(_entry.manifest.id)
-
+    
                 main_orchestrator.connector_runtime = _connector_runtime
                 if getattr(main_orchestrator, "task_runner", None) is not None:
                     main_orchestrator.task_runner.connector_runtime = _connector_runtime
                 app.state.connector_runtime = _connector_runtime
             except Exception as _e:
                 logger.warning("Connector runtime degraded: %s", _e)
-
+    
             # Expose the live connector registry for runtime capability reporting.
             main_orchestrator._connector_registry = _connector_registry
-
+    
             # Seed vault with current workspace path from docker-compose.yml
             if not _connector_vault.exists("shared_workspace.host_path"):
                 try:
@@ -833,12 +833,12 @@ async def boot(app, config):
                             logger.info("Seeded vault with workspace path: %s", _ws_path)
                 except Exception as _e:
                     logger.debug("Could not seed workspace path: %s", _e)
-
+    
             logger.info("Connectors subsystem initialized (FEATURE_CONNECTORS=%s).", FEATURE_CONNECTORS)
         except Exception as e:
             _connector_vault_error = str(e)
             logger.warning(f"Connectors initialization failed: {e}")
-
+    
         # ===== MCP SUBSYSTEM =====
         try:
             from feature_flags import FEATURE_MCP
@@ -851,11 +851,11 @@ async def boot(app, config):
                 from src.mcp.receipts import MCPReceiptManager
                 from src.mcp.registry import MCPServerRegistry
                 from src.mcp.response_guard import MCPResponseGuard
-
+    
                 _mcp_vault = _connector_vault if '_connector_vault' in dir() else _boot_vault
                 _mcp_registry = MCPServerRegistry(vault=_mcp_vault)
                 _mcp_evaluator = MCPPermissionEvaluator()
-
+    
                 try:
                     _mcp_soul = getattr(main_orchestrator, "soul", None)
                     if _mcp_soul is not None:
@@ -865,11 +865,11 @@ async def boot(app, config):
                             _mcp_evaluator.load_from_soul(_mcp_soul.dict())
                 except Exception as _mcp_soul_exc:
                     logger.warning("MCP Soul permission load failed: %s", _mcp_soul_exc)
-
+    
                 _mcp_network_policy = MCPNetworkPolicy(
                     network_interceptor=getattr(main_orchestrator, "network_interceptor", None),
                 )
-
+    
                 _mcp_receipt_service = getattr(main_orchestrator, "receipt_service", None)
                 _mcp_proxy = None
                 if _mcp_receipt_service is not None:
@@ -887,7 +887,7 @@ async def boot(app, config):
                         )
                     except Exception as _mcp_proxy_exc:
                         logger.warning("MCP proxy initialization failed: %s", _mcp_proxy_exc)
-
+    
                 init_mcp_api(
                     registry=_mcp_registry,
                     evaluator=_mcp_evaluator,
@@ -899,7 +899,7 @@ async def boot(app, config):
                 logger.info("MCP subsystem initialized.")
         except Exception as e:
             logger.warning(f"MCP initialization failed: {e}")
-
+    
         # ===== OAUTH TOKEN MANAGER =====
         try:
             from oauth_token_manager import OAuthTokenManager, set_oauth_manager
@@ -910,7 +910,7 @@ async def boot(app, config):
                 set_oauth_manager(_oauth_mgr)
                 _oauth_mgr.start_background_refresh()
                 logger.info("OAuth token manager initialized.")
-
+    
                 # Recover the provider when OAuth becomes available after import-time boot.
                 from oauth_token_manager import get_oauth_token as _get_oauth
                 if main_orchestrator.provider is None and _get_oauth():
@@ -918,7 +918,7 @@ async def boot(app, config):
                     main_orchestrator._init_provider()
                     if main_orchestrator.provider:
                         logger.info("Provider initialized via OAuth (post-startup recovery).")
-
+    
                 # Advance onboarding if a valid OAuth token is already present.
                 if _get_oauth():
                     try:
@@ -932,10 +932,10 @@ async def boot(app, config):
                     except Exception as _e:
                         logger.warning("Onboarding OAuth recovery failed: %s", _e)
             else:
-                logger.warning("OAuth token manager skipped Ã¢â‚¬â€ connector vault not available.")
+                logger.warning("OAuth token manager skipped â€” connector vault not available.")
         except Exception as e:
             logger.warning("OAuth token manager initialization failed: %s", e)
-
+    
         # ===== OPENAI CODEX OAUTH TOKEN MANAGER =====
         try:
             from openai_codex_oauth_manager import OpenAICodexOAuthManager, set_openai_codex_manager
@@ -945,7 +945,7 @@ async def boot(app, config):
                 set_openai_codex_manager(_codex_mgr)
                 _codex_mgr.start_background_refresh()
                 logger.info("OpenAI Codex OAuth token manager initialized.")
-
+    
                 # If Codex OAuth token is now available and provider is openai-codex
                 # but wasn't initialized at startup, re-init the provider.
                 from openai_codex_oauth_manager import get_codex_oauth_token as _get_codex_token
@@ -955,7 +955,7 @@ async def boot(app, config):
                     main_orchestrator._init_provider()
                     if main_orchestrator.provider:
                         logger.info("Provider initialized via Codex OAuth (post-startup recovery).")
-
+    
                 # Update onboarding from oauth_pending if Codex OAuth is connected
                 if _current_provider == "openai-codex" and _get_codex_token():
                     try:
@@ -970,10 +970,10 @@ async def boot(app, config):
                     except Exception as _e:
                         logger.warning("Onboarding Codex OAuth recovery failed: %s", _e)
             else:
-                logger.warning("Codex OAuth token manager skipped Ã¢â‚¬â€ connector vault not available.")
+                logger.warning("Codex OAuth token manager skipped â€” connector vault not available.")
         except Exception as e:
             logger.warning("Codex OAuth token manager initialization failed: %s", e)
-
+    
         # ===== GOOGLE OAUTH MANAGER =====
         try:
             from google_oauth_manager import GoogleOAuthManager, set_google_oauth_manager
@@ -989,7 +989,7 @@ async def boot(app, config):
                 logger.info("Google OAuth disabled (FEATURE_GOOGLE_OAUTH=%s).", FEATURE_GOOGLE_OAUTH)
         except Exception as e:
             logger.warning("Google OAuth initialization failed: %s", e)
-
+    
         # Start health monitoring after OAuth/provider recovery so the first
         # readiness snapshot reflects the settled provider state.
         if FEATURE_HEALTH_MONITOR:
@@ -997,7 +997,7 @@ async def boot(app, config):
                 subsystem_manager.start("health_monitor")
             except Exception as e:
                 logger.warning("Health monitor initialization failed: %s", e)
-
+    
         # ===== AUTH API =====
         try:
             from src.core.auth_api import router as auth_router, init_auth_api
@@ -1006,7 +1006,7 @@ async def boot(app, config):
             logger.info("Auth API initialized.")
         except Exception as e:
             logger.warning(f"Auth API initialization failed: {e}")
-
+    
         # ===== SETUP & RECOVERY API =====
         try:
             from setup_api import router as setup_router, init_setup_api
@@ -1025,12 +1025,12 @@ async def boot(app, config):
             logger.info("Setup API initialized.")
         except Exception as e:
             logger.warning(f"Setup API initialization failed: {e}")
-
+    
         # ===== UPDATE CHECKER + API =====
         try:
             from update_checker import UpdateChecker
             from update_api import router as update_router, init_update_api
-
+    
             _update_checker = UpdateChecker()
             init_update_api(_update_checker)
             _update_checker.start()
@@ -1038,16 +1038,16 @@ async def boot(app, config):
             logger.info("Update checker started (version=%s).", _app_version)
         except Exception as e:
             logger.warning(f"Update checker initialization failed: {e}")
-
+    
         # ===== PHASE 6b: USAGE TRACKER + PERSISTENCE =====
         try:
             from usage_tracker import UsageTracker
             from usage_persistence import UsagePersistence
             from src.core.control_plane import set_usage_tracker, set_usage_persistence
-
+    
             _usage_persistence = UsagePersistence(data_dir="/home/lancelot/data")
             set_usage_persistence(_usage_persistence)
-
+    
             if _bootstrap_model_router():
                 logger.info("Usage tracker + model router initialized.")
             else:
@@ -1058,52 +1058,52 @@ async def boot(app, config):
                 logger.info("Usage tracker + persistence initialized (router unavailable).")
         except Exception as e:
             logger.warning(f"Usage tracker initialization failed: {e}")
-
+    
         # ===== PHASE 7: MODEL DISCOVERY + PROVIDER API =====
         try:
             from providers.api import router as provider_router, init_provider_api, load_persisted_config
-
+    
             # If a persisted provider exists, restore it even when boot env selected
             # a provider with no credentials and left the orchestrator uninitialized.
             _persisted_config = load_persisted_config()
             _persisted_provider = _persisted_config.get("active_provider")
             if _persisted_provider:
                 _restore_persisted_provider(_persisted_provider, main_orchestrator)
-
+    
             if not _bootstrap_model_discovery():
                 init_provider_api(None, orchestrator=main_orchestrator)
-                logger.warning("Provider not initialized Ã¢â‚¬â€ model discovery skipped")
+                logger.warning("Provider not initialized â€” model discovery skipped")
             app.include_router(provider_router)
         except Exception as e:
             logger.warning(f"Model discovery initialization failed: {e}")
-
+    
         # ===== TELEGRAM TOOL FLOW + ACTIONCARD BRIDGES =====
         try:
             from feature_flags import FEATURE_TOOL_FLOW_STREAMING, FEATURE_ACTION_CARDS
             from event_bus import event_bus as _tg_event_bus
-
+    
             # Wire ToolFlow progress streaming to Telegram
             if FEATURE_TOOL_FLOW_STREAMING and telegram_bot:
                 from toolflow.telegram_bridge import TelegramProgressBridge
                 _tg_bridge = TelegramProgressBridge(telegram_bot)
                 _tg_event_bus.subscribe_all(_tg_bridge.on_toolflow_event)
                 logger.info("Telegram ToolFlow progress bridge enabled")
-
+    
             # Wire ActionCard events to Telegram
             if FEATURE_ACTION_CARDS and telegram_bot:
                 _tg_event_bus.subscribe("actioncard_presented", telegram_bot._on_actioncard_event)
                 _tg_event_bus.subscribe("actioncard_resolved", telegram_bot._on_actioncard_resolved_event)
-
+    
                 # Inject resolver and store references for callback handling
                 if hasattr(app.state, "actioncard_resolver"):
                     telegram_bot._action_card_resolver = app.state.actioncard_resolver
                 if hasattr(app.state, "actioncard_store"):
                     telegram_bot._action_card_store = app.state.actioncard_store
-
+    
                 logger.info("Telegram ActionCard event bridges enabled")
         except Exception as e:
             logger.warning("Telegram event bridge initialization failed: %s", e)
-
+    
         # Start Communications Polling
         if telegram_bot:
             telegram_bot.start_polling()
@@ -1121,7 +1121,7 @@ async def boot(app, config):
                 handler=lambda content: chat_poller.send_message(content),
                 mode="local"
             )
-
+        
         # ===== SIGHUP SECRET RELOAD HANDLER =====
         import platform as _plat
         if _plat.system() != "Windows":
@@ -1140,7 +1140,7 @@ async def boot(app, config):
                     logger.error("SIGHUP: secret reload failed: %s", _e)
             signal.signal(signal.SIGHUP, _sighup_handler)
             logger.info("SIGHUP handler registered for secret rotation.")
-
+    
         # ===== OBSERVABILITY: OTel Export + Receipt Bridge + API =====
         try:
             from feature_flags import FEATURE_OBSERVABILITY
@@ -1152,9 +1152,9 @@ async def boot(app, config):
                 from observability.config import load_config as _load_obs_config
                 from observability.otel_provider import init_otel
                 from observability.receipt_bridge import configure_bridge
-
+    
                 _obs_config = _load_obs_config()
-
+    
                 # Metrics API
                 from observability.metrics_api import router as metrics_api_router, init_metrics_api
                 try:
@@ -1165,7 +1165,7 @@ async def boot(app, config):
                         logger.info("Metrics API initialized.")
                 except Exception as _e:
                     logger.warning("Metrics API initialization failed: %s", _e)
-
+    
                 # Webhooks
                 if _obs_config.webhooks.enabled and _obs_config.webhooks.endpoints:
                     from observability.webhook_engine import init_webhook_engine
@@ -1178,7 +1178,7 @@ async def boot(app, config):
                     )
                     logger.info("Webhook engine initialized (%d endpoints)",
                                 len(_obs_config.webhooks.endpoints))
-
+    
                 # OTel
                 if _obs_config.otel.enabled and _obs_config.otel.endpoint:
                     _otel_ok = init_otel(
@@ -1194,24 +1194,24 @@ async def boot(app, config):
                     if _otel_ok:
                         logger.info("OTel export initialized (endpoint=%s)", _obs_config.otel.endpoint)
                     else:
-                        logger.warning("OTel export initialization failed Ã¢â‚¬â€ bridge disabled")
+                        logger.warning("OTel export initialization failed â€” bridge disabled")
                 else:
                     logger.info("FEATURE_OBSERVABILITY enabled but OTel exporter not configured")
         except Exception as e:
             logger.warning(f"Observability initialization failed: {e}")
-
+    
         _optional_receipt_service = getattr(main_orchestrator, "receipt_service", None)
-
-        # Ã¢â€â‚¬Ã¢â€â‚¬ Time-Travel Debugging Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+    
+        # â”€â”€ Time-Travel Debugging â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         try:
             from feature_flags import FEATURE_TIME_TRAVEL
             if FEATURE_TIME_TRAVEL:
                 from timetravel.api import router as timetravel_router, init_timetravel_api
                 app.include_router(timetravel_router)
-
+    
                 # Initialize with receipt service and live Soul provider
                 _tt_soul = lambda: getattr(main_orchestrator, "soul", None)
-
+    
                 def _apply_timetravel_modifications(graph_dict, modifications):
                     for field_path, value in (modifications or {}).items():
                         parts = str(field_path).split(".")
@@ -1223,32 +1223,32 @@ async def boot(app, config):
                         leaf_key = int(leaf) if isinstance(cursor, list) and leaf.isdigit() else leaf
                         cursor[leaf_key] = value
                     return graph_dict
-
+    
                 def _execute_timetravel_quest(*, mode, source_quest_id, new_quest_id, modifications, operator_id, session_id):
                     from datetime import datetime, timezone
                     from src.core.tasking.schema import TaskGraph, TaskRun
-
+    
                     source_run = main_orchestrator.task_store.get_run_by_quest_id(source_quest_id)
                     if source_run is None:
                         raise RuntimeError(f"Source quest is not replayable by TaskRun: {source_quest_id}")
-
+    
                     source_graph = main_orchestrator.task_store.get_graph(source_run.task_graph_id)
                     if source_graph is None:
                         raise RuntimeError(
                             f"TaskGraph not found for source quest {source_quest_id}: {source_run.task_graph_id}"
                         )
-
+    
                     cloned_graph = source_graph.to_dict()
                     cloned_graph["id"] = str(uuid.uuid4())
                     cloned_graph["created_at"] = datetime.now(timezone.utc).isoformat()
                     cloned_graph["session_id"] = session_id or source_graph.session_id or source_run.session_id
-
+    
                     if mode == "fork" and modifications:
                         cloned_graph = _apply_timetravel_modifications(cloned_graph, modifications)
-
+    
                     replay_graph = TaskGraph.from_dict(cloned_graph)
                     main_orchestrator.task_store.save_graph(replay_graph)
-
+    
                     replay_run = TaskRun(
                         task_graph_id=replay_graph.id,
                         execution_token_id=source_run.execution_token_id,
@@ -1264,7 +1264,7 @@ async def boot(app, config):
                         "status": result.status,
                         "step_count": len(result.step_results),
                     }
-
+    
                 if _optional_receipt_service is not None:
                     init_timetravel_api(
                         receipt_service=_optional_receipt_service,
@@ -1274,13 +1274,13 @@ async def boot(app, config):
                         trust_ledger=getattr(main_orchestrator, "trust_ledger", None),
                         data_dir=main_orchestrator.data_dir,
                     )
-                    logger.info("FEATURE_TIME_TRAVEL enabled Ã¢â‚¬â€ API mounted at /api/timetravel")
+                    logger.info("FEATURE_TIME_TRAVEL enabled â€” API mounted at /api/timetravel")
                 else:
                     logger.warning("Time-Travel: receipt service unavailable")
         except Exception as e:
             logger.warning(f"Time-Travel initialization failed: {e}")
-
-        # Ã¢â€â‚¬Ã¢â€â‚¬ A2A Protocol Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+    
+        # â”€â”€ A2A Protocol â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         try:
             from feature_flags import FEATURE_A2A
             if FEATURE_A2A:
@@ -1291,16 +1291,16 @@ async def boot(app, config):
                 from a2a.outbound_pipeline import OutboundPipeline
                 from a2a.client import A2AClient
                 from a2a.types import A2AArtifact, A2AMessagePart
-
+    
                 # Initialize registry
                 _a2a_registry = A2ARegistry()
-
+    
                 # Load Soul for A2A permissions
                 _a2a_soul_provider = lambda: getattr(main_orchestrator, "soul", None)
-
+    
                 _a2a_client = A2AClient(_optional_receipt_service)
                 _a2a_vault = _connector_vault if '_connector_vault' in dir() else None
-
+    
                 # Initialize pipelines
                 _a2a_inbound = InboundPipeline(
                     _a2a_registry,
@@ -1321,7 +1321,7 @@ async def boot(app, config):
                         else None
                     ),
                 )
-
+    
                 def _execute_inbound_a2a_task(*, task, caller, quest_id):
                     """Route inbound A2A work through the live orchestrator."""
                     text_parts = []
@@ -1333,11 +1333,11 @@ async def boot(app, config):
                                 text_parts.append(json.dumps(part.data, sort_keys=True))
                             elif part.file_uri:
                                 text_parts.append(f"[file] {part.file_uri}")
-
+    
                     user_message = "\n".join(p for p in text_parts if p).strip()
                     if not user_message:
                         raise ValueError("Inbound A2A task contained no executable content")
-
+    
                     envelope = (
                         f"[External A2A task from {caller.display_name or caller.agent_id}"
                         f" ({caller.agent_framework})]\n{user_message}"
@@ -1362,7 +1362,7 @@ async def boot(app, config):
                         "artifacts": artifacts,
                         "message": "Task executed successfully.",
                     }
-
+    
                 # Mount protocol-standard endpoints at root
                 init_a2a_server(
                     _a2a_soul_provider,
@@ -1373,36 +1373,36 @@ async def boot(app, config):
                     data_dir="/home/lancelot/data",
                 )
                 app.include_router(a2a_server_router)
-
+    
                 # Mount management API
                 init_a2a_api(_a2a_registry, _optional_receipt_service, _a2a_soul_provider, _a2a_outbound, _a2a_client)
                 app.include_router(a2a_api_router)
-
-                logger.info("FEATURE_A2A enabled Ã¢â‚¬â€ protocol at /a2a/, management at /api/a2a/")
+    
+                logger.info("FEATURE_A2A enabled â€” protocol at /a2a/, management at /api/a2a/")
         except Exception as e:
             logger.warning(f"A2A initialization failed: {e}")
-
-        # Ã¢â€â‚¬Ã¢â€â‚¬ Incident Response Playbooks Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+    
+        # â”€â”€ Incident Response Playbooks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         try:
             from feature_flags import FEATURE_INCIDENT_RESPONSE
             if FEATURE_INCIDENT_RESPONSE:
                 from src.incidents.api import router as incidents_router, init_incidents_api
                 from src.incidents.playbook_api import router as playbook_router, init_playbook_api
                 from src.incidents.receipt_hook import configure as configure_incident_hook
-
+    
                 init_incidents_api(_optional_receipt_service, "/home/lancelot/data")
                 app.include_router(incidents_router)
-
+    
                 _playbooks_dir = os.path.join(os.path.dirname(__file__), "..", "..", "playbooks")
                 init_playbook_api(_playbooks_dir)
                 app.include_router(playbook_router)
-
+    
                 configure_incident_hook(enabled=True, data_dir="/home/lancelot/data")
-
-                logger.info("FEATURE_INCIDENT_RESPONSE enabled Ã¢â‚¬â€ API at /api/incidents/, /api/playbooks/")
+    
+                logger.info("FEATURE_INCIDENT_RESPONSE enabled â€” API at /api/incidents/, /api/playbooks/")
         except Exception as e:
             logger.warning(f"Incident Response initialization failed: {e}")
-
+    
         logger.info("Lancelot Gateway started.")
         return BootResult(
             core=BootCore(started_steps=["gateway_boot"]),

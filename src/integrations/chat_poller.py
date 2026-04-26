@@ -1,4 +1,4 @@
-﻿import os
+import os
 import time
 import threading
 import logging
@@ -25,10 +25,10 @@ class ChatPoller:
         self.last_poll_time = datetime.now(timezone.utc).isoformat()
         self._sent_message_ids = deque(maxlen=100)
         self._sent_message_set = set()
-
+        
         # Load config
         self._load_config()
-
+        
         # Initialize Service
         self._init_service()
 
@@ -44,9 +44,9 @@ class ChatPoller:
         """Initializes the Authenticated Chat Service."""
         try:
             # Scopes for reading and writing messages
-            SCOPES = ['https://www.googleapis.com/auth/chat.messages',
+            SCOPES = ['https://www.googleapis.com/auth/chat.messages', 
                       'https://www.googleapis.com/auth/chat.spaces.readonly']
-
+            
             self.creds, project = google.auth.default(scopes=SCOPES)
             self.service = build('chat', 'v1', credentials=self.creds)
             logger.info("ChatPoller: Service initialized successfully.")
@@ -78,7 +78,7 @@ class ChatPoller:
         if not self.service or not target:
             logger.warning("ChatPoller: Cannot send (Service or Space missing).")
             return
-
+            
         try:
             created = self.service.spaces().messages().create(
                 parent=target,
@@ -131,7 +131,7 @@ class ChatPoller:
         """Starts the background polling loop."""
         if self.running or not self.service or not self.space_name:
             return
-
+            
         self.running = True
         threading.Thread(target=self._poll_loop, daemon=True).start()
         logger.info(f"ChatPoller: Started polling {self.space_name}")
@@ -150,5 +150,5 @@ class ChatPoller:
                 self._process_messages(resp.get('messages', []))
             except Exception as e:
                 logger.error(f"ChatPoller: Poll error: {e}")
-
+                
             time.sleep(3) # Poll interval

@@ -11,6 +11,7 @@ Validates:
 import pytest
 import sys
 import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "core"))
@@ -21,33 +22,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "core"))
 # ---------------------------------------------------------------------------
 
 def _is_proceed_message_standalone(message: str, has_plan: bool) -> bool:
-    """Standalone copy of Orchestrator._is_proceed_message logic for testing.
+    """Exercise the production proceed detector without importing Orchestrator."""
+    from orchestrator_approval import is_proceed_message
 
-    This avoids importing the full Orchestrator which has heavy dependencies.
-    Must be kept in sync with orchestrator.py::_is_proceed_message.
-    """
-    lower = message.strip().lower()
-
-    strong_phrases = [
-        "proceed", "go ahead", "approved", "approve",
-        "yes, proceed", "yes proceed", "execute",
-        "run it", "start execution", "yes go ahead",
-        "confirmed", "confirm",
-    ]
-    if any(lower.startswith(p) or lower == p for p in strong_phrases):
-        return True
-
-    contextual_phrases = [
-        "do it", "set it up", "get it done", "make it happen",
-        "wire it up", "hook it up", "let's go", "do this",
-        "yes do it", "yes, do it",
-        "sounds good", "ok sounds good", "okay sounds good",
-        "looks good", "that works", "works for me", "go for it",
-    ]
-    if has_plan and any(lower.startswith(p) or lower == p for p in contextual_phrases):
-        return True
-
-    return False
+    runtime = SimpleNamespace(
+        _last_plan_artifact=object() if has_plan else None,
+        task_store=None,
+    )
+    return is_proceed_message(runtime, message)
 
 
 class TestProceedDetection:

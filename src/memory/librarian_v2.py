@@ -1,4 +1,4 @@
-﻿"""
+"""
 Librarian - Intelligent File Clerk
 -------------------------------------
 High-concurrency, AI-driven file organization service.
@@ -36,10 +36,10 @@ class TrashService:
         timestamp = int(time.time())
         trash_name = f"{filename}_{timestamp}"
         dest_path = os.path.join(self.trash_dir, trash_name)
-
+        
         try:
             shutil.move(file_path, dest_path)
-
+            
             # Write metadata
             meta = {
                 "original_path": file_path,
@@ -49,7 +49,7 @@ class TrashService:
             }
             with open(dest_path + ".metadata", "w") as f:
                 json.dump(meta, f)
-
+                
             logger.info(f"Soft deleted: {filename} -> {trash_name}")
             return True
         except Exception as e:
@@ -65,7 +65,7 @@ class TrashService:
                     meta_path = os.path.join(self.trash_dir, f)
                     with open(meta_path, "r") as mf:
                         meta = json.load(mf)
-
+                    
                     expires = datetime.fromisoformat(meta["expires_at"])
                     if now > expires:
                         # Delete file and metadata
@@ -96,7 +96,7 @@ class LibrarianV2:
         self.observer = Observer()
         self.client = None
         self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-
+        
         # Classification Categories
         self.categories = {
             "Financial": ["invoices", "receipts", "billing"],
@@ -104,7 +104,7 @@ class LibrarianV2:
             "Personal": ["photos", "letters"],
             "Data": ["csv", "json", "datasets"]
         }
-
+        
         self._init_gemini()
 
     def _init_gemini(self):
@@ -122,7 +122,7 @@ class LibrarianV2:
         self.observer.schedule(handler, self.data_dir, recursive=False)
         self.observer.start()
         logger.info("Librarian watching: %s", self.data_dir)
-
+        
         # Start background worker
         asyncio.create_task(self._process_queue())
         asyncio.create_task(self._periodic_cleanup())
@@ -140,7 +140,7 @@ class LibrarianV2:
             try:
                 # Debounce fast writes
                 await asyncio.sleep(1)
-
+                
                 if os.path.exists(file_path):
                     await self._organize_file(file_path)
             except Exception as e:
@@ -167,24 +167,24 @@ class LibrarianV2:
             return
 
         logger.info(f"Analyzing: {filename}")
-
+        
         category = "Unsorted"
         summary = "No analysis performed."
-
+        
         # AI Classification
         if self.client:
             try:
                 with open(file_path, "r", errors='ignore') as f:
                     content = f.read(1500)
-
+                
                 # Offload to thread to avoid blocking loop
                 loop = asyncio.get_running_loop()
                 response = await loop.run_in_executor(None, self._query_gemini, content)
-
+                
                 parsed = self._parse_ai_decision(response)
                 category = parsed.get("category", "Unsorted")
                 summary = parsed.get("summary", "")
-
+                
             except Exception as e:
                 logger.warning(f"AI Check failed: {e}")
 
@@ -192,9 +192,9 @@ class LibrarianV2:
         target_dir = os.path.join(self.data_dir, category)
         if not os.path.exists(target_dir):
             os.makedirs(target_dir)
-
+            
         dest_path = os.path.join(target_dir, filename)
-
+        
         # Handle Collision
         if os.path.exists(dest_path):
             name, ext = os.path.splitext(filename)
@@ -203,10 +203,10 @@ class LibrarianV2:
         try:
             shutil.move(file_path, dest_path)
             logger.info(f"Filed: {filename} -> {category}/")
-
+            
             # Log to Memory
             self._log_filing(filename, category, summary)
-
+            
         except Exception as e:
             logger.error(f"Refiling failed: {e}")
 
@@ -229,12 +229,12 @@ class LibrarianV2:
         # Simple heuristic parsing
         lower = text.lower()
         category = "Other"
-
+        
         if "financial" in lower: category = "Financial"
         elif "technical" in lower: category = "Technical"
         elif "personal" in lower: category = "Personal"
         elif "data" in lower: category = "Data"
-
+        
         return {"category": category, "summary": text}
 
     def _log_filing(self, filename, category, summary):
