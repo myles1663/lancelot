@@ -309,6 +309,36 @@ class TestRegisterAgent:
         })
         assert resp.status_code == 422
 
+
+class TestDelegateTask:
+    def test_delegate_forwards_authenticated_identity(self, client, mock_outbound_pipeline):
+        mock_outbound_pipeline.delegate.return_value = type(
+            "Result",
+            (),
+            {"success": True, "to_dict": lambda self: {"success": True, "task_id": "task-1"}},
+        )()
+
+        resp = client.post(
+            "/api/a2a/delegate",
+            json={"target_agent_id": "agent-1", "content": "Investigate", "task_type": "general"},
+        )
+
+        assert resp.status_code == 200
+        mock_outbound_pipeline.delegate.assert_called_once_with(
+            target_agent_id="agent-1",
+            task_content="Investigate",
+            task_type="general",
+            operator_id="op-1",
+            session_id="sess-1",
+        )
+        data = resp.json()
+        assert data["agent_id"] == "new-agent"
+        assert data["status"] == "registered"
+        mock_registry.register.assert_called_once()
+        receipt = mock_receipt_service.create.call_args.args[0]
+        assert receipt.operator_id == "op-1"
+        assert receipt.session_id == "sess-1"
+
     def test_duplicate_returns_409(self, client, mock_registry):
         mock_registry.get.return_value = _make_agent("dup-agent")
         resp = client.post("/api/a2a/agents", json={
@@ -395,30 +425,6 @@ class TestRegenerateCard:
 # ── POST /delegate ──────────────────────────────────────────
 
 class TestDelegateTask:
-    def test_delegate_forwards_authenticated_identity(self, client, mock_outbound_pipeline):
-        from src.a2a.outbound_pipeline import DelegationResult
-
-        mock_outbound_pipeline.delegate.return_value = DelegationResult(
-            success=True,
-            task_id="task-1",
-            target_agent_id="agent-1",
-            status="completed",
-        )
-
-        resp = client.post(
-            "/api/a2a/delegate",
-            json={"target_agent_id": "agent-1", "content": "Investigate", "task_type": "general"},
-        )
-
-        assert resp.status_code == 200
-        mock_outbound_pipeline.delegate.assert_called_once_with(
-            target_agent_id="agent-1",
-            task_content="Investigate",
-            task_type="general",
-            operator_id="op-1",
-            session_id="sess-1",
-        )
-
     def test_successful_delegation(self, client, mock_outbound_pipeline):
         from src.a2a.outbound_pipeline import DelegationResult
         mock_outbound_pipeline.delegate.return_value = DelegationResult(

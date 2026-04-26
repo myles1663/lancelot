@@ -1,5 +1,5 @@
 """
-Voice Processor — STT/TTS pipeline for Telegram voice notes (Fix Pack V1 PR7).
+Voice Processor — STT/TTS pipeline for Telegram voice notes.
 
 Converts audio → text (STT) and text → audio (TTS) using Google Cloud
 Speech-to-Text / Text-to-Speech REST APIs, with fallback stubs when

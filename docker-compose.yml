@@ -14,7 +14,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       - PYTHONUNBUFFERED=1
       # - GOOGLE_APPLICATION_CREDENTIALS=/home/lancelot/.config/gcloud/application_default_credentials.json
@@ -112,7 +113,7 @@ services:
       - LOCAL_MODEL_THREADS=${LOCAL_MODEL_THREADS:-4}
       - LOCAL_MODEL_GPU_LAYERS=${LOCAL_MODEL_GPU_LAYERS:-0}
       - LOCAL_LLM_PORT=${LOCAL_LLM_PORT:-8080}
-    # Fix Pack V8: GPU access for CUDA offload
+    # GPU access for CUDA offload
     deploy:
       resources:
         reservations:

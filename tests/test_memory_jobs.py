@@ -253,6 +253,7 @@ class TestEpisodicSummarization:
         archived_summaries = archival.list_items()
         assert len(archived_summaries) >= 1
         assert archived_summaries[0].tier == MemoryTier.archival
+        assert archived_summaries[0].metadata["promotion_decision"]["allowed"] is True
         assert "Memory content 0" in archived_summaries[0].content
         assert "Time range:" in archived_summaries[0].content
 

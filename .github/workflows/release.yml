@@ -124,7 +124,7 @@ jobs:
           docker pull ${{ env.REGISTRY }}/${{ env.LOCAL_LLM_IMAGE_NAME }}:${{ steps.version.outputs.version }}-prism-b8846-d104cf1
           ```
 
-          See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/master/CHANGELOG.md) for the concise public changelog.
+          See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for the concise public changelog.
           EOF
 
       - name: Create GitHub Release

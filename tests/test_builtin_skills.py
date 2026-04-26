@@ -1,5 +1,5 @@
 """
-Tests for built-in actuator skills (Fix Pack V1 PR6).
+Tests for built-in actuator skills.
 repo_writer, command_runner, service_runner, network_client.
 """
 

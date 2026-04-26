@@ -95,6 +95,71 @@ class TestExplicitDeny(unittest.TestCase):
         self.assertFalse(self.sentry.deny_request("nonexistent-id"))
 
 
+class TestBoundedApprovalIntent(unittest.TestCase):
+
+    def setUp(self):
+        self.data_dir = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.data_dir, "mcp_configs"), exist_ok=True)
+        with open(os.path.join(self.data_dir, "MEMORY_SUMMARY.md"), "w") as f:
+            f.write("")
+        self.sentry = MCPSentry(data_dir=self.data_dir)
+
+    def test_workspace_artifact_retry_can_reuse_same_intent(self):
+        first = {
+            "action": "create",
+            "workspace": "/home/lancelot/workspace",
+            "path": "operator_smoke/approval_probe_continue.txt",
+            "content": "approval continue smoke passed",
+        }
+        pending = self.sentry.check_permission("repo_writer", first)
+        self.assertEqual(pending["status"], "PENDING")
+        self.assertTrue(self.sentry.approve_request(pending["request_id"]))
+
+        retry = dict(first)
+        retry["content"] = "approval continue smoke passed."
+        result = self.sentry.check_permission("repo_writer", retry)
+
+        self.assertEqual(result["status"], "APPROVED")
+        self.assertEqual(result["request_id"], pending["request_id"])
+        self.assertEqual(result["approval_match"], "bounded_intent")
+
+    def test_app_write_requires_exact_parameter_match(self):
+        first = {
+            "action": "edit",
+            "workspace": "/home/lancelot/app",
+            "path": "src/core/example.py",
+            "content": "VALUE = 1\n",
+        }
+        pending = self.sentry.check_permission("repo_writer", first)
+        self.assertEqual(pending["status"], "PENDING")
+        self.assertTrue(self.sentry.approve_request(pending["request_id"]))
+
+        changed = dict(first)
+        changed["content"] = "VALUE = 2\n"
+        result = self.sentry.check_permission("repo_writer", changed)
+
+        self.assertEqual(result["status"], "PENDING")
+        self.assertNotEqual(result["request_id"], pending["request_id"])
+
+    def test_workspace_artifact_approval_does_not_cross_targets(self):
+        first = {
+            "action": "create",
+            "workspace": "/home/lancelot/workspace",
+            "path": "operator_smoke/one.txt",
+            "content": "approval continue smoke passed",
+        }
+        pending = self.sentry.check_permission("repo_writer", first)
+        self.assertEqual(pending["status"], "PENDING")
+        self.assertTrue(self.sentry.approve_request(pending["request_id"]))
+
+        different_target = dict(first)
+        different_target["path"] = "operator_smoke/two.txt"
+        result = self.sentry.check_permission("repo_writer", different_target)
+
+        self.assertEqual(result["status"], "PENDING")
+        self.assertNotEqual(result["request_id"], pending["request_id"])
+
+
 class TestPersistence(unittest.TestCase):
 
     def setUp(self):

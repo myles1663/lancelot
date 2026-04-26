@@ -1,5 +1,5 @@
 """
-Lancelot vNext4: Risk-Tiered Governance Module
+Risk-Tiered Governance Module
 
 This module owns all risk-tiered governance logic:
 - Risk classification (risk_classifier.py)

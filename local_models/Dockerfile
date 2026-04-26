@@ -4,7 +4,7 @@
 # Serves the local utility model via llama-server (HTTP API).
 # Model weights are mounted at runtime, never baked into image.
 #
-# Fix Pack V8: CUDA runtime image + pre-built CUDA wheel
+# CUDA runtime image + pre-built CUDA wheel
 # Uses pre-built llama-cpp-python wheel (no CUDA compile needed)
 # ==========================================================
 

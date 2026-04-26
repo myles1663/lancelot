@@ -1,5 +1,5 @@
 """
-Tests for BAL Phase 1 Foundation.
+Tests for BAL foundation.
 
 Covers: feature flags, BALConfig, BAL gates, BALDatabase, BAL receipts,
 Soul overlay loading and merging, composable Soul linter checks.

@@ -1,4 +1,4 @@
-"""Tests for vNext4 governance feature flags (Prompt 1)."""
+"""Tests for governance feature flags."""
 
 import os
 import pytest

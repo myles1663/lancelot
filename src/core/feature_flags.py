@@ -4,17 +4,17 @@
 # Patent Pending: US Provisional Application #63/982,183
 
 """
-Feature Flags — vNext2/vNext3/vNext4 subsystem kill switches.
+Feature Flags - subsystem kill switches.
 
 Each flag controls whether a subsystem is active. When disabled,
 the system boots without that subsystem.
 
-vNext2 Environment variables:
+Core subsystem environment variables:
     FEATURE_SOUL           — default: true
     FEATURE_SKILLS         — default: true
     FEATURE_HEALTH_MONITOR — default: true
     FEATURE_SCHEDULER      — default: true
-    FEATURE_MEMORY_VNEXT   — default: false (vNext3 Memory subsystem)
+    FEATURE_MEMORY_VNEXT   — default: false (structured memory subsystem)
 
 Tool Fabric Environment variables:
     FEATURE_TOOLS_FABRIC         — default: true (global enable)
@@ -24,7 +24,7 @@ Tool Fabric Environment variables:
     FEATURE_TOOLS_HOST_EXECUTION — default: false (container Linux access)
     FEATURE_TOOLS_HOST_BRIDGE    — default: false (DANGEROUS: real host OS bridge)
 
-vNext4 Governance Environment variables:
+Governance environment variables:
     FEATURE_RISK_TIERED_GOVERNANCE — default: false (master switch)
     FEATURE_POLICY_CACHE           — default: false (boot-time policy compilation)
     FEATURE_ASYNC_VERIFICATION     — default: false (async verify for T1 actions)
@@ -39,19 +39,19 @@ Capability Upgrade Environment variables:
 Approval Pattern Learning Environment variables:
     FEATURE_APPROVAL_LEARNING        — default: false (APL: learn owner decision patterns)
 
-Structural Fixes (V23) Environment variables:
+Response hygiene environment variables:
     FEATURE_STRUCTURED_OUTPUT        — default: false (JSON schema output mode with receipt verification)
     FEATURE_CLAIM_VERIFICATION       — default: false (cross-reference response claims vs tool receipts)
     FEATURE_UNIFIED_CLASSIFICATION   — default: false (single LLM call intent classification)
 
-Competitive Intelligence (V24) Environment variables:
+Competitive intelligence environment variables:
     FEATURE_GITHUB_SEARCH            — default: true (GitHub API skill for structured repo/commit/issue data)
     FEATURE_COMPETITIVE_SCAN         — default: false (episodic memory storage for competitive scan diffing)
 
-Autonomy Loop v2 (V25) Environment variables:
+Deep reasoning environment variables:
     FEATURE_DEEP_REASONING_LOOP      — default: false (deep reasoning pass before agentic execution)
 
-Google OAuth (V26) Environment variables:
+Google OAuth environment variables:
     FEATURE_GOOGLE_OAUTH             — default: false (Google OAuth 2.0 for Gmail + Calendar)
 
 Federation Environment variables:
@@ -185,20 +185,20 @@ FEATURE_TOOLS_HOST_BRIDGE: bool = _env_bool("FEATURE_TOOLS_HOST_BRIDGE", default
 FEATURE_HOST_WRITE_COMMANDS: bool = _env_bool("FEATURE_HOST_WRITE_COMMANDS", default=False)
 FEATURE_TOOLS_UAB: bool = _env_bool("FEATURE_TOOLS_UAB", default=False)
 
-# Fix Pack V1 flags
+# Execution authority and runtime hygiene flags
 FEATURE_RESPONSE_ASSEMBLER: bool = _env_bool("FEATURE_RESPONSE_ASSEMBLER")
 FEATURE_EXECUTION_TOKENS: bool = _env_bool("FEATURE_EXECUTION_TOKENS")
 FEATURE_TASK_GRAPH_EXECUTION: bool = _env_bool("FEATURE_TASK_GRAPH_EXECUTION")
 FEATURE_NETWORK_ALLOWLIST: bool = _env_bool("FEATURE_NETWORK_ALLOWLIST")
 FEATURE_VOICE_NOTES: bool = _env_bool("FEATURE_VOICE_NOTES")
 
-# Fix Pack V6 flags
+# Agentic tool loop flags
 FEATURE_AGENTIC_LOOP: bool = _env_bool("FEATURE_AGENTIC_LOOP", default=False)
 
-# Fix Pack V8 flags
+# Local agentic routing flags
 FEATURE_LOCAL_AGENTIC: bool = _env_bool("FEATURE_LOCAL_AGENTIC", default=False)
 
-# vNext4 Governance flags
+# Risk-tiered governance flags
 FEATURE_RISK_TIERED_GOVERNANCE: bool = _env_bool("FEATURE_RISK_TIERED_GOVERNANCE", default=False)
 FEATURE_POLICY_CACHE: bool = _env_bool("FEATURE_POLICY_CACHE", default=False)
 FEATURE_ASYNC_VERIFICATION: bool = _env_bool("FEATURE_ASYNC_VERIFICATION", default=False)
@@ -216,22 +216,22 @@ FEATURE_APPROVAL_LEARNING: bool = _env_bool("FEATURE_APPROVAL_LEARNING", default
 # Business Automation Layer flags
 FEATURE_BAL: bool = _env_bool("FEATURE_BAL", default=False)
 
-# Structural Fixes (V23) — production intelligence improvements
+# Response hygiene flags
 FEATURE_STRUCTURED_OUTPUT: bool = _env_bool("FEATURE_STRUCTURED_OUTPUT", default=False)       # JSON schema output + receipt verification — eliminates narration/hallucination at format level
 FEATURE_CLAIM_VERIFICATION: bool = _env_bool("FEATURE_CLAIM_VERIFICATION", default=False)     # Cross-reference response text claims against tool receipts — neutralize unverified claims
 FEATURE_UNIFIED_CLASSIFICATION: bool = _env_bool("FEATURE_UNIFIED_CLASSIFICATION", default=False)  # Single LLM call replaces 7-function keyword heuristic chain for intent routing
 
-# Competitive Intelligence (V24) — grounded research improvements
+# Competitive intelligence flags
 FEATURE_GITHUB_SEARCH: bool = _env_bool("FEATURE_GITHUB_SEARCH", default=True)           # GitHub API skill for repos, commits, issues, releases with source URLs
 FEATURE_COMPETITIVE_SCAN: bool = _env_bool("FEATURE_COMPETITIVE_SCAN", default=False)     # Store competitive scans in episodic memory for trending/diffing (requires MEMORY_VNEXT)
 
-# Autonomy Loop v2 (V25) — deep reasoning before action
+# Deep reasoning before action
 FEATURE_DEEP_REASONING_LOOP: bool = _env_bool("FEATURE_DEEP_REASONING_LOOP", default=False)  # Reasoning-only LLM pass before agentic loop + task experience memory
 
-# Google OAuth (V26) — Google OAuth flow for Gmail + Calendar connectors
+# Google OAuth flow for Gmail + Calendar connectors
 FEATURE_GOOGLE_OAUTH: bool = _env_bool("FEATURE_GOOGLE_OAUTH", default=False)  # OAuth 2.0 Authorization Code + PKCE for Gmail and Google Calendar
 
-# Tool Flow Streaming + ActionCards (V31) — real-time progress + interactive buttons
+# Tool flow streaming and ActionCards
 FEATURE_TOOL_FLOW_STREAMING: bool = _env_bool("FEATURE_TOOL_FLOW_STREAMING", default=False)  # Real-time tool execution progress events via EventBus
 FEATURE_ACTION_CARDS: bool = _env_bool("FEATURE_ACTION_CARDS", default=False)  # Channel-agnostic interactive buttons for approvals and actions
 
@@ -341,7 +341,7 @@ def reload_flags() -> None:
     global FEATURE_A2A
     global FEATURE_INCIDENT_RESPONSE
 
-    # vNext2 flags
+    # Core subsystem flags
     FEATURE_SOUL = _env_bool("FEATURE_SOUL")
     FEATURE_SKILLS = _env_bool("FEATURE_SKILLS")
     FEATURE_HEALTH_MONITOR = _env_bool("FEATURE_HEALTH_MONITOR")
@@ -358,20 +358,20 @@ def reload_flags() -> None:
     FEATURE_HOST_WRITE_COMMANDS = _env_bool("FEATURE_HOST_WRITE_COMMANDS", default=False)
     FEATURE_TOOLS_UAB = _env_bool("FEATURE_TOOLS_UAB", default=False)
 
-    # Fix Pack V1 flags
+    # Execution authority and runtime hygiene flags
     FEATURE_RESPONSE_ASSEMBLER = _env_bool("FEATURE_RESPONSE_ASSEMBLER")
     FEATURE_EXECUTION_TOKENS = _env_bool("FEATURE_EXECUTION_TOKENS")
     FEATURE_TASK_GRAPH_EXECUTION = _env_bool("FEATURE_TASK_GRAPH_EXECUTION")
     FEATURE_NETWORK_ALLOWLIST = _env_bool("FEATURE_NETWORK_ALLOWLIST")
     FEATURE_VOICE_NOTES = _env_bool("FEATURE_VOICE_NOTES")
 
-    # Fix Pack V6 flags
+    # Agentic tool loop flags
     FEATURE_AGENTIC_LOOP = _env_bool("FEATURE_AGENTIC_LOOP", default=False)
 
-    # Fix Pack V8 flags
+    # Local agentic routing flags
     FEATURE_LOCAL_AGENTIC = _env_bool("FEATURE_LOCAL_AGENTIC", default=False)
 
-    # vNext4 Governance flags
+    # Risk-tiered governance flags
     FEATURE_RISK_TIERED_GOVERNANCE = _env_bool("FEATURE_RISK_TIERED_GOVERNANCE", default=False)
     FEATURE_POLICY_CACHE = _env_bool("FEATURE_POLICY_CACHE", default=False)
     FEATURE_ASYNC_VERIFICATION = _env_bool("FEATURE_ASYNC_VERIFICATION", default=False)
@@ -389,22 +389,22 @@ def reload_flags() -> None:
     # Business Automation Layer flags
     FEATURE_BAL = _env_bool("FEATURE_BAL", default=False)
 
-    # Structural Fixes (V23)
+    # Response hygiene
     FEATURE_STRUCTURED_OUTPUT = _env_bool("FEATURE_STRUCTURED_OUTPUT", default=False)
     FEATURE_CLAIM_VERIFICATION = _env_bool("FEATURE_CLAIM_VERIFICATION", default=False)
     FEATURE_UNIFIED_CLASSIFICATION = _env_bool("FEATURE_UNIFIED_CLASSIFICATION", default=False)
 
-    # Competitive Intelligence (V24)
+    # Competitive intelligence
     FEATURE_GITHUB_SEARCH = _env_bool("FEATURE_GITHUB_SEARCH", default=True)
     FEATURE_COMPETITIVE_SCAN = _env_bool("FEATURE_COMPETITIVE_SCAN", default=False)
 
-    # Autonomy Loop v2 (V25)
+    # Deep reasoning
     FEATURE_DEEP_REASONING_LOOP = _env_bool("FEATURE_DEEP_REASONING_LOOP", default=False)
 
-    # Google OAuth (V26)
+    # Google OAuth
     FEATURE_GOOGLE_OAUTH = _env_bool("FEATURE_GOOGLE_OAUTH", default=False)
 
-    # Tool Flow Streaming + ActionCards (V31)
+    # Tool flow streaming and ActionCards
     FEATURE_TOOL_FLOW_STREAMING = _env_bool("FEATURE_TOOL_FLOW_STREAMING", default=False)
     FEATURE_ACTION_CARDS = _env_bool("FEATURE_ACTION_CARDS", default=False)
 
@@ -456,21 +456,21 @@ def log_feature_flags() -> None:
         FEATURE_HOST_WRITE_COMMANDS, FEATURE_TOOLS_UAB,
     )
     logger.info(
-        "Fix Pack V1 flags: RESPONSE_ASSEMBLER=%s, EXECUTION_TOKENS=%s, TASK_GRAPH=%s, NETWORK_ALLOWLIST=%s, VOICE_NOTES=%s",
+        "Execution authority flags: RESPONSE_ASSEMBLER=%s, EXECUTION_TOKENS=%s, TASK_GRAPH=%s, NETWORK_ALLOWLIST=%s, VOICE_NOTES=%s",
         FEATURE_RESPONSE_ASSEMBLER, FEATURE_EXECUTION_TOKENS,
         FEATURE_TASK_GRAPH_EXECUTION, FEATURE_NETWORK_ALLOWLIST,
         FEATURE_VOICE_NOTES,
     )
     logger.info(
-        "Fix Pack V6 flags: AGENTIC_LOOP=%s",
+        "Agentic tool loop flags: AGENTIC_LOOP=%s",
         FEATURE_AGENTIC_LOOP,
     )
     logger.info(
-        "Fix Pack V8 flags: LOCAL_AGENTIC=%s",
+        "Local agentic routing flags: LOCAL_AGENTIC=%s",
         FEATURE_LOCAL_AGENTIC,
     )
     logger.info(
-        "vNext4 Governance flags: RISK_TIERED=%s, POLICY_CACHE=%s, ASYNC_VERIFY=%s, TEMPLATES=%s, BATCH_RECEIPTS=%s",
+        "Risk-tiered governance flags: RISK_TIERED=%s, POLICY_CACHE=%s, ASYNC_VERIFY=%s, TEMPLATES=%s, BATCH_RECEIPTS=%s",
         FEATURE_RISK_TIERED_GOVERNANCE, FEATURE_POLICY_CACHE,
         FEATURE_ASYNC_VERIFICATION, FEATURE_INTENT_TEMPLATES,
         FEATURE_BATCH_RECEIPTS,
@@ -488,7 +488,7 @@ def log_feature_flags() -> None:
         FEATURE_BAL,
     )
     logger.info(
-        "Structural Fixes flags: STRUCTURED_OUTPUT=%s, CLAIM_VERIFICATION=%s, UNIFIED_CLASSIFICATION=%s",
+        "Response hygiene flags: STRUCTURED_OUTPUT=%s, CLAIM_VERIFICATION=%s, UNIFIED_CLASSIFICATION=%s",
         FEATURE_STRUCTURED_OUTPUT, FEATURE_CLAIM_VERIFICATION, FEATURE_UNIFIED_CLASSIFICATION,
     )
     logger.info(
@@ -496,7 +496,7 @@ def log_feature_flags() -> None:
         FEATURE_GITHUB_SEARCH, FEATURE_COMPETITIVE_SCAN,
     )
     logger.info(
-        "Autonomy Loop v2 flags: DEEP_REASONING_LOOP=%s",
+        "Deep reasoning flags: DEEP_REASONING_LOOP=%s",
         FEATURE_DEEP_REASONING_LOOP,
     )
     logger.info(

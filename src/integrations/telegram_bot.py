@@ -4,7 +4,7 @@ Telegram Bot Integration for Lancelot
 Long-polling bot that receives messages via Telegram Bot API
 and routes them through the Lancelot orchestrator.
 
-Supports text messages and voice notes (Fix Pack V1 PR7).
+Supports text messages and voice notes.
 Uses only `requests` (no extra dependencies beyond voice_processor).
 """
 
@@ -30,7 +30,7 @@ class TelegramBot:
     Supports text messages and voice notes (STT → LLM → TTS → voice reply).
     """
 
-    # V33: Persist offset to avoid re-processing messages on restart
+    # Persist offset to avoid re-processing messages on restart
     # Stored in chat/ subdir to avoid Librarian file watcher auto-moving it
     _OFFSET_FILE = os.path.join(os.getenv("LANCELOT_DATA_DIR", "/home/lancelot/data"), "chat", "telegram_offset.txt")
 
@@ -58,9 +58,7 @@ class TelegramBot:
         self.voice_processor = voice_processor
         self._network_interceptor = network_interceptor
         self.running = False
-        self._stop_event = threading.Event()
-        self._poll_thread = None
-        self._offset = self._load_offset()  # V33: Persist across restarts
+        self._offset = self._load_offset()  # Persist across restarts
         self._receipt_service = None  # Set externally if available
 
         if not self.token:
@@ -140,41 +138,15 @@ class TelegramBot:
 
     def start_polling(self):
         """Starts the background polling thread."""
-        if not self.token:
-            return
-        if self.running and self._poll_thread is not None and self._poll_thread.is_alive():
-            logger.debug("TelegramBot: Polling start skipped; already running")
+        if self.running or not self.token:
             return
         self.running = True
-        self._stop_event.clear()
-        self._poll_thread = threading.Thread(
-            target=self._poll_loop,
-            daemon=True,
-            name="telegram-poller",
-        )
-        self._poll_thread.start()
+        threading.Thread(target=self._poll_loop, daemon=True).start()
         logger.info(f"TelegramBot: Polling started (chat_id={self.chat_id})")
 
     def stop_polling(self):
-        was_running = self.running or (
-            self._poll_thread is not None and self._poll_thread.is_alive()
-        )
         self.running = False
-        self._stop_event.set()
-        if self._poll_thread is not None:
-            self._poll_thread.join(timeout=5)
-            if self._poll_thread.is_alive():
-                logger.warning("TelegramBot: Polling thread did not stop within 5s")
-                return
-            self._poll_thread = None
-        if was_running:
-            logger.info("TelegramBot: Polling stopped.")
-        else:
-            logger.debug("TelegramBot: Stop skipped; polling was not running.")
-
-    def _wait_before_poll_retry(self, seconds: float) -> bool:
-        """Return True when polling shutdown was requested during retry backoff."""
-        return self._stop_event.wait(timeout=seconds)
+        logger.info("TelegramBot: Polling stopped.")
 
     @staticmethod
     def _display_width(text: str) -> int:
@@ -370,19 +342,19 @@ class TelegramBot:
         if total <= max_total:
             return col_widths, n
 
-        # Phase 1: cap each column to max 12 chars
+        # Pass 1: cap each column to max 12 chars
         capped = [min(w, 12) for w in col_widths]
         total = sum(capped) + (n - 1)
         if total <= max_total:
             return capped, n
 
-        # Phase 2: cap each column to max 8 chars
+        # Pass 2: cap each column to max 8 chars
         capped = [min(w, 8) for w in capped]
         total = sum(capped) + (n - 1)
         if total <= max_total:
             return capped, n
 
-        # Phase 3: drop rightmost columns until it fits
+        # Pass 3: drop rightmost columns until it fits
         for keep in range(n, 0, -1):
             subset = capped[:keep]
             total = sum(subset) + (keep - 1)
@@ -559,7 +531,7 @@ class TelegramBot:
 
     @staticmethod
     def _chunk_by_lines(text: str, max_size: int = 4000) -> list:
-        """V28: Split text into chunks at line boundaries.
+        """Split text into chunks at line boundaries.
 
         Avoids breaking markdown links mid-URL which causes orphaned
         URL fragments to appear at the top of the next Telegram message.
@@ -722,7 +694,7 @@ class TelegramBot:
     def send_message(self, text: str, chat_id: str = None):
         """Sends a message to the configured chat.
 
-        V15b: Retries failed chunks once and logs which chunk failed for
+        Retries failed chunks once and logs which chunk failed for
         debugging. Previously, a failed chunk was silently skipped, causing
         the user to receive an incomplete response with no indication.
         """
@@ -731,7 +703,7 @@ class TelegramBot:
             logger.warning("TelegramBot: Cannot send (token or chat_id missing).")
             return
 
-        # V33: Guard against raw JSON being sent as message text
+        # Guard against raw JSON being sent as message text
         stripped = text.strip()
         if len(stripped) > 500 and stripped[:1] in ("{", "["):
             try:
@@ -745,14 +717,14 @@ class TelegramBot:
                     exc,
                 )
 
-        # V33: Debug trace — log every outgoing message (first 200 chars + length)
+        # Debug trace: log every outgoing message (first 200 chars + length)
         logger.info("TelegramBot: send_message called — len=%d first200=%s",
                      len(text), repr(text[:200]))
 
         url = TG_API.format(token=self.token, method="sendMessage")
 
         # Telegram limit is 4096 chars per message; chunk if needed
-        # V28: Split at line boundaries to avoid breaking markdown links mid-URL
+        # Split at line boundaries to avoid breaking markdown links mid-URL
         chunks = TelegramBot._chunk_by_lines(text, max_size=4000)
         total_chunks = len(chunks)
         failed_chunks = []
@@ -760,13 +732,13 @@ class TelegramBot:
 
         for idx, chunk in enumerate(chunks):
             sent = False
-            for attempt in range(2):  # V15b: retry once on failure
+            for attempt in range(2):  # retry once on failure
                 try:
                     if attempt == 0:
                         parse_mode = "HTML"
                         send_chunk = chunk
                     else:
-                        # V34: On retry, strip ALL HTML/markdown formatting so text is clean
+                        # On retry, strip ALL HTML/markdown formatting so text is clean
                         parse_mode = None
                         send_chunk = re.sub(r"</?(?:b|i|pre|code)>", "", chunk)  # Strip HTML tags
                         send_chunk = re.sub(r"```\n?", "", send_chunk)  # Remove code fences (if any)
@@ -811,7 +783,7 @@ class TelegramBot:
     def _poll_loop(self):
         """Long-polling loop using getUpdates."""
         logger.info("TelegramBot: _poll_loop thread started (running=%s)", self.running)
-        while self.running and not self._stop_event.is_set():
+        while self.running:
             try:
                 url = TG_API.format(token=self.token, method="getUpdates")
                 resp = self._post(
@@ -827,15 +799,13 @@ class TelegramBot:
 
                 if not resp.ok:
                     logger.error("TelegramBot: Poll HTTP %s: %s", resp.status_code, resp.text[:200])
-                    if self._wait_before_poll_retry(5):
-                        break
+                    time.sleep(5)
                     continue
 
                 data = resp.json()
                 if not data.get("ok"):
                     logger.error("TelegramBot: API error: %s", data)
-                    if self._wait_before_poll_retry(5):
-                        break
+                    time.sleep(5)
                     continue
 
                 updates = data.get("result", [])
@@ -843,7 +813,7 @@ class TelegramBot:
                     logger.info("TelegramBot: Received %d update(s), offset=%s", len(updates), self._offset)
                 for update in updates:
                     self._handle_update(update)
-                # V33: Persist offset after processing batch so restarts don't re-process
+                # Persist offset after processing batch so restarts don't re-process
                 if updates:
                     self._save_offset()
 
@@ -852,19 +822,17 @@ class TelegramBot:
                 continue
             except Exception as e:
                 logger.error("TelegramBot: Poll error: %s", e)
-                if self._wait_before_poll_retry(5):
-                    break
-        self.running = False
+                time.sleep(5)
 
     def send_document(self, file_bytes: bytes, filename: str, chat_id: str = None, caption: str = None):
         """Sends a document/file to the configured chat."""
-        # V33: Trace all document sends for debugging JSON injection
+        # Trace all document sends for debugging JSON injection
         import traceback
         logger.info("TelegramBot: send_document called — file=%s size=%d caption=%s caller=%s",
                      filename, len(file_bytes), (caption or "")[:50],
                      "".join(traceback.format_stack()[-3:-1]).strip()[:200])
 
-        # V33: Block raw JSON files from being sent as documents
+        # Block raw JSON files from being sent as documents
         if filename.endswith(".json") and len(file_bytes) > 1000:
             logger.warning("TelegramBot: BLOCKED JSON document send — file=%s size=%d", filename, len(file_bytes))
             return False
@@ -948,13 +916,13 @@ class TelegramBot:
     def _handle_update(self, update: dict):
         """Processes a single Telegram update.
 
-        V15b: Offset is now incremented AFTER processing succeeds (or is
+        Offset is incremented after processing succeeds (or is
         deliberately skipped for non-message updates). This prevents permanent
         message loss if orchestrator.chat() crashes mid-processing.
         """
         update_id = update.get("update_id", 0)
 
-        # V32: Handle callback_query updates (ActionCard button clicks)
+        # Handle callback_query updates (ActionCard button clicks)
         callback_query = update.get("callback_query")
         if callback_query:
             self._handle_callback_query(callback_query)
@@ -983,7 +951,7 @@ class TelegramBot:
             self._offset = update_id + 1
             return
 
-        # V14: Check for photo messages
+        # Check for photo messages
         photo = msg.get("photo")
         if photo:
             caption = msg.get("caption", "What's in this image?")
@@ -992,7 +960,7 @@ class TelegramBot:
             self._offset = update_id + 1
             return
 
-        # V14: Check for document messages
+        # Check for document messages
         document = msg.get("document")
         if document:
             caption = msg.get("caption", "Please analyze this document.")
@@ -1015,19 +983,19 @@ class TelegramBot:
         try:
             response = self.orchestrator.chat(text, channel="telegram")
             if response:
-                # V15: Skip sending if telegram_send already delivered this response
+                # Skip sending if telegram_send already delivered this response
                 if not getattr(self.orchestrator, '_telegram_already_sent', False):
                     response = self._sanitize_for_telegram(response)
                     self.send_message(response, sender_chat_id)
                 else:
                     logger.info("TelegramBot: Response already sent via telegram_send — skipping duplicate")
                 self.orchestrator._telegram_already_sent = False  # Reset for next message
-            # V15b: Only ack after successful processing
+            # Only ack after successful processing
             self._offset = update_id + 1
         except Exception as e:
             logger.error(f"TelegramBot: Orchestrator error: {e}")
             self.send_message(f"Error processing request: {e}", sender_chat_id)
-            # V15b: Still ack on handled errors (user got an error message)
+            # Still ack on handled errors (user got an error message)
             self._offset = update_id + 1
 
     def _handle_voice(self, voice: dict, chat_id: str, sender_name: str):
@@ -1064,7 +1032,7 @@ class TelegramBot:
                 )
                 return
 
-            # V15b: Detect stub mode placeholder — don't feed it into the orchestrator
+            # Detect stub mode placeholder; do not feed it into the orchestrator
             if transcribed_text.startswith("[") and "not configured" in transcribed_text:
                 logger.warning("TelegramBot: STT returned stub placeholder — voice not configured")
                 self.send_message(
@@ -1116,7 +1084,7 @@ class TelegramBot:
             )
 
     def _handle_photo(self, file_id: str, caption: str, chat_id: str, sender_name: str):
-        """V14: Handle a photo — download → send to Gemini vision → respond."""
+        """Handle a photo: download, send to Gemini vision, respond."""
         logger.info("TelegramBot: Photo from [%s] caption='%s'", sender_name, caption[:50])
 
         if not self.orchestrator:
@@ -1127,7 +1095,7 @@ class TelegramBot:
             image_bytes = self._download_file(file_id)
             logger.info("TelegramBot: Downloaded photo (%d bytes)", len(image_bytes))
 
-            # V15b: Guard against empty downloads
+            # Guard against empty downloads
             if not image_bytes:
                 self.send_message("Failed to download the photo. Please try sending it again.", chat_id)
                 return
@@ -1149,7 +1117,7 @@ class TelegramBot:
             self.send_message(f"Error processing photo: {e}", chat_id)
 
     def _handle_document(self, document: dict, caption: str, chat_id: str, sender_name: str):
-        """V14: Handle a document — download → read/analyze → respond."""
+        """Handle a document: download, read/analyze, respond."""
         file_id = document.get("file_id", "")
         file_name = document.get("file_name", "unknown")
         mime_type = document.get("mime_type", "application/octet-stream")
@@ -1164,7 +1132,7 @@ class TelegramBot:
             file_bytes = self._download_file(file_id)
             logger.info("TelegramBot: Downloaded document (%d bytes)", len(file_bytes))
 
-            # V15b: Guard against empty downloads
+            # Guard against empty downloads
             if not file_bytes:
                 self.send_message("Failed to download the document. Please try sending it again.", chat_id)
                 return
@@ -1186,7 +1154,7 @@ class TelegramBot:
             self.send_message(f"Error processing document: {e}", chat_id)
 
     # ------------------------------------------------------------------
-    # V32: ActionCard callback handling
+    # ActionCard callback handling
     # ------------------------------------------------------------------
 
     def _handle_callback_query(self, callback_query: dict):
@@ -1266,7 +1234,7 @@ class TelegramBot:
         )
 
     # ------------------------------------------------------------------
-    # V32: Event-driven ActionCard presentation
+    # Event-driven ActionCard presentation
     # ------------------------------------------------------------------
 
     async def _on_actioncard_event(self, event):

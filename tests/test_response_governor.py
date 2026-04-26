@@ -224,8 +224,8 @@ class TestFakeWorkProposalInGovernor:
 
     def test_returns_string_for_fake_work(self):
         result = detect_fake_work_proposal(
-            "Phase 1: Research (2 hours)\n"
-            "Phase 2: Development (4 hours)\n"
+            "Stage 1: Research (2 hours)\n"
+            "Stage 2: Development (4 hours)\n"
             "I recommend starting with the feasibility study."
         )
         assert isinstance(result, str)

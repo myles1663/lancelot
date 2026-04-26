@@ -6,6 +6,7 @@ import type { ReceiptItem } from '@/api/receipts'
 import { StatusDot } from '@/components'
 import { ChatInterface } from './command/ChatInterface'
 import { ControlsPanel } from './command/ControlsPanel'
+import { ActiveWorkPanel } from './command/ActiveWorkPanel'
 import { formatTimeOnly } from '@/utils/dateFormat'
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -39,11 +40,8 @@ export function CommandCenter() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left column: 2/3 width */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Active Task Monitor — WR-23 */}
-          <section className="bg-surface-card border border-border-default rounded-lg p-4">
-            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">Active Task</h3>
-            <p className="text-sm text-text-muted">No active task</p>
-          </section>
+          {/* Active work ledger */}
+          <ActiveWorkPanel />
 
           {/* Chat Interface */}
           <ChatInterface />

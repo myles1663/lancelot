@@ -104,8 +104,8 @@ def _is_control_flow_response(response_text: str) -> bool:
 def _approval_wait_acknowledgement_response() -> str:
     return (
         "I am paused for Commander approval. Review the ActionCard in War Room, "
-        "then send `continue` after approving. No additional governed tool work "
-        "will run until that decision is recorded."
+        "then use that card's Continue control after approving. No additional "
+        "governed tool work will run until that decision is recorded."
     )
 
 
@@ -254,6 +254,26 @@ def _emit_progress(self, phase: str, message: str, **metadata: Any) -> None:
     emitter = getattr(self, "_emit_chat_progress", None)
     if callable(emitter):
         emitter(phase, message, **metadata)
+
+
+def _active_work_context_block(self) -> str:
+    """Render compact active-work state for continuation turns."""
+    store = getattr(self, "work_ledger_store", None)
+    if store is None:
+        return ""
+    try:
+        return store.render_context_block(
+            quest_id=getattr(self, "_current_quest_id", "") or "",
+            session_id=getattr(self, "_current_session_id", "") or "",
+            max_items=3,
+            max_events=8,
+        )
+    except Exception as exc:
+        _gov_logger.warning(
+            "active_work_context_render_failed",
+            extra={"error": str(exc)},
+        )
+        return ""
 
 
 def chat(
@@ -677,7 +697,7 @@ def chat(
                     quest_id=getattr(self, "_current_quest_id", None),
                     mode="crusader" if crusader_mode else "normal",
                 )
-                # Memory vNext compiler provides core blocks, working memory,
+                # Structured memory compiler provides core blocks, working memory,
                 # and retrieval items — but NOT conversation history or receipts.
                 # Append those from ContextEnvironment so the LLM has full context.
                 history_str = self.context_env.get_history_string(limit=30, channel=channel)
@@ -695,6 +715,10 @@ def chat(
                 context_str = self.context_env.get_context_string(channel=channel)
         else:
             context_str = self.context_env.get_context_string(channel=channel)
+
+        active_work_context = _active_work_context_block(self)
+        if active_work_context:
+            context_str = (context_str or "") + "\n\n" + active_work_context
 
         # Legacy fields
         self.rules_context = "See ContextEnv"
@@ -848,7 +872,7 @@ def chat(
                 else:
                     _gov_logger.debug("knowledge_request_routed_to_agentic_loop")
 
-                # Autonomy Loop v2 — Deep Reasoning Pass (Phase 1)
+                # Deep reasoning pass before agentic execution
                 reasoning_artifact = None
                 if FEATURE_DEEP_REASONING_LOOP and self._should_use_deep_reasoning(user_message):
                     _gov_logger.debug("deep_reasoning_pass_triggered")
@@ -988,7 +1012,7 @@ def chat(
                     extra={"error": str(e)},
                 )
 
-        # Record task experience (Autonomy Loop v2 Phase 6)
+        # Record task experience for future retrieval
         if FEATURE_DEEP_REASONING_LOOP and sanitized_response:
             try:
                 _v25_duration = int((__import__("time").time() - start_time) * 1000)

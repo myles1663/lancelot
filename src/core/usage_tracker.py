@@ -60,6 +60,9 @@ _FALLBACK_COST_PER_1K: dict[str, float] = {
     "nvidia/llama-3.1-nemotron-70b-instruct": 0.0012,
     # Local (free)
     "local-llm": 0.0,
+    "bonsai-1.7b": 0.0,
+    "bonsai-8b": 0.0,
+    "ternary-bonsai-8b": 0.0,
 }
 
 
@@ -88,13 +91,22 @@ _COST_PER_1K = _load_cost_rates()
 _AVG_TOKENS: dict[str, int] = {
     "local_redaction": 80,
     "local_utility": 120,
-    "local_agentic": 200,  # V8: local model with tool calling
+    "local_agentic": 200,  # local model with tool calling
     "flagship_fast": 500,
     "flagship_deep": 1500,
 }
 
 # What a local task *would* cost if sent to the cheapest flagship.
 _FLAGSHIP_FLOOR_COST_PER_1K = 0.0004
+
+
+def _is_local_model_name(model: str) -> bool:
+    normalized = (model or "").lower()
+    return (
+        normalized == "local-llm"
+        or normalized.startswith("local-")
+        or "bonsai" in normalized
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +224,7 @@ class UsageTracker:
         m["cost"] = round(m["cost"] + est_cost, 6)
 
         # Also record in a synthetic "direct" lane for the lane view
-        lane = "local_agentic" if model == "local-llm" else "flagship_fast"
+        lane = "local_agentic" if _is_local_model_name(model) else "flagship_fast"
         usage = self._lanes[lane]
         usage.requests += 1
         usage.successes += 1

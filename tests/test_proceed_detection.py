@@ -1,5 +1,5 @@
 """
-Tests for Fix Pack V2 — Expanded proceed detection + stall phrase blocking.
+Tests for expanded proceed detection and stall phrase blocking.
 
 Validates:
 - "set it up" treated as proceed when a plan exists
@@ -274,7 +274,8 @@ class TestChatToolRouting:
                 "content": (
                     "Paused for Commander approval before running `repo_writer`.\n\n"
                     "Approval ID: `abc123`.\n\n"
-                    "Review the ActionCard in War Room, then send `continue` after approval."
+                    "Review and resolve the ActionCard in War Room. "
+                    "After approval, use that card's Continue control to resume the same run."
                 ),
             },
         ]

@@ -1,11 +1,11 @@
 """
-Unified Intent Classifier — single LLM call replaces 7 heuristic functions (V23).
+Unified Intent Classifier — single LLM call replaces heuristic routing functions.
 
 Uses the active provider to classify user intent in a single call with
 a JSON response. Provider-aware: uses Gemini's response_schema when available,
 falls back to JSON-in-prompt for Anthropic/OpenAI/xAI.
 
-Replaces the V1-V22 chain of:
+Replaces the previous chain of:
     classify_intent() -> _verify_intent_with_llm() -> _is_continuation()
     -> _needs_research() -> _is_low_risk_exec() -> _is_conversational()
     -> _is_simple_for_local()
@@ -212,17 +212,17 @@ class UnifiedClassifier:
             parsed = self._parse(result.text)
             if parsed:
                 logger.debug(
-                    "V23 unified classifier (%s/%s): intent=%s confidence=%.2f reasoning=%s",
+                    "Unified classifier (%s/%s): intent=%s confidence=%.2f reasoning=%s",
                     self._provider_type, self._model,
                     parsed.intent, parsed.confidence, parsed.reasoning,
                 )
                 return parsed
 
-            logger.warning("V23 unified classifier: parse failed, falling back to keywords")
+            logger.warning("Unified classifier parse failed, falling back to keywords")
             return self._keyword_fallback(message)
 
         except Exception as e:
-            logger.warning("V23 unified classifier failed: %s — falling back to keywords", e)
+            logger.warning("Unified classifier failed: %s — falling back to keywords", e)
             return self._keyword_fallback(message)
 
     def _classify_locally(

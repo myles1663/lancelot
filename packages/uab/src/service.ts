@@ -4,7 +4,7 @@
  * Framework-agnostic: import this module from ClaudeClaw, Lancelot,
  * or any other AI agent runtime to get desktop app control.
  *
- * Phase 4 enhancements:
+ * Production hardening modules:
  *   - Connection Manager with health monitoring & auto-reconnect
  *   - Smart Element Cache with TTL & invalidation
  *   - Permission/Safety model for destructive actions
@@ -54,7 +54,7 @@ export class UABService {
   private router: ControlRouter;
   private _running = false;
 
-  // Phase 4: Production hardening modules
+  // Production hardening modules
   private connectionMgr: ConnectionManager;
   private cache: ElementCache;
   readonly permissions: PermissionManager;
@@ -66,7 +66,7 @@ export class UABService {
     this.pluginManager = new PluginManager();
     this.router = new ControlRouter(this.pluginManager);
 
-    // Phase 4 modules
+    // Production hardening modules
     this.connectionMgr = new ConnectionManager(this.router);
     this.cache = new ElementCache();
     this.permissions = new PermissionManager();
@@ -275,7 +275,7 @@ export class UABService {
     return appState;
   }
 
-  // ─── Phase 3: Keyboard Input ────────────────────────────────────
+  // ─── Keyboard Input ─────────────────────────────────────────────
 
   /** Send a single keypress to a connected app */
   async keypress(pid: number, key: string): Promise<ActionResult> {
@@ -295,7 +295,7 @@ export class UABService {
     return result;
   }
 
-  // ─── Phase 3: Window Management ──────────────────────────────────
+  // ─── Window Management ──────────────────────────────────────────
 
   /** Minimize a window */
   async minimize(pid: number): Promise<ActionResult> {
@@ -337,7 +337,7 @@ export class UABService {
     return connection.act('', 'resize', { width, height });
   }
 
-  // ─── Phase 3: Screenshot ──────────────────────────────────────
+  // ─── Screenshot ────────────────────────────────────────────────
 
   /** Capture a screenshot of a connected app's window */
   async screenshot(pid: number, outputPath?: string): Promise<ActionResult> {
@@ -346,14 +346,14 @@ export class UABService {
     return connection.act('', 'screenshot', { outputPath });
   }
 
-  // ─── Phase 4: Action Chains ───────────────────────────────────
+  // ─── Action Chains ─────────────────────────────────────────────
 
   /** Execute a multi-step action chain */
   async executeChain(chain: ChainDefinition): Promise<ChainResult> {
     return this.chainExecutor.execute(chain);
   }
 
-  // ─── Phase 4: Health & Diagnostics ─────────────────────────────
+  // ─── Health & Diagnostics ──────────────────────────────────────
 
   /** Get connection health summary */
   getHealthSummary(): Array<{

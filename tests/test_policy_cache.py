@@ -1,4 +1,4 @@
-"""Tests for vNext4 PolicyCache (Prompts 8-9)."""
+"""Tests for PolicyCache."""
 
 import os
 import sys

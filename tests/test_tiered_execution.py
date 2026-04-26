@@ -1,4 +1,4 @@
-"""Tests for vNext4 Full Tiered execute_plan() (Prompt 19).
+"""Tests for full tiered execute_plan().
 
 Uses a test harness that simulates the Orchestrator's risk-tiered
 execution loop with real governance modules and real files.

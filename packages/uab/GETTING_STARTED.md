@@ -30,7 +30,7 @@ node dist/cli.js install
 ```bash
 npm install
 npm run build
-node dist/cli.js serve --port 3100 --api-key YOUR_KEY
+node dist/cli.js serve --host 0.0.0.0 --port 3100 --api-key YOUR_KEY
 ```
 
 ## Quick Start
@@ -382,7 +382,7 @@ uab serve
 # With authentication
 uab serve --port 3100 --api-key my-secret-key
 
-# Bind to all interfaces for remote access. This requires --api-key.
+# Bind to all interfaces (for remote access — use with caution)
 uab serve --host 0.0.0.0 --api-key my-secret-key
 ```
 
@@ -393,15 +393,15 @@ uab serve --host 0.0.0.0 --api-key my-secret-key
 curl http://localhost:3100/health
 
 # Scan for apps
-curl -X POST http://localhost:3100/scan -H "X-API-Key: my-secret-key"
+curl -X POST http://localhost:3100/scan
 
 # Find and connect to an app
-curl -X POST http://localhost:3100/find -H "X-API-Key: my-secret-key" -d '{"query":"notepad"}'
-curl -X POST http://localhost:3100/connect -H "X-API-Key: my-secret-key" -d '{"target":"notepad"}'
+curl -X POST http://localhost:3100/find -d '{"query":"notepad"}'
+curl -X POST http://localhost:3100/connect -d '{"target":"notepad"}'
 
 # Query and interact
-curl -X POST http://localhost:3100/query -H "X-API-Key: my-secret-key" -d '{"pid":1234,"selector":{"type":"button"}}'
-curl -X POST http://localhost:3100/act -H "X-API-Key: my-secret-key" -d '{"pid":1234,"elementId":"btn_1","action":"click"}'
+curl -X POST http://localhost:3100/query -d '{"pid":1234,"selector":{"type":"button"}}'
+curl -X POST http://localhost:3100/act -d '{"pid":1234,"elementId":"btn_1","action":"click"}'
 ```
 
 ### Programmatic Server Usage

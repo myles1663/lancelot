@@ -282,7 +282,7 @@ class Librarian:
                 content = f.read(2000) # Read first 2k chars
             
             # Simple simulation of analysis success for receipt
-            # In vNext this would call an LLM
+            # Future semantic tagging can use an LLM here.
             
             duration = int((__import__("time").time() - start_time) * 1000)
             self.receipt_service.update(receipt.complete(

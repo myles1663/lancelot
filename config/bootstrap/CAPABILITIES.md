@@ -12,7 +12,7 @@
 - **Model Routing**: Dual-model architecture — local LLM handles simple/private queries locally, flagship providers handle complex reasoning and agentic tool use. The router selects automatically based on query complexity and policy.
 - **Soul Contract**: Immutable identity core (mission, allegiance, tone invariants) loaded from Soul documents at startup.
 - **Cost Tracking**: Per-model, per-day usage tracking with monthly persistence to usage history. Visible in the War Room Cost Tracker panel.
-- **Risk-Tiered Governance (vNext4)**: Every action classified into 4 risk tiers — T0 (inert: reads), T1 (reversible: writes with rollback snapshots + async verification), T2 (controlled: shell commands with sync verification), T3 (irreversible: network/deploy with approval gates). Policy cache for O(1) decisions. Tier boundary enforcement ensures no pipeline debt crosses risk levels.
+- **Risk-Tiered Governance**: Every action classified into 4 risk tiers — T0 (inert: reads), T1 (reversible: writes with rollback snapshots + async verification), T2 (controlled: shell commands with sync verification), T3 (irreversible: network/deploy with approval gates). Policy cache for O(1) decisions. Tier boundary enforcement ensures no pipeline debt crosses risk levels.
 
 ## Deployment
 - Docker container on Commander's server (Docker Desktop)

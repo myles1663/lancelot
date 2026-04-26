@@ -50,13 +50,13 @@ class BALConfig(BaseModel):
     # Data storage
     bal_data_dir: str = "/home/lancelot/data/bal"
 
-    # SMTP config (Phase 5 — delivery)
+    # SMTP delivery config
     bal_smtp_host: str = ""
     bal_smtp_port: int = 587
     bal_smtp_user: str = ""
     bal_smtp_password: str = ""
 
-    # Stripe config (Phase 6 — billing)
+    # Stripe billing config
     bal_stripe_secret_key: str = ""
     bal_stripe_webhook_secret: str = ""
 

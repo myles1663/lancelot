@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import re
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
@@ -14,6 +15,11 @@ logger = logging.getLogger(__name__)
 # Configuration
 MAX_CONTEXT_TOKENS = 128000  # Default safe limit
 MAX_FILES_IN_CONTEXT = 50
+MAX_CHAT_HISTORY_MESSAGES = int(os.getenv("LANCELOT_CHAT_HISTORY_MAX_MESSAGES", "200"))
+CHAT_HISTORY_RECENT_KEEP = int(os.getenv("LANCELOT_CHAT_HISTORY_RECENT_KEEP", "120"))
+CHAT_HISTORY_COMPACT_BATCH = int(os.getenv("LANCELOT_CHAT_HISTORY_COMPACT_BATCH", "40"))
+MAX_CHAT_SUMMARIES = int(os.getenv("LANCELOT_CHAT_SUMMARIES_MAX", "40"))
+CHAT_SUMMARY_PREVIEW_CHARS = 280
 BOOTSTRAP_TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "config" / "bootstrap"
 BOOTSTRAP_DATA_FILES = ("RULES.md", "CAPABILITIES.md")
 
@@ -38,9 +44,11 @@ class ContextEnvironment:
         self._ensure_bootstrap_files()
         self.receipt_service = get_receipt_service(data_dir)
         self.items: Dict[str, ContextItem] = {}
-        self.history: List[Dict[str, str]] = []
+        self.history: List[Dict[str, Any]] = []
+        self.chat_summaries: List[Dict[str, Any]] = []
         self.current_tokens = 0
-        self._current_quest_id: Optional[str] = None  # V29: Set by orchestrator per chat() call
+        self._current_quest_id: Optional[str] = None  # Set by orchestrator per chat() call
+        self._load_chat_summaries()
         self._load_history()
 
     def _ensure_bootstrap_files(self):
@@ -69,9 +77,33 @@ class ContextEnvironment:
         if os.path.exists(history_path):
             try:
                 with open(history_path, "r", encoding="utf-8") as f:
-                    self.history = json.load(f)
+                    loaded = json.load(f)
+                    self.history = loaded if isinstance(loaded, list) else []
             except Exception as e:
                 logger.warning("Error loading chat history: %s", e)
+
+    def _chat_summaries_path(self) -> str:
+        return os.path.join(self._chat_dir(), "chat_summaries.json")
+
+    def _load_chat_summaries(self):
+        """Loads deterministic summaries of compacted chat history."""
+        summaries_path = self._chat_summaries_path()
+        if os.path.exists(summaries_path):
+            try:
+                with open(summaries_path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                    self.chat_summaries = loaded if isinstance(loaded, list) else []
+            except Exception as e:
+                logger.warning("Error loading chat summaries: %s", e)
+
+    def save_chat_summaries(self):
+        """Persists deterministic summaries of compacted chat history."""
+        summaries_path = self._chat_summaries_path()
+        try:
+            with open(summaries_path, "w", encoding="utf-8") as f:
+                json.dump(self.chat_summaries[-MAX_CHAT_SUMMARIES:], f, indent=2)
+        except Exception as e:
+            logger.warning("Error saving chat summaries: %s", e)
 
     def save_history(self):
         """Persists chat history to JSON."""
@@ -85,26 +117,37 @@ class ContextEnvironment:
     def add_history(self, role: str, content: str):
         """Adds a message to history and auto-saves."""
         self.history.append({"role": role, "content": content, "timestamp": time.time()})
-        # Trim history if too long (e.g. keep last 100 turns)
-        if len(self.history) > 200:
-            self.history = self.history[-200:]
+        self._compact_history_if_needed()
         self.save_history()
 
     def get_history_string(self, limit: int = 50, channel: str = None) -> str:
         """Formats recent chat history for context, optionally filtered by channel.
 
-        V15: When channel is specified, only include messages from that channel
+        When channel is specified, only include messages from that channel.
         (tagged as "[via <channel>]") plus assistant responses and untagged API messages.
         This prevents cross-channel pollution (e.g. War Room health checks pushing
         Telegram conversation out of the context window).
         """
-        if not self.history:
+        summaries = self._filtered_chat_summaries(channel)[-8:]
+
+        if not self.history and not summaries:
             return ""
 
-        buffer = ["--- RECENT CHAT HISTORY ---"]
+        buffer = []
+
+        if summaries:
+            buffer.append("--- COMPACTED CHAT HISTORY ---")
+            for summary in summaries:
+                timestamp = self._format_summary_timestamp(summary)
+                buffer.append(f"SUMMARY [{timestamp}]: {summary.get('summary', '')}")
+
+        if not self.history:
+            return "\n".join(buffer)
+
+        buffer.append("--- RECENT CHAT HISTORY ---")
 
         if channel:
-            # V15: Filter to messages from this channel
+            # Filter to messages from this channel
             filtered = []
             for msg in self.history:
                 content = msg.get("content", "")
@@ -130,6 +173,96 @@ class ContextEnvironment:
             buffer.append(f"{role}: {content}")
             
         return "\n".join(buffer)
+
+    def _compact_history_if_needed(self):
+        if len(self.history) <= MAX_CHAT_HISTORY_MESSAGES:
+            return
+
+        recent_keep = min(CHAT_HISTORY_RECENT_KEEP, MAX_CHAT_HISTORY_MESSAGES)
+        older_messages = self.history[:-recent_keep]
+        if not older_messages:
+            return
+
+        batch_size = max(1, CHAT_HISTORY_COMPACT_BATCH)
+        for start in range(0, len(older_messages), batch_size):
+            batch = older_messages[start:start + batch_size]
+            self.chat_summaries.append(self._summarize_chat_batch(batch))
+
+        self.chat_summaries = self.chat_summaries[-MAX_CHAT_SUMMARIES:]
+        self.history = self.history[-recent_keep:]
+        self.save_chat_summaries()
+
+    def _summarize_chat_batch(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+        user_messages = [m for m in messages if m.get("role") == "user"]
+        assistant_messages = [m for m in messages if m.get("role") == "assistant"]
+        channels = sorted({ch for msg in messages for ch in self._message_channels(msg)})
+
+        first_ts = messages[0].get("timestamp") if messages else None
+        last_ts = messages[-1].get("timestamp") if messages else None
+        user_preview = "; ".join(
+            self._preview_chat_text(msg.get("content", ""), CHAT_SUMMARY_PREVIEW_CHARS)
+            for msg in user_messages[:3]
+        )
+        assistant_preview = "; ".join(
+            self._preview_chat_text(msg.get("content", ""), CHAT_SUMMARY_PREVIEW_CHARS)
+            for msg in assistant_messages[:3]
+        )
+
+        parts = [
+            f"Compacted {len(messages)} older chat messages",
+            f"{len(user_messages)} user / {len(assistant_messages)} assistant",
+        ]
+        if channels:
+            parts.append(f"channels: {', '.join(channels)}")
+        if user_preview:
+            parts.append(f"user intents: {user_preview}")
+        if assistant_preview:
+            parts.append(f"assistant outcomes: {assistant_preview}")
+
+        return {
+            "created_at": time.time(),
+            "first_timestamp": first_ts,
+            "last_timestamp": last_ts,
+            "message_count": len(messages),
+            "channels": channels,
+            "source": "deterministic_chat_compaction",
+            "summary": ". ".join(parts),
+        }
+
+    def _filtered_chat_summaries(self, channel: str = None) -> List[Dict[str, Any]]:
+        if not channel:
+            return self.chat_summaries
+
+        summaries = []
+        for summary in self.chat_summaries:
+            channels = summary.get("channels") or []
+            if not channels or channel in channels or "shared" in channels:
+                summaries.append(summary)
+        return summaries
+
+    @staticmethod
+    def _message_channels(message: Dict[str, Any]) -> List[str]:
+        content = message.get("content", "") or ""
+        channels = re.findall(r"\[via ([^\]]+)\]", content)
+        if channels:
+            return channels
+        if message.get("role") == "user":
+            return ["shared"]
+        return []
+
+    @staticmethod
+    def _preview_chat_text(value: Any, limit: int) -> str:
+        text = " ".join(str(value or "").split())
+        if len(text) <= limit:
+            return text
+        return text[: max(0, limit - 16)].rstrip() + "... [truncated]"
+
+    @staticmethod
+    def _format_summary_timestamp(summary: Dict[str, Any]) -> str:
+        timestamp = summary.get("last_timestamp") or summary.get("created_at")
+        if isinstance(timestamp, (int, float)):
+            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
+        return "unknown"
         
     def _is_safe_path(self, path: str) -> bool:
         """Ensures path is within data_dir."""
@@ -277,7 +410,7 @@ class ContextEnvironment:
     def get_context_string(self, channel: str = None) -> str:
         """Formats context for the LLM.
 
-        V15: Accepts optional channel to filter history by source channel.
+        Accepts optional channel to filter history by source channel.
         """
         buffer = []
 
@@ -292,7 +425,7 @@ class ContextEnvironment:
         receipts_str = self.get_recent_receipts(limit=15)
         buffer.append(f"\n{receipts_str}")
 
-        # 3. Chat History (V15: filtered by channel when specified)
+        # 3. Chat History (filtered by channel when specified)
         history_str = self.get_history_string(limit=50, channel=channel)
         buffer.append(f"\n{history_str}")
         

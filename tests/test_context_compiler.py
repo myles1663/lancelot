@@ -1,5 +1,5 @@
 """
-Tests for Memory vNext Context Compiler.
+Tests for structured memory context compiler.
 
 These tests validate:
 - Deterministic compilation order

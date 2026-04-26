@@ -11,7 +11,7 @@ from receipts import get_receipt_service, ReceiptStatus, ActionType
 from panels.tools_panel import get_tools_panel, render_tools_panel
 from panels.cost_panel import render_cost_panel
 
-# Fix Pack V11: Gateway API URL — War Room calls the gateway API instead of
+# Gateway API URL — War Room calls the gateway API instead of
 # creating its own bare orchestrator. This ensures all subsystems (skill_executor,
 # local_model, scheduler, etc.) are available for tool execution.
 _GATEWAY_URL = os.getenv("LANCELOT_GATEWAY_URL", "http://localhost:8000")
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 def _chat_via_gateway(text: str, crusader_mode: bool = False) -> str:
     """Send chat message through the gateway API.
 
-    Fix Pack V11: Routes through the FastAPI gateway so all subsystems
+    Routes through the FastAPI gateway so all subsystems
     (skill_executor, local_model, etc.) are available. Falls back to
     direct orchestrator if gateway is unreachable.
     """
@@ -36,7 +36,7 @@ def _chat_via_gateway(text: str, crusader_mode: bool = False) -> str:
             return data.get("response", "")
     except Exception as e:
         logger.warning(
-            "V11: Gateway call failed (%s), falling back to direct orchestrator",
+            "Gateway call failed (%s), falling back to direct orchestrator",
             e,
         )
     # Fallback: direct orchestrator (missing subsystems but better than nothing)
@@ -46,7 +46,7 @@ def _chat_via_gateway(text: str, crusader_mode: bool = False) -> str:
 def _chat_with_files_via_gateway(text: str, uploaded_files: list, save_to_workspace: bool = False) -> str:
     """Send chat message with file attachments through the gateway API.
 
-    V14: Routes file uploads through /chat/upload (multipart/form-data).
+    Routes file uploads through /chat/upload (multipart/form-data).
     """
     try:
         files_payload = []
@@ -71,7 +71,7 @@ def _chat_with_files_via_gateway(text: str, uploaded_files: list, save_to_worksp
             return data.get("response", "")
     except Exception as e:
         logger.warning(
-            "V14: Gateway upload call failed (%s), falling back to text-only",
+            "Gateway upload call failed (%s), falling back to text-only",
             e,
         )
     return _chat_via_gateway(text)
@@ -324,7 +324,7 @@ with tab_command:
                             st.session_state.messages.append({"role": "assistant", "content": response})
 
                         else:
-                            # Normal mode — V14: route with file uploads if present
+                            # Normal mode: route with file uploads if present
                             if uploaded_files:
                                 response = _chat_with_files_via_gateway(
                                     prompt, uploaded_files, save_to_workspace

@@ -1,7 +1,7 @@
 """
 War Room — Memory Panel.
 
-Provides visibility into the Memory vNext subsystem:
+Provides visibility into the structured memory subsystem:
 - Core block status and token usage
 - Memory tier statistics
 - Quarantine queue
@@ -374,7 +374,7 @@ class MemoryPanel:
             return {
                 "panel": "memory",
                 "enabled": False,
-                "message": "Memory vNext is disabled. Set FEATURE_MEMORY_VNEXT=true to enable.",
+                "message": "Structured memory is disabled. Set FEATURE_MEMORY_VNEXT=true to enable.",
             }
 
         return {

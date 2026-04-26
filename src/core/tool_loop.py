@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import feature_flags as _ff
 from intent_classifier import classify_intent, IntentType
@@ -37,7 +38,10 @@ def _pending_approval_response(
     if approval_id:
         label = "Approval group ID" if approval_count > 1 else "Approval ID"
         details.append(f"{label}: `{approval_id}`.")
-    details.append("Review the ActionCard in War Room, then send `continue` after approval.")
+    details.append(
+        "Review and resolve the ActionCard in War Room. "
+        "After approval, use that card's Continue control to resume the same run."
+    )
     return "\n\n".join(details)
 
 
@@ -47,6 +51,7 @@ _PENDING_APPROVAL_RESPONSE_MARKERS = (
     "waiting for commander approval",
     "review the actioncard",
     "send `continue` after approval",
+    "continue control to resume",
     "approval id:",
     "approval group id:",
 )
@@ -209,7 +214,7 @@ def _approval_reason(skill_name: str) -> str:
 def _approval_group_reason(requests: list[dict[str, Any]]) -> str:
     tools = {str(item.get("tool_name") or "") for item in requests}
     if tools == {"repo_writer"}:
-        return "This grouped approval covers multiple repository file changes for the same user request."
+        return "This grouped approval covers multiple bounded file changes for the same user request."
     if tools.issubset({"network_client", "github_connector"}):
         return "This grouped approval covers multiple outbound connector requests for the same user request."
     if tools == {"command_runner"}:
@@ -242,7 +247,93 @@ def _tool_input_error(skill_name: str, inputs: dict[str, Any]) -> str:
     ]
     if missing:
         return f"{skill_name} missing required input(s): {', '.join(missing)}."
+    if skill_name == "command_runner":
+        command = str(inputs.get("command") or "")
+        for char in COMMAND_BLACKLIST_CHARS:
+            if char in command:
+                rendered = "\\n" if char == "\n" else char
+                return (
+                    f"command_runner blocked shell metacharacter '{rendered}' in command. "
+                    "Use one allowed command per tool call; do not chain, pipe, redirect, "
+                    "substitute, or group shell commands."
+                )
     return ""
+
+
+def _external_network_error(prompt: str, inputs: dict[str, Any]) -> str:
+    """Return a rejection reason when network_client lacks explicit operator intent."""
+    normalized = " ".join(str(prompt or "").lower().split())
+    url = str((inputs or {}).get("url") or "").strip()
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+
+    if any(
+        marker in normalized
+        for marker in (
+            "no external",
+            "without external",
+            "do not contact external",
+            "do not call external",
+            "do not run external",
+            "no network",
+            "local only",
+        )
+    ):
+        return "network_client was not allowed because the operator requested local-only or no-external execution."
+
+    if url and url.lower() in normalized:
+        return ""
+    if host and host in normalized:
+        return ""
+
+    explicit_network_intent = (
+        "http://",
+        "https://",
+        "www.",
+        "web ",
+        "website",
+        "internet",
+        "online",
+        " url",
+        "fetch",
+        "download",
+        "research",
+        "search",
+        "github",
+        "api ",
+        "api docs",
+        "documentation",
+        "endpoint",
+    )
+    if any(marker in normalized for marker in explicit_network_intent):
+        return ""
+
+    return (
+        "network_client requires explicit operator intent for external network access. "
+        "Use internal health, scheduler, receipt, or command tools for local runtime inspection."
+    )
+
+
+def _command_return_code_failure(skill_name: str, outputs: Any) -> str:
+    """Treat command-like tool return_code failures as failed governed actions."""
+    if skill_name not in {"command_runner", "service_runner"} or not isinstance(outputs, dict):
+        return ""
+    if "return_code" not in outputs:
+        return ""
+    try:
+        return_code = int(outputs.get("return_code"))
+    except (TypeError, ValueError):
+        return_code = 1
+    if return_code == 0:
+        return ""
+    detail = (
+        outputs.get("stderr")
+        or outputs.get("stdout")
+        or outputs.get("command")
+        or outputs.get("service_name")
+        or "no detail returned"
+    )
+    return f"{skill_name} exited with return_code={return_code}: {str(detail)[:500]}"
 
 
 def _receipt_safe_payload(value: Any, limit: int = 4000) -> Any:
@@ -909,6 +1000,42 @@ def _agentic_generate(
                 tool_results.append((tc.id, skill_name, str(result_data)))
                 continue
 
+            if skill_name == "network_client":
+                network_error = _external_network_error(prompt, inputs or {})
+                if network_error:
+                    result_data = {
+                        "error": network_error,
+                        "instruction": (
+                            "Do not call external network tools for this request. "
+                            "Use local runtime status, scheduler, receipt, or command inspection instead."
+                        ),
+                    }
+                    tool_receipts.append({
+                        "skill": skill_name,
+                        "inputs": inputs,
+                        "result": f"REJECTED - {network_error}",
+                    })
+                    _persist_tool_call_receipt(
+                        self,
+                        skill_name,
+                        inputs or {},
+                        f"REJECTED - {network_error}",
+                        outputs=result_data,
+                        error=network_error,
+                        iteration=iteration + 1,
+                    )
+                    if self.toolflow_emitter:
+                        self.toolflow_emitter.tool_call_completed(
+                            _quest_id, iteration + 1, skill_name,
+                            "REJECTED", network_error, _channel,
+                        )
+                    _gov_logger.warning(
+                        "network_tool_call_rejected_without_explicit_intent",
+                        extra={"skill": skill_name, "url": str((inputs or {}).get("url") or "")[:200]},
+                    )
+                    tool_results.append((tc.id, skill_name, str(result_data)))
+                    continue
+
             prior_success = _find_successful_tool_receipt(tool_receipts, skill_name, inputs or {})
             if prior_success:
                 result_data = {
@@ -962,7 +1089,7 @@ def _agentic_generate(
 
             if sentry_blocked:
                 if FEATURE_DEEP_REASONING_LOOP:
-                    # Governed Negotiation — structured feedback (Phase 3)
+                    # Governed negotiation with structured feedback
                     from src.core.reasoning_artifact import GovernanceFeedback
                     feedback = GovernanceFeedback(
                         skill_name=skill_name,
@@ -1056,37 +1183,64 @@ def _agentic_generate(
                     exec_result = self.skill_executor.run(skill_name, inputs)
                     _exec_duration_ms = int(_time.time() * 1000) - _exec_start_ms
                     if exec_result.success:
-                        _exec_success = True
                         result_data = exec_result.outputs or {"status": "success"}
-                        # Inject download URL for document_creator results
-                        if skill_name == "document_creator" and result_data.get("path"):
-                            doc_abs = result_data["path"]
-                            _ws = os.getenv("LANCELOT_WORKSPACE", "/home/lancelot/workspace")
-                            doc_rel = doc_abs.replace(f"{_ws}/", "").lstrip("/")
-                            _dl_url = f"/api/files/{doc_rel}"
-                            result_data["download_url"] = _dl_url
-                            result_data["download_note"] = (
-                                f"Document created. Include this link in your response so "
-                                f"the user can download it: [Download {Path(doc_abs).name}]({_dl_url})"
+                        return_code_error = _command_return_code_failure(skill_name, result_data)
+                        if return_code_error:
+                            result_data = {
+                                "error": return_code_error,
+                                "outputs": result_data,
+                                "instruction": (
+                                    "Tool execution returned a nonzero exit code. "
+                                    "Try a valid local inspection command or report the failed command accurately."
+                                ),
+                            }
+                            tool_receipts.append({
+                                "skill": skill_name,
+                                "inputs": inputs,
+                                "result": f"FAILED: {return_code_error}",
+                                "outputs": result_data,
+                            })
+                            _persist_tool_call_receipt(
+                                self,
+                                skill_name,
+                                inputs or {},
+                                f"FAILED: {return_code_error}",
+                                outputs=result_data,
+                                error=return_code_error,
+                                duration_ms=_exec_duration_ms,
+                                iteration=iteration + 1,
                             )
-                        result_str = str(result_data)
-                        if len(result_str) > 8000:
-                            result_data = {"truncated": result_str[:8000] + "... [truncated]"}
-                        tool_receipts.append({
-                            "skill": skill_name,
-                            "inputs": inputs,
-                            "result": "SUCCESS",
-                            "outputs": result_data,
-                        })
-                        _persist_tool_call_receipt(
-                            self,
-                            skill_name,
-                            inputs or {},
-                            "SUCCESS",
-                            outputs=result_data,
-                            duration_ms=_exec_duration_ms,
-                            iteration=iteration + 1,
-                        )
+                        else:
+                            _exec_success = True
+                            # Inject download URL for document_creator results
+                            if skill_name == "document_creator" and result_data.get("path"):
+                                doc_abs = result_data["path"]
+                                _ws = os.getenv("LANCELOT_WORKSPACE", "/home/lancelot/workspace")
+                                doc_rel = doc_abs.replace(f"{_ws}/", "").lstrip("/")
+                                _dl_url = f"/api/files/{doc_rel}"
+                                result_data["download_url"] = _dl_url
+                                result_data["download_note"] = (
+                                    f"Document created. Include this link in your response so "
+                                    f"the user can download it: [Download {Path(doc_abs).name}]({_dl_url})"
+                                )
+                            result_str = str(result_data)
+                            if len(result_str) > 8000:
+                                result_data = {"truncated": result_str[:8000] + "... [truncated]"}
+                            tool_receipts.append({
+                                "skill": skill_name,
+                                "inputs": inputs,
+                                "result": "SUCCESS",
+                                "outputs": result_data,
+                            })
+                            _persist_tool_call_receipt(
+                                self,
+                                skill_name,
+                                inputs or {},
+                                "SUCCESS",
+                                outputs=result_data,
+                                duration_ms=_exec_duration_ms,
+                                iteration=iteration + 1,
+                            )
                     else:
                         # Nudge model to silently retry with alternative
                         err_msg = exec_result.error or "Unknown error"
@@ -1294,8 +1448,27 @@ def _local_agentic_generate(
         The final text response from the local model.
     """
     MAX_LOCAL_ITERATIONS = 5
+    local_model = getattr(self, "local_model", None)
+    local_model_label = "local-llm"
+    local_model_timeout = 60.0
 
-    if not self.local_model:
+    local_roles = getattr(self, "local_model_roles", None)
+    if local_roles is not None:
+        try:
+            from src.core.local_model_roles import ROLE_UTILITY
+
+            utility_config = local_roles.config_for(ROLE_UTILITY)
+            local_model = local_roles.client_for(ROLE_UTILITY)
+            local_model_label = utility_config.model or ROLE_UTILITY
+            local_model_timeout = max(1.0, float(utility_config.timeout_s or 60.0))
+        except Exception as exc:
+            _gov_logger.warning(
+                "local_agentic_utility_role_unavailable: %s",
+                exc,
+                extra={"error": str(exc)},
+            )
+
+    if not local_model:
         _gov_logger.debug(
             "local_agentic_fallback_to_flagship",
             extra={"reason": "local_model_unavailable"},
@@ -1307,10 +1480,10 @@ def _local_agentic_generate(
             context_str=context_str,
         )
 
-    if not self.local_model.is_healthy():
+    if not local_model.is_healthy():
         _gov_logger.debug(
             "local_agentic_fallback_to_flagship",
-            extra={"reason": "local_model_unhealthy"},
+            extra={"reason": "local_model_unhealthy", "model": local_model_label},
         )
         return self._agentic_generate(
             prompt=prompt,
@@ -1361,18 +1534,21 @@ def _local_agentic_generate(
         )
 
         try:
-            result = self.local_model.chat_with_tools(
+            result = local_model.chat_with_tools(
                 messages=messages,
                 tools=tools,
                 max_tokens=512,
                 temperature=0.1,
+                timeout=local_model_timeout,
             )
         except Exception as e:
             _gov_logger.warning(
-                "local_agentic_model_call_failed",
+                "local_agentic_model_call_failed: %s",
+                e,
                 extra={
                     "iteration": iteration + 1,
                     "error": str(e),
+                    "model": local_model_label,
                 },
             )
             if tool_receipts:
@@ -1408,12 +1584,13 @@ def _local_agentic_generate(
         total_est_tokens += iter_tokens
         self.governor.log_usage("tokens", iter_tokens)
         if self.usage_tracker:
-            self.usage_tracker.record_simple("local-llm", iter_tokens)
+            self.usage_tracker.record_simple(local_model_label, iter_tokens)
         _gov_logger.debug(
             "local_agentic_token_usage",
             extra={
                 "iteration": iteration + 1,
                 "iter_tokens": iter_tokens,
+                "model": local_model_label,
                 "total_est_tokens": total_est_tokens,
             },
         )
@@ -1489,6 +1666,46 @@ def _local_agentic_generate(
                 })
                 continue
 
+            if skill_name == "network_client":
+                network_error = _external_network_error(prompt, inputs or {})
+                if network_error:
+                    result_content = str({
+                        "error": network_error,
+                        "instruction": (
+                            "Do not call external network tools for this request. "
+                            "Use local runtime status, scheduler, receipt, or command inspection instead."
+                        ),
+                    })
+                    tool_receipts.append({
+                        "skill": skill_name,
+                        "inputs": inputs,
+                        "result": f"REJECTED - {network_error}",
+                    })
+                    _persist_tool_call_receipt(
+                        self,
+                        skill_name,
+                        inputs or {},
+                        f"REJECTED - {network_error}",
+                        outputs={"error": network_error},
+                        error=network_error,
+                        iteration=iteration + 1,
+                    )
+                    if self.toolflow_emitter:
+                        self.toolflow_emitter.tool_call_completed(
+                            _quest_id, iteration + 1, skill_name,
+                            "REJECTED", network_error, _channel,
+                        )
+                    _gov_logger.warning(
+                        "local_network_tool_call_rejected_without_explicit_intent",
+                        extra={"skill": skill_name, "url": str((inputs or {}).get("url") or "")[:200]},
+                    )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": result_content,
+                    })
+                    continue
+
             prior_success = _find_successful_tool_receipt(tool_receipts, skill_name, inputs or {})
             if prior_success:
                 result_content = str({
@@ -1532,7 +1749,7 @@ def _local_agentic_generate(
 
             if sentry_blocked:
                 if FEATURE_DEEP_REASONING_LOOP:
-                    # Governed Negotiation — structured feedback (Phase 3)
+                    # Governed negotiation with structured feedback
                     from src.core.reasoning_artifact import GovernanceFeedback
                     feedback = GovernanceFeedback(
                         skill_name=skill_name,
@@ -1584,25 +1801,53 @@ def _local_agentic_generate(
                     skill_result = self.skill_executor.run(skill_name, inputs)
                     _exec_duration_ms = int(_time.time() * 1000) - _exec_start_ms
                     if skill_result.success:
-                        _exec_success = True
-                        result_content = str(skill_result.outputs or {"status": "success"})
-                        if len(result_content) > 4000:
-                            result_content = result_content[:4000] + "... [truncated]"
-                        tool_receipts.append({
-                            "skill": skill_name,
-                            "inputs": inputs,
-                            "result": "SUCCESS",
-                            "outputs": skill_result.outputs,
-                        })
-                        _persist_tool_call_receipt(
-                            self,
-                            skill_name,
-                            inputs or {},
-                            "SUCCESS",
-                            outputs=skill_result.outputs or {},
-                            duration_ms=_exec_duration_ms,
-                            iteration=iteration + 1,
-                        )
+                        outputs = skill_result.outputs or {"status": "success"}
+                        return_code_error = _command_return_code_failure(skill_name, outputs)
+                        if return_code_error:
+                            result_content = str({
+                                "error": return_code_error,
+                                "outputs": outputs,
+                                "instruction": (
+                                    "Tool execution returned a nonzero exit code. "
+                                    "Try a valid local inspection command or report the failed command accurately."
+                                ),
+                            })
+                            tool_receipts.append({
+                                "skill": skill_name,
+                                "inputs": inputs,
+                                "result": f"FAILED: {return_code_error}",
+                                "outputs": {"error": return_code_error, "outputs": outputs},
+                            })
+                            _persist_tool_call_receipt(
+                                self,
+                                skill_name,
+                                inputs or {},
+                                f"FAILED: {return_code_error}",
+                                outputs={"error": return_code_error, "outputs": outputs},
+                                error=return_code_error,
+                                duration_ms=_exec_duration_ms,
+                                iteration=iteration + 1,
+                            )
+                        else:
+                            _exec_success = True
+                            result_content = str(outputs)
+                            if len(result_content) > 4000:
+                                result_content = result_content[:4000] + "... [truncated]"
+                            tool_receipts.append({
+                                "skill": skill_name,
+                                "inputs": inputs,
+                                "result": "SUCCESS",
+                                "outputs": outputs,
+                            })
+                            _persist_tool_call_receipt(
+                                self,
+                                skill_name,
+                                inputs or {},
+                                "SUCCESS",
+                                outputs=outputs,
+                                duration_ms=_exec_duration_ms,
+                                iteration=iteration + 1,
+                            )
                     else:
                         result_content = f"Error: {skill_result.error}"
                         tool_receipts.append({
@@ -1757,9 +2002,9 @@ def _execute_with_llm(self, graph, user_text: str = "") -> str:
         return ""
 
 def execute_plan(self, plan) -> str:
-    """S17: Executes a plan autonomously with risk-tiered governance.
+    """Execute a plan autonomously with risk-tiered governance.
 
-    vNext4: Full risk-tiered pipeline:
+    Full risk-tiered pipeline:
       T0: Policy cache → Execute → Batch receipt
       T1: Policy cache → Snapshot → Execute → Async verify → Receipt
       T2: Flush + Drain → Execute → Sync verify → Receipt
@@ -1771,7 +2016,7 @@ def execute_plan(self, plan) -> str:
     results = []
     plan_id = getattr(plan, "plan_id", str(uuid.uuid4()))
 
-    # vNext4: Initialize batch buffer if enabled
+    # Initialize batch buffer if enabled
     batch_buffer = None
     if _GOVERNANCE_AVAILABLE and _ff.FEATURE_RISK_TIERED_GOVERNANCE and _ff.FEATURE_BATCH_RECEIPTS:
         try:
@@ -1810,7 +2055,7 @@ def execute_plan(self, plan) -> str:
                 return f"Plan Failed at Step {step.id}.\nReason: {verification.reason}\nSuggestion: {verification.correction_suggestion}"
             continue
 
-        # ── vNext4: Classify risk tier ──────────────────────────
+        # ── Classify risk tier ─────────────────────────────────
         try:
             profile = self._risk_classifier.classify(capability, target=target)
         except Exception as e:
@@ -1956,7 +2201,7 @@ def execute_plan(self, plan) -> str:
                     drain_result.failed, drain_result.drained_count,
                 )
                 results.append(
-                    f"[vNext4] Async verification: {drain_result.passed} passed, "
+                    f"Async verification: {drain_result.passed} passed, "
                     f"{drain_result.failed} rolled back"
                 )
         self._async_queue.clear_results()

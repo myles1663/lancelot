@@ -1,5 +1,5 @@
-"""
-Librarian V2 - Intelligent File Clerk
+﻿"""
+Librarian - Intelligent File Clerk
 -------------------------------------
 High-concurrency, AI-driven file organization service.
 
@@ -36,10 +36,10 @@ class TrashService:
         timestamp = int(time.time())
         trash_name = f"{filename}_{timestamp}"
         dest_path = os.path.join(self.trash_dir, trash_name)
-        
+
         try:
             shutil.move(file_path, dest_path)
-            
+
             # Write metadata
             meta = {
                 "original_path": file_path,
@@ -49,7 +49,7 @@ class TrashService:
             }
             with open(dest_path + ".metadata", "w") as f:
                 json.dump(meta, f)
-                
+
             logger.info(f"Soft deleted: {filename} -> {trash_name}")
             return True
         except Exception as e:
@@ -65,7 +65,7 @@ class TrashService:
                     meta_path = os.path.join(self.trash_dir, f)
                     with open(meta_path, "r") as mf:
                         meta = json.load(mf)
-                    
+
                     expires = datetime.fromisoformat(meta["expires_at"])
                     if now > expires:
                         # Delete file and metadata
@@ -96,11 +96,7 @@ class LibrarianV2:
         self.observer = Observer()
         self.client = None
         self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-        self._running = False
-        self._loop = None
-        self._tasks = set()
-        self._observer_started = False
-        
+
         # Classification Categories
         self.categories = {
             "Financial": ["invoices", "receipts", "billing"],
@@ -108,7 +104,7 @@ class LibrarianV2:
             "Personal": ["photos", "letters"],
             "Data": ["csv", "json", "datasets"]
         }
-        
+
         self._init_gemini()
 
     def _init_gemini(self):
@@ -121,62 +117,36 @@ class LibrarianV2:
 
     def start(self):
         """Starts the filesystem watcher."""
-        if self._running:
-            logger.debug("Librarian V2 start skipped; already running.")
-            return
-
         loop = asyncio.get_running_loop()
-        self._loop = loop
-        self._running = True
         handler = LibrarianHandler(self.queue, loop)
         self.observer.schedule(handler, self.data_dir, recursive=False)
-        try:
-            self.observer.start()
-            self._observer_started = True
-        except Exception:
-            self._running = False
-            raise
-        logger.info(f"Librarian V2 watching: {self.data_dir}")
-        
-        # Start background worker
-        self._track_task(loop.create_task(self._process_queue(), name="librarian-process-queue"))
-        self._track_task(loop.create_task(self._periodic_cleanup(), name="librarian-trash-cleanup"))
+        self.observer.start()
+        logger.info("Librarian watching: %s", self.data_dir)
 
-    def _track_task(self, task):
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        # Start background worker
+        asyncio.create_task(self._process_queue())
+        asyncio.create_task(self._periodic_cleanup())
 
     async def _periodic_cleanup(self):
         """Runs trash cleanup every hour."""
-        try:
-            while self._running:
-                await asyncio.sleep(3600)
-                if self._running:
-                    self.trash_svc.cleanup()
-        except asyncio.CancelledError:
-            logger.debug("Librarian V2 cleanup task cancelled.")
-            raise
+        while True:
+            await asyncio.sleep(3600)
+            self.trash_svc.cleanup()
 
     async def _process_queue(self):
         """Consumes files from the queue."""
-        try:
-            while self._running:
-                file_path = await self.queue.get()
-                try:
-                    # Debounce fast writes
-                    await asyncio.sleep(1)
+        while True:
+            file_path = await self.queue.get()
+            try:
+                # Debounce fast writes
+                await asyncio.sleep(1)
 
-                    if self._running and os.path.exists(file_path):
-                        await self._organize_file(file_path)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    logger.error(f"Processing error: {e}")
-                finally:
-                    self.queue.task_done()
-        except asyncio.CancelledError:
-            logger.debug("Librarian V2 queue processor cancelled.")
-            raise
+                if os.path.exists(file_path):
+                    await self._organize_file(file_path)
+            except Exception as e:
+                logger.error(f"Processing error: {e}")
+            finally:
+                self.queue.task_done()
 
     # System files that the Librarian must never move
     PROTECTED_FILES = {
@@ -197,24 +167,24 @@ class LibrarianV2:
             return
 
         logger.info(f"Analyzing: {filename}")
-        
+
         category = "Unsorted"
         summary = "No analysis performed."
-        
+
         # AI Classification
         if self.client:
             try:
                 with open(file_path, "r", errors='ignore') as f:
                     content = f.read(1500)
-                
+
                 # Offload to thread to avoid blocking loop
                 loop = asyncio.get_running_loop()
                 response = await loop.run_in_executor(None, self._query_gemini, content)
-                
+
                 parsed = self._parse_ai_decision(response)
                 category = parsed.get("category", "Unsorted")
                 summary = parsed.get("summary", "")
-                
+
             except Exception as e:
                 logger.warning(f"AI Check failed: {e}")
 
@@ -222,9 +192,9 @@ class LibrarianV2:
         target_dir = os.path.join(self.data_dir, category)
         if not os.path.exists(target_dir):
             os.makedirs(target_dir)
-            
+
         dest_path = os.path.join(target_dir, filename)
-        
+
         # Handle Collision
         if os.path.exists(dest_path):
             name, ext = os.path.splitext(filename)
@@ -233,10 +203,10 @@ class LibrarianV2:
         try:
             shutil.move(file_path, dest_path)
             logger.info(f"Filed: {filename} -> {category}/")
-            
+
             # Log to Memory
             self._log_filing(filename, category, summary)
-            
+
         except Exception as e:
             logger.error(f"Refiling failed: {e}")
 
@@ -259,12 +229,12 @@ class LibrarianV2:
         # Simple heuristic parsing
         lower = text.lower()
         category = "Other"
-        
+
         if "financial" in lower: category = "Financial"
         elif "technical" in lower: category = "Technical"
         elif "personal" in lower: category = "Personal"
         elif "data" in lower: category = "Data"
-        
+
         return {"category": category, "summary": text}
 
     def _log_filing(self, filename, category, summary):
@@ -274,24 +244,5 @@ class LibrarianV2:
             f.write(entry)
 
     def stop(self):
-        self._running = False
-        if self._tasks:
-            tasks = tuple(self._tasks)
-
-            def _cancel_tasks():
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-
-            if self._loop and not self._loop.is_closed():
-                self._loop.call_soon_threadsafe(_cancel_tasks)
-        if self._observer_started:
-            self.observer.stop()
-            try:
-                self.observer.join(timeout=5)
-            except TypeError:
-                self.observer.join()
-            self._observer_started = False
-        else:
-            logger.debug("Librarian V2 observer stop skipped; observer was not running.")
-        logger.info("Librarian V2 stopped.")
+        self.observer.stop()
+        logger.info("Librarian stopped.")

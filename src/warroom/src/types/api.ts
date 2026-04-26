@@ -240,6 +240,74 @@ export interface ChatRunsResponse {
   count: number
 }
 
+export type ActiveWorkStatus = 'active' | 'blocked' | 'checkpointed' | 'completed' | 'failed' | 'cancelled'
+
+export interface ActiveWorkItem {
+  quest_id: string
+  session_id: string
+  operator_id: string
+  channel: string
+  objective: string
+  status: ActiveWorkStatus
+  phase: string
+  current_step: string
+  next_action: string
+  blocker: string
+  last_chat_run_id: string
+  last_task_run_id: string
+  last_receipt_id: string
+  created_at: string
+  updated_at: string
+  metadata: Record<string, unknown>
+}
+
+export interface WorkLedgerEvent {
+  event_id: string
+  quest_id: string
+  event_type: string
+  summary: string
+  receipt_id: string
+  phase: string
+  status: string
+  created_at: string
+  metadata: Record<string, unknown>
+}
+
+export interface WorkCheckpoint {
+  checkpoint_id: string
+  quest_id: string
+  reason: string
+  summary: string
+  completed_work: string[]
+  pending_work: string[]
+  open_decisions: string[]
+  files_touched: string[]
+  approvals: string[]
+  receipt_ids: string[]
+  created_at: string
+}
+
+export interface ActiveWorkResponse {
+  items: ActiveWorkItem[]
+  count: number
+}
+
+export interface WorkItemResponse {
+  item: ActiveWorkItem
+  events: WorkLedgerEvent[]
+  checkpoints: WorkCheckpoint[]
+}
+
+export interface WorkCheckpointResponse {
+  checkpoint: WorkCheckpoint
+  quest_id: string
+  request_id: string
+}
+
+export interface WorkResumeResponse extends ChatAsyncResponse {
+  source_quest_id: string
+}
+
 export interface ChatUploadResponse extends ChatResponse {
   files_received: number
 }

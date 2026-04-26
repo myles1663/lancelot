@@ -141,6 +141,20 @@ class TestActionCardStore:
         assert len(soul_cards) == 1
         assert soul_cards[0].source_system == "soul"
 
+    def test_list_pending_by_quest(self, store):
+        """list_pending_by_quest returns unresolved cards for one quest."""
+        card1 = _make_card(quest_id="quest-1", title="Quest 1 pending")
+        card2 = _make_card(quest_id="quest-1", title="Quest 1 resolved")
+        card3 = _make_card(quest_id="quest-2", title="Quest 2 pending")
+        store.save(card1)
+        store.save(card2)
+        store.save(card3)
+        store.resolve(card2.card_id, "approve", "api")
+
+        pending = store.list_pending_by_quest("quest-1")
+
+        assert [card.card_id for card in pending] == [card1.card_id]
+
     def test_list_pending_excludes_expired(self, store):
         """list_pending filters out expired cards."""
         fresh = _make_card(title="Fresh")

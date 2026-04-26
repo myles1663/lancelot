@@ -3,7 +3,7 @@ AnthropicProviderClient — Anthropic adapter via anthropic SDK (v8.3.0).
 
 Implements the ProviderClient interface for Anthropic models (Claude).
 Handles Anthropic's message format, tool_use/tool_result blocks, and model listing.
-V28: Supports OAuth bearer-token auth via ``auth_token`` parameter.
+Supports OAuth bearer-token auth via ``auth_token`` parameter.
 
 Public API:
     AnthropicProviderClient(api_key, mode, auth_token)
@@ -25,7 +25,7 @@ class AnthropicProviderClient(ProviderClient):
 
     def __init__(self, api_key: str = "", mode: str = "sdk", auth_token: str = ""):
         self._mode = mode
-        self._auth_token = auth_token  # V28: OAuth token (takes priority)
+        self._auth_token = auth_token  # OAuth token (takes priority)
         self._api_key = api_key
         try:
             import anthropic
@@ -73,14 +73,14 @@ class AnthropicProviderClient(ProviderClient):
             "messages": messages,
             "max_tokens": 8192,
         }
-        # V29: Allow config-driven max_tokens override (for synthesis calls etc.)
+        # Allow config-driven max_tokens override for synthesis calls.
         if config and config.get("max_tokens"):
             kwargs["max_tokens"] = config["max_tokens"]
 
         if system_instruction:
             kwargs["system"] = system_instruction
 
-        # V27: Extended thinking support (SDK mode only)
+        # Extended thinking support (SDK mode only)
         if self._mode == "sdk" and config and config.get("thinking"):
             thinking_cfg = config["thinking"]
             budget = thinking_cfg.get("budget_tokens", 10000)
@@ -123,7 +123,7 @@ class AnthropicProviderClient(ProviderClient):
             "max_tokens": 8192,
             "tools": anthropic_tools,
         }
-        # V29: Allow config-driven max_tokens override
+        # Allow config-driven max_tokens override
         if config and config.get("max_tokens"):
             kwargs["max_tokens"] = config["max_tokens"]
 
@@ -140,7 +140,7 @@ class AnthropicProviderClient(ProviderClient):
                 del kwargs["tools"]
             # AUTO is the default
 
-        # V27: Extended thinking support (SDK mode only)
+        # Extended thinking support (SDK mode only)
         if self._mode == "sdk" and config and config.get("thinking"):
             thinking_cfg = config["thinking"]
             budget = thinking_cfg.get("budget_tokens", 10000)
@@ -228,7 +228,7 @@ class AnthropicProviderClient(ProviderClient):
                 ))
         except Exception as e:
             logger.warning("Anthropic model listing failed: %s", e)
-            # Fallback: return known models (V27: updated to latest)
+            # Fallback: return known models.
             models = [
                 ModelInfo(id="claude-opus-4-6", display_name="Claude Opus 4.6",
                           context_window=200000, supports_tools=True, capability_tier="deep"),
@@ -266,7 +266,7 @@ class AnthropicProviderClient(ProviderClient):
                 return call_fn()
             except Exception as e:
                 last_exc = e
-                # V28: If OAuth mode and auth error, try refreshing the token first
+                # If OAuth mode and auth error, try refreshing the token first.
                 if _is_auth_error(e) and self._auth_token and attempt == 0:
                     if self._try_oauth_refresh():
                         logger.info("OAuth token refreshed after 401, retrying…")
@@ -307,7 +307,7 @@ class AnthropicProviderClient(ProviderClient):
 
         for block in response.content:
             if block.type == "thinking":
-                # V27: Extended thinking block
+                # Extended thinking block
                 thinking_parts.append(block.thinking)
             elif block.type == "text":
                 text_parts.append(block.text)
@@ -334,7 +334,7 @@ class AnthropicProviderClient(ProviderClient):
         ]
         raw = {"role": "assistant", "content": content_for_history}
 
-        # V27: Include thinking text for orchestrator (not sent back to API)
+        # Include thinking text for orchestrator; it is not sent back to the API.
         if thinking_parts:
             raw["thinking"] = "\n".join(thinking_parts)
 

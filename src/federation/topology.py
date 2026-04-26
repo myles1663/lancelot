@@ -300,7 +300,22 @@ class TopologyRegistry:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            for pid, pdata in data.get("peers", {}).items():
+            if not isinstance(data, dict):
+                logger.info(
+                    "Ignoring legacy topology payload at %s: expected object, got %s",
+                    path,
+                    type(data).__name__,
+                )
+                return
+            peers = data.get("peers", {})
+            if not isinstance(peers, dict):
+                logger.info(
+                    "Ignoring topology peers payload at %s: expected object, got %s",
+                    path,
+                    type(peers).__name__,
+                )
+                return
+            for pid, pdata in peers.items():
                 self._peers[pid] = PeerRecord.from_dict(pdata)
             self._recompute_mode()
             logger.info(

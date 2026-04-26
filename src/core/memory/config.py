@@ -1,5 +1,5 @@
 """
-Memory vNext Configuration — Token budgets, defaults, and settings.
+Structured Memory Configuration — Token budgets, defaults, and settings.
 
 This module defines hard limits and defaults for the memory subsystem.
 """

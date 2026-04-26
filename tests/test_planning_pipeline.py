@@ -156,14 +156,14 @@ class TestEdgeCases:
     def test_gibberish_defaults_to_knowledge_request(self):
         pipeline = PlanningPipeline()
         result = pipeline.process("asdf jkl xyz qwerty")
-        # V9: Unrecognized input defaults to KNOWLEDGE_REQUEST (not PLAN_REQUEST)
+        # Unrecognized input defaults to KNOWLEDGE_REQUEST (not PLAN_REQUEST)
         # so Gemini gives a natural response instead of generating a plan
         assert result.intent == IntentType.KNOWLEDGE_REQUEST
 
     def test_exec_request_builds_plan_artifact(self):
         pipeline = PlanningPipeline()
         result = pipeline.process("Deploy the application")
-        # V3: EXEC_REQUEST builds a PlanArtifact so orchestrator can
+        # EXEC_REQUEST builds a PlanArtifact so orchestrator can
         # compile it into a TaskGraph → permission prompt → execution
         assert result.intent == IntentType.EXEC_REQUEST
         assert result.artifact is not None

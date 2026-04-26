@@ -1,5 +1,5 @@
 """
-vNext2 Regression tests — Prompt 17 / H1-H5.
+Subsystem hardening regression tests.
 
 Covers:
     - Feature flags (_env_bool, reload, defaults, log)

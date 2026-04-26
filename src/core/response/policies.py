@@ -1,7 +1,7 @@
 """
 Output Hygiene Policies — enforces chat cleanliness and War Room routing.
 
-V29: Channel-aware limits — War Room gets full content, Telegram stays tight.
+Channel-aware limits: War Room gets full content, Telegram stays tight.
 
 Rules:
 - Chat output: goal (1 line) + plan summary (<=15 lines) + status (1-3 lines)
@@ -33,7 +33,7 @@ _USER_MESSAGE_PARAM = re.compile(
     re.IGNORECASE,
 )
 
-# ── Gemini tool-call syntax (Fix Pack V3) ──
+# ── Gemini tool-call syntax ──
 # "Action:I will now browse..." prefix line
 _ACTION_PREFIX = re.compile(
     r"^Action:\s?.*$",
@@ -66,7 +66,7 @@ class OutputPolicy:
     MAX_NEXT_ACTIONS = 5
     MAX_STATUS_LINES = 3
 
-    # V29: Auto-document thresholds — content exceeding these triggers
+    # Auto-document thresholds — content exceeding these triggers
     # automatic document creation so nothing gets lost
     AUTO_DOCUMENT_LINES = 200
     AUTO_DOCUMENT_CHARS = 8000
@@ -92,7 +92,7 @@ class OutputPolicy:
     )
 
     # Section headers that are allowed in chat output
-    # V26: Broadened to include common research/analysis headers
+    # Broadened to include common research/analysis headers
     _CHAT_HEADERS = re.compile(
         r"^##\s*(Goal|Plan\s+Steps|Next\s+Action|Summary|Executive\s+Summary|"
         r"Findings|Analysis|Comparison|Competitive\s+Analysis|Recommendations|"
@@ -110,7 +110,7 @@ class OutputPolicy:
         text = _TOOL_SCAFFOLDING.sub("", text)
         text = _MODEL_REFERENCE.sub("", text)
         text = _USER_MESSAGE_PARAM.sub("", text)
-        # Gemini tool-call syntax (Fix Pack V3)
+        # Gemini tool-call syntax
         text = _ACTION_PREFIX.sub("", text)
         text = _TOOL_CODE_BLOCK.sub("", text)
         text = _TOOL_CODE_INLINE.sub("", text)
@@ -130,7 +130,7 @@ class OutputPolicy:
     def enforce_chat_limits(text: str, channel: str = "api") -> str:
         """Truncate chat output based on delivery channel.
 
-        V29: Channel-aware limits:
+        Channel-aware limits:
         - warroom: 500 lines (full web UI)
         - telegram: 60 lines (4096 char constraint)
         - api/default: 80 lines
@@ -158,7 +158,7 @@ class OutputPolicy:
     def needs_auto_document(text: str) -> bool:
         """Check if content is long enough to warrant automatic document creation.
 
-        V29: Triggers document_creator for long research results so full
+        Triggers document_creator for long research results so full
         content is persisted even if chat display truncates.
         """
         lines = text.split("\n")
@@ -186,7 +186,7 @@ class OutputPolicy:
             if not section.strip():
                 continue
             # If it starts with ##, check if it's a KNOWN VERBOSE section
-            # V26: Inverted logic — use blocklist (verbose headers) instead
+            # Use blocklist (verbose headers) instead
             # of whitelist (chat headers).  Agentic-loop responses produce
             # many legitimate ## sections (skills lists, research results,
             # competitive analyses) that are NOT planner scaffolding.

@@ -1,5 +1,5 @@
 """
-Tests for Fix Pack V3 — Intent Classifier broadened keywords + default fix.
+Tests for intent classifier keyword broadening and default routing.
 
 Validates:
 - "set up a way for us to communicate" → EXEC_REQUEST (new "set" keyword)
@@ -138,7 +138,7 @@ class TestBroadenedKnowledge:
 # ---------------------------------------------------------------------------
 
 class TestRegressionExisting:
-    """Ensure V1/V2 classifications haven't broken."""
+    """Ensure existing classifications have not regressed."""
 
     def test_plan_keyword(self):
         assert classify_intent("plan the migration") == IntentType.PLAN_REQUEST

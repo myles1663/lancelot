@@ -150,7 +150,7 @@ def scrub_environ() -> None:
 def reload(vault) -> Dict[str, bool]:
     """Re-read all vault keys into cache. Returns dict of changed keys.
 
-    Used for hot rotation (Phase 2). The dict maps env_key → True if
+    Used for hot rotation. The dict maps env_key → True if
     the value changed, False if unchanged.
     """
     changed: Dict[str, bool] = {}

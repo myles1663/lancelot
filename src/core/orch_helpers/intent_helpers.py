@@ -1,4 +1,4 @@
-# V30: Intent classification helper functions extracted from orchestrator.py
+# Intent classification helper functions extracted from orchestrator.py
 # These are pure functions — no instance state, no side effects.
 # Kept separate so routing logic stays readable and testable.
 
@@ -8,11 +8,11 @@ import re
 def is_conversational(prompt: str) -> bool:
     """Detect purely conversational messages that need no tools.
 
-    Fix Pack V13: Prevents simple chat (greetings, name preferences,
+    Prevents simple chat (greetings, name preferences,
     thanks) from entering the agentic loop where Gemini may hallucinate
     tool calls for messages that just need a text response.
 
-    Fix Pack V17b: Split into two categories:
+    Split into two categories:
     - Always-conversational (greetings, thanks, farewells) — match on prefix
     - Confirmation words ("yes", "ok", "sure") — only conversational if the
       message is JUST the word (+ optional punctuation/filler). If there's
@@ -60,7 +60,7 @@ def is_conversational(prompt: str) -> bool:
 def is_continuation(message: str) -> bool:
     """Detect messages that are conversational continuations of a prior thread.
 
-    V17: Short messages that reference previous context ("it", "that", "this",
+    Short messages that reference previous context ("it", "that", "this",
     "the spec", "the plan") should flow through the agentic loop where the
     full conversation history provides context, rather than being routed to
     the template-based PlanningPipeline which has no conversation awareness.
@@ -85,14 +85,14 @@ def is_continuation(message: str) -> bool:
         "what else", "anything else",
         "yes", "yeah", "yep", "no", "nah", "nope",
         "ok do", "okay do", "sure do", "sure,",
-        # V17b: Confirmation + comma implies more content follows
+        # Confirmation + comma implies more content follows
         "ok,", "okay,", "alright,", "cool,",
         "yes,", "yeah,", "yep,", "no,", "nah,",
-        # V17b: Common action follow-ups
+        # Common action follow-ups
         "do it", "try it", "run it", "send it", "save it",
         "delete it", "rename it", "retry", "try again",
         "go for it", "proceed", "continue", "carry on",
-        # V20: Correction / redirect signals
+        # Correction / redirect signals
         "correction", "change it to", "switch to", "redirect",
         "no no", "wait", "hold on", "not that",
         "use telegram", "use slack", "use email",
@@ -101,7 +101,7 @@ def is_continuation(message: str) -> bool:
     if any(signal in msg_lower for signal in continuation_signals):
         return True
 
-    # V17b: "it" at end of string (word boundary) — "ok create it", "just do it"
+    # "it" at end of string (word boundary) — "ok create it", "just do it"
     if msg_lower.endswith(" it") or msg_lower == "it":
         return True
 
@@ -115,7 +115,7 @@ def is_continuation(message: str) -> bool:
 def needs_research(prompt: str) -> bool:
     """Detect queries requiring tool-backed research.
 
-    Fix Pack V10: Returns True for open-ended exploratory queries where
+    Returns True for open-ended exploratory queries where
     Gemini should use network_client to research before answering.
     Prevents Gemini from generating "I will research..." text that gets
     blocked by the response governor.
@@ -131,7 +131,7 @@ def needs_research(prompt: str) -> bool:
         "can you find", "can you figure",
         "how can we", "how could we",
         "recommend", "suggest",
-        # V14: Additional research triggers
+        # Additional research triggers
         "what about", "have you heard of", "do you know about",
         "see if", "check if", "check out",
         "alternative", "alternatives", "other options",
@@ -140,13 +140,13 @@ def needs_research(prompt: str) -> bool:
         "is there a free", "free way to", "free option",
         "what's the best", "what is the best",
         "come up with a plan", "plan for",
-        # V18/V20: Tool-action triggers — specific phrases only (not bare keywords)
+        # Tool-action triggers — specific phrases only (not bare keywords)
         "send a message", "send me a message",
         "send a telegram message", "send via telegram", "send on telegram",
         "send to telegram", "send to the war room", "send to warroom",
         "notify me via", "message me on",
         "post to the dashboard", "push to command center",
-        # V19: Scheduling triggers — specific phrases
+        # Scheduling triggers — specific phrases
         "schedule a", "set an alarm", "set a reminder",
         "wake me up", "wake-up call",
         "set up a recurring", "every morning at", "every day at", "every hour",
@@ -174,7 +174,7 @@ def needs_research(prompt: str) -> bool:
     if re.search(r'\bwhat\s+about\s+\w+', prompt_lower):
         return True
 
-    # V15: Delegation patterns — "prompt X to do Y", "ask X to do Y"
+    # Delegation patterns — "prompt X to do Y", "ask X to do Y"
     if re.search(
         r'\b(?:prompt|ask|tell|invoke|use)\s+\w+(?:\s+\w+)?\s+to\b',
         prompt_lower,
@@ -187,7 +187,7 @@ def needs_research(prompt: str) -> bool:
 def wants_action(prompt: str) -> bool:
     """Detect queries where the user wants Lancelot to take action.
 
-    Fix Pack V12: Returns True when the user expects code writing,
+    Returns True when the user expects code writing,
     file creation, or system configuration — not just information.
     Used to set allow_writes=True in the agentic loop.
     """
@@ -205,7 +205,7 @@ def wants_action(prompt: str) -> bool:
 
 
 def is_low_risk_exec(prompt: str) -> bool:
-    """V21: Detect execution requests that are low-risk (read-only or text generation).
+    """Detect execution requests that are low-risk (read-only or text generation).
 
     Used by just-do-it mode to skip PlanningPipeline -> TaskGraph -> Permission
     for actions that have no destructive side effects. These go straight to
@@ -248,7 +248,7 @@ def is_low_risk_exec(prompt: str) -> bool:
 
 
 def extract_literal_terms(text: str) -> list:
-    """V22: Extract high-confidence proper nouns and quoted strings to preserve verbatim.
+    """Extract high-confidence proper nouns and quoted strings to preserve verbatim.
 
     Returns a list of terms that should NOT be corrected, substituted,
     or interpreted by the LLM. These are injected into the agentic loop

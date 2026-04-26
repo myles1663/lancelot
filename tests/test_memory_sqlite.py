@@ -1,5 +1,5 @@
 """
-Tests for Memory vNext SQLite stores with FTS5 search.
+Tests for structured memory SQLite stores with FTS5 search.
 
 These tests validate:
 - SQLite persistence for tiered memory

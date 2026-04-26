@@ -1,5 +1,5 @@
 """
-Response Presenter — converts structured agentic output to readable chat text (V23).
+Response Presenter — converts structured agentic output to readable chat text.
 
 The presentation layer sits between the agentic loop's structured JSON output and
 the user-facing chat response. It:
@@ -118,12 +118,12 @@ class ResponsePresenter:
                 result = verifier.verify(response_text, receipts)
                 if not result.is_clean:
                     logger.info(
-                        "V23 presenter: %d claims flagged in response_to_user",
+                        "Presenter flagged %d claims in response_to_user",
                         len(result.flagged_claims),
                     )
                 response_text = result.cleaned_text
             except Exception as e:
-                logger.warning("V23 claim verification failed: %s", e)
+                logger.warning("Claim verification failed: %s", e)
 
         # 3. Build final chat output
         return self._format_chat(response_text, verified_actions, next_action)
@@ -149,7 +149,7 @@ class ResponsePresenter:
             result = verifier.verify(raw_text, receipts)
             return result.cleaned_text
         except Exception as e:
-            logger.warning("V23 fallback claim verification failed: %s", e)
+            logger.warning("Fallback claim verification failed: %s", e)
             return raw_text
 
     def _verify_actions(
@@ -184,7 +184,7 @@ class ResponsePresenter:
             if tool not in receipt_by_tool:
                 # No receipt for this tool — the model hallucinated this action
                 logger.info(
-                    "V23 presenter: dropped hallucinated action '%s' (no receipt)",
+                    "Presenter dropped hallucinated action '%s' (no receipt)",
                     tool,
                 )
                 continue
@@ -207,7 +207,7 @@ class ResponsePresenter:
                 if actual_failed:
                     action = {**action, "status": "failed"}
                     logger.info(
-                        "V23 presenter: corrected '%s' status from success to failed",
+                        "Presenter corrected '%s' status from success to failed",
                         tool,
                     )
                 elif actual_escalated:
@@ -220,7 +220,7 @@ class ResponsePresenter:
 
         dropped = len(actions) - len(verified)
         if dropped:
-            logger.info("V23 presenter: dropped %d/%d unverified actions", dropped, len(actions))
+            logger.info("Presenter dropped %d/%d unverified actions", dropped, len(actions))
 
         return verified
 
@@ -246,7 +246,7 @@ class ResponsePresenter:
         if response_text:
             parts.append(response_text.strip())
 
-        # V26: Action receipt lines ([x], [+]) are no longer appended to chat.
+        # Action receipt lines ([x], [+]) are no longer appended to chat.
         # The model's response_to_user already describes actions taken. Receipt
         # lines are audit artifacts — they clutter the chat and the duplicate
         # detection heuristic was unreliable, causing repetition at the end of

@@ -1,5 +1,5 @@
 """
-Tests for Memory vNext REST API.
+Tests for structured memory REST API.
 
 These tests validate:
 - Core block endpoints

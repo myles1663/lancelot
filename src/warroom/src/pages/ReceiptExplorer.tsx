@@ -7,7 +7,7 @@ import { formatTimestamp } from '@/utils/dateFormat'
 
 const TIER_LABELS = ['T0', 'T1', 'T2', 'T3']
 
-// V29: Action type display config — color-coded badges
+// Action type display config — color-coded badges
 const ACTION_TYPE_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   tool_call:     { label: 'Tool Call',    color: 'text-blue-400',   bg: 'bg-blue-400/15' },
   llm_call:      { label: 'LLM Call',     color: 'text-purple-400', bg: 'bg-purple-400/15' },

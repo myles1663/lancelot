@@ -121,7 +121,7 @@ SCHEMA_V2 = """
 -- BAL Schema Version 2: Client Manager enhancements
 ALTER TABLE bal_clients ADD COLUMN memory_block_id TEXT;
 
--- Enforce email uniqueness (replaces non-unique index from V1)
+-- Enforce email uniqueness (replaces previous non-unique index)
 DROP INDEX IF EXISTS idx_bal_clients_email;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_bal_clients_email ON bal_clients(email);
 """

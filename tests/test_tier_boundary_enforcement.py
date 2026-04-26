@@ -1,4 +1,4 @@
-"""Tests for vNext4 T2/T3 Boundary Enforcement (Prompt 20).
+"""Tests for T2/T3 boundary enforcement.
 
 Validates the critical safety invariant: before ANY T2/T3 action,
 all pending batch receipts are flushed and async verifications completed.

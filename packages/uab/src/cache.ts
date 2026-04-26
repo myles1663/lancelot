@@ -1,7 +1,7 @@
 /**
  * UAB Smart Cache — Intelligent element tree caching with TTL & invalidation.
  *
- * Phase 4: Performance optimization.
+ * Performance optimization.
  * - Per-PID element tree caching with configurable TTL
  * - Automatic invalidation on mutating actions (click, type, etc.)
  * - Query result caching with selector-based keys

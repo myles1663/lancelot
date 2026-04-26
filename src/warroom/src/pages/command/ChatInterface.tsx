@@ -1,5 +1,5 @@
 import { Fragment, useState, useRef, useEffect, useCallback } from 'react'
-import { cancelChatRun, fetchChatRuns, retryChatRun, sendMessageAsync, sendMessageWithFiles } from '@/api'
+import { cancelChatRun, fetchChatRuns, resumeWorkItem, retryChatRun, sendMessageAsync, sendMessageWithFiles } from '@/api'
 import { fetchChatHistory } from '@/api/chat'
 import { resolveActionCard } from '@/api/actioncards'
 import { ChatMessage } from './ChatMessage'
@@ -24,15 +24,15 @@ function formatProgressPhase(phase: string): string {
 
 function fallbackProgressMessage(elapsedSeconds: number): string {
   if (elapsedSeconds >= 60) {
-    return 'Still waiting on the backend response. Check live events, container logs, or model latency if this continues.'
+    return 'No progress event yet. Check active work, container logs, or model latency if this continues.'
   }
   if (elapsedSeconds >= 25) {
-    return 'Waiting for a long-running governed step to return.'
+    return 'Still queued or running; Lancelot may be waiting on model or tool latency.'
   }
   if (elapsedSeconds >= 10) {
-    return 'Waiting for live governance progress.'
+    return 'Waiting for the next governance progress event.'
   }
-  return 'Processing request.'
+  return 'Submitting to the governed execution queue.'
 }
 
 function ProgressSpinner() {
@@ -152,6 +152,10 @@ function latestProgressEvent(run: ChatRunState): ChatRunProgressEvent | undefine
   return events.length > 0 ? events[events.length - 1] : undefined
 }
 
+function recentProgressEvents(run: ChatRunState): ChatRunProgressEvent[] {
+  return [...(run.progress_events || [])].slice(-3)
+}
+
 function waitReasonForRun(run: ChatRunState, progress?: ChatRunProgressEvent): string {
   if (progress?.wait_reason) return progress.wait_reason
   if (run.phase === 'waiting_worker_slot') return 'worker_slot'
@@ -175,6 +179,18 @@ function waitReasonHeadline(status: string, waitReason: string): string {
     return 'Waiting for Commander approval.'
   }
   return ''
+}
+
+function waitReasonBadge(waitReason?: string): string {
+  if (!waitReason) return 'WAITING'
+  const labels: Record<string, string> = {
+    worker_slot: 'WORKER',
+    provider_call: 'PROVIDER',
+    finalization: 'FINALIZE',
+    approval: 'APPROVAL',
+    tool_execution: 'TOOL',
+  }
+  return labels[waitReason] || waitReason.replace(/_/g, ' ').toUpperCase()
 }
 
 function progressAgeSeconds(run: ChatRunState, nowSeconds: number): number | null {
@@ -255,6 +271,7 @@ function ChatRunIndicator({
     progressMessage && progressMessage !== statusHeadline
       ? progressMessage
       : fallbackSupplementalMessage
+  const recentEvents = recentProgressEvents(run)
   return (
     <div className={`bg-surface-card border rounded-lg px-4 py-3 my-2 animate-slide-in ${
       hasDegradedProgress || hasSlowProgress ? 'border-state-degraded/50' : 'border-border-default'
@@ -277,6 +294,26 @@ function ChatRunIndicator({
             <p className="mt-0.5 text-[10px] font-mono text-text-muted truncate">
               {phaseTimingSummary(run)}
             </p>
+            {recentEvents.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {recentEvents.map((event, index) => (
+                  <div
+                    key={`${event.at}-${event.phase}-${index}`}
+                    className="grid grid-cols-[5.5rem_minmax(0,1fr)_3.5rem] gap-2 text-[10px] leading-relaxed"
+                  >
+                    <span className="font-mono uppercase text-text-muted truncate">
+                      {formatProgressPhase(event.phase)}
+                    </span>
+                    <span className="text-text-secondary truncate">
+                      {event.message}
+                    </span>
+                    <span className="font-mono text-right text-text-muted">
+                      {formatElapsed(event.elapsed_ms)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             {degradedProgress && (
               <div className="mt-2 border-l-2 border-state-degraded pl-2">
                 <p className="text-[10px] font-medium text-state-degraded">
@@ -331,7 +368,7 @@ function ChatRunIndicator({
           )}
           {isActive && waitReason && (
             <span className="text-[9px] px-1.5 py-0.5 rounded font-mono font-semibold uppercase tracking-wider bg-accent-primary/15 text-accent-primary">
-              WAITING
+              {waitReasonBadge(waitReason)}
             </span>
           )}
           {hasSlowProgress && (
@@ -660,7 +697,7 @@ export function ChatInterface() {
       setRunActionPendingId(cardId)
       try {
         if (questId) {
-          const result = await retryChatRun(questId)
+          const result = await resumeWorkItem(questId)
           trackChatRun(result.run)
           markApprovedCardsResumed([cardId])
           return
@@ -747,7 +784,11 @@ export function ChatInterface() {
                     ? 'bg-accent-primary/15 text-accent-primary'
                     : 'bg-accent-primary/20 text-accent-primary'
               }`}>
-                {activeChatProgress.degraded ? 'DEGRADED' : activeChatProgress.waitReason ? 'WAITING' : 'LIVE'}
+                {activeChatProgress.degraded
+                  ? 'DEGRADED'
+                  : activeChatProgress.waitReason
+                    ? waitReasonBadge(activeChatProgress.waitReason)
+                    : 'LIVE'}
               </span>
             </div>
           </div>

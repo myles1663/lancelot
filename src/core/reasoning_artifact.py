@@ -1,10 +1,10 @@
 """
-Reasoning Artifact — Data structures for the Autonomy Loop v2 (V25).
+Reasoning Artifact — data structures for deep reasoning and task experience.
 
 Provides:
-    ReasoningArtifact  — output of the deep reasoning pass (Phase 1)
-    TaskExperience     — episodic record of a completed task (Phase 6)
-    GovernanceFeedback — structured feedback when Sentry blocks an action (Phase 3)
+    ReasoningArtifact  — output of the deep reasoning pass
+    TaskExperience     — episodic record of a completed task
+    GovernanceFeedback — structured feedback when Sentry blocks an action
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 
 # ---------------------------------------------------------------------------
-# Phase 1: Deep Reasoning Pass
+# Deep Reasoning Pass
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -38,7 +38,7 @@ class ReasoningArtifact:
     def to_context_block(self) -> str:
         """Format as a context block for injection into the agentic loop."""
         lines = [
-            "--- DEEP REASONING (Phase 1 Analysis) ---",
+            "--- DEEP REASONING ANALYSIS ---",
             self.reasoning_text,
         ]
         if self.capability_gaps:
@@ -60,7 +60,7 @@ class ReasoningArtifact:
 
 
 # ---------------------------------------------------------------------------
-# Phase 6: Task Experience Memory
+# Task Experience Memory
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -129,7 +129,7 @@ class TaskExperience:
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: Governed Negotiation
+# Governed Negotiation
 # ---------------------------------------------------------------------------
 
 @dataclass

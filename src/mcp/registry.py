@@ -19,7 +19,7 @@ the CredentialVault with scoped access policy checks. This ensures:
     4. Vault audit trail tracks every credential retrieval
 
 Transport restriction:
-    Phase 1 supports HTTP+SSE transport ONLY. No stdio process spawning.
+    Current transport support is HTTP+SSE only. No stdio process spawning.
     See client.py header comment for the security rationale.
 """
 
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 class MCPTransport(str, Enum):
     """Supported MCP transport protocols.
 
-    Phase 1: HTTP+SSE only. Stdio is explicitly excluded because
+    HTTP+SSE only. Stdio is explicitly excluded because
     spawning host processes inside a governed container is an
     unacceptable attack surface.
     """

@@ -99,7 +99,7 @@ async def receipt_stats(
 
 @router.get("/{receipt_id}/context")
 async def get_receipt_context(receipt_id: str):
-    """V29: Get a receipt's relational context — children, parent summary, quest sibling count.
+    """Get a receipt's relational context: children, parent summary, quest sibling count.
 
     Called by the Receipt Explorer when a row is expanded to provide
     context about what the receipt is connected to.

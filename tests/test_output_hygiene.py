@@ -1,5 +1,5 @@
 """
-Tests for Fix Pack V2+V3 — Output Hygiene: tool parameter + Gemini syntax stripping.
+Tests for output hygiene: tool parameter and Gemini syntax stripping.
 
 Validates that internal tool call syntax (Tool:, Params:, model=, user_message=)
 and Gemini tool-call syntax (Action:, Tool_Code, print()) never reach the user.
@@ -87,7 +87,7 @@ class TestStripToolScaffolding:
         result = self.policy.strip_tool_scaffolding(text)
         assert "()" not in result
 
-    # ── V3: Gemini tool-call syntax ──
+    # ── Gemini tool-call syntax ──
 
     def test_strips_action_prefix_with_space(self):
         text = "Action: I will now browse the internet."
@@ -239,7 +239,7 @@ class TestTelegramSanitize:
     def test_empty_string(self):
         assert self.bot._sanitize_for_telegram("") == ""
 
-    # ── V3: Gemini tool-call syntax in Telegram ──
+    # ── Gemini tool-call syntax in Telegram ──
 
     def test_strips_action_prefix_telegram(self):
         text = 'Action:I will now browse the internet and search for "Does Slack offer a free use account?".'

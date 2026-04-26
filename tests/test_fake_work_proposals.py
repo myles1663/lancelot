@@ -101,9 +101,9 @@ class TestDetectFakeWorkProposal:
 
     def test_time_estimates_trigger(self):
         result = detect_fake_work_proposal(
-            "Phase 1: Research (2 hours)\n"
-            "Phase 2: Prototype Development (4 hours)\n"
-            "Phase 3: Testing (1 hour)\n"
+            "Stage 1: Research (2 hours)\n"
+            "Stage 2: Prototype Development (4 hours)\n"
+            "Stage 3: Testing (1 hour)\n"
             "I recommend starting with the feasibility study."
         )
         assert result is not None
@@ -119,11 +119,11 @@ class TestDetectFakeWorkProposal:
 
     def test_multi_phase_plan(self):
         result = detect_fake_work_proposal(
-            "Phase 1: Initial Research\n"
+            "Stage 1: Initial Research\n"
             "I will investigate the Telegram Bot API.\n"
-            "Phase 2: Prototype Development\n"
+            "Stage 2: Prototype Development\n"
             "I will build a proof of concept.\n"
-            "Phase 3: Integration Testing\n"
+            "Stage 3: Integration Testing\n"
             "I will evaluate the complete solution."
         )
         assert result is not None
@@ -192,8 +192,8 @@ class TestEnforcementWithFakeWorkProposal:
     def test_fake_work_blocked(self):
         ctx = ResponseContext(
             text=(
-                "Phase 1: Research (2 hours)\n"
-                "Phase 2: Development (4 hours)\n"
+                "Stage 1: Research (2 hours)\n"
+                "Stage 2: Development (4 hours)\n"
                 "I recommend starting with the feasibility study."
             )
         )
@@ -203,8 +203,8 @@ class TestEnforcementWithFakeWorkProposal:
     def test_fake_work_allowed_with_job(self):
         ctx = ResponseContext(
             text=(
-                "Phase 1: Research (2 hours)\n"
-                "Phase 2: Development (4 hours)\n"
+                "Stage 1: Research (2 hours)\n"
+                "Stage 2: Development (4 hours)\n"
                 "I recommend starting with the feasibility study."
             )
         )

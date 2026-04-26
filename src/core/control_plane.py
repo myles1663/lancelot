@@ -151,7 +151,7 @@ def init_control_plane(data_dir: str) -> None:
     init_runtime_pause(data_dir)
     init_model_usage_policy(data_dir)
 
-    # Fix Pack V1: Try to initialize token store for War Room endpoints
+    # Try to initialize token store for War Room endpoints
     try:
         from pathlib import Path
         from src.core.execution_authority.store import ExecutionTokenStore
@@ -510,7 +510,7 @@ async def onboarding_status():
     try:
         snap = get_snapshot()
         model_usage = get_model_usage_status()
-        # V27: Read provider mode from env
+        # Read provider mode from env
         provider_mode = os.environ.get("LANCELOT_PROVIDER_MODE", "sdk")
         return {
             "state": snap.state.value,
@@ -759,7 +759,7 @@ async def usage_reset():
 
 
 # ------------------------------------------------------------------
-# /warroom/* — War Room Artifact endpoints (Fix Pack V1 PR1)
+# /warroom/* — War Room artifact endpoints
 # ------------------------------------------------------------------
 
 @router.post(
@@ -823,7 +823,7 @@ async def warroom_get_artifact(artifact_id: str):
 
 
 # ------------------------------------------------------------------
-# /tokens/* — ExecutionToken endpoints (Fix Pack V1 PR3)
+# /tokens/* — ExecutionToken endpoints
 # ------------------------------------------------------------------
 
 @router.get("/tokens", dependencies=[Depends(require_authenticated_request), Depends(require_operator_capability("platform.admin"))])

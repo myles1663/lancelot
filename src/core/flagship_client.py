@@ -55,13 +55,13 @@ class FlagshipClient:
         self._provider = provider
         self._profile = profile
         self._api_key: Optional[str] = None
-        self._oauth_token: Optional[str] = None  # V28: OAuth bearer token
+        self._oauth_token: Optional[str] = None  # OAuth bearer token
 
         env_var = _API_KEY_VARS.get(provider)
         if env_var:
             self._api_key = os.environ.get(env_var)
 
-        # V28: Check for OAuth token (Anthropic only) — via in-memory cache (F-009)
+        # Check for OAuth token (Anthropic only) via in-memory cache.
         if provider == "anthropic":
             try:
                 from oauth_token_manager import get_oauth_token
@@ -102,7 +102,7 @@ class FlagshipClient:
                 f"(set {_API_KEY_VARS.get(self._provider, 'UNKNOWN')})"
             )
 
-        # V28: Refresh OAuth token from cache (background refresh thread updates it)
+        # Refresh OAuth token from cache; the background refresh thread updates it.
         if self._provider == "anthropic" and not self._api_key:
             try:
                 from oauth_token_manager import get_oauth_token
@@ -191,7 +191,7 @@ class FlagshipClient:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": temperature,
         }
-        # V28: Use Bearer auth for OAuth, x-api-key for API key
+        # Use Bearer auth for OAuth, x-api-key for API key.
         if self._oauth_token and not self._api_key:
             headers = {
                 "Authorization": f"Bearer {self._oauth_token}",

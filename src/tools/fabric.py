@@ -76,6 +76,24 @@ from src.core.feature_flags import (
 )
 
 logger = logging.getLogger(__name__)
+_OPERATOR_NOTICE_LOGGER = logging.getLogger("lancelot.operator_notice")
+
+
+def _emit_operator_notice_once(code: str, template: str, *args: Any) -> None:
+    """Emit startup capability notices once even if this module is imported by aliases."""
+    emitted = getattr(_OPERATOR_NOTICE_LOGGER, "_lancelot_emitted_notice_codes", None)
+    if emitted is None:
+        emitted = set()
+        setattr(_OPERATOR_NOTICE_LOGGER, "_lancelot_emitted_notice_codes", emitted)
+    if code in emitted:
+        return
+    emitted.add(code)
+    detail = template % args if args else template
+    _OPERATOR_NOTICE_LOGGER.warning(
+        "operator_notice category=capability_enabled code=%s message=%s",
+        code,
+        detail,
+    )
 
 
 # =============================================================================
@@ -179,8 +197,9 @@ class ToolFabric:
                 workspace=self.config.default_workspace,
             )
             self._health_monitor.register(host_provider)
-            logger.warning(
-                "HOST EXECUTION ENABLED — commands will run in container Linux environment"
+            _emit_operator_notice_once(
+                "host_execution_enabled",
+                "Host execution provider enabled; commands run in container Linux.",
             )
 
         # Host bridge provider (real host OS via Host Agent)
@@ -189,8 +208,9 @@ class ToolFabric:
                 workspace=self.config.default_workspace,
             )
             self._health_monitor.register(bridge_provider)
-            logger.warning(
-                "HOST BRIDGE ENABLED — commands will be sent to host agent at %s",
+            _emit_operator_notice_once(
+                "host_bridge_enabled",
+                "Host bridge provider enabled; commands can cross to host agent at %s.",
                 bridge_provider.config.agent_url,
             )
 
@@ -207,8 +227,9 @@ class ToolFabric:
             from src.tools.providers.uab_bridge import UABProvider
             uab_provider = UABProvider()
             self._health_monitor.register(uab_provider)
-            logger.warning(
-                "UAB BRIDGE ENABLED — desktop app control via daemon at %s",
+            _emit_operator_notice_once(
+                "uab_bridge_enabled",
+                "UAB desktop bridge enabled via daemon at %s.",
                 uab_provider.config.daemon_url,
             )
 

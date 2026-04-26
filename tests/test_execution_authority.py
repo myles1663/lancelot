@@ -1,5 +1,5 @@
 """
-Tests for ExecutionToken schema, store, and minter (Fix Pack V1 PR3).
+Tests for ExecutionToken schema, store, and minter.
 """
 
 import os

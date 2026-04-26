@@ -7,7 +7,7 @@
 Google OAuth 2.0 Token Manager — Authorization Code + PKCE flow,
 vault-backed token storage, auto-refresh, and connector fan-out.
 
-V26: Adds Google OAuth 2.0 as a built-in flow so users can enter
+Adds Google OAuth 2.0 as a built-in flow so users can enter
 their Google Cloud Client ID + Secret and Lancelot handles the
 consent redirect, code exchange, encrypted token storage, background
 refresh, and fan-out to Gmail + Calendar connector vault keys.

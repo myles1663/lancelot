@@ -306,8 +306,8 @@ def detect_forbidden_async_language(text: str) -> List[str]:
     return found
 
 
-# Fix Pack V6/V14: Phrases allowed ONLY when backed by REAL tool receipts.
-# V14: Removed future-tense stalling phrases. Only past-tense (proof of
+# Phrases allowed ONLY when backed by REAL tool receipts.
+# Future-tense stalling phrases are excluded. Only past-tense (proof of
 # completed work) and imperative "let me X" (system will immediately execute)
 # are allowed. "I will provide" and "I'll proceed with" were letting stalling
 # slip through when no tools were actually called.
@@ -324,7 +324,7 @@ _AGENTIC_ALLOWED_PHRASES = {
 def filter_forbidden_for_agentic_context(violations: List[str], has_tool_receipts: bool = False) -> List[str]:
     """Filter out research-related violations when tool receipts are present.
 
-    Fix Pack V6: When the agentic loop has actually called tools (network_client,
+    When the agentic loop has actually called tools (network_client,
     command_runner, etc.), phrases like "I researched X" or "I will investigate"
     are legitimate — they describe real tool-backed work, not simulated progress.
 

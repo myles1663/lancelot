@@ -1,5 +1,5 @@
 """
-Memory vNext SQLite Store — Tiered memory persistence with FTS5 search.
+Structured Memory SQLite Store — Tiered memory persistence with FTS5 search.
 
 This module provides SQLite-backed storage for:
 - Working Memory (short-lived, task-scoped)

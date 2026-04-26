@@ -1,5 +1,5 @@
 """
-Lancelot vNext4: Intent Template System
+Intent Template System
 
 Caches known-good execution plan skeletons for recurring intents.
 Templates are learned from successful executions and promoted

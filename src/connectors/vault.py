@@ -273,7 +273,7 @@ class CredentialVault:
             try:
                 key = secret_path.read_text(encoding="utf-8").strip()
                 if key:
-                    logger.info("Vault key loaded from Docker secret: %s", secret_path)
+                    logger.debug("Vault key loaded from Docker secret: %s", secret_path)
                     return key, "docker_secret"
             except Exception as exc:
                 logger.warning("Failed to read Docker secret %s: %s", secret_path, exc)

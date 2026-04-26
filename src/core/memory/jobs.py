@@ -1,5 +1,5 @@
 """
-Memory vNext Scheduler Jobs — Background maintenance tasks.
+Structured Memory Scheduler Jobs — Background maintenance tasks.
 
 This module provides scheduled jobs for memory subsystem hygiene:
 - Working Memory Compaction: Consolidate and clean working memory
@@ -27,6 +27,7 @@ from .schemas import (
     Provenance,
     ProvenanceType,
 )
+from .promotion import evaluate_promotion
 
 logger = logging.getLogger(__name__)
 
@@ -259,8 +260,18 @@ class MemoryJobExecutor:
                         ],
                     )
 
-                    archival_store.insert(summary_item)
-                    summaries_created += 1
+                    promotion_decision = evaluate_promotion(summary_item, MemoryTier.archival)
+                    summary_item.status = promotion_decision.suggested_status
+                    summary_item.metadata["promotion_decision"] = promotion_decision.to_dict()
+                    if promotion_decision.allowed:
+                        archival_store.insert(summary_item)
+                        summaries_created += 1
+                    else:
+                        logger.warning(
+                            "Episodic summary for namespace %s was not promoted: %s",
+                            namespace,
+                            promotion_decision.reason,
+                        )
 
                     # Archive original items (lower confidence)
                     for item in batch:

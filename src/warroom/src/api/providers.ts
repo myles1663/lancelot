@@ -124,7 +124,7 @@ export const fetchProviderKeys = () =>
 export const rotateProviderKey = (provider: string, apiKey: string) =>
   apiPost<RotateKeyResponse>('/api/v1/providers/keys/rotate', { provider, api_key: apiKey })
 
-// --- V28: OAuth Management ---
+// --- OAuth Management ---
 
 export interface OAuthInitiateResponse {
   status: string

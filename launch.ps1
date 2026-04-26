@@ -27,6 +27,12 @@ Write-Host ""
 Write-Host "  Lancelot — Pre-flight checks" -ForegroundColor Cyan
 Write-Host ""
 
+# Optional .env recovery
+if (-not (Test-Path ".env")) {
+    Write-Host "  [INFO] .env not found; continuing with compose defaults, Docker secrets, and persisted vault/onboarding state." -ForegroundColor Yellow
+    Write-Host "         Copy .env.example to .env only when you need to override deployment settings." -ForegroundColor Gray
+}
+
 # 1. Docker CLI
 try {
     $null = Get-Command docker -ErrorAction Stop

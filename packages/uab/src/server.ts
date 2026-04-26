@@ -69,28 +69,6 @@ function delay(timeoutMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, timeoutMs));
 }
 
-function isLoopbackBindHost(host: string): boolean {
-  const normalized = host.trim().toLowerCase();
-  return (
-    normalized === 'localhost'
-    || normalized === '::1'
-    || normalized === '[::1]'
-    || normalized === '127.0.0.1'
-    || normalized.startsWith('127.')
-  );
-}
-
-function assertAuthenticatedNetworkBind(host: string, apiKey?: string): void {
-  if ((apiKey?.trim().length ?? 0) > 0 || isLoopbackBindHost(host)) {
-    return;
-  }
-
-  throw new Error(
-    `UABServer refuses unauthenticated non-loopback binding (${host}). `
-    + 'Bind to 127.0.0.1 for local-only use or provide --api-key for network access.',
-  );
-}
-
 export async function waitUntil(
   label: string,
   predicate: () => Promise<boolean>,
@@ -223,7 +201,6 @@ export class UABServer {
       apiKey: options?.apiKey,
       maxBodySize: options?.maxBodySize ?? 1024 * 1024, // 1MB
     };
-    assertAuthenticatedNetworkBind(this.opts.host, this.opts.apiKey);
 
     // Merge environment defaults with user overrides
     this.connector = new UABConnector({

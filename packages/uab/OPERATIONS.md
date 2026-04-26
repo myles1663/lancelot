@@ -72,7 +72,7 @@ cat ~/Library/Application\ Support/UAB\ Bridge/api-key
 
 To regenerate: delete the file and run `uab-bridge install` again.
 
-Installed services configure an API key, so all POST requests require the `X-API-Key` header. GET `/health` is exempt.
+All POST requests require the `X-API-Key` header. GET `/health` is exempt.
 
 ## Logs
 
@@ -189,11 +189,11 @@ v1.0.0 added DPI-aware capture. If screenshots are still small:
 
 ### Default Binding
 
-UABServer binds to `127.0.0.1:3100` by default. Binding to `0.0.0.0` is allowed for VM or remote-agent access only when an API key is configured; the server refuses unauthenticated non-loopback binds.
+UABServer binds to `0.0.0.0:3100` — all network interfaces. This allows VMs (Co-work, WSL2) to reach the server.
 
 ### Firewall
 
-Windows Firewall may prompt when UAB is explicitly bound outside loopback. UAB only needs inbound TCP on port 3100 from trusted local subnets; it does not need outbound internet access for desktop control.
+Windows Firewall may prompt on first run. UAB only needs inbound TCP on port 3100. The server does NOT need internet access — it's localhost-only in practice.
 
 If using a third-party firewall:
 ```

@@ -1,5 +1,5 @@
 """
-Lancelot vNext4: War Room Governance Panel
+War Room Governance Panel
 
 Streamlit panel showing governance pipeline metrics:
 policy cache stats, batch receipt counts, async queue depth,

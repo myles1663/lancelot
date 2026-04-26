@@ -9,7 +9,7 @@ Endpoints:
 The model is loaded once at startup from the path specified by
 LOCAL_MODEL_PATH env var or from the lockfile default.
 
-Fix Pack V8: Added chat completions endpoint with function calling support.
+Provides a chat completions endpoint with function calling support.
 """
 
 import os
@@ -611,7 +611,7 @@ def _postprocess_chat_result(result: dict) -> dict:
 def chat_completions(req: ChatCompletionRequest):
     """OpenAI-compatible chat completions with tool/function calling support.
 
-    Fix Pack V8: Qwen3-8B outputs tool calls as <tool_call> XML tags and
+    Qwen3-8B outputs tool calls as <tool_call> XML tags and
     reasoning as <think> tags. This endpoint post-processes the output to
     convert to standard OpenAI format.
     """

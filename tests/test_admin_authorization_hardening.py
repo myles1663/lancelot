@@ -99,10 +99,15 @@ def _actioncard_client():
     class _Resolver:
         def __init__(self):
             self.calls = []
+            self.archives = []
 
         def resolve(self, *args, **kwargs):
             self.calls.append((args, kwargs))
             return {"status": "approved", "message": "ok"}
+
+        def archive(self, *args, **kwargs):
+            self.archives.append((args, kwargs))
+            return {"status": "archived", "message": "archived"}
 
     resolver = _Resolver()
     actioncard_api.init_actioncard_api(card_store=object(), card_resolver=resolver)
@@ -237,6 +242,44 @@ def test_actioncard_resolution_requires_platform_admin_and_uses_authenticated_id
     assert kwargs["operator_id"] == "op-123"
     assert kwargs["session_id"] == "session-1"
     assert kwargs["actor"] == "Arthur"
+
+
+def test_actioncard_archive_requires_platform_admin_and_uses_authenticated_identity():
+    client, resolver = _actioncard_client()
+    token = "limited-actioncard-archive-session"
+    auth_api._sessions.clear()
+    _insert_session(token, {"warroom.login"})
+    _authenticate_client(client, token)
+
+    response = client.post(
+        "/api/actioncards/card-1/archive",
+        json={"reason": "stale card"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Missing capability: platform.admin"
+    assert resolver.archives == []
+
+    admin_token = "admin-actioncard-archive-session"
+    auth_api._sessions.clear()
+    _insert_session(admin_token, {"warroom.login", "platform.admin"})
+    _authenticate_client(client, admin_token)
+
+    response = client.post(
+        "/api/actioncards/card-2/archive",
+        json={"reason": "stale card"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "archived"
+    assert len(resolver.archives) == 1
+    args, kwargs = resolver.archives[0]
+    assert args == ("card-2",)
+    assert kwargs["channel"] == "warroom_archive"
+    assert kwargs["operator_id"] == "op-123"
+    assert kwargs["session_id"] == "session-1"
+    assert kwargs["actor"] == "Arthur"
+    assert kwargs["reason"] == "stale card"
 
 
 def test_scheduler_routes_require_scheduler_admin_capability():

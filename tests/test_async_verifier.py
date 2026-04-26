@@ -1,4 +1,4 @@
-"""Tests for vNext4 AsyncVerificationQueue (Prompts 12, 14)."""
+"""Tests for AsyncVerificationQueue."""
 
 import os
 import sys

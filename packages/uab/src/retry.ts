@@ -1,7 +1,7 @@
 /**
  * UAB Retry — Error recovery with exponential backoff.
  *
- * Phase 4: Production hardening.
+ * Production hardening.
  * - Exponential backoff with jitter
  * - Configurable retry conditions
  * - Operation timeout wrapper

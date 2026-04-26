@@ -1,5 +1,5 @@
 """
-Lancelot vNext4: Risk-Tiered Governance Data Models
+Risk-Tiered Governance Data Models
 
 Core data types for risk classification, verification tracking,
 and receipt management. These models have zero external dependencies

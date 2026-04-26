@@ -1,1 +1,1 @@
-"""Response assembly and output hygiene — Fix Pack V1 PR1."""
+"""Response assembly and output hygiene."""

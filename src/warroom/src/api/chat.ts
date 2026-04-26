@@ -7,6 +7,10 @@ import type {
   ChatUploadResponse,
   CrusaderStatusResponse,
   CrusaderActionResponse,
+  ActiveWorkResponse,
+  WorkCheckpointResponse,
+  WorkItemResponse,
+  WorkResumeResponse,
 } from '@/types/api'
 
 const CHAT_REQUEST_TIMEOUT_MS = 300000
@@ -37,6 +41,29 @@ export function retryChatRun(runId: string) {
 /** GET /api/chat/runs — Reconcile recent persisted async runs */
 export function fetchChatRuns(limit = 25) {
   return apiGet<ChatRunsResponse>('/api/chat/runs', { limit: String(limit) })
+}
+
+/** GET /api/work/active - Reconcile active work ledger items */
+export function fetchActiveWork(limit = 10) {
+  return apiGet<ActiveWorkResponse>('/api/work/active', { limit: String(limit) })
+}
+
+/** GET /api/work/{quest_id} - Load one active work item with events/checkpoints */
+export function fetchWorkItem(questId: string) {
+  return apiGet<WorkItemResponse>(`/api/work/${encodeURIComponent(questId)}`)
+}
+
+/** POST /api/work/{quest_id}/checkpoint - Create a durable work checkpoint */
+export function checkpointWorkItem(questId: string, reason = 'operator_checkpoint') {
+  return apiPost<WorkCheckpointResponse>(
+    `/api/work/${encodeURIComponent(questId)}/checkpoint`,
+    { reason },
+  )
+}
+
+/** POST /api/work/{quest_id}/resume - Resume retained governed work */
+export function resumeWorkItem(questId: string) {
+  return apiPost<WorkResumeResponse>(`/api/work/${encodeURIComponent(questId)}/resume`)
 }
 
 /** POST /chat/upload — Send a message with file attachments */

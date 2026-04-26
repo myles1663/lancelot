@@ -132,6 +132,41 @@ class ActionCardResolver:
 
         return result
 
+    def archive(
+        self,
+        card_id: str,
+        channel: str,
+        operator_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        actor: Optional[str] = None,
+        reason: str = "",
+    ) -> Dict[str, Any]:
+        """Resolve a stale card as archived without invoking its approval handler."""
+        card = self._store.get(card_id)
+        if card is None:
+            card = self._store.get_by_prefix(card_id)
+        if card is None:
+            return {"status": "error", "message": "Card not found"}
+        if card.resolved:
+            return {
+                "status": "error",
+                "message": f"Already resolved ({card.resolved_action}) via {card.resolved_channel}",
+            }
+
+        result = {
+            "status": "archived",
+            "message": reason or "ActionCard archived by operator.",
+        }
+        self._store.resolve(card.card_id, "archived", channel)
+        self._emit_resolution_event(card, "archived", channel, result)
+        self._create_receipt(card, "archived", channel, result, operator_id, session_id, actor)
+
+        logger.info(
+            "ActionCard archived: card=%s channel=%s system=%s item=%s",
+            card.short_id(), channel, card.source_system, card.source_item_id,
+        )
+        return result
+
     def _emit_resolution_event(
         self, card, button_id: str, channel: str, result: Dict[str, Any]
     ) -> None:

@@ -1,5 +1,5 @@
 """
-Lancelot vNext4: Batch Receipt System
+Batch Receipt System
 
 Reduces I/O overhead for T0/T1 actions by collecting receipts in a buffer
 and flushing as a single JSON artifact. Supports tier-boundary flush and

@@ -1,5 +1,5 @@
 """
-Memory vNext Store — Core block persistence and management.
+Structured Memory Store — Core block persistence and management.
 
 This module provides the CoreBlockStore for persisting and managing
 core memory blocks (persona, human, mission, operating_rules, workspace_state).

@@ -63,7 +63,7 @@ ISO27001_CONTROL_MAP: Dict[str, Dict[str, Any]] = {
     "A.5.17": {
         "description": "Authentication — Session creation records with auth_method",
         "receipt_types": [],
-        "notes": "Phase 1: local auth. Phase 2: SSO adds richer evidence.",
+        "notes": "Local auth provides baseline evidence; SSO adds richer evidence.",
     },
     "A.5.23": {
         "description": "Cloud Services Security — Governed connector and MCP server receipts",

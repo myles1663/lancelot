@@ -3,7 +3,7 @@
 # Licensed under BUSL-1.1. See LICENSE for details.
 
 """
-Governed MCP (Model Context Protocol) — Phase 1.
+Governed MCP (Model Context Protocol).
 
 Every MCP tool invocation routes through the full governance stack:
 

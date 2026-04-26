@@ -23,9 +23,7 @@ if not defined NODE_PATH (
     exit /b 1
 )
 
-if not defined UAB_DAEMON_HOST set "UAB_DAEMON_HOST=127.0.0.1"
-
-"%NODE_PATH%" dist\daemon.js --host "%UAB_DAEMON_HOST%" --port 7900
+"%NODE_PATH%" dist\daemon.js --port 7900
 set "EXIT_CODE=%ERRORLEVEL%"
 popd >nul
 exit /b %EXIT_CODE%

@@ -55,8 +55,7 @@ class OperatorIdentity:
         session_id:   Ephemeral UUID, unique per War Room session.
         session_started_at: ISO 8601 timestamp of session creation.
         auth_method:  How the session was authenticated.
-                      Phase 1: "local" or "api_key".
-                      Phase 2: "sso".
+                      Supported values: "local", "api_key", or "sso".
         ip_address:   Client IP. Redacted in compliance exports. Never shown in UI.
     """
     operator_id: str

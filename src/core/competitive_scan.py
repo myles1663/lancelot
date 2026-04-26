@@ -1,7 +1,7 @@
 """
 Competitive Scan — store and diff competitive intelligence in episodic memory.
 
-V24: When FEATURE_COMPETITIVE_SCAN is enabled, competitive research results
+When FEATURE_COMPETITIVE_SCAN is enabled, competitive research results
 are stored as episodic memory items with structured metadata.  Subsequent
 scans of the same target retrieve previous scans and produce a human-readable
 diff showing new findings, removed findings, and trends over time.
@@ -134,10 +134,15 @@ def store_scan(
     try:
         episodic = memory_store_manager.episodic
         episodic.insert(item)
-        logger.info(f"V24: Stored competitive scan for '{target}' (id={item_id}, {len(findings)} chars)")
+        logger.info(
+            "Stored competitive scan for '%s' (id=%s, %d chars)",
+            target,
+            item_id,
+            len(findings),
+        )
         return item_id
     except Exception as e:
-        logger.warning(f"V24: Failed to store competitive scan: {e}")
+        logger.warning("Failed to store competitive scan: %s", e)
         return None
 
 
@@ -179,10 +184,10 @@ def retrieve_previous_scans(
                 "title": item.title,
             })
 
-        logger.info(f"V24: Retrieved {len(scans)} previous scans for '{target}'")
+        logger.info("Retrieved %d previous scans for '%s'", len(scans), target)
         return scans
     except Exception as e:
-        logger.warning(f"V24: Failed to retrieve previous scans: {e}")
+        logger.warning("Failed to retrieve previous scans: %s", e)
         return []
 
 

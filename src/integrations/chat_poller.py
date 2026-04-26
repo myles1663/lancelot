@@ -1,4 +1,4 @@
-import os
+﻿import os
 import time
 import threading
 import logging
@@ -22,15 +22,13 @@ class ChatPoller:
         self.service = None
         self.space_name = None
         self.running = False
-        self._stop_event = threading.Event()
-        self._poll_thread = None
         self.last_poll_time = datetime.now(timezone.utc).isoformat()
         self._sent_message_ids = deque(maxlen=100)
         self._sent_message_set = set()
-        
+
         # Load config
         self._load_config()
-        
+
         # Initialize Service
         self._init_service()
 
@@ -46,9 +44,9 @@ class ChatPoller:
         """Initializes the Authenticated Chat Service."""
         try:
             # Scopes for reading and writing messages
-            SCOPES = ['https://www.googleapis.com/auth/chat.messages', 
+            SCOPES = ['https://www.googleapis.com/auth/chat.messages',
                       'https://www.googleapis.com/auth/chat.spaces.readonly']
-            
+
             self.creds, project = google.auth.default(scopes=SCOPES)
             self.service = build('chat', 'v1', credentials=self.creds)
             logger.info("ChatPoller: Service initialized successfully.")
@@ -80,7 +78,7 @@ class ChatPoller:
         if not self.service or not target:
             logger.warning("ChatPoller: Cannot send (Service or Space missing).")
             return
-            
+
         try:
             created = self.service.spaces().messages().create(
                 parent=target,
@@ -133,48 +131,24 @@ class ChatPoller:
         """Starts the background polling loop."""
         if self.running or not self.service or not self.space_name:
             return
-            
+
         self.running = True
-        self._stop_event.clear()
-        self._poll_thread = threading.Thread(
-            target=self._poll_loop,
-            daemon=True,
-            name="google-chat-poller",
-        )
-        self._poll_thread.start()
+        threading.Thread(target=self._poll_loop, daemon=True).start()
         logger.info(f"ChatPoller: Started polling {self.space_name}")
 
     def stop_polling(self):
-        was_running = self.running or (
-            self._poll_thread is not None and self._poll_thread.is_alive()
-        )
         self.running = False
-        self._stop_event.set()
-        if self._poll_thread is not None:
-            self._poll_thread.join(timeout=5)
-            if self._poll_thread.is_alive():
-                logger.warning("ChatPoller: Polling thread did not stop within 5s")
-                return
-            self._poll_thread = None
-        if was_running:
-            logger.info("ChatPoller: Polling stopped")
-        else:
-            logger.debug("ChatPoller: Stop skipped; polling was not running")
 
     def _poll_loop(self):
         """Main polling loop."""
-        try:
-            while not self._stop_event.is_set():
-                try:
-                    resp = self.service.spaces().messages().list(
-                        parent=self.space_name,
-                        pageSize=10
-                    ).execute()
-                    self._process_messages(resp.get('messages', []))
-                except Exception as e:
-                    logger.error(f"ChatPoller: Poll error: {e}")
+        while self.running:
+            try:
+                resp = self.service.spaces().messages().list(
+                    parent=self.space_name,
+                    pageSize=10
+                ).execute()
+                self._process_messages(resp.get('messages', []))
+            except Exception as e:
+                logger.error(f"ChatPoller: Poll error: {e}")
 
-                if self._stop_event.wait(timeout=3):
-                    return
-        finally:
-            self.running = False
+            time.sleep(3) # Poll interval

@@ -1,5 +1,5 @@
 """
-Tests for Memory vNext Search and Index.
+Tests for structured memory search and index.
 
 These tests validate:
 - Unified search across tiers

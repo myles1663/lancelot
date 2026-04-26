@@ -156,15 +156,15 @@ class TestDefaultBehavior:
         assert classify_intent("   ") == IntentType.AMBIGUOUS
 
     def test_short_conversational(self):
-        # V9: Conversational keywords route to KNOWLEDGE_REQUEST
+        # Conversational keywords route to KNOWLEDGE_REQUEST
         assert classify_intent("hello") == IntentType.KNOWLEDGE_REQUEST
 
     def test_gibberish(self):
-        # V9: Default fallback is KNOWLEDGE_REQUEST (not AMBIGUOUS)
+        # Default fallback is KNOWLEDGE_REQUEST (not AMBIGUOUS)
         assert classify_intent("asdf jkl xyz") == IntentType.KNOWLEDGE_REQUEST
 
     def test_none_like_input(self):
-        # V9: "ok" is in CONVERSATIONAL_KEYWORDS → KNOWLEDGE_REQUEST
+        # "ok" is in CONVERSATIONAL_KEYWORDS → KNOWLEDGE_REQUEST
         assert classify_intent("ok") == IntentType.KNOWLEDGE_REQUEST
 
 

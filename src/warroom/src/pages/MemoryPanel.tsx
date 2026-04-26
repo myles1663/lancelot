@@ -82,8 +82,8 @@ export function MemoryPanel() {
       <div>
         <h2 className="text-lg font-semibold text-text-primary mb-6">Memory</h2>
         <EmptyState
-          title="Memory vNext Disabled"
-          description="The Memory vNext subsystem is not enabled. Set FEATURE_MEMORY_VNEXT=true in your .env file and restart the container to activate tiered memory with core blocks, context compilation, and governed self-edits."
+          title="Structured Memory Disabled"
+          description="The structured memory subsystem is not enabled. Set FEATURE_MEMORY_VNEXT=true in your .env file and restart the container to activate tiered memory with core blocks, context compilation, and governed self-edits."
           icon="&#128451;"
         />
       </div>

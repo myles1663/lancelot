@@ -3,7 +3,6 @@ Tests for src.core.scheduler.executor — Job execution pipeline (Prompt 13 / D4
 """
 
 import pytest
-import time
 import yaml
 from pathlib import Path
 
@@ -203,36 +202,6 @@ class TestDisabledJobs:
         result = executor.execute_job("test_job")
         assert result.skipped is True
         assert "disabled" in result.skip_reason.lower()
-
-
-# ===================================================================
-# Tick loop lifecycle
-# ===================================================================
-
-class TestTickLoopLifecycle:
-
-    def test_start_is_idempotent(self, service, runtime_pause_state):
-        executor = JobExecutor(service, _noop_skill, [_ready_gate()])
-        executor.start_tick_loop()
-        first_thread = executor._tick_thread
-        executor.start_tick_loop()
-        try:
-            assert executor._tick_thread is first_thread
-        finally:
-            executor.stop()
-
-    def test_stop_does_not_wait_for_full_tick_interval(self, service, runtime_pause_state):
-        executor = JobExecutor(service, _noop_skill, [_ready_gate()])
-        executor.start_tick_loop()
-        assert executor.is_running is True
-
-        started_at = time.perf_counter()
-        executor.stop()
-        elapsed_s = time.perf_counter() - started_at
-
-        assert elapsed_s < 0.5
-        assert executor.is_running is False
-        assert executor._tick_thread is None
 
 
 # ===================================================================

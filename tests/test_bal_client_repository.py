@@ -248,9 +248,9 @@ class TestMemoryBlockId:
         assert fetched.memory_block_id == "mem_abc"
 
 
-class TestSchemaV2Migration:
+class TestSchemaMigration:
     def test_v2_migration_applied(self, bal_db):
-        """Schema V2 adds memory_block_id and unique email index."""
+        """Current schema adds memory_block_id and unique email index."""
         assert bal_db.CURRENT_SCHEMA_VERSION == 2
         with bal_db.transaction() as conn:
             # memory_block_id column should exist

@@ -5,7 +5,7 @@
  * loaded DLLs, process signatures, and binary characteristics.
  * Windows-focused implementation with extensible platform support.
  *
- * Phase 3 Enhancement: Full DLL module scanning in detectAll() for
+ * Full DLL module scanning in detectAll() for
  * accurate framework detection across all running processes.
  */
 

@@ -42,7 +42,7 @@ class ActionType(str, Enum):
     VERIFICATION = "verification"
     USER_INTERACTION = "user_interaction"
     SYSTEM = "system"
-    # Fix Pack V1 — Execution Authority + Task Graph
+    # Execution authority and task graph
     TOKEN_MINTED = "token_minted"
     TOKEN_REVOKED = "token_revoked"
     TOKEN_EXPIRED = "token_expired"
@@ -52,7 +52,7 @@ class ActionType(str, Enum):
     STEP_FAILED = "step_failed"
     VERIFY_PASSED = "verify_passed"
     VERIFY_FAILED = "verify_failed"
-    # Fix Pack V1 — Voice Notes
+    # Voice notes
     VOICE_STT = "voice_stt"
     VOICE_TTS = "voice_tts"
     # Business Automation Layer (BAL)
@@ -61,7 +61,7 @@ class ActionType(str, Enum):
     BAL_REPURPOSE_EVENT = "bal_repurpose_event"
     BAL_DELIVERY_EVENT = "bal_delivery_event"
     BAL_BILLING_EVENT = "bal_billing_event"
-    # Tool Flow Streaming + ActionCards (V31)
+    # Tool flow streaming and ActionCards
     TOOL_FLOW_EVENT = "tool_flow_event"
     ACTION_CARD_PRESENTED = "action_card_presented"
     ACTION_CARD_RESOLVED = "action_card_resolved"
@@ -280,7 +280,7 @@ class ReceiptService:
     INTEGRITY_KEY_FILENAME = "receipt_integrity_key.json"
     INTEGRITY_CHAIN_HEAD = "0" * 64
 
-    # Phase 1 schema: table + indexes on columns that exist in all versions.
+    # Base schema: table + indexes on columns that exist in all versions.
     # The operator_id index is created AFTER migration (see _init_database)
     # to avoid "no such column" errors when upgrading v1 → v2 databases.
     CREATE_TABLE_SQL = """

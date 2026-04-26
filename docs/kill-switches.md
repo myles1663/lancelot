@@ -58,7 +58,7 @@ Lancelot uses hot-toggleable feature flags as kill switches for every high-risk 
 | `FEATURE_AGENTIC_LOOP` | false | Multi-step autonomous execution. *Requires: FEATURE_SKILLS* |
 | `FEATURE_LOCAL_AGENTIC` | false | Use local LLM for agentic steps. *Requires: FEATURE_AGENTIC_LOOP* |
 
-### Governance (vNext4)
+### Governance
 
 | Flag | Default | Description |
 |------|---------|-------------|

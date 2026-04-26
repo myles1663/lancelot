@@ -1,5 +1,5 @@
 """
-Tests for TaskRunner (Fix Pack V1 PR5).
+Tests for TaskRunner.
 Execute TaskRun step-by-step, calling tools/skills, emitting receipts, updating state.
 """
 

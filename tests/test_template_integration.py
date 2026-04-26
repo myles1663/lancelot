@@ -1,4 +1,4 @@
-"""Tests for vNext4 Intent Template Integration (Prompt 18).
+"""Tests for Intent Template integration.
 
 These tests verify the template lifecycle: creation from successful
 executions, promotion, matching, and invalidation.

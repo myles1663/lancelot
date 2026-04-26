@@ -194,7 +194,7 @@ class TestFallbackBeforeBootstrap:
         assert secret_cache.get("LANCELOT_API_TOKEN", "def") == "def"
 
 
-# ── Reload (Phase 2) ─────────────────────────────────────────────
+# ── Reload ───────────────────────────────────────────────────────
 
 class TestReload:
     def test_reload_detects_changed_values(self):
@@ -312,7 +312,7 @@ class TestAllKeysMapped:
 
 
 # ══════════════════════════════════════════════════════════════════
-# Phase 3 Tests — Docker Secrets, PBKDF2 Key Derivation, Key Scrub
+# Docker Secrets, PBKDF2 Key Derivation, Key Scrub
 # ══════════════════════════════════════════════════════════════════
 
 class TestDockerSecrets:

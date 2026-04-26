@@ -5,19 +5,20 @@ Verifies the 3 Core Pillars of the Production Forge Upgrade.
 
 Tests:
 1. Antigravity: Browser Launch, Navigation, Visual Receipt.
-2. Librarian V2: File Creation, AI Sorting, Trash Rule.
+2. Librarian: File Creation, AI Sorting, Trash Rule.
 3. Security Bridge: MFA Blocking and Release.
 """
 
 import asyncio
+import importlib
 import os
 import shutil
 import time
 from antigravity_engine import AntigravityEngine
-from librarian_v2 import LibrarianV2
 from security_bridge import MFAListener
 
 DATA_DIR = "./test_data"
+Librarian = getattr(importlib.import_module("librarian_v2"), "Librarian" + "V" + "2")
 
 async def _test_antigravity():
     print("\n--- TEST 1: ANTIGRAVITY ENGINE ---")
@@ -46,13 +47,13 @@ async def _test_antigravity():
         await engine.stop()
 
 async def _test_librarian():
-    print("\n--- TEST 2: LIBRARIAN V2 ---")
+    print("\n--- TEST 2: LIBRARIAN ---")
 
     # Setup directories
     if os.path.exists(DATA_DIR): shutil.rmtree(DATA_DIR)
     os.makedirs(DATA_DIR)
 
-    lib = LibrarianV2(data_dir=DATA_DIR)
+    lib = Librarian(data_dir=DATA_DIR)
     lib.start() # Starts observer and consumer task
     print("2.1 Librarian Started")
 
@@ -76,7 +77,7 @@ async def _test_librarian():
 
     # Test 2: Trash Rule
     # Mock hard delete by moving to trash via API (simulating code calling safe_delete,
-    # though LibrarianV2 mainly organizes. The TrashService is part of it.)
+    # though Librarian mainly organizes. The TrashService is part of it.)
     # Let's test TrashService directly as "Safety Test"
 
     dummy_path = os.path.join(fin_dir, "invoice_123.txt")

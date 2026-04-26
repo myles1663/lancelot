@@ -51,7 +51,7 @@ def _load_persisted_provider() -> str:
     return ""
 
 # ---------------------------------------------------------------------------
-# V16: Provider configuration — mirrors installer/src/constants.mjs
+# Provider configuration mirrors installer/src/constants.mjs
 # ---------------------------------------------------------------------------
 PROVIDERS = {
     "gemini": {
@@ -107,7 +107,7 @@ PROVIDERS = {
 }
 
 # ---------------------------------------------------------------------------
-# V16: Comms connector definitions — all supported messaging platforms
+# Comms connector definitions for supported messaging platforms
 # ---------------------------------------------------------------------------
 COMMS_CONNECTORS = {
     "telegram": {
@@ -350,14 +350,14 @@ class OnboardingOrchestrator:
 
     def _sync_snapshot(self):
         """Sync dynamically determined state to the snapshot file."""
-        # V27: Complete state map covering all onboarding steps
+        # Complete state map covering all onboarding steps
         state_map = {
             "WELCOME": OnboardingState.WELCOME,
             "FLAGSHIP_SELECTION": OnboardingState.FLAGSHIP_SELECTION,
             "HANDSHAKE": OnboardingState.CREDENTIALS_CAPTURE,
-            "ANTHROPIC_OAUTH_WAITING": OnboardingState.CREDENTIALS_CAPTURE,  # V28: OAuth browser flow
+            "ANTHROPIC_OAUTH_WAITING": OnboardingState.CREDENTIALS_CAPTURE,  # OAuth browser flow
             "OPENAI_CODEX_OAUTH_WAITING": OnboardingState.CREDENTIALS_CAPTURE,  # Codex OAuth browser flow
-            "PROVIDER_MODE_SELECTION": OnboardingState.CREDENTIALS_CAPTURE,  # V27: shares credential phase
+            "PROVIDER_MODE_SELECTION": OnboardingState.CREDENTIALS_CAPTURE,  # shares credential phase
             "LOCAL_UTILITY_SETUP": OnboardingState.LOCAL_UTILITY_SETUP,
             "COMMS_SELECTION": OnboardingState.COMMS_SELECTION,
             "AUTH_MODEL_SELECTION": OnboardingState.CREDENTIALS_CAPTURE,
@@ -397,7 +397,7 @@ class OnboardingOrchestrator:
     def _determine_state(self):
         """Determines current state based on filesystem/env — self-healing on restart.
 
-        V27 flow: WELCOME -> FLAGSHIP_SELECTION -> HANDSHAKE -> PROVIDER_MODE_SELECTION
+        Flow: WELCOME -> FLAGSHIP_SELECTION -> HANDSHAKE -> PROVIDER_MODE_SELECTION
                   -> LOCAL_UTILITY_SETUP -> COMMS_SELECTION -> [comms sub-states]
                   -> AUTH_MODEL_SELECTION -> LOCAL_AUTH_SETUP|ENTERPRISE_AUTH_SETUP
                   -> FINAL_CHECKS -> READY
@@ -411,7 +411,7 @@ class OnboardingOrchestrator:
         if not os.path.exists(self.user_file):
             return "WELCOME"
 
-        # Step 2: V16 — Provider must be selected
+        # Step 2: Provider must be selected
         provider = self._get_selected_provider()
         if not provider:
             return "FLAGSHIP_SELECTION"
@@ -467,12 +467,12 @@ class OnboardingOrchestrator:
         if not api_key and not adc_exists and not credential_source_ready and not snapshot_verified:
             return "HANDSHAKE"
 
-        # Step 3.5: V27 — Provider mode (SDK/API) must be selected
+        # Step 3.5: Provider mode (SDK/API) must be selected
         provider_mode = self._get_env_value("LANCELOT_PROVIDER_MODE")
         if not provider_mode:
             return "PROVIDER_MODE_SELECTION"
 
-        # Step 4: V16 — Local model must be verified
+        # Step 4: Local model must be verified
         if self.snapshot.local_model_status != "verified":
             return "LOCAL_UTILITY_SETUP"
 
@@ -502,7 +502,7 @@ class OnboardingOrchestrator:
         else:
             return "AUTH_MODEL_SELECTION"
 
-        # Step 7: V16 — Security tokens must exist
+        # Step 7: Security tokens must exist
         if not self._has_security_tokens():
             return "FINAL_CHECKS"
 
@@ -662,7 +662,7 @@ class OnboardingOrchestrator:
             return f"Error bonding identity: {e}"
 
     # ------------------------------------------------------------------
-    # V16: FLAGSHIP_SELECTION state
+    # FLAGSHIP_SELECTION state
     # ------------------------------------------------------------------
 
     def _flagship_selection_prompt(self) -> str:
@@ -720,7 +720,7 @@ class OnboardingOrchestrator:
             msg += ("\n\nAlternatively, type **'scan'** to detect Google Cloud "
                     "Application Default Credentials (advanced).")
 
-        # V28: OAuth option for Anthropic
+        # OAuth option for Anthropic
         if provider_id == "anthropic":
             msg += ("\n\nAlternatively, type **'oauth'** to authenticate via browser "
                     "(uses your claude.ai subscription — no API key needed).")
@@ -751,7 +751,7 @@ class OnboardingOrchestrator:
                         + self._comms_selection_prompt())
             return result
 
-        # V28: Anthropic OAuth browser flow
+        # Anthropic OAuth browser flow
         if stripped.lower() == "oauth" and provider_id == "anthropic":
             return self._initiate_anthropic_oauth()
 
@@ -790,7 +790,7 @@ class OnboardingOrchestrator:
             self._write_env_values({
                 env_var: key,
                 "LANCELOT_PROVIDER": provider_id,
-            }, section_comment="LLM Provider (V16)")
+            }, section_comment="LLM Provider")
 
             self.fail_count = 0
 
@@ -808,7 +808,7 @@ class OnboardingOrchestrator:
             return f"Error saving API Key: {e}"
 
     # ------------------------------------------------------------------
-    # V28: Anthropic OAuth browser flow
+    # Anthropic OAuth browser flow
     # ------------------------------------------------------------------
 
     def _initiate_anthropic_oauth(self) -> str:
@@ -852,7 +852,7 @@ class OnboardingOrchestrator:
                     self._write_env_values({
                         "LANCELOT_AUTH_MODE": "OAUTH",
                         "LANCELOT_PROVIDER": "anthropic",
-                    }, section_comment="Anthropic OAuth (V28)")
+                    }, section_comment="Anthropic OAuth")
                     self.fail_count = 0
                     self.state = "PROVIDER_MODE_SELECTION"
                     return (
@@ -1068,7 +1068,7 @@ class OnboardingOrchestrator:
             return {"valid": True, "warning": f"Could not reach {provider} API to validate: {e}"}
 
     # ------------------------------------------------------------------
-    # V27: PROVIDER_MODE_SELECTION state — SDK vs API
+    # PROVIDER_MODE_SELECTION state: SDK vs API
     # ------------------------------------------------------------------
 
     def _provider_mode_prompt(self) -> str:
@@ -1097,7 +1097,7 @@ class OnboardingOrchestrator:
 
         self._write_env_values(
             {"LANCELOT_PROVIDER_MODE": mode},
-            "Provider Mode (V27)",
+            "Provider Mode",
         )
         # Skip already-completed steps (e.g. local models already verified)
         self.state = self._determine_state()
@@ -1127,7 +1127,7 @@ class OnboardingOrchestrator:
                 self._write_env_values({
                     "LANCELOT_AUTH_MODE": "OAUTH",
                     "LANCELOT_PROVIDER": "gemini",
-                }, section_comment="Google ADC Auth (V16)")
+                }, section_comment="Google ADC Auth")
 
                 self.state = "COMMS_CHAT_SCAN"
 
@@ -1197,7 +1197,7 @@ class OnboardingOrchestrator:
         pass
 
     # ------------------------------------------------------------------
-    # V16: COMMS_SELECTION — all connectors
+    # COMMS_SELECTION: all connectors
     # ------------------------------------------------------------------
 
     def _comms_selection_prompt(self) -> str:
@@ -1280,7 +1280,7 @@ class OnboardingOrchestrator:
         return "Invalid selection.\n\n" + self._comms_selection_prompt()
 
     # ------------------------------------------------------------------
-    # V16: Guided connector setup (generic multi-step flow)
+    # Guided connector setup (generic multi-step flow)
     # ------------------------------------------------------------------
 
     def _handle_guided_setup(self, text: str) -> str:
@@ -1675,7 +1675,7 @@ class OnboardingOrchestrator:
         return self._handle_auth_model_selection("oidc")
 
     # ------------------------------------------------------------------
-    # V16: FINAL_CHECKS state
+    # FINAL_CHECKS state
     # ------------------------------------------------------------------
 
     def _handle_final_checks(self) -> str:

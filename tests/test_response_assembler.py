@@ -1,5 +1,5 @@
 """
-Tests for Response Assembler + Output Hygiene (Fix Pack V1 PR1).
+Tests for Response Assembler and output hygiene.
 """
 
 import os

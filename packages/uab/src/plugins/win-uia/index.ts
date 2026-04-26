@@ -1,12 +1,12 @@
 /**
- * Windows UI Automation Plugin — Phase 3 Enhanced
+ * Windows UI Automation Plugin
  *
  * Controls desktop apps via the Windows UI Automation API (UIA).
  * This is the "accessibility" fallback in the control router —
  * it works with virtually any Windows GUI app: WPF, WinForms,
  * Qt, GTK, Java Swing, native Win32, and more.
  *
- * Phase 3 Enhancements:
+ * Input and window-control capabilities:
  *   - Keyboard input (keypress, hotkey combos)
  *   - Window management (minimize, maximize, restore, move, resize, close)
  *   - Screenshot capture (per-window via Win32 API)

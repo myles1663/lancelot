@@ -1,5 +1,5 @@
 """
-Memory vNext Write Gates — Safety validation for memory writes.
+Structured Memory Write Gates — Safety validation for memory writes.
 
 This module provides the WriteGateValidator for:
 - Block allowlist enforcement

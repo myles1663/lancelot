@@ -1,9 +1,24 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from chat_runs import ChatRunStore
+from work_ledger import WorkLedgerStore
+
+
+@pytest.fixture
+def gateway_work_ledger(tmp_path, monkeypatch):
+    import gateway
+
+    store = WorkLedgerStore(str(tmp_path / "work_ledger.sqlite"))
+    monkeypatch.setattr(gateway, "work_ledger_store", store)
+    monkeypatch.setattr(gateway.main_orchestrator, "work_ledger_store", store)
+    try:
+        yield store
+    finally:
+        store.close()
 
 
 def test_chat_run_store_records_lifecycle(tmp_path):
@@ -216,6 +231,40 @@ def test_chat_run_store_retries_blocked_run_from_retained_message(tmp_path):
         store.close()
 
 
+def test_chat_run_store_lists_terminal_retries_only(tmp_path):
+    store = ChatRunStore(str(tmp_path / "runs.sqlite"))
+    try:
+        blocked = store.create(
+            request_id="req-1",
+            user="Myles",
+            channel="warroom",
+            session_id="sess-1",
+            operator_id="op-1",
+            message="blocked request",
+        )
+        store.complete(blocked.run_id, status="blocked", response="Approval required")
+        retry = store.create_retry(
+            blocked.run_id,
+            request_id="req-2",
+            session_id="sess-1",
+            operator_id="op-1",
+        )
+        assert retry is not None
+        active_retry = store.get(retry.run_id)
+        assert active_retry is not None
+
+        assert store.list_terminal_retries() == []
+
+        store.complete(retry.run_id, status="succeeded", response="done")
+        retries = store.list_terminal_retries()
+
+        assert [item.run_id for item in retries] == [retry.run_id]
+        assert retries[0].retry_of_run_id == blocked.run_id
+        assert retries[0].status == "succeeded"
+    finally:
+        store.close()
+
+
 def test_chat_run_status_classifier_identifies_operator_blocking():
     import gateway
 
@@ -225,7 +274,7 @@ def test_chat_run_status_classifier_identifies_operator_blocking():
     assert gateway._classify_chat_run_status("Pending approval from Commander") == "blocked"
 
 
-def test_execute_async_chat_run_marks_completion_and_emits_events(tmp_path, monkeypatch):
+def test_execute_async_chat_run_marks_completion_and_emits_events(tmp_path, monkeypatch, gateway_work_ledger):
     import gateway
 
     store = ChatRunStore(str(tmp_path / "runs.sqlite"))
@@ -276,13 +325,21 @@ def test_execute_async_chat_run_marks_completion_and_emits_events(tmp_path, monk
         assert observed_kwargs["quest_id"] == run.run_id
         assert [event["phase"] for event in completed.progress_events] == [
             "waiting_worker_slot",
+            "execution",
             "finalization",
         ]
         assert completed.progress_events[0]["wait_reason"] == "worker_slot"
-        assert completed.progress_events[1]["wait_reason"] == "finalization"
+        assert completed.progress_events[1]["wait_reason"] == "execution_start"
+        assert completed.progress_events[2]["wait_reason"] == "finalization"
+        work_item = gateway_work_ledger.get_work(run.run_id)
+        assert work_item is not None
+        assert work_item.status == "completed"
+        assert work_item.phase == "completed"
+        assert gateway_work_ledger.list_checkpoints(run.run_id)
         assert events == [
             ("chat.run_progress", "queued", "waiting_worker_slot"),
             ("chat.run_started", "running", "executing"),
+            ("chat.run_progress", "running", "execution"),
             ("chat.run_progress", "running", "finalization"),
             ("chat.run_completed", "succeeded", "completed"),
         ]
@@ -290,7 +347,7 @@ def test_execute_async_chat_run_marks_completion_and_emits_events(tmp_path, monk
         store.close()
 
 
-def test_execute_async_chat_run_does_not_overwrite_operator_cancel(tmp_path, monkeypatch):
+def test_execute_async_chat_run_does_not_overwrite_operator_cancel(tmp_path, monkeypatch, gateway_work_ledger):
     import gateway
 
     store = ChatRunStore(str(tmp_path / "runs.sqlite"))
@@ -339,15 +396,19 @@ def test_execute_async_chat_run_does_not_overwrite_operator_cancel(tmp_path, mon
         assert cancelled is not None
         assert cancelled.status == "cancelled"
         assert cancelled.response == ""
+        work_item = gateway_work_ledger.get_work(run.run_id)
+        assert work_item is not None
+        assert work_item.status == "cancelled"
         assert events == [
             ("chat.run_progress", "queued", "waiting_worker_slot"),
             ("chat.run_started", "running", "executing"),
+            ("chat.run_progress", "running", "execution"),
         ]
     finally:
         store.close()
 
 
-def test_execute_async_chat_run_keeps_fast_runtime_commands_outside_worker_slot(tmp_path, monkeypatch):
+def test_execute_async_chat_run_keeps_fast_runtime_commands_outside_worker_slot(tmp_path, monkeypatch, gateway_work_ledger):
     import gateway
 
     store = ChatRunStore(str(tmp_path / "runs.sqlite"))
@@ -396,9 +457,13 @@ def test_execute_async_chat_run_keeps_fast_runtime_commands_outside_worker_slot(
         completed = store.get(run.run_id)
         assert completed is not None
         assert completed.status == "succeeded"
-        assert [event["phase"] for event in completed.progress_events] == ["finalization"]
+        work_item = gateway_work_ledger.get_work(run.run_id)
+        assert work_item is not None
+        assert work_item.status == "completed"
+        assert [event["phase"] for event in completed.progress_events] == ["execution", "finalization"]
         assert events == [
             ("chat.run_started", "running", "executing"),
+            ("chat.run_progress", "running", "execution"),
             ("chat.run_progress", "running", "finalization"),
             ("chat.run_completed", "succeeded", "completed"),
         ]
@@ -406,7 +471,7 @@ def test_execute_async_chat_run_keeps_fast_runtime_commands_outside_worker_slot(
         store.close()
 
 
-def test_chat_progress_event_updates_async_run(tmp_path, monkeypatch):
+def test_chat_progress_event_updates_async_run(tmp_path, monkeypatch, gateway_work_ledger):
     import gateway
 
     store = ChatRunStore(str(tmp_path / "runs.sqlite"))
@@ -447,12 +512,16 @@ def test_chat_progress_event_updates_async_run(tmp_path, monkeypatch):
         assert updated.phase == "execution"
         assert updated.last_progress_message == "Preparing governed model request"
         assert updated.progress_events[-1]["wait_reason"] == "provider_call"
+        work_item = gateway_work_ledger.get_work(run.run_id)
+        assert work_item is not None
+        assert work_item.phase == "execution"
+        assert work_item.next_action == "Preparing governed model request"
         assert events == [("chat.run_progress", "execution")]
     finally:
         store.close()
 
 
-def test_chat_progress_event_preserves_degraded_disclosure(tmp_path, monkeypatch):
+def test_chat_progress_event_preserves_degraded_disclosure(tmp_path, monkeypatch, gateway_work_ledger):
     import gateway
 
     store = ChatRunStore(str(tmp_path / "runs.sqlite"))
@@ -497,6 +566,9 @@ def test_chat_progress_event_preserves_degraded_disclosure(tmp_path, monkeypatch
         assert event["degraded"] is True
         assert event["degraded_reason"] == "deterministic local scrub fallback used"
         assert event["source"] == "local_model_error"
+        work_item = gateway_work_ledger.get_work(run.run_id)
+        assert work_item is not None
+        assert work_item.metadata["degraded_reason"] == "deterministic local scrub fallback used"
     finally:
         store.close()
 
@@ -686,7 +758,34 @@ def test_operational_report_command_uses_concrete_read_only_checks(monkeypatch):
     assert "Scheduler: running (2 jobs, 1 enabled" in response
     assert "health_sweep: enabled, trigger=interval:60" in response
     assert "Degraded conditions: none visible from these checks" in response
+    assert "Operator action required: none from these checks" in response
     assert "no repository writes, deployments, or external messages" in response
+
+
+def test_operational_report_categorizes_expected_capability_notices(monkeypatch):
+    import gateway
+
+    monkeypatch.setattr(gateway._ff, "FEATURE_TOOLS_HOST_EXECUTION", True)
+    monkeypatch.setattr(gateway._ff, "FEATURE_TOOLS_HOST_BRIDGE", False)
+    monkeypatch.setattr(gateway._ff, "FEATURE_HOST_WRITE_COMMANDS", False)
+    monkeypatch.setattr(gateway._ff, "FEATURE_TOOLS_UAB", True)
+    monkeypatch.setattr(gateway._ff, "FEATURE_HIVE_UAB", False)
+
+    notices = gateway._operator_notice_snapshot([])
+
+    assert notices["action_required"] == []
+    assert any("Host execution provider is enabled" in notice for notice in notices["expected"])
+    assert any("UAB desktop bridge is enabled" in notice for notice in notices["expected"])
+
+
+def test_operational_report_categorizes_degraded_conditions_as_action_required(monkeypatch):
+    import gateway
+
+    notices = gateway._operator_notice_snapshot(["local_model_role:utility=timeout"])
+
+    assert notices["action_required"] == [
+        "local_model_role:utility=timeout. Investigate before continuing customer-facing work."
+    ]
 
 
 def test_operational_report_uses_orchestrator_scheduler_fallback(monkeypatch):
@@ -894,7 +993,7 @@ def test_chat_run_payload_omits_receipt_proof_for_active_runs(tmp_path):
         store.close()
 
 
-def test_chat_async_endpoint_queues_run_without_waiting_for_result(tmp_path, monkeypatch):
+def test_chat_async_endpoint_queues_run_without_waiting_for_result(tmp_path, monkeypatch, gateway_work_ledger):
     import gateway
 
     store = ChatRunStore(str(tmp_path / "runs.sqlite"))
@@ -923,18 +1022,22 @@ def test_chat_async_endpoint_queues_run_without_waiting_for_result(tmp_path, mon
             json={"text": "continue the plan", "user": "Myles", "channel": "warroom"},
         )
 
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         payload = response.json()
         assert payload["accepted"] is True
         assert payload["status"] == "queued"
         assert payload["run"]["session_id"] == "sess-1"
         assert payload["run"]["operator_id"] == "op-1"
         assert store.get(payload["run_id"]) is not None
+        work_item = gateway_work_ledger.get_work(payload["run_id"])
+        assert work_item is not None
+        assert work_item.status == "active"
+        assert work_item.objective == "continue the plan"
     finally:
         store.close()
 
 
-def test_chat_run_cancel_endpoint_marks_run_cancelled(tmp_path, monkeypatch):
+def test_chat_run_cancel_endpoint_marks_run_cancelled(tmp_path, monkeypatch, gateway_work_ledger):
     import gateway
 
     store = ChatRunStore(str(tmp_path / "runs.sqlite"))
@@ -972,17 +1075,21 @@ def test_chat_run_cancel_endpoint_marks_run_cancelled(tmp_path, monkeypatch):
             json={"reason": "Operator cancelled from test."},
         )
 
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         payload = response.json()
         assert payload["cancelled"] is True
         assert payload["run"]["status"] == "cancelled"
         assert payload["run"]["cancel_reason"] == "Operator cancelled from test."
+        work_item = gateway_work_ledger.get_work(run.run_id)
+        assert work_item is not None
+        assert work_item.status == "cancelled"
+        assert work_item.blocker == "Operator cancelled from test."
         assert events == [("chat.run_cancelled", "cancelled")]
     finally:
         store.close()
 
 
-def test_chat_run_retry_endpoint_queues_new_run(tmp_path, monkeypatch):
+def test_chat_run_retry_endpoint_queues_new_run(tmp_path, monkeypatch, gateway_work_ledger):
     import gateway
 
     store = ChatRunStore(str(tmp_path / "runs.sqlite"))
@@ -1022,19 +1129,23 @@ def test_chat_run_retry_endpoint_queues_new_run(tmp_path, monkeypatch):
         client = TestClient(gateway.app)
         response = client.post(f"/api/chat/runs/{run.run_id}/retry")
 
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         payload = response.json()
         assert payload["accepted"] is True
         assert payload["run"]["status"] == "queued"
         assert payload["run"]["retry_of_run_id"] == run.run_id
         assert payload["run"]["retry_count"] == 1
         assert store.get(payload["run_id"]) is not None
+        retry_item = gateway_work_ledger.get_work(payload["run_id"])
+        assert retry_item is not None
+        assert retry_item.status == "active"
+        assert retry_item.metadata["retry_of_run_id"] == run.run_id
         assert events == [("chat.run_queued", "queued")]
     finally:
         store.close()
 
 
-def test_chat_run_retry_endpoint_queues_blocked_run(tmp_path, monkeypatch):
+def test_chat_run_retry_endpoint_queues_blocked_run(tmp_path, monkeypatch, gateway_work_ledger):
     import gateway
 
     store = ChatRunStore(str(tmp_path / "runs.sqlite"))
@@ -1085,6 +1196,333 @@ def test_chat_run_retry_endpoint_queues_blocked_run(tmp_path, monkeypatch):
         assert payload["run"]["retry_of_run_id"] == run.run_id
         assert payload["run"]["retry_count"] == 1
         assert store.get(payload["run_id"]) is not None
+        retry_item = gateway_work_ledger.get_work(payload["run_id"])
+        assert retry_item is not None
+        assert retry_item.status == "active"
+        assert retry_item.metadata["retry_of_run_id"] == run.run_id
         assert events == [("chat.run_queued", "queued")]
     finally:
         store.close()
+
+
+def test_work_api_lists_gets_and_checkpoints_active_work(monkeypatch, gateway_work_ledger):
+    import gateway
+
+    identity = SimpleNamespace(
+        display_name="Myles",
+        operator_id="op-1",
+        session_id="sess-1",
+    )
+    monkeypatch.setattr(gateway, "verify_token", lambda _request: True)
+    monkeypatch.setattr("src.core.auth_api.resolve_authenticated_identity", lambda _request: identity)
+
+    gateway_work_ledger.upsert_work(
+        quest_id="quest-1",
+        objective="continue the hardening pass",
+        session_id="sess-1",
+        operator_id="op-1",
+        status="active",
+        phase="execution",
+        next_action="Run focused tests",
+    )
+
+    client = TestClient(gateway.app)
+    active_response = client.get("/api/work/active")
+    item_response = client.get("/api/work/quest-1")
+    checkpoint_response = client.post(
+        "/api/work/quest-1/checkpoint",
+        json={"reason": "operator_pause"},
+    )
+
+    assert active_response.status_code == 200
+    assert active_response.json()["items"][0]["quest_id"] == "quest-1"
+    assert item_response.status_code == 200
+    assert item_response.json()["item"]["next_action"] == "Run focused tests"
+    assert checkpoint_response.status_code == 200
+    assert checkpoint_response.json()["checkpoint"]["reason"] == "operator_pause"
+
+
+def test_work_api_creates_quiet_phase_checkpoint_before_listing(monkeypatch, gateway_work_ledger):
+    import gateway
+
+    identity = SimpleNamespace(
+        display_name="Myles",
+        operator_id="op-1",
+        session_id="sess-1",
+    )
+    monkeypatch.setattr(gateway, "verify_token", lambda _request: True)
+    monkeypatch.setattr("src.core.auth_api.resolve_authenticated_identity", lambda _request: identity)
+    monkeypatch.setattr(gateway, "ACTIVE_WORK_QUIET_CHECKPOINT_AFTER_SECONDS", 0)
+
+    gateway_work_ledger.upsert_work(
+        quest_id="quest-quiet",
+        objective="quiet work",
+        session_id="sess-1",
+        operator_id="op-1",
+        status="active",
+        phase="provider_call",
+        next_action="Waiting on governed provider response",
+    )
+
+    client = TestClient(gateway.app)
+    response = client.get("/api/work/active")
+
+    assert response.status_code == 200
+    checkpoints = gateway_work_ledger.list_checkpoints("quest-quiet")
+    assert len(checkpoints) == 1
+    assert checkpoints[0]["reason"] == "quiet_phase"
+
+
+def test_work_resume_endpoint_queues_retry_from_ledger_item(tmp_path, monkeypatch, gateway_work_ledger):
+    import gateway
+
+    store = ChatRunStore(str(tmp_path / "runs.sqlite"))
+    identity = SimpleNamespace(
+        display_name="Myles",
+        operator_id="op-1",
+        session_id="sess-1",
+    )
+    events = []
+
+    async def fake_execute_async_chat_run(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(gateway, "chat_run_store", store)
+    monkeypatch.setattr(gateway, "verify_token", lambda _request: True)
+    monkeypatch.setattr(gateway.rate_limiter, "check", lambda _ip: True)
+    monkeypatch.setattr(gateway, "_execute_async_chat_run", fake_execute_async_chat_run)
+    monkeypatch.setattr(
+        gateway,
+        "_emit_chat_run_event",
+        lambda event_type, run, **_extra: events.append((event_type, run.status)),
+    )
+    monkeypatch.setattr("src.core.auth_api.resolve_authenticated_identity", lambda _request: identity)
+    monkeypatch.setattr("src.core.runtime_pause.is_runtime_paused", lambda: False)
+
+    try:
+        blocked = store.create(
+            request_id="req-1",
+            user="Myles",
+            channel="warroom",
+            session_id="sess-1",
+            operator_id="op-1",
+            message="resume this blocked governed request",
+        )
+        blocked = store.complete(
+            blocked.run_id,
+            status="blocked",
+            response="Approval group ID: abc-123",
+        )
+        gateway._sync_work_ledger_from_chat_run(blocked, event_type="chat_run_blocked")
+        assert gateway_work_ledger.get_work(blocked.run_id) is not None
+
+        client = TestClient(gateway.app)
+        response = client.post(f"/api/work/{blocked.run_id}/resume")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["accepted"] is True
+        assert payload["source_quest_id"] == blocked.run_id
+        retry = store.get(payload["run_id"])
+        assert retry is not None
+        assert retry.retry_of_run_id == blocked.run_id
+        assert gateway_work_ledger.get_work(payload["run_id"]) is not None
+        assert events == [("chat.run_queued", "queued")]
+    finally:
+        store.close()
+
+
+def test_work_ledger_sync_closes_source_when_retry_finishes(tmp_path, monkeypatch, gateway_work_ledger):
+    import gateway
+
+    store = ChatRunStore(str(tmp_path / "runs.sqlite"))
+    monkeypatch.setattr(gateway, "chat_run_store", store)
+    try:
+        blocked = store.create(
+            request_id="req-1",
+            user="Myles",
+            channel="warroom",
+            session_id="sess-1",
+            operator_id="op-1",
+            message="write the governed artifact",
+        )
+        blocked = store.complete(
+            blocked.run_id,
+            status="blocked",
+            response="Approval group ID: abc-123",
+        )
+        gateway._sync_work_ledger_from_chat_run(blocked, event_type="chat_run_blocked")
+        assert gateway_work_ledger.get_work(blocked.run_id).status == "blocked"
+
+        retry = store.create_retry(
+            blocked.run_id,
+            request_id="req-2",
+            session_id="sess-1",
+            operator_id="op-1",
+        )
+        retry = store.complete(retry.run_id, status="succeeded", response="done")
+        gateway._sync_work_ledger_from_chat_run(retry, event_type="chat_run_completed")
+
+        source_item = gateway_work_ledger.get_work(blocked.run_id)
+        assert source_item is not None
+        assert source_item.status == "completed"
+        assert source_item.phase == "superseded"
+        assert source_item.metadata["superseded_by_retry_run_id"] == retry.run_id
+        assert gateway_work_ledger.list_work(session_id="sess-1") == []
+    finally:
+        store.close()
+
+
+def test_work_archive_endpoint_cancels_and_hides_blocked_work(tmp_path, monkeypatch, gateway_work_ledger):
+    import gateway
+
+    store = ChatRunStore(str(tmp_path / "runs.sqlite"))
+    identity = SimpleNamespace(
+        display_name="Myles",
+        operator_id="op-1",
+        session_id="sess-1",
+    )
+    events = []
+    archived_cards = []
+    linked_card = SimpleNamespace(
+        card_id="card-1",
+        title="Approve stale work",
+        source_system="governance",
+    )
+
+    monkeypatch.setattr(gateway, "chat_run_store", store)
+    monkeypatch.setattr(gateway, "_require_request_capability", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        gateway,
+        "_emit_chat_run_event",
+        lambda event_type, run, **_extra: events.append((event_type, run.status)),
+    )
+    monkeypatch.setattr(
+        gateway.app.state,
+        "actioncard_store",
+        SimpleNamespace(list_pending_by_quest=lambda quest_id, limit=50: [linked_card]),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        gateway.app.state,
+        "actioncard_resolver",
+        SimpleNamespace(
+            archive=lambda *args, **kwargs: (
+                archived_cards.append((args, kwargs))
+                or {"status": "archived", "message": "archived"}
+            )
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr("src.core.auth_api.resolve_authenticated_identity", lambda _request: identity)
+
+    try:
+        blocked = store.create(
+            request_id="req-1",
+            user="Myles",
+            channel="warroom",
+            session_id="old-sess",
+            operator_id="op-1",
+            message="blocked governed command",
+        )
+        blocked = store.complete(
+            blocked.run_id,
+            status="blocked",
+            response="Approval group ID: abc-123",
+        )
+        gateway._sync_work_ledger_from_chat_run(blocked, event_type="chat_run_blocked")
+
+        client = TestClient(gateway.app)
+        response = client.post(
+            f"/api/work/{blocked.run_id}/archive",
+            json={"reason": "Operator cleared stale blocked work after retry succeeded."},
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["archived"] is True
+        assert payload["item"]["status"] == "cancelled"
+        assert payload["item"]["phase"] == "archived"
+        assert payload["archived_actioncards"] == [
+            {
+                "card_id": "card-1",
+                "title": "Approve stale work",
+                "source_system": "governance",
+            }
+        ]
+        assert archived_cards[0][0] == ("card-1",)
+        assert archived_cards[0][1]["channel"] == "work_archive"
+        assert gateway_work_ledger.list_work(session_id="old-sess") == []
+        cancelled = store.get(blocked.run_id)
+        assert cancelled is not None
+        assert cancelled.status == "cancelled"
+        assert events == [("chat.run_cancelled", "cancelled")]
+    finally:
+        store.close()
+
+
+def test_operator_smoke_endpoint_runs_against_live_gateway(monkeypatch):
+    import gateway
+
+    captured_receipts = []
+    identity = SimpleNamespace(
+        display_name="Myles",
+        operator_id="op-1",
+        session_id="sess-1",
+    )
+    monkeypatch.setattr(gateway, "_gateway_started", True)
+    monkeypatch.setattr(gateway, "_require_request_capability", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.core.auth_api.resolve_authenticated_identity", lambda _request: identity)
+    monkeypatch.setattr(
+        gateway,
+        "get_receipt_service",
+        lambda *_args, **_kwargs: SimpleNamespace(create=lambda receipt: captured_receipts.append(receipt)),
+    )
+    monkeypatch.setattr(
+        gateway,
+        "health_check",
+        lambda: {
+            "components": {
+                "gateway": "ok",
+                "orchestrator": "ok",
+                "local_llm": "ok",
+                "memory": "ok",
+                "sentry": "ok",
+            },
+            "local_llm": {
+                "roles": {
+                    "scrub_region_finder": {"enabled": True, "ready": True, "status": "ok"},
+                    "utility": {"enabled": True, "ready": True, "status": "ok"},
+                }
+            },
+            "uptime_seconds": 30.0,
+        },
+    )
+    monkeypatch.setattr(
+        gateway,
+        "_scheduler_report_snapshot",
+        lambda: {
+            "status": "running",
+            "last_tick": "2026-04-22T14:00:00+00:00",
+            "job_count": 1,
+            "enabled_count": 1,
+            "jobs": [],
+            "degraded_conditions": [],
+        },
+    )
+    monkeypatch.setattr(
+        gateway,
+        "_active_work_report_snapshot",
+        lambda: {"status": "ok", "count": 0, "items": [], "degraded_conditions": []},
+    )
+
+    client = TestClient(gateway.app)
+    response = client.get("/api/operator/smoke")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["source"] == "live_gateway"
+    assert "Diagnostic source: live gateway process" in payload["report"]
+    assert "Write safety: no repository writes" in payload["report"]
+    assert captured_receipts

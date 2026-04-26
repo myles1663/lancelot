@@ -1,4 +1,4 @@
-"""Tests for vNext4 T1 Pipeline Integration (Prompt 15).
+"""Tests for T1 pipeline integration.
 
 These tests verify that T1 (reversible) actions flow through the
 AsyncVerificationQueue + RollbackManager when governance flags are enabled.

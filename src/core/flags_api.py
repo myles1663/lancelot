@@ -84,7 +84,7 @@ FLAG_META = {
         "warning": "Requires SKILLS to be enabled for job execution. Without SKILLS, jobs will be registered but cannot run.",
     },
     "FEATURE_MEMORY_VNEXT": {
-        "description": "Tiered memory system (vNext3). Provides 5 core blocks (persona, human, mission, operating_rules, workspace_state), working/episodic/archival storage, context compiler, governed self-edits, and full-text search.",
+        "description": "Structured memory system. Provides 5 core blocks (persona, human, mission, operating_rules, workspace_state), working/episodic/archival storage, context compiler, governed self-edits, and full-text search.",
         "category": "Core Subsystem",
         "requires": [],
         "conflicts": [],
@@ -158,11 +158,11 @@ FLAG_META = {
 
     # ── Execution & Runtime ───────────────────────────────────────
     "FEATURE_RESPONSE_ASSEMBLER": {
-        "description": "Response assembly pipeline. Always active since Fix Pack V2 — this flag is informational only. The assembler processes raw LLM output through formatting, citation injection, and artifact extraction.",
+        "description": "Response assembly pipeline. Always active; this flag is informational only. The assembler processes raw LLM output through formatting, citation injection, and artifact extraction.",
         "category": "Runtime",
         "requires": [],
         "conflicts": [],
-        "warning": "This flag is informational only. The response assembler is always active since Fix Pack V2 for output hygiene. Toggling has no effect.",
+        "warning": "This flag is informational only. The response assembler is always active for output hygiene. Toggling has no effect.",
     },
     "FEATURE_EXECUTION_TOKENS": {
         "description": "Execution token system. Generates time-limited, permission-scoped tokens for tool execution. Provides fine-grained authorization control.",
@@ -208,7 +208,7 @@ FLAG_META = {
         "warning": "Requires AGENTIC_LOOP. Local model quality is lower — only suitable for simple agentic tasks. Complex plans should use flagship.",
     },
 
-    # ── Governance (vNext4) ───────────────────────────────────────
+    # ── Governance ────────────────────────────────────────────────
     "FEATURE_RISK_TIERED_GOVERNANCE": {
         "description": "Master switch for risk-tiered governance. Enables 4-tier risk classification (T0-T3) with escalating approval requirements per tier.",
         "category": "Governance",
@@ -286,13 +286,13 @@ FLAG_META = {
         "warning": "Disabling will stop all BAL client operations and close the database connection. Active client workflows will be interrupted.",
     },
 
-    # ── Structural Fixes (V23) ────────────────────────────────────
+    # ── Response Hygiene ──────────────────────────────────────────
     "FEATURE_STRUCTURED_OUTPUT": {
         "description": "Structured Output Mode. After the agentic loop completes, a reformat step converts the raw response into a verified JSON structure with explicit fields: response_to_user, actions_taken, next_action. A presentation layer cross-references claimed actions against actual tool receipts and silently drops anything that didn't happen. Converts the verified JSON back to readable chat text. Eliminates narration, fake progress claims, and verbose failure descriptions at the format level.",
         "category": "Intelligence",
         "requires": ["FEATURE_AGENTIC_LOOP"],
         "conflicts": [],
-        "warning": "Requires AGENTIC_LOOP. Adds one additional LLM call per agentic response for reformatting. If reformatting fails, falls back to raw text. Monitor logs for 'V23: Structured reformat' entries.",
+        "warning": "Requires AGENTIC_LOOP. Adds one additional LLM call per agentic response for reformatting. If reformatting fails, falls back to raw text. Monitor structured reformat logs.",
     },
     "FEATURE_CLAIM_VERIFICATION": {
         "description": "Response Claim Verification. Scans the response for action claims ('I sent the email', 'I searched for X') and cross-references each claim against actual tool receipts from the current turn. Claims without matching receipts are neutralized before the user sees them. Works with or without STRUCTURED_OUTPUT — when structured output is enabled, verifies the response_to_user field; when disabled, verifies raw text directly.",
@@ -306,10 +306,10 @@ FLAG_META = {
         "category": "Intelligence",
         "requires": [],
         "conflicts": [],
-        "warning": "Adds one fast-model API call per incoming message for classification (~100 input tokens). Falls back to keyword classifier if the API call fails. Monitor for classification accuracy — check logs for 'V23 Unified Classifier' entries.",
+        "warning": "Adds one fast-model API call per incoming message for classification (~100 input tokens). Falls back to keyword classifier if the API call fails. Monitor unified classifier logs for accuracy.",
     },
 
-    # ── Competitive Intelligence (V24) ──────────────────────────
+    # ── Competitive Intelligence ──────────────────────────────────
     "FEATURE_GITHUB_SEARCH": {
         "description": "GitHub Search Skill. Adds a dedicated tool for querying GitHub's REST API — search repositories, get recent commits, issues/PRs, and releases. Returns structured data with source URLs for every result. Grounds competitive intelligence in verifiable artifacts instead of web search summaries.",
         "category": "Intelligence",
@@ -322,12 +322,12 @@ FLAG_META = {
         "category": "Intelligence",
         "requires": ["FEATURE_MEMORY_VNEXT"],
         "conflicts": [],
-        "warning": "Requires Memory vNext to be enabled for episodic storage. Scans are stored with 30-day decay. Each scan adds ~200-500 tokens to episodic memory.",
+        "warning": "Requires structured memory to be enabled for episodic storage. Scans are stored with 30-day decay. Each scan adds ~200-500 tokens to episodic memory.",
     },
 
-    # ── Autonomy Loop v2 (V25) ──────────────────────────────────────
+    # ── Deep Reasoning Loop ───────────────────────────────────────
     "FEATURE_DEEP_REASONING_LOOP": {
-        "description": "Autonomy Loop v2: Deep reasoning pass before agentic execution. Runs a reasoning-only LLM call (no tools, deep model, high thinking) before the agentic loop. The model analyzes the task, identifies information needs, proposes approaches, and flags capability gaps. Reasoning output is injected as context for the agentic loop. Also records task experiences in episodic memory for future learning, and provides structured governance feedback when actions are blocked.",
+        "description": "Deep reasoning pass before agentic execution. Runs a reasoning-only LLM call (no tools, deep model, high thinking) before the agentic loop. The model analyzes the task, identifies information needs, proposes approaches, and flags capability gaps. Reasoning output is injected as context for the agentic loop. Also records task experiences in episodic memory for future learning, and provides structured governance feedback when actions are blocked.",
         "category": "Reasoning",
         "requires": [],
         "conflicts": [],

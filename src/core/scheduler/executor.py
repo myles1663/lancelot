@@ -165,7 +165,6 @@ class JobExecutor:
         self._receipts: List[Dict[str, Any]] = []
         self._tick_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-        self._tick_state_lock = threading.Lock()
         self._job_locks: Dict[str, threading.Lock] = {}
         self._job_locks_guard = threading.Lock()
         self._approval_state_lock = threading.Lock()
@@ -231,39 +230,22 @@ class JobExecutor:
 
     def start_tick_loop(self) -> None:
         """Start the background scheduler tick loop."""
-        with self._tick_state_lock:
-            if self._tick_thread and self._tick_thread.is_alive():
-                logger.debug("Scheduler tick loop start skipped; loop is already running")
-                return
-            self._stop_event.clear()
-            thread = threading.Thread(
-                target=self._tick_loop, daemon=True, name="scheduler-tick"
-            )
-            self._tick_thread = thread
-
-        thread.start()
+        if self._tick_thread and self._tick_thread.is_alive():
+            logger.warning("Tick loop already running")
+            return
+        self._stop_event.clear()
+        self._tick_thread = threading.Thread(
+            target=self._tick_loop, daemon=True, name="scheduler-tick"
+        )
+        self._tick_thread.start()
         logger.info("Scheduler tick loop started (60s interval)")
 
     def stop(self) -> None:
         """Stop the tick loop."""
-        with self._tick_state_lock:
-            thread = self._tick_thread
-            was_running = bool(thread and thread.is_alive())
-
         self._stop_event.set()
-        if thread:
-            thread.join(timeout=5)
-            if thread.is_alive():
-                logger.warning("Scheduler tick loop did not stop within 5s")
-                return
-            with self._tick_state_lock:
-                if self._tick_thread is thread:
-                    self._tick_thread = None
-
-        if was_running:
-            logger.info("Scheduler tick loop stopped")
-        else:
-            logger.debug("Scheduler tick loop stop skipped; loop was not running")
+        if self._tick_thread:
+            self._tick_thread.join(timeout=5)
+        logger.info("Scheduler tick loop stopped")
 
     def _tick_loop(self) -> None:
         """Background loop that checks jobs every 60 seconds."""
@@ -272,8 +254,11 @@ class JobExecutor:
                 self._tick()
             except Exception:
                 logger.exception("Scheduler tick error")
-            if self._stop_event.wait(timeout=60):
-                return
+            # Sleep in small increments so stop() is responsive
+            for _ in range(60):
+                if self._stop_event.is_set():
+                    return
+                time.sleep(1)
 
     def _tick(self) -> None:
         """Single tick — evaluate all jobs."""

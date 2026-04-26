@@ -1,4 +1,4 @@
-"""Tests for vNext4 RollbackManager (Prompt 13)."""
+"""Tests for RollbackManager."""
 
 import os
 import sys

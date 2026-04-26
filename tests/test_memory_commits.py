@@ -1,5 +1,5 @@
 """
-Tests for Memory vNext Commit Manager.
+Tests for structured memory commit manager.
 
 These tests validate:
 - Staged edit workflow

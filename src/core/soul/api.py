@@ -56,7 +56,7 @@ router = APIRouter(
 _SOUL_DIR: Optional[str] = os.environ.get("SOUL_DIR", None)
 _proposals_lock = threading.Lock()
 
-# V31: ActionCard factory — set by gateway.py during startup
+# ActionCard factory set by gateway.py during startup
 _actioncard_factory = None
 _runtime_reload_callback = None
 
@@ -319,7 +319,7 @@ async def propose_amendment(request: Request):
             soul_dir=_SOUL_DIR,
         )
 
-        # V31: Emit ActionCard for cross-channel approval notification
+        # Emit ActionCard for cross-channel approval notification
         if _actioncard_factory:
             try:
                 _actioncard_factory.from_soul_proposal(

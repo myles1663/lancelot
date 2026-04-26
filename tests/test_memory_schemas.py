@@ -1,5 +1,5 @@
 """
-Tests for Memory vNext schemas and core block store.
+Tests for structured memory schemas and core block store.
 
 These tests validate:
 - Pydantic schema validation

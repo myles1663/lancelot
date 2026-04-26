@@ -1,4 +1,4 @@
-"""Tests for vNext4 Comprehensive Integration (Prompt 23).
+"""Tests for comprehensive governance integration.
 
 End-to-end integration tests covering multi-tier execution, template
 lifecycle, verification failure cascade, flag combinations, and

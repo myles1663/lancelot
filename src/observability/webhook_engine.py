@@ -91,7 +91,6 @@ class WebhookEngine:
         self._pending: List[WebhookDelivery] = []
         self._lock = threading.Lock()
         self._running = False
-        self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._client = httpx.Client(timeout=delivery_timeout_s, verify=True)
         self._network_interceptor = network_interceptor
@@ -117,42 +116,21 @@ class WebhookEngine:
 
     def start(self) -> None:
         """Start the retry background thread."""
-        with self._lock:
-            if self._running and self._thread is not None and self._thread.is_alive():
-                logger.debug("Webhook engine start skipped; retry thread is already running")
-                return
-            self._running = True
-            self._stop_event.clear()
-            thread = threading.Thread(
-                target=self._retry_loop, daemon=True, name="webhook-retry"
-            )
-            self._thread = thread
-
-        thread.start()
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(
+            target=self._retry_loop, daemon=True, name="webhook-retry"
+        )
+        self._thread.start()
         logger.info("Webhook engine started (%d endpoints)", len(self._endpoints))
 
     def stop(self) -> None:
         """Stop the retry thread and close the HTTP client."""
-        with self._lock:
-            thread = self._thread
-            was_running = self._running or (thread is not None and thread.is_alive())
-            self._running = False
-
-        self._stop_event.set()
-        if thread:
-            thread.join(timeout=5)
-            if thread.is_alive():
-                logger.warning("Webhook engine retry thread did not stop within 5s")
-            else:
-                with self._lock:
-                    if self._thread is thread:
-                        self._thread = None
-
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=5)
         self._client.close()
-        if was_running:
-            logger.info("Webhook engine stopped")
-        else:
-            logger.debug("Webhook engine stop skipped; retry thread was not running")
 
     def update_endpoints(self, endpoints: List[WebhookEndpoint]) -> None:
         """Hot-update endpoint list (from config changes)."""
@@ -419,47 +397,40 @@ class WebhookEngine:
 
     def _retry_loop(self) -> None:
         """Background thread that processes pending retries."""
-        try:
-            while not self._stop_event.is_set():
-                if self._stop_event.wait(timeout=5):
-                    return
-                self._process_pending_retries()
-        finally:
+        while self._running:
+            time.sleep(5)  # Check every 5 seconds
+            now = time.time()
+            to_retry: List[WebhookDelivery] = []
+            remaining: List[WebhookDelivery] = []
+
             with self._lock:
-                self._running = False
+                for d in self._pending:
+                    if d.attempt >= self._max_retries:
+                        # Exhausted — record failure
+                        self._record_failure(d)
+                        continue
 
-    def _process_pending_retries(self) -> None:
-        """Process pending deliveries whose retry delay has elapsed."""
-        now = time.time()
-        to_retry: List[WebhookDelivery] = []
-        remaining: List[WebhookDelivery] = []
+                    # Check if retry delay has elapsed
+                    delay_idx = min(d.attempt - 1, len(RETRY_DELAYS) - 1)
+                    retry_after = d.created_at + sum(RETRY_DELAYS[:d.attempt])
+                    if now >= retry_after:
+                        d.attempt += 1
+                        to_retry.append(d)
+                    else:
+                        remaining.append(d)
 
-        with self._lock:
-            for d in self._pending:
-                if d.attempt >= self._max_retries:
-                    # Exhausted - record final failure.
-                    self._record_failure(d)
-                    continue
+                self._pending = remaining
+                self._update_pending_stats_locked()
+                self._save_pending_locked()
 
-                retry_after = d.created_at + sum(RETRY_DELAYS[:d.attempt])
-                if now >= retry_after:
-                    d.attempt += 1
-                    to_retry.append(d)
-                else:
-                    remaining.append(d)
-
-            self._pending = remaining
-            self._update_pending_stats_locked()
-            self._save_pending_locked()
-
-        # Execute retries outside the lock.
-        for d in to_retry:
-            success = self._deliver(d)
-            if not success:
-                with self._lock:
-                    self._pending.append(d)
-                    self._update_pending_stats_locked()
-                    self._save_pending_locked()
+            # Execute retries outside the lock
+            for d in to_retry:
+                success = self._deliver(d)
+                if not success:
+                    with self._lock:
+                        self._pending.append(d)
+                        self._update_pending_stats_locked()
+                        self._save_pending_locked()
 
 
 # Module-level singleton

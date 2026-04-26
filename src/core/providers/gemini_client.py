@@ -64,7 +64,7 @@ class GeminiProviderClient(ProviderClient):
             else:
                 gen_config.thinking_config = thinking
 
-        # Structured output: force JSON with schema validation (V23)
+        # Structured output: force JSON with schema validation.
         if config.get("response_mime_type"):
             gen_config.response_mime_type = config["response_mime_type"]
         if config.get("response_schema"):
@@ -127,7 +127,7 @@ class GeminiProviderClient(ProviderClient):
             else:
                 gen_config.thinking_config = thinking
 
-        # Structured output: force JSON with schema validation (V23)
+        # Structured output: force JSON with schema validation.
         # Note: structured output + tool calling may conflict on some models.
         # Only enable when explicitly requested via config.
         if config.get("response_mime_type"):

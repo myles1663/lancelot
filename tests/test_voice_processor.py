@@ -1,5 +1,5 @@
 """
-Tests for VoiceProcessor (Fix Pack V1 PR7) and Telegram voice note integration.
+Tests for VoiceProcessor and Telegram voice note integration.
 """
 
 import os

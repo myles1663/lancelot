@@ -1,5 +1,5 @@
 """
-Memory vNext Index — Unified search interface across memory tiers.
+Structured Memory Index — Unified search interface across memory tiers.
 
 This module provides the MemoryIndex class that offers:
 - Unified search across working, episodic, and archival memory

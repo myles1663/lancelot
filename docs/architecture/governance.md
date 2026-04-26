@@ -1,4 +1,4 @@
-# Architecture: Risk-Tiered Governance (vNext4)
+# Architecture: Risk-Tiered Governance
 
 ## Overview
 

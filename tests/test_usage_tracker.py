@@ -177,6 +177,15 @@ class TestRecording:
         assert lane["total_elapsed_ms"] == 30.0
         assert lane["avg_elapsed_ms"] == 15.0
 
+    def test_record_simple_bonsai_counts_as_local_agentic(self, tracker):
+        tracker.record_simple("bonsai-8b", 23)
+
+        lane = tracker.lane_breakdown()["local_agentic"]
+        assert lane["requests"] == 1
+        assert lane["successes"] == 1
+        assert lane["total_tokens_est"] == 23
+        assert lane["total_cost_est"] == 0.0
+
 
 # ===================================================================
 # UsageTracker — cost estimation

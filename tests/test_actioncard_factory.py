@@ -64,11 +64,29 @@ class TestActionCardFactory:
         )
 
         assert card.title == "Approve repository file edit: src/core/example_store.py"
-        assert "I need approval to edit `src/core/example_store.py`." in card.description
+        assert "I need approval to edit one repository file: `src/core/example_store.py`." in card.description
         assert "Approval scope:\n- One exact repository file operation" in card.description
         assert "- Target file: `src/core/example_store.py`" in card.description
         assert "Git commits, pushes, deployments, or external calls unless separately approved" in card.description
         assert "Tool: repo_writer" in card.description
+
+    def test_from_sentry_request_summarizes_workspace_write(self, factory):
+        """Workspace writes should not be described as repository changes."""
+        card = factory.from_sentry_request(
+            req_id="sentry-003",
+            tool_name="repo_writer",
+            params={
+                "action": "create",
+                "path": "operator_smoke/approval_probe.txt",
+                "workspace": "/home/lancelot/workspace",
+            },
+        )
+
+        assert card.title == "Approve workspace file create: operator_smoke/approval_probe.txt"
+        assert "I need approval to create one workspace file: `operator_smoke/approval_probe.txt`." in card.description
+        assert "Approval scope:\n- One bounded workspace file operation" in card.description
+        assert "same file and equivalent text content" in card.description
+        assert "- Workspace root: `/home/lancelot/workspace`" in card.description
 
     def test_from_sentry_request_batch_groups_repo_writes(self, factory):
         """Grouped approval cards summarize exact file scope."""

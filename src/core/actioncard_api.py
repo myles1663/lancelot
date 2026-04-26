@@ -116,6 +116,32 @@ async def resolve_actioncard(
     return result
 
 
+@router.post("/{card_id}/archive")
+async def archive_actioncard(
+    card_id: str,
+    request: Request,
+    body: Optional[ResolveRequest] = None,
+):
+    """Archive a stale ActionCard without invoking its approval handler."""
+    if not _card_resolver:
+        raise HTTPException(503, "ActionCard resolver not initialized")
+
+    identity = resolve_authenticated_identity(request)
+    result = _card_resolver.archive(
+        card_id,
+        channel="warroom_archive",
+        operator_id=identity.operator_id,
+        session_id=identity.session_id,
+        actor=identity.display_name or identity.operator_id,
+        reason=(body.reason if body else "") or "ActionCard archived by operator.",
+    )
+
+    if result.get("status") == "error":
+        raise HTTPException(400, result.get("message", "Archive failed"))
+
+    return result
+
+
 @router.post("/cleanup")
 async def cleanup_actioncards():
     """Delete expired and old resolved cards."""

@@ -14,6 +14,7 @@ Prompt 5 — Orchestrator Wiring
 """
 
 import os
+import logging
 import pytest
 import tempfile
 import shutil
@@ -135,6 +136,33 @@ class TestToolFabricInit:
 
         assert result.exit_code == 1
         assert "disabled" in result.stderr.lower()
+
+    def test_operator_capability_notice_emits_once_across_alias_imports(self, caplog):
+        """Capability notices are operator-facing; duplicate alias imports should not repeat them."""
+        from src.tools import fabric as fabric_module
+
+        notice_logger = logging.getLogger("lancelot.operator_notice")
+        if hasattr(notice_logger, "_lancelot_emitted_notice_codes"):
+            delattr(notice_logger, "_lancelot_emitted_notice_codes")
+
+        caplog.set_level(logging.WARNING, logger="lancelot.operator_notice")
+        fabric_module._emit_operator_notice_once(
+            "host_execution_enabled",
+            "Host execution provider enabled; commands run in container Linux.",
+        )
+        fabric_module._emit_operator_notice_once(
+            "host_execution_enabled",
+            "Host execution provider enabled; commands run in container Linux.",
+        )
+
+        records = [
+            record
+            for record in caplog.records
+            if "code=host_execution_enabled" in record.getMessage()
+        ]
+        assert len(records) == 1
+        if hasattr(notice_logger, "_lancelot_emitted_notice_codes"):
+            delattr(notice_logger, "_lancelot_emitted_notice_codes")
 
 
 # =============================================================================

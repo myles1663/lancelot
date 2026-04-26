@@ -1,5 +1,5 @@
 """
-Tests for Memory vNext Write Gates.
+Tests for structured memory write gates.
 
 These tests validate:
 - Block allowlist enforcement

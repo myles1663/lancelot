@@ -38,6 +38,12 @@ echo ""
 echo -e "  ${CYAN}Lancelot — Pre-flight checks${NC}"
 echo ""
 
+# Optional .env recovery
+if [ ! -f ".env" ]; then
+    echo -e "  ${YELLOW}[INFO] .env not found; continuing with compose defaults, Docker secrets, and persisted vault/onboarding state.${NC}"
+    echo -e "         Copy .env.example to .env only when you need to override deployment settings."
+fi
+
 # 1. Docker CLI
 if ! command -v docker &> /dev/null; then
     fatal_error "Docker is not installed." "Install Docker Desktop: https://www.docker.com/products/docker-desktop/"

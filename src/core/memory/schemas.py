@@ -1,5 +1,5 @@
 """
-Memory vNext Schemas — Pydantic v2 models for the memory subsystem.
+Structured Memory Schemas — Pydantic v2 models for the memory subsystem.
 
 This module defines all data models for:
 - Core Memory Blocks (persona, human, mission, operating_rules, workspace_state)

@@ -91,22 +91,63 @@ def _workspace_scope_line(params: Dict[str, Any]) -> str:
     return f"- Workspace root: `{workspace}`"
 
 
+def _file_target_kind(params: Dict[str, Any]) -> str:
+    workspace = str((params or {}).get("workspace") or "").strip().replace("\\", "/").lower()
+    path = str((params or {}).get("path") or "").strip().replace("\\", "/").lower()
+    if workspace:
+        if workspace.endswith("/home/lancelot/app") or "/lancelot/app" in workspace:
+            return "repository"
+        if workspace.endswith("/home/lancelot/workspace") or "/lancelot/workspace" in workspace:
+            return "workspace"
+        return "workspace"
+    if path.startswith(("src/", "tests/", "docs/", "config/", "packages/", "scripts/")):
+        return "repository"
+    if path in {"readme.md", "docker-compose.yml", "pyproject.toml", "pytest.ini"}:
+        return "repository"
+    return "file"
+
+
+def _file_kind_label(kind: str) -> str:
+    if kind == "repository":
+        return "repository file"
+    if kind == "workspace":
+        return "workspace file"
+    return "file"
+
+
+def _allows_bounded_workspace_retry(params: Dict[str, Any]) -> bool:
+    action = str((params or {}).get("action") or "").strip().lower()
+    path = str((params or {}).get("path") or "").strip().lower()
+    if action not in {"create", "edit"}:
+        return False
+    if _file_target_kind(params or {}) != "workspace":
+        return False
+    return path.endswith((".txt", ".md", ".log", ".csv"))
+
+
 def _approval_copy(tool_name: str, params: Dict[str, Any]) -> Dict[str, str]:
     tool = str(tool_name or "tool").strip()
     if tool == "repo_writer":
         action = str(params.get("action") or "modify").strip().lower()
         path = str(params.get("path") or "workspace file").strip()
+        kind = _file_target_kind(params)
+        label = _file_kind_label(kind)
+        bounded_workspace_retry = _allows_bounded_workspace_retry(params)
         scope = [
-            "- One exact repository file operation",
+            f"- One {'bounded' if bounded_workspace_retry else 'exact'} {label} operation",
             f"- Action: {action}",
             f"- Target file: `{path}`",
         ]
+        if bounded_workspace_retry:
+            scope.append(
+                "- A resume retry may reuse this approval only for the same file and equivalent text content"
+            )
         workspace_line = _workspace_scope_line(params)
         if workspace_line:
             scope.append(workspace_line)
         return {
-            "title": f"Approve repository file {action}: {_shorten(path, 40)}",
-            "headline": f"I need approval to {action} `{path}`.",
+            "title": f"Approve {label} {action}: {_shorten(path, 40)}",
+            "headline": f"I need approval to {action} one {label}: `{path}`.",
             "scope": "\n".join(scope),
             "exclusions": (
                 "- Other files\n"
@@ -207,17 +248,24 @@ def _approval_group_copy(requests: List[Dict[str, Any]]) -> Dict[str, str]:
             for item in requests
             if str((item.get("params") or {}).get("workspace") or "").strip()
         })
+        kinds = [_file_target_kind(item.get("params") or {}) for item in requests]
+        kind = kinds[0] if len(set(kinds)) == 1 else "file"
+        label = _file_kind_label(kind)
         scope = [
-            f"- {count} exact repository file operations",
+            f"- {count} exact {label} operations",
             "- Only the files listed below",
         ]
         if len(workspaces) == 1:
             scope.append(f"- Workspace root: `{workspaces[0]}`")
         elif len(workspaces) > 1:
             scope.append("- Workspace roots are listed in technical details")
+        if all(_allows_bounded_workspace_retry(item.get("params") or {}) for item in requests):
+            scope.append(
+                "- Resume retries may reuse approval only for the same listed files and equivalent text content"
+            )
         return {
-            "title": f"Approve {count} repository file {action_label}s",
-            "headline": f"I need approval to {action_label} {count} repository files.",
+            "title": f"Approve {count} {label} {action_label}s",
+            "headline": f"I need approval to {action_label} {count} {label}s.",
             "scope": "\n".join(scope),
             "exclusions": (
                 "- Files not listed below\n"

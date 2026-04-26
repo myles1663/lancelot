@@ -1,5 +1,5 @@
 """
-Claim Verifier — cross-references response text claims against tool receipts (V23).
+Claim Verifier — cross-references response text claims against tool receipts.
 
 Scans the response_to_user free-text field for action claims (past-tense verbs
 implying completed tool use) and validates each claim against the tool receipts
@@ -126,7 +126,7 @@ class ClaimVerifier:
                 claim.matched_receipt = False
                 flagged.append(f"'{claim.verb}' — no matching tool receipt")
                 logger.info(
-                    "V23 claim verification: flagged '%s' (expected tools: %s, "
+                    "Claim verification flagged '%s' (expected tools: %s, "
                     "successful: %s)",
                     claim.verb, expected_tools, successful_tools,
                 )
@@ -140,7 +140,7 @@ class ClaimVerifier:
 
         # Neutralize unverified claims
         cleaned = self._neutralize_claims(response_text, claims)
-        logger.info("V23 claim verification: %d claims flagged", len(flagged))
+        logger.info("Claim verification flagged %d claims", len(flagged))
 
         return VerificationResult(
             is_clean=False,

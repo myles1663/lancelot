@@ -1,5 +1,5 @@
 """
-Memory vNext Context Compiler — Deterministic prompt assembly.
+Structured Memory Context Compiler — Deterministic prompt assembly.
 
 This module provides the ContextCompiler that assembles the runtime prompt from:
 1. Core Memory Blocks (persona, human, operating_rules, mission, workspace_state)

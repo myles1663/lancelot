@@ -126,7 +126,7 @@ class ModelRouter:
         self._local = local_client
         self._local_roles = local_roles
         self._flagship = flagship_client
-        self._provider_client = provider_client  # V27: SDK-mode ProviderClient
+        self._provider_client = provider_client  # SDK-mode ProviderClient
         self._decisions: deque[RouterDecision] = deque(maxlen=_MAX_RECENT)
         self._usage = UsageTracker()
 
@@ -352,7 +352,7 @@ class ModelRouter:
         """Execute a task on the flagship provider."""
         from src.core.flagship_client import FlagshipError
 
-        # V27: SDK mode â€” use ProviderClient.generate() when available
+        # SDK mode: use ProviderClient.generate() when available
         if self._provider_client is not None:
             return self._execute_flagship_sdk(
                 task_type, text, lane, rationale, input_preview, start, **kwargs
@@ -486,7 +486,7 @@ class ModelRouter:
         return f"flagship-{lane}"
 
     # ------------------------------------------------------------------
-    # V27: SDK-mode flagship execution
+    # SDK-mode flagship execution
     # ------------------------------------------------------------------
 
     def _execute_flagship_sdk(

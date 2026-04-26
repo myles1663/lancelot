@@ -5,27 +5,19 @@ Lancelot is a self-hosted AI operator for technical users who want model-driven 
 ## Quickstart
 
 1. Install Docker Desktop and Node.js 18+.
-2. Run `npx create-lancelot@latest`.
+2. Run `npx create-lancelot`.
 3. The installer will collect one provider credential, pull the prebuilt core and local-model images, and start the stack.
 4. Open http://localhost:8000.
-5. Verify readiness: `curl http://localhost:8000/health/ready`
-6. In the War Room, send `hello`.
-7. For direct API smoke tests, run this from the installed repo directory and use the generated `LANCELOT_API_TOKEN` from `.env`:
-
-```bash
-TOKEN="$(grep '^LANCELOT_API_TOKEN=' .env | cut -d= -f2-)"
-curl -X POST http://localhost:8000/chat \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"text":"hello"}'
-```
+5. Verify liveness: `curl http://localhost:8000/health/live`
+6. Send a smoke test: `curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '{"text":"hello"}'`
 
 Manual setup:
 
 ```bash
-git clone https://github.com/myles1663/lancelot.git
+git clone <repo-url>
 cd lancelot
-cp .env.example .env
+# Optional: create .env only when you need deployment overrides.
+# cp .env.example .env
 docker compose pull lancelot-core
 docker compose pull local-llm
 docker compose up -d

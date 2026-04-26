@@ -1,4 +1,4 @@
-"""Tests for vNext4 governance data models (Prompt 2)."""
+"""Tests for governance data models."""
 
 import pytest
 from datetime import datetime

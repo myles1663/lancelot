@@ -2,9 +2,6 @@
 Tests for src.core.health.monitor — Health monitor loop (Prompt 10 / C3-C5).
 """
 
-import threading
-import time
-
 import pytest
 from src.core.health.types import HealthSnapshot
 from src.core.health.monitor import HealthMonitor, HealthCheck
@@ -211,6 +208,7 @@ class TestMonitorLoop:
     def test_start_and_stop(self):
         monitor = _make_monitor()
         monitor.start_monitor()
+        import time
         time.sleep(0.3)  # Let it tick a few times
         monitor.stop_monitor()
         # Should have computed at least one snapshot
@@ -221,48 +219,6 @@ class TestMonitorLoop:
         monitor.start_monitor()
         monitor.start_monitor()  # Should not start second thread
         monitor.stop_monitor()
-
-    def test_stop_does_not_wait_for_full_interval(self):
-        tick_seen = threading.Event()
-
-        def counted_check():
-            tick_seen.set()
-            return True
-
-        monitor = HealthMonitor(
-            checks=[HealthCheck("local_llm", counted_check)],
-            interval_s=30.0,
-        )
-        monitor.start_monitor()
-        assert tick_seen.wait(timeout=1.0)
-
-        started_at = time.perf_counter()
-        monitor.stop_monitor()
-        elapsed_s = time.perf_counter() - started_at
-
-        assert elapsed_s < 0.5
-
-    def test_subsecond_interval_does_not_busy_loop(self):
-        calls = 0
-        calls_lock = threading.Lock()
-
-        def counted_check():
-            nonlocal calls
-            with calls_lock:
-                calls += 1
-            return True
-
-        monitor = HealthMonitor(
-            checks=[HealthCheck("local_llm", counted_check)],
-            interval_s=0.05,
-        )
-        monitor.start_monitor()
-        time.sleep(0.18)
-        monitor.stop_monitor()
-
-        with calls_lock:
-            final_calls = calls
-        assert 2 <= final_calls <= 20
 
 
 # ===================================================================

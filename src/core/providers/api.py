@@ -318,7 +318,7 @@ def get_provider_stack():
     provider_name = stack.get("provider", "")
     env_var = API_KEY_VARS.get(provider_name, "")
     has_key = bool(os.getenv(env_var, "").strip()) if env_var else False
-    # V28: Anthropic OAuth counts as having credentials
+    # Anthropic OAuth counts as having credentials.
     if not has_key and provider_name == "anthropic":
         status = _anthropic_oauth_status()
         if status and status.get("configured"):
@@ -394,7 +394,7 @@ def get_model_profiles():
 
 
 # ---------------------------------------------------------------------------
-# New endpoints (v8.3.1) — Provider switching + lane overrides
+# Provider switching + lane overrides
 # ---------------------------------------------------------------------------
 
 @router.get("/available")
@@ -408,7 +408,7 @@ def get_available_providers():
     providers = []
     for name, env_var in API_KEY_VARS.items():
         has_key = bool(os.getenv(env_var, "").strip()) if env_var else False
-        # V28: Anthropic OAuth counts as having credentials
+        # Anthropic OAuth counts as having credentials.
         if not has_key and name == "anthropic":
             status = _anthropic_oauth_status()
             if status and status.get("configured"):
@@ -447,7 +447,7 @@ def switch_provider(req: SwitchProviderRequest):
     api_key = os.getenv(env_var, "").strip() if env_var else ""
     if not api_key:
         _has_oauth = False
-        # V28: Check for OAuth token as alternative for Anthropic
+        # Check for OAuth token as alternative for Anthropic.
         if provider_name == "anthropic":
             _has_oauth = bool(_anthropic_oauth_token())
         # Codex OAuth: ChatGPT Pro subscription
@@ -468,7 +468,7 @@ def switch_provider(req: SwitchProviderRequest):
 
         # Create a fresh provider for model discovery
         _auth_token = ""
-        # V28: pass OAuth token for Anthropic when no API key
+        # Pass OAuth token for Anthropic when no API key.
         if not api_key and provider_name == "anthropic":
             _auth_token = _anthropic_oauth_token()
         # Codex OAuth token
@@ -678,7 +678,7 @@ def get_provider_keys():
             "oauth_configured": False,
             "oauth_status": None,
         }
-        # V28: Append OAuth status for Anthropic
+        # Append OAuth status for Anthropic.
         if name == "anthropic":
             status = _anthropic_oauth_status()
             if status:
@@ -768,7 +768,7 @@ def rotate_provider_key(req: RotateKeyRequest):
 
 
 # ---------------------------------------------------------------------------
-# OAuth Management (V28 / v0.2.14) — Anthropic OAuth from the War Room
+# OAuth Management — Anthropic OAuth from the War Room
 # ---------------------------------------------------------------------------
 
 @router.post("/oauth/initiate", dependencies=[Depends(require_operator_capability("provider.admin"))])

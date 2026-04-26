@@ -1,5 +1,5 @@
 """
-Memory vNext — Governed Block Memory + Context Compiler.
+Structured Memory — Governed Block Memory + Context Compiler.
 
 This package provides Lancelot's memory subsystem with:
 - Core Memory Blocks (persona, human, mission, operating_rules, workspace_state)
@@ -39,7 +39,7 @@ _core_block_store: Optional["CoreBlockStore"] = None
 
 def is_memory_enabled() -> bool:
     """
-    Check if the Memory vNext feature is enabled.
+    Check if the structured memory feature is enabled.
 
     Returns:
         True if FEATURE_MEMORY_VNEXT is enabled
@@ -64,7 +64,7 @@ def get_core_block_store(data_dir: Optional[str | Path] = None) -> "CoreBlockSto
 
     if not is_memory_enabled():
         raise RuntimeError(
-            "Memory vNext is disabled. Set FEATURE_MEMORY_VNEXT=true to enable."
+            "Structured memory is disabled. Set FEATURE_MEMORY_VNEXT=true to enable."
         )
 
     if _core_block_store is None:
@@ -75,7 +75,7 @@ def get_core_block_store(data_dir: Optional[str | Path] = None) -> "CoreBlockSto
 
         _core_block_store = CoreBlockStore(data_dir=data_dir)
         _core_block_store.initialize()
-        logger.info("Memory vNext CoreBlockStore initialized")
+        logger.info("Structured memory CoreBlockStore initialized")
 
     return _core_block_store
 
@@ -141,6 +141,11 @@ from .gates import (
     QuarantineManager,
 )
 
+from .promotion import (
+    PromotionDecision,
+    evaluate_promotion,
+)
+
 from .api import router as memory_router
 
 from .jobs import (
@@ -192,6 +197,9 @@ __all__ = [
     "WriteGateValidator",
     "GateResult",
     "QuarantineManager",
+    # Promotion
+    "PromotionDecision",
+    "evaluate_promotion",
     # API
     "memory_router",
     # Jobs

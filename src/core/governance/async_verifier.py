@@ -1,5 +1,5 @@
 """
-Lancelot vNext4: Async Verification Queue
+Async Verification Queue
 
 Processes verification jobs for T1 actions in the background.
 Supports sync fallback when queue is full, drain for tier boundaries,

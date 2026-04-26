@@ -88,10 +88,10 @@ class TestVersioning:
         assert store.load_version(999) is None
 
     def test_list_versions(self, store):
-        topo1 = _topology(name="V1")
+        topo1 = _topology(name="alpha")
         store.save_version(topo1)
 
-        topo2 = _topology(name="V2")
+        topo2 = _topology(name="beta")
         topo2.version = 2
         store.save_version(topo2)
 

@@ -1,4 +1,4 @@
-"""Tests for vNext4 IntentTemplate system (Prompts 16-17)."""
+"""Tests for IntentTemplate system."""
 
 import json
 import os

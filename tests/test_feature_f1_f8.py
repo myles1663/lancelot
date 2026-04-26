@@ -14,14 +14,14 @@ from unittest.mock import patch, MagicMock
 class TestEnvConfiguration(unittest.TestCase):
 
     def test_env_example_file_exists(self):
-        # V16+: .env is generated during onboarding; verify VERSION file
+        # .env is generated during onboarding; verify VERSION file
         # exists at project root as the canonical config anchor.
         project_root = os.path.join(os.path.dirname(__file__), "..")
         version_file = os.path.join(project_root, "VERSION")
         self.assertTrue(os.path.exists(version_file))
 
     def test_env_example_has_required_vars(self):
-        # V16+: Required env vars are defined in the onboarding PROVIDERS
+        # Required env vars are defined in the onboarding PROVIDERS
         # dict and gateway security checks rather than a static .env.example.
         from onboarding import PROVIDERS
         # Verify flagship provider env vars are declared
@@ -83,7 +83,7 @@ class TestSimplifiedOnboarding(unittest.TestCase):
         orch = OnboardingOrchestrator(data_dir=self.data_dir)
         self.assertEqual(orch.state, "WELCOME")
 
-        # V16+: WELCOME -> FLAGSHIP_SELECTION (provider pick first)
+        # WELCOME -> FLAGSHIP_SELECTION (provider pick first)
         response = orch.process("Arthur", "Hello")
         self.assertEqual(orch.state, "FLAGSHIP_SELECTION")
         self.assertIn("Welcome, Arthur", response)
@@ -94,7 +94,7 @@ class TestSimplifiedOnboarding(unittest.TestCase):
         orch = OnboardingOrchestrator(data_dir=self.data_dir)
         orch.process("Arthur", "Hello")  # WELCOME -> FLAGSHIP_SELECTION
 
-        # V16+: Select provider, then arrive at HANDSHAKE for API key
+        # Select provider, then arrive at HANDSHAKE for API key
         response = orch.process("Arthur", "1")  # Pick Gemini -> HANDSHAKE
         self.assertEqual(orch.state, "HANDSHAKE")
         # Verify it asks for an API key
@@ -105,7 +105,7 @@ class TestSimplifiedOnboarding(unittest.TestCase):
         orch = OnboardingOrchestrator(data_dir=self.data_dir)
         orch.process("Arthur", "Hello")  # WELCOME -> FLAGSHIP_SELECTION
         orch.process("Arthur", "1")  # FLAGSHIP_SELECTION -> HANDSHAKE
-        # V16+ flow: QUEST_SELECTION state should never appear
+        # QUEST_SELECTION state should never appear
         self.assertNotEqual(orch.state, "QUEST_SELECTION")
 
     def test_lockdown_after_five_bad_keys(self):

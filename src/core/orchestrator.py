@@ -81,7 +81,7 @@ from src.core.frontier_scrubber import (
     validate_frontier_redaction as _validate_frontier_redaction_fn,
 )
 
-# vNext4 Governance imports (conditional)
+# Governance imports (conditional)
 import logging as _logging
 _gov_logger = _logging.getLogger(__name__)
 
@@ -147,7 +147,7 @@ class ChatAttachment:
     mime_type: str
     data: bytes
 
-# Fix Pack V1: New subsystem imports
+# Execution authority and tasking imports
 try:
     from response.assembler import ResponseAssembler, AssembledResponse
     from action_language_gate import check_action_language
@@ -170,7 +170,7 @@ except ImportError:
         from src.core.execution_authority.store import ExecutionTokenStore
         from src.core.execution_authority.minter import PermissionMinter
     except ImportError as e:
-        _gov_logger.warning("Fix Pack V1 imports unavailable: %s", e)
+        _gov_logger.warning("Execution authority imports unavailable: %s", e)
         ResponseAssembler = None
         check_action_language = None
         TaskStore = None
@@ -234,27 +234,28 @@ class LancelotOrchestrator:
         self.skill_executor = None
         self.scheduler_service = None
         self.job_executor = None
-        self.local_model = None  # Fix Pack V8: LocalModelClient for local agentic routing
+        self.local_model = None  # LocalModelClient for local agentic routing
         self.local_model_roles = None  # Role router for scrub + utility local model lanes
         self.model_router = None  # Injected by gateway for local redaction + utility routing
         self.frontier_scrubber = LocalPIIScrubber()
         self.usage_tracker = None  # Injected by gateway for Cost Tracker panel
         self._memory_enabled = False
         self.context_compiler = None
+        self.work_ledger_store = None
 
         # Runtime bridge for streamed tool-execution events.
         self.toolflow_emitter = None
         # Runtime bridge for approval and action-card creation.
         self.actioncard_factory = None
 
-        # Fix Pack V1: Execution authority + tasking + response assembler
+        # Execution authority, tasking, and response assembler
         self._init_fix_pack_v1()
 
         self._load_memory()
         self._init_provider()
         self._init_context_cache()
 
-        # vNext4: Risk-Tiered Governance subsystems
+        # Risk-tiered governance subsystems
         self._risk_classifier = None
         self._async_queue = None
         self._rollback_manager = None
@@ -615,7 +616,7 @@ class LancelotOrchestrator:
         )
 
     def _init_governance(self):
-        """Initialize vNext4 governance subsystems if feature flags are enabled."""
+        """Initialize governance subsystems if feature flags are enabled."""
         # ── Trust Ledger ──
         if _TRUST_AVAILABLE:
             try:
@@ -655,7 +656,7 @@ class LancelotOrchestrator:
         try:
             gov_config = load_governance_config()
             self._risk_classifier = RiskClassifier(gov_config.risk_classification)
-            _gov_logger.info("vNext4: RiskClassifier initialized")
+            _gov_logger.info("RiskClassifier initialized")
 
             if _ff.FEATURE_ASYNC_VERIFICATION:
                 self._async_queue = AsyncVerificationQueue(
@@ -664,16 +665,16 @@ class LancelotOrchestrator:
                 )
                 workspace = os.getenv("LANCELOT_WORKSPACE", "/home/lancelot/workspace")
                 self._rollback_manager = RollbackManager(workspace=workspace)
-                _gov_logger.info("vNext4: AsyncVerificationQueue + RollbackManager initialized")
+                _gov_logger.info("AsyncVerificationQueue + RollbackManager initialized")
 
             if _ff.FEATURE_INTENT_TEMPLATES:
                 self._template_registry = IntentTemplateRegistry(
                     config=gov_config.intent_templates,
                     data_dir=os.path.join(self.data_dir, "governance"),
                 )
-                _gov_logger.info("vNext4: IntentTemplateRegistry initialized")
+                _gov_logger.info("IntentTemplateRegistry initialized")
         except Exception as e:
-            _gov_logger.error("vNext4 governance init failed: %s", e)
+            _gov_logger.error("Governance init failed: %s", e)
             self._risk_classifier = None
             self._async_queue = None
             self._rollback_manager = None
@@ -704,7 +705,7 @@ class LancelotOrchestrator:
             _gov_logger.debug("Trust seed failed (non-fatal): %s", e)
 
     def _init_fix_pack_v1(self):
-        """Initialize Fix Pack V1 subsystems: execution authority, tasking, response assembler."""
+        """Initialize execution authority, tasking, and response assembler."""
         self.task_store = None
         self.token_store = None
         self.minter = None
@@ -715,7 +716,7 @@ class LancelotOrchestrator:
 
         try:
             if TaskStore is None:
-                _gov_logger.info("Fix Pack V1 imports not available; skipping init.")
+                _gov_logger.info("Execution authority imports not available; skipping init.")
                 return
 
             from feature_flags import (
@@ -729,7 +730,7 @@ class LancelotOrchestrator:
             if FEATURE_TASK_GRAPH_EXECUTION:
                 self.task_store = TaskStore(db_dir / "tasks.db")
                 self.plan_compiler = PlanCompiler()
-                _gov_logger.info("Fix Pack V1: TaskStore + PlanCompiler initialized.")
+                _gov_logger.info("TaskStore + PlanCompiler initialized.")
 
             if FEATURE_EXECUTION_TOKENS:
                 self.token_store = ExecutionTokenStore(db_dir / "tokens.db")
@@ -738,7 +739,7 @@ class LancelotOrchestrator:
                     receipt_service=self.receipt_service,
                 )
                 _gov_logger.info(
-                    "Fix Pack V1: ExecutionTokenStore + PermissionMinter initialized."
+                    "ExecutionTokenStore + PermissionMinter initialized."
                 )
 
             if FEATURE_TASK_GRAPH_EXECUTION and self.task_store:
@@ -751,18 +752,18 @@ class LancelotOrchestrator:
                     verifier=self.verifier,
                     connector_runtime=getattr(self, "connector_runtime", None),
                 )
-                _gov_logger.info("Fix Pack V1: TaskRunner initialized.")
+                _gov_logger.info("TaskRunner initialized.")
 
             if FEATURE_RESPONSE_ASSEMBLER:
-                _gov_logger.info("Fix Pack V1: FEATURE_RESPONSE_ASSEMBLER flag active.")
+                _gov_logger.info("FEATURE_RESPONSE_ASSEMBLER flag active.")
 
         except Exception as e:
-            _gov_logger.warning("Fix Pack V1 init error (non-fatal): %s", e)
+            _gov_logger.warning("Execution authority init error (non-fatal): %s", e)
 
-        # Fix Pack V2: Always initialize assembler — output hygiene is mandatory
+        # Always initialize assembler; output hygiene is mandatory.
         try:
             self.assembler = ResponseAssembler()
-            _gov_logger.info("Fix Pack V2: ResponseAssembler initialized (always-on).")
+            _gov_logger.info("ResponseAssembler initialized (always-on).")
         except Exception as e:
             _gov_logger.warning("ResponseAssembler init failed (non-fatal): %s", e)
             self.assembler = None
@@ -905,7 +906,7 @@ class LancelotOrchestrator:
         Sends the user's original request to Gemini to generate concrete,
         actionable plan steps specific to the domain.
 
-        Fix Pack V6: When agentic loop is enabled, Gemini can research
+        When agentic loop is enabled, Gemini can research
         (via network_client) before generating plan steps.
 
         Falls back to the original template steps if Gemini fails.
@@ -941,7 +942,7 @@ class LancelotOrchestrator:
         try:
             from feature_flags import FEATURE_AGENTIC_LOOP
             if FEATURE_AGENTIC_LOOP:
-                _gov_logger.info("V7: Enriching plan with forced tool research")
+                _gov_logger.info("Enriching plan with forced tool research")
                 raw = self._agentic_generate(
                     prompt=prompt,
                     system_instruction=sys_instruction,
@@ -977,7 +978,7 @@ class LancelotOrchestrator:
         return _execute_with_llm_impl(self, graph, user_text=user_text)
 
     def _summarize_execution_results(self, graph, run_result) -> str:
-        """Summarize real skill execution results using Gemini (Fix Pack V5).
+        """Summarize real skill execution results using Gemini.
 
         Takes a TaskGraph and TaskRunResult, formats the real step outputs,
         and sends to Gemini for a concise user-facing summary.
@@ -1037,7 +1038,7 @@ class LancelotOrchestrator:
         self.context_env.read_file("USER.md")
         self.context_env.read_file("RULES.md")
         self.context_env.read_file("MEMORY_SUMMARY.md")
-        self.context_env.read_file("CAPABILITIES.md")  # Fix Pack V5: self-awareness
+        self.context_env.read_file("CAPABILITIES.md")  # self-awareness
 
         # Cache local strings for prompts/rules (legacy support)
         # Note: ContextEnv stores the actual content now
@@ -1244,7 +1245,7 @@ class LancelotOrchestrator:
             "Be comprehensive — the user expects a complete deliverable, not a summary."
         )
 
-        # SELF-AWARENESS (Fix Pack V5)
+        # SELF-AWARENESS
         self_awareness = self._build_self_awareness()
 
         # Host bridge awareness (same as _build_system_instruction)
@@ -1272,13 +1273,13 @@ class LancelotOrchestrator:
         return instruction
 
     def _build_self_awareness(self) -> str:
-        """Build self-awareness identity core for system instructions (V17).
+        """Build self-awareness identity core for system instructions.
 
         Contains WHO you are and KEY behavioral rules only. Detailed
         architecture, memory descriptions, and capabilities are in
         CAPABILITIES.md (loaded into file context at boot).
 
-        V17: Slimmed from ~4500 chars to ~750 chars. Detailed reference
+        Detailed reference
         material moved to CAPABILITIES.md in file context.
         """
         return (
@@ -1300,7 +1301,7 @@ class LancelotOrchestrator:
             "in your file context. Refer to it when asked about your internals."
         )
 
-    # ── Fix Pack V6: Agentic Loop (Provider Function Calling) ──────────
+    # ── Agentic Loop (Provider Function Calling) ───────────────────────
 
     def _build_tool_declarations(self):
         return _build_tool_declarations_impl(self)
@@ -1314,7 +1315,7 @@ class LancelotOrchestrator:
         )
 
     # ------------------------------------------------------------------
-    # Fix Pack V8: Local agentic routing
+    # Local agentic routing
     # ------------------------------------------------------------------
 
     def _build_openai_tool_declarations(self):
@@ -1330,7 +1331,7 @@ class LancelotOrchestrator:
         if len(prompt) > 500:
             return False
 
-        # V17b: Continuation messages reference prior context that the local
+        # Continuation messages reference prior context that the local
         # model won't have — always route to flagship for full history
         if self._is_continuation(prompt):
             return False
@@ -1343,14 +1344,14 @@ class LancelotOrchestrator:
             "debug", "refactor", "design", "evaluate", "explain",
             "research", "investigate", "build", "implement", "create",
             "write code", "deploy", "migrate",
-            # V10: Research-intent phrases that need Gemini + tools
+            # Research-intent phrases that need Gemini + tools
             "figure out", "find out", "find a way", "look into",
             "explore", "recommend", "options for",
             "realtime", "real-time", "voice chat", "voice call",
-            # V16: Self-awareness / identity questions need full system instruction
+            # Self-awareness / identity questions need full system instruction
             "tell me about", "describe your", "how do you", "how does your",
             "what is your", "your memory", "your architecture", "about yourself",
-            # V15: Additional complex keywords for better routing
+            # Additional complex keywords for better routing
             "code",           # "Claude Code", "look at the code", etc. — needs flagship
             "prompt",         # "prompt X to do Y" — complex delegation request
             "claude",         # References to Claude/Claude Code
@@ -1466,7 +1467,7 @@ class LancelotOrchestrator:
         return _is_conversational_fn(prompt)
 
     def _check_name_update(self, message: str):
-        """V18: Detect 'call me X' / 'my name is X' and persist to USER.md.
+        """Detect 'call me X' / 'my name is X' and persist to USER.md.
 
         Updates the user profile file so the name persists across restarts
         and is used consistently across all channels.
@@ -1700,7 +1701,7 @@ class LancelotOrchestrator:
             )
             return f"Error generating response: {e}"
 
-    # ── End Fix Pack V6 ──────────────────────────────────────────────
+    # ── End Agentic Loop ─────────────────────────────────────────────
 
     def _get_thinking_config(self):
         """Returns thinking config dict based on GEMINI_THINKING_LEVEL env var.
@@ -2391,7 +2392,7 @@ class LancelotOrchestrator:
         return "\n".join(output)
 
     def run_autonomous_mission(self, goal: str) -> str:
-        """S17: Generates AND Executes a plan autonomously."""
+        """Generate and execute a plan autonomously."""
         _gov_logger.info(
             "autonomous_mission_started",
             extra={"goal": goal},
@@ -2537,7 +2538,7 @@ class LancelotOrchestrator:
         return self.model_name
 
     def _route_model(self, user_message: str) -> str:
-        """V17: Smart model routing — selects the best model for the task.
+        """Smart model routing: selects the best model for the task.
 
         Routes to deep model (e.g. gemini-2.5-pro) for complex reasoning tasks,
         and fast model (Flash) for everything else. This ensures Lancelot never
@@ -2671,7 +2672,7 @@ class LancelotOrchestrator:
         2. Check for structural fake work proposals — replace entire response
         3. Check individual forbidden phrases — replace if >= 2, strip if 1
 
-        Fix Pack V6: When agentic loop has tool receipts, research/execution
+        When agentic loop has tool receipts, research/execution
         phrases are allowed because they describe real tool-backed work.
         """
         import re
@@ -2681,8 +2682,8 @@ class LancelotOrchestrator:
             filter_forbidden_for_agentic_context,
         )
 
-        # Fix Pack V14: Only real tool receipts grant trust.
-        # V10 had a bug: is_agentic_context=True was treated the same as
+        # Only real tool receipts grant trust.
+        # is_agentic_context=True must not be treated the same as
         # has_tool_receipts=True, letting stalling language through even when
         # no tools were called. Now only actual tool calls earn trust.
         has_tool_receipts = False
@@ -2698,13 +2699,13 @@ class LancelotOrchestrator:
             cleaned = cleaned.replace(marker, "").strip()
 
         # Tier 2: Check for structural fake work proposal (highest priority)
-        # V14: Only skip fake work detection when tools were ACTUALLY called.
+        # Only skip fake work detection when tools were ACTUALLY called.
         if not has_tool_receipts:
             fake_work_reason = detect_fake_work_proposal(cleaned)
             if fake_work_reason:
                 return self._generate_honest_replacement(cleaned, fake_work_reason)
 
-        # Tier 2b (Fix Pack V1): Action Language Gate — block execution claims
+        # Tier 2b: Action Language Gate — block execution claims
         #   without a real TaskRun + receipt
         if check_action_language is not None:
             active_run = None
@@ -2718,8 +2719,8 @@ class LancelotOrchestrator:
 
         # Tier 3: Check for individual forbidden phrases
         violations = detect_forbidden_async_language(cleaned)
-        # V14: Only filter out phrases when tools were ACTUALLY called.
-        # (V10 bug: is_agentic_context was treated as has_tool_receipts)
+        # Only filter out phrases when tools were ACTUALLY called.
+        # is_agentic_context must not be treated as has_tool_receipts.
         violations = filter_forbidden_for_agentic_context(
             violations, has_tool_receipts=has_tool_receipts
         )

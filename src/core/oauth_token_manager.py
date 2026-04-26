@@ -1,7 +1,7 @@
 """
 Anthropic OAuth Token Manager — PKCE flow, vault-backed token storage, auto-refresh.
 
-V28 (v0.2.14): Adds OAuth 2.0 Authorization Code + PKCE as an alternative
+Adds OAuth 2.0 Authorization Code + PKCE as an alternative
 to API keys for Anthropic authentication.  Tokens are stored in the
 encrypted connector vault and refreshed proactively before expiry.
 

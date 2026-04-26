@@ -742,6 +742,7 @@ class _FakeToolLoopSelf:
         self.provider = object()
         self.skill_executor = object()
         self.local_model = None
+        self.local_model_roles = None
         self.context_env = types.SimpleNamespace(get_context_string=lambda: "context")
         self.governor = _FakeGovernor()
         self.usage_tracker = types.SimpleNamespace(record_simple=lambda *_: None)
@@ -873,6 +874,56 @@ def test_agentic_generate_executes_declared_tool_then_returns_final_text(monkeyp
     assert ("tool_calls", 1) in runtime.governor.logged
 
 
+def test_agentic_generate_rejects_external_network_without_operator_intent(monkeypatch):
+    import tool_loop
+    from providers.base import ToolCall
+
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_STRUCTURED_OUTPUT", False, raising=False)
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_CLAIM_VERIFICATION", False, raising=False)
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_DEEP_REASONING_LOOP", False, raising=False)
+
+    first = types.SimpleNamespace(
+        text="",
+        raw={"role": "assistant", "content": ""},
+        tool_calls=[
+            ToolCall(
+                name="network_client",
+                args={"method": "GET", "url": "https://example.invalid"},
+                id="call-1",
+            )
+        ],
+    )
+    second = types.SimpleNamespace(
+        text="I inspected the local runtime path only; no external request was made.",
+        raw={"role": "assistant", "content": "local only"},
+        tool_calls=[],
+    )
+    runtime = _FakeToolLoopSelf(first)
+    runtime._build_tool_declarations = lambda: [types.SimpleNamespace(name="network_client")]
+    runtime.skill_executor = types.SimpleNamespace(
+        run=lambda *_: (_ for _ in ()).throw(AssertionError("network_client should not execute"))
+    )
+    receipts = []
+    runtime.receipt_service = types.SimpleNamespace(create=lambda receipt: receipts.append(receipt))
+    results = [first, second]
+    runtime._provider_generate_with_tools = lambda **_: results.pop(0)
+
+    response = tool_loop._agentic_generate(
+        runtime,
+        (
+            "Operator acceptance smoke test. Inspect current runtime health and active work status. "
+            "Do not modify files and do not run external writes."
+        ),
+        force_tool_use=True,
+    )
+
+    assert "no external request was made" in response
+    assert runtime._last_tool_receipts[0]["result"].startswith("REJECTED")
+    assert "network_client was not allowed" in runtime._last_tool_receipts[0]["result"]
+    assert receipts[0].status == "failure"
+    assert receipts[0].action_name == "network_client"
+
+
 def test_agentic_generate_replaces_stale_approval_prompt_after_successful_tools(monkeypatch):
     import tool_loop
     from providers.base import ToolCall
@@ -896,7 +947,8 @@ def test_agentic_generate_replaces_stale_approval_prompt_after_successful_tools(
         text=(
             "Paused for Commander approval before running 1 governed action.\n\n"
             "Approval ID: `stale`.\n\n"
-            "Review the ActionCard in War Room, then send `continue` after approval."
+            "Review and resolve the ActionCard in War Room. "
+            "After approval, use that card's Continue control to resume the same run."
         ),
         raw={"role": "assistant", "content": "stale approval prompt"},
         tool_calls=[],
@@ -1052,7 +1104,7 @@ def test_agentic_generate_blocks_escalated_tool_without_write_permission(monkeyp
 
     response = tool_loop._agentic_generate(runtime, "write file", allow_writes=False)
     assert response.startswith("Paused for Commander approval")
-    assert "send `continue` after approval" in response
+    assert "Continue control to resume the same run" in response
     assert runtime._last_tool_receipts[0]["result"].startswith("ESCALATED")
     assert actioncards[0]["tool_name"] == "repo_writer"
     assert "User request: write file." in actioncards[0]["approval_context"]
@@ -1169,6 +1221,48 @@ def test_agentic_generate_blocks_completion_claim_with_unresolved_tool_failure(m
     assert runtime._last_tool_receipts[0]["result"].startswith("FAILED")
 
 
+def test_agentic_generate_treats_nonzero_command_return_code_as_failure(monkeypatch):
+    import tool_loop
+    from providers.base import ToolCall
+
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_STRUCTURED_OUTPUT", False, raising=False)
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_CLAIM_VERIFICATION", False, raising=False)
+    monkeypatch.setattr(tool_loop._ff, "FEATURE_DEEP_REASONING_LOOP", False, raising=False)
+
+    first = types.SimpleNamespace(
+        text="",
+        raw={"role": "assistant", "content": ""},
+        tool_calls=[ToolCall(name="command_runner", args={"command": "ver"}, id="call-1")],
+    )
+    second = types.SimpleNamespace(
+        text="The command failed; no successful operation was completed.",
+        raw={"role": "assistant", "content": "failed"},
+        tool_calls=[],
+    )
+    runtime = _FakeToolLoopSelf(first)
+    runtime._build_tool_declarations = lambda: [types.SimpleNamespace(name="command_runner")]
+    runtime.skill_executor = types.SimpleNamespace(
+        run=lambda *_: types.SimpleNamespace(
+            success=True,
+            outputs={"return_code": 1, "stderr": "ver: not found", "command": "ver"},
+            error="",
+        )
+    )
+    receipts = []
+    runtime.receipt_service = types.SimpleNamespace(create=lambda receipt: receipts.append(receipt))
+    results = [first, second]
+    runtime._provider_generate_with_tools = lambda **_: results.pop(0)
+
+    response = tool_loop._agentic_generate(runtime, "Inspect runtime version", force_tool_use=True)
+
+    assert "command failed" in response
+    assert runtime._last_tool_receipts[0]["result"].startswith("FAILED:")
+    assert "return_code=1" in runtime._last_tool_receipts[0]["result"]
+    assert receipts[0].status == "failure"
+    assert receipts[0].action_name == "command_runner"
+    assert receipts[0].error_message.startswith("command_runner exited with return_code=1")
+
+
 def test_local_agentic_generate_falls_back_when_local_model_is_unavailable():
     import tool_loop
 
@@ -1207,6 +1301,61 @@ def test_local_agentic_generate_returns_text_and_tracks_usage():
     assert "emoji sparingly" in captured["messages"][0]["content"]
     assert ("tokens", 17) in runtime.governor.logged
     assert usage == [("local-llm", 17)]
+
+
+def test_local_agentic_generate_prefers_utility_role_client():
+    import tool_loop
+    from src.core.local_model_roles import ROLE_UTILITY
+
+    captured = {}
+
+    class FallbackModel:
+        def is_healthy(self):
+            return True
+
+        def chat_with_tools(self, **_):
+            raise AssertionError("fallback local model should not be used")
+
+    class UtilityModel:
+        def is_healthy(self):
+            return True
+
+        def chat_with_tools(self, **kwargs):
+            captured["timeout"] = kwargs["timeout"]
+            return {
+                "choices": [
+                    {
+                        "message": {"content": "utility answer"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"total_tokens": 23},
+            }
+
+    class RoleRouter:
+        def __init__(self):
+            self.requested_roles = []
+            self.utility = UtilityModel()
+
+        def config_for(self, role):
+            self.requested_roles.append(("config", role))
+            return types.SimpleNamespace(model="bonsai-8b", timeout_s=7.0)
+
+        def client_for(self, role):
+            self.requested_roles.append(("client", role))
+            return self.utility
+
+    usage = []
+    roles = RoleRouter()
+    runtime = _FakeToolLoopSelf(types.SimpleNamespace(text="", tool_calls=[]))
+    runtime.local_model = FallbackModel()
+    runtime.local_model_roles = roles
+    runtime.usage_tracker = types.SimpleNamespace(record_simple=lambda *args: usage.append(args))
+
+    assert tool_loop._local_agentic_generate(runtime, "hello") == "utility answer"
+    assert roles.requested_roles == [("config", ROLE_UTILITY), ("client", ROLE_UTILITY)]
+    assert captured["timeout"] == 7.0
+    assert usage == [("bonsai-8b", 23)]
 
 
 def test_local_agentic_generate_returns_when_approval_is_required():
@@ -1393,6 +1542,17 @@ def test_execute_command_handles_safe_repl_and_file_operations(command, expected
     assert tool_loop._execute_command(_CommandRuntime(), command) == expected
 
 
+def test_tool_input_error_rejects_command_runner_shell_composition():
+    import tool_loop
+
+    pipe_error = tool_loop._tool_input_error("command_runner", {"command": "ls | head"})
+    chain_error = tool_loop._tool_input_error("command_runner", {"command": "echo ok && whoami"})
+
+    assert "blocked shell metacharacter '|'" in pipe_error
+    assert "Use one allowed command per tool call" in pipe_error
+    assert "blocked shell metacharacter '&'" in chain_error
+
+
 def test_execute_command_handles_sleep_and_wake_commands():
     import tool_loop
 
@@ -1507,15 +1667,93 @@ def test_gateway_boot_support_health_monitor_reports_local_model_states(monkeypa
 
     assert objects["monitor"].started is True
     assert [check.name for check in objects["monitor"].checks] == [
-        "startup_validation",
         "llm_provider",
         "onboarding_ready",
         "local_llm",
         "scheduler",
     ]
-    assert objects["monitor"].checks[3].snapshot_details_fn()["local_llm_status"] == "ok"
+    assert objects["monitor"].checks[2].snapshot_details_fn()["local_llm_status"] == "ok"
     gbs._shutdown_health_monitor(objects)
     assert objects["monitor"].stopped is True
+
+
+def test_gateway_boot_support_health_monitor_accepts_ready_local_roles(monkeypatch):
+    import gateway_boot_support as gbs
+
+    _preserve_module_globals(monkeypatch, gbs, GATEWAY_BOOT_SUPPORT_BOUND_GLOBALS)
+    availability_calls = []
+
+    class HealthCheck:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class HealthMonitor:
+        def __init__(self, checks, interval_s):
+            self.checks = checks
+            self.interval_s = interval_s
+
+        def start_monitor(self):
+            pass
+
+        def stop_monitor(self):
+            pass
+
+        def compute_snapshot(self):
+            return {"checks": [check.name for check in self.checks]}
+
+    monkeypatch.setitem(sys.modules, "health.monitor", _module(HealthMonitor=HealthMonitor, HealthCheck=HealthCheck))
+    monkeypatch.setitem(sys.modules, "health.api", _module(set_snapshot_provider=lambda provider: None))
+    monkeypatch.setitem(
+        sys.modules,
+        "src.core.model_usage_policy",
+        _module(set_local_model_availability=lambda *args, **kwargs: availability_calls.append((args, kwargs))),
+    )
+
+    local_model = types.SimpleNamespace(
+        health=lambda: (_ for _ in ()).throw(RuntimeError("legacy lane unavailable")),
+        is_healthy=lambda: False,
+    )
+    role_status = {
+        "roles": {
+            "scrub_region_finder": {
+                "enabled": True,
+                "ready": True,
+                "loaded": True,
+                "status": "ok",
+                "last_verified_at": "2026-04-22T10:00:00Z",
+                "last_checked_at": "2026-04-22T10:00:00Z",
+                "last_smoke_elapsed_ms": 100.0,
+            },
+            "utility": {
+                "enabled": True,
+                "ready": True,
+                "loaded": True,
+                "status": "ok",
+                "last_verified_at": "2026-04-22T10:01:00Z",
+                "last_checked_at": "2026-04-22T10:01:00Z",
+                "last_smoke_elapsed_ms": 250.0,
+            },
+        }
+    }
+    orchestrator = types.SimpleNamespace(
+        provider=object(),
+        local_model=local_model,
+        local_model_roles=types.SimpleNamespace(status=lambda: role_status),
+        scheduler_service=None,
+        job_executor=None,
+    )
+    onboarding = types.SimpleNamespace(_determine_state=lambda: "READY")
+
+    gbs.bind_gateway_globals(main_orchestrator=orchestrator, onboarding_orch=onboarding)
+    objects = gbs._init_health_monitor()
+    local_check = objects["monitor"].checks[2]
+    details = local_check.snapshot_details_fn()
+
+    assert local_check.check_fn() is True
+    assert details["local_llm_status"] == "ok"
+    assert details["local_llm_last_error"] is None
+    assert details["local_llm_last_smoke_elapsed_ms"] == 250.0
+    assert availability_calls[-1][0][0] is True
 
 
 def test_gateway_boot_support_provider_hot_toggle_and_model_bootstrap(monkeypatch):

@@ -215,6 +215,36 @@ class TestActionCardResolver:
         )
         assert result["status"] == "denied"
 
+    def test_archive_resolves_without_invoking_handler(self, resolver, store):
+        """Archive clears stale cards without approving or denying the source request."""
+        card = _make_card(store, quest_id="q-123")
+        handler = MagicMock(return_value={"status": "approved", "message": "OK"})
+        resolver.register_handler("governance", handler)
+
+        result = resolver.archive(
+            card.card_id,
+            channel="work_archive",
+            operator_id="op-1",
+            session_id="sess-1",
+            actor="Arthur",
+            reason="Work item archived.",
+        )
+
+        assert result["status"] == "archived"
+        handler.assert_not_called()
+        updated = store.get(card.card_id)
+        assert updated.resolved is True
+        assert updated.resolved_action == "archived"
+        assert updated.resolved_channel == "work_archive"
+        resolver._event_bus.publish_sync.assert_called_once()
+        event = resolver._event_bus.publish_sync.call_args[0][0]
+        assert event.payload["button_id"] == "archived"
+        assert event.payload["result_status"] == "archived"
+        resolver._receipt_service.create.assert_called_once()
+        receipt = resolver._receipt_service.create.call_args[0][0]
+        assert receipt.action_name == "actioncard.governance.archived"
+        assert receipt.quest_id == "q-123"
+
     def test_passes_authenticated_context_to_handler(self, resolver, store):
         """Authenticated operator context is forwarded to subsystem handlers."""
         card = _make_card(store)

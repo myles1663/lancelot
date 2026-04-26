@@ -2,7 +2,7 @@
 Action Language Gate — prevents phantom execution claims.
 
 No "Action:" or execution-tense language unless a real TaskRun exists
-with at least one receipt. This is a hard invariant (AC1 from Fix Pack V1).
+with at least one receipt. This is a hard execution invariant.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ class GateResult:
 
 # Patterns that imply execution is happening right now
 _EXECUTION_PATTERNS = [
-    re.compile(r"^Action:\s?", re.MULTILINE),  # V3: optional space after colon
+    re.compile(r"^Action:\s?", re.MULTILINE),  # optional space after colon
     re.compile(r"(?:executing|executed)\s+step\b", re.IGNORECASE),
     re.compile(r"running\s+command\b", re.IGNORECASE),
     re.compile(r"deploying\s+to\b", re.IGNORECASE),
@@ -38,7 +38,7 @@ _EXECUTION_PATTERNS = [
     re.compile(r"i\s+(?:have|just)\s+(?:executed|deployed|created|modified|deleted|written)", re.IGNORECASE),
     re.compile(r"successfully\s+(?:executed|deployed|created|modified|deleted|written)", re.IGNORECASE),
     re.compile(r"completed\s+step\s+\d", re.IGNORECASE),
-    # V3: "I will now browse/search/look/check/find/query" — Gemini phantom action
+    # "I will now browse/search/look/check/find/query" — Gemini phantom action
     re.compile(r"i\s+will\s+now\s+(?:browse|search|look|check|find|query)", re.IGNORECASE),
 ]
 
@@ -75,7 +75,7 @@ def check_action_language(text: str, task_run=None, has_tool_receipts: bool = Fa
     If a TaskRun exists with status QUEUED/RUNNING/BLOCKED and at least
     one receipt, execution language is allowed.
 
-    Fix Pack V6: If has_tool_receipts is True, execution language is also
+    If has_tool_receipts is True, execution language is also
     allowed — the agentic loop has made real tool calls that back the claims.
 
     Args:
@@ -86,7 +86,7 @@ def check_action_language(text: str, task_run=None, has_tool_receipts: bool = Fa
     Returns:
         GateResult with passed=True if OK, or violations + corrected text.
     """
-    # Fix Pack V6: If agentic loop made real tool calls, allow execution language
+    # If agentic loop made real tool calls, allow execution language
     if has_tool_receipts:
         return GateResult(passed=True, corrected_text=text)
 

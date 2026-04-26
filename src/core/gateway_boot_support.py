@@ -31,7 +31,7 @@ def bind_gateway_globals(**kwargs):
     globals().update(kwargs)
 
 def _init_memory():
-    """Initialize Memory vNext subsystem."""
+    """Initialize structured memory subsystem."""
     from memory.store import CoreBlockStore
     from memory.sqlite_store import MemoryStoreManager
     from memory.compiler import ContextCompilerService
@@ -51,15 +51,15 @@ def _init_memory():
     )
     main_orchestrator._memory_enabled = True
     main_orchestrator.context_compiler = compiler_svc
-    logger.info("Memory vNext initialized and wired.")
+    logger.info("Structured memory initialized and wired.")
     return {"core_store": core_store, "store_manager": store_manager, "compiler": compiler_svc}
 
 
 def _shutdown_memory(objects):
-    """Shut down Memory vNext subsystem."""
+    """Shut down structured memory subsystem."""
     main_orchestrator._memory_enabled = False
     main_orchestrator.context_compiler = None
-    logger.info("Memory vNext shut down.")
+    logger.info("Structured memory shut down.")
 def _init_soul():
     """Initialize Soul subsystem."""
     from soul.store import load_active_soul, SoulStoreError
@@ -241,19 +241,86 @@ def _shutdown_scheduler(objects):
     logger.info("Scheduler shut down.")
 
 
+def _summarize_local_role_readiness(local_roles) -> dict[str, object]:
+    """Return aggregate readiness for role-specific local model endpoints."""
+    if local_roles is None:
+        return {"ready": False, "loaded": False, "status": "unavailable", "last_error": None}
+    try:
+        raw = local_roles.status()
+    except Exception as exc:
+        return {
+            "ready": False,
+            "loaded": False,
+            "status": "unavailable",
+            "last_error": str(exc),
+        }
+    roles = raw.get("roles", raw) if isinstance(raw, dict) else {}
+    enabled_roles = [
+        payload
+        for payload in (roles or {}).values()
+        if isinstance(payload, dict) and payload.get("enabled", True)
+    ]
+    if not enabled_roles:
+        return {"ready": False, "loaded": False, "status": "unavailable", "last_error": None}
+    ready = all(bool(role.get("ready")) for role in enabled_roles)
+    loaded = any(bool(role.get("loaded", role.get("ready"))) for role in enabled_roles)
+    failures = [
+        str(role.get("last_error") or role.get("status") or "not ready")
+        for role in enabled_roles
+        if not role.get("ready")
+    ]
+    verified = [
+        str(role.get("last_verified_at"))
+        for role in enabled_roles
+        if role.get("last_verified_at")
+    ]
+    checked = [
+        str(role.get("last_checked_at"))
+        for role in enabled_roles
+        if role.get("last_checked_at")
+    ]
+    smoke_times = [
+        float(role.get("last_smoke_elapsed_ms"))
+        for role in enabled_roles
+        if role.get("last_smoke_elapsed_ms") is not None
+    ]
+    return {
+        "ready": ready,
+        "loaded": loaded,
+        "status": "ok" if ready else ("degraded" if loaded else "unavailable"),
+        "last_error": "; ".join(failures) if failures else None,
+        "last_verified_at": max(verified) if verified else None,
+        "last_checked_at": max(checked) if checked else None,
+        "last_smoke_elapsed_ms": max(smoke_times) if smoke_times else None,
+    }
+
+
 def _init_health_monitor():
     """Initialize Health Monitor subsystem."""
     from health.monitor import HealthMonitor, HealthCheck
     from health.api import set_snapshot_provider
-    from src.core.startup_validation import (
-        startup_validation_health_details,
-        startup_validation_ready,
-    )
+
+    def _local_llm_ready():
+        local_model = getattr(main_orchestrator, "local_model", None)
+        if local_model is not None:
+            try:
+                if local_model.is_healthy():
+                    return True
+            except Exception:
+                pass
+        role_lane = _summarize_local_role_readiness(
+            getattr(main_orchestrator, "local_model_roles", None)
+        )
+        return bool(role_lane.get("ready"))
 
     def _local_llm_health_details():
         from src.core.model_usage_policy import set_local_model_availability
 
-        if main_orchestrator.local_model is None:
+        role_lane = _summarize_local_role_readiness(
+            getattr(main_orchestrator, "local_model_roles", None)
+        )
+
+        if getattr(main_orchestrator, "local_model", None) is None:
             details = {
                 "local_llm_loaded": False,
                 "local_llm_status": "unavailable",
@@ -263,13 +330,35 @@ def _init_health_monitor():
                 "local_llm_consecutive_failures": 0,
                 "local_llm_last_smoke_elapsed_ms": None,
             }
+            if role_lane.get("ready"):
+                details.update({
+                    "local_llm_loaded": True,
+                    "local_llm_status": "ok",
+                    "local_llm_last_verified_at": role_lane.get("last_verified_at"),
+                    "local_llm_last_checked_at": role_lane.get("last_checked_at"),
+                    "local_llm_last_error": None,
+                    "local_llm_last_smoke_elapsed_ms": role_lane.get("last_smoke_elapsed_ms"),
+                })
+                set_local_model_availability(
+                    True,
+                    "Role-specific local model lanes ready",
+                    loaded=True,
+                    ready=True,
+                    last_verified_at=details["local_llm_last_verified_at"],
+                    last_checked_at=details["local_llm_last_checked_at"],
+                    last_error=None,
+                    consecutive_failures=0,
+                    last_smoke_elapsed_ms=details["local_llm_last_smoke_elapsed_ms"],
+                )
+                return details
             set_local_model_availability(
                 False,
                 details["local_llm_last_error"],
-                loaded=False,
+                loaded=bool(role_lane.get("loaded", False)),
                 ready=False,
                 last_error=details["local_llm_last_error"],
                 consecutive_failures=0,
+                last_smoke_elapsed_ms=role_lane.get("last_smoke_elapsed_ms"),
             )
             return details
         try:
@@ -283,6 +372,28 @@ def _init_health_monitor():
                 "local_llm_consecutive_failures": data.get("consecutive_failures", 0),
                 "local_llm_last_smoke_elapsed_ms": data.get("last_smoke_elapsed_ms"),
             }
+            if not data.get("ready") and role_lane.get("ready"):
+                details.update({
+                    "local_llm_loaded": True,
+                    "local_llm_status": "ok",
+                    "local_llm_last_verified_at": role_lane.get("last_verified_at"),
+                    "local_llm_last_checked_at": role_lane.get("last_checked_at"),
+                    "local_llm_last_error": None,
+                    "local_llm_consecutive_failures": 0,
+                    "local_llm_last_smoke_elapsed_ms": role_lane.get("last_smoke_elapsed_ms"),
+                })
+                set_local_model_availability(
+                    True,
+                    "Role-specific local model lanes ready",
+                    loaded=True,
+                    ready=True,
+                    last_verified_at=details["local_llm_last_verified_at"],
+                    last_checked_at=details["local_llm_last_checked_at"],
+                    last_error=None,
+                    consecutive_failures=0,
+                    last_smoke_elapsed_ms=details["local_llm_last_smoke_elapsed_ms"],
+                )
+                return details
             set_local_model_availability(
                 bool(data.get("ready")),
                 data.get("last_error") or ("Local model ready" if data.get("ready") else "Local model not ready"),
@@ -305,23 +416,39 @@ def _init_health_monitor():
                 "local_llm_consecutive_failures": 0,
                 "local_llm_last_smoke_elapsed_ms": None,
             }
+            if role_lane.get("ready"):
+                details.update({
+                    "local_llm_loaded": True,
+                    "local_llm_status": "ok",
+                    "local_llm_last_verified_at": role_lane.get("last_verified_at"),
+                    "local_llm_last_checked_at": role_lane.get("last_checked_at"),
+                    "local_llm_last_error": None,
+                    "local_llm_last_smoke_elapsed_ms": role_lane.get("last_smoke_elapsed_ms"),
+                })
+                set_local_model_availability(
+                    True,
+                    "Role-specific local model lanes ready",
+                    loaded=True,
+                    ready=True,
+                    last_verified_at=details["local_llm_last_verified_at"],
+                    last_checked_at=details["local_llm_last_checked_at"],
+                    last_error=None,
+                    consecutive_failures=0,
+                    last_smoke_elapsed_ms=details["local_llm_last_smoke_elapsed_ms"],
+                )
+                return details
             set_local_model_availability(
                 False,
                 str(exc),
-                loaded=False,
+                loaded=bool(role_lane.get("loaded", False)),
                 ready=False,
                 last_error=str(exc),
                 consecutive_failures=0,
+                last_smoke_elapsed_ms=role_lane.get("last_smoke_elapsed_ms"),
             )
             return details
 
     checks = [
-        HealthCheck(
-            name="startup_validation",
-            check_fn=startup_validation_ready,
-            degraded_reason="Startup validation failed",
-            snapshot_details_fn=startup_validation_health_details,
-        ),
         HealthCheck(
             name="llm_provider",
             check_fn=lambda: main_orchestrator.provider is not None,
@@ -334,10 +461,7 @@ def _init_health_monitor():
         ),
         HealthCheck(
             name="local_llm",
-            check_fn=lambda: (
-                main_orchestrator.local_model is not None
-                and main_orchestrator.local_model.is_healthy()
-            ),
+            check_fn=_local_llm_ready,
             degraded_reason="Local LLM not ready for inference",
             snapshot_details_fn=_local_llm_health_details,
         ),
@@ -361,9 +485,10 @@ def _init_health_monitor():
 
     monitor = HealthMonitor(checks=checks, interval_s=30.0)
     monitor.start_monitor()
-    # Serve a fresh readiness snapshot on each /health/ready request so the
-    # panel reflects current provider/local-LLM state even after startup races.
-    set_snapshot_provider(monitor.compute_snapshot)
+    # Readiness must be cheap and predictable. The monitor refreshes health in
+    # the background; the API serves the cached snapshot so model probes cannot
+    # make operator UI or container probes look hung.
+    set_snapshot_provider(lambda: monitor.latest_snapshot)
     logger.info("Health monitor started.")
     return {"monitor": monitor}
 

@@ -1,5 +1,5 @@
 """
-Tests for Action Language Gate (Fix Pack V1 PR2).
+Tests for Action Language Gate.
 No "Action:" or execution claims without a real TaskRun + receipt.
 """
 

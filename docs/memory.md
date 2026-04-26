@@ -65,6 +65,7 @@ Contents:
 **Properties:**
 - Append-only within a session — cannot be retroactively modified
 - Periodic summarization compresses old sessions
+- Basic context history keeps recent turns verbatim and writes deterministic compacted summaries to `lancelot_data/chat/chat_summaries.json`
 - Scheduler-generated summaries are content-based deterministic rollups of the underlying episodic items; they are no longer title-only placeholders
 - Summaries are searchable via the context compiler
 
@@ -83,6 +84,23 @@ Contents:
 - Entries have confidence scores that decay over time unless reinforced
 - Provenance tracking — every entry records where it came from
 - Optional TTL for time-sensitive information
+
+---
+
+## Promotion Rules
+
+Promotion is the point where short-lived context becomes durable memory that can influence future behavior. Lancelot treats that as a governed operation, not a background convenience.
+
+| Target | Allowed source | Rule |
+|--------|----------------|------|
+| Core memory | Governed core-block edit only | Never promoted from chat, working memory, or scheduler output. Core updates require the memory edit workflow, provenance, confidence checks, and quarantine where applicable. |
+| Working memory | Current quest or runtime process | Must remain task scoped. Working entries should carry a TTL and quest namespace. Missing TTL is a warning, not a promotion blocker. |
+| Episodic memory | Conversation turn, receipt, or notable runtime event | Requires provenance and a confidence floor. It is append-only session history, not a place for durable instructions. |
+| Archival memory | Verified facts, deterministic summaries, receipts, or external documents | Requires provenance, sufficient confidence, and no secret material. Raw working memory cannot move directly to archival; it must first be summarized or verified. |
+
+The deterministic promotion policy lives in `src/core/memory/promotion.py`. It returns a structured decision with `allowed`, `suggested_status`, `reason`, and `requires_approval`. Scheduler-generated episodic summaries record that decision in item metadata before archival insertion. If a candidate is inference-only, it can enter archival quarantine for operator review; if it contains secret-like material or lacks required provenance, promotion is blocked.
+
+These rules are intentionally conservative. They prevent multi-day task context from becoming permanent instruction state just because it appeared in chat, while still allowing verified summaries and receipts to improve long-running continuity.
 
 ---
 
@@ -203,6 +221,8 @@ Before each LLM call, the Context Compiler assembles memory into a token-budgete
 6. **Security filters** — remove detected injection patterns, redact secrets
 7. **Emit CompiledContext + receipt**
 
+After the memory compiler renders the prompt, the orchestrator appends the compact Active Work Ledger block for the current quest or authenticated session. This block comes from `/home/lancelot/data/work/work_ledger.sqlite`, not from memory, and contains only resume-critical state: objective, status, phase, blocker, next action, recent ledger events, checkpoint pending work, open decisions, and receipt IDs. The purpose is continuity across long-running work and context compaction without turning chat history into the system of record.
+
 ### Token Budget
 
 Each tier has a configurable token budget. When the total exceeds the context window, items are evicted in priority order:
@@ -291,7 +311,7 @@ Each job emits receipts: `memory_job_run`, `memory_job_failed`, or `memory_job_s
 FEATURE_MEMORY_VNEXT=true|false    # Default: false
 ```
 
-When disabled, Lancelot falls back to basic context management (conversation history only). The system boots and functions normally without Memory vNext — it just doesn't have structured memory.
+When disabled, Lancelot falls back to basic context management (conversation history only). The system boots and functions normally without structured memory.
 
 ---
 

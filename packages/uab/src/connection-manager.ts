@@ -1,7 +1,7 @@
 /**
  * UAB Connection Manager — Health monitoring, auto-reconnect, stale cleanup.
  *
- * Phase 4: Production hardening for connection lifecycle.
+ * Production hardening for connection lifecycle.
  * - Periodic health checks on active connections
  * - Automatic reconnection on failure
  * - Stale connection cleanup

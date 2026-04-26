@@ -1,4 +1,4 @@
-# V30: Response formatting helper functions extracted from orchestrator.py
+# Response formatting helper functions extracted from orchestrator.py
 # These are pure functions — no instance state, no side effects.
 # Kept separate so response assembly stays readable and testable.
 
@@ -20,7 +20,7 @@ def format_tool_receipts(receipts: list, error: str = "", note: str = "") -> str
 
 
 def append_download_links(response: str, doc_paths: list) -> str:
-    """V29b: Append download links for auto-created documents to the chat response.
+    """Append download links for auto-created documents to the chat response.
 
     Converts absolute workspace paths to /api/files/ URLs so the War Room
     markdown renderer produces clickable download links.

@@ -1,4 +1,4 @@
-"""Tests for vNext4 Security Hardening (Prompt 22).
+"""Tests for governance security hardening.
 
 Attack surface tests ensuring the risk-tiered system cannot be exploited.
 """

@@ -153,7 +153,7 @@ KNOWLEDGE_PHRASES: frozenset = frozenset({
     "which one",    # "which one is best?"
 })
 
-# Fix Pack V9: Conversational keywords — greetings, thanks, small talk
+# Conversational keywords: greetings, thanks, small talk
 # These should NOT trigger the planning pipeline.
 CONVERSATIONAL_KEYWORDS: frozenset = frozenset({
     "hello", "hi", "hey", "yo", "sup",
@@ -236,12 +236,12 @@ def classify_intent(text: str) -> IntentType:
     if has_knowledge:
         return IntentType.KNOWLEDGE_REQUEST
 
-    # Fix Pack V9: Conversational messages (greetings, thanks, small talk)
+    # Conversational messages (greetings, thanks, small talk)
     # Route to KNOWLEDGE_REQUEST so Gemini gives a natural response
     if has_conversational:
         return IntentType.KNOWLEDGE_REQUEST
 
-    # Fix Pack V9: Default to KNOWLEDGE_REQUEST instead of PLAN_REQUEST.
+    # Default to KNOWLEDGE_REQUEST instead of PLAN_REQUEST.
     # Planning keywords are explicit enough to catch real plan requests.
     # Unrecognized messages should get a natural Gemini response, not a plan.
     return IntentType.KNOWLEDGE_REQUEST

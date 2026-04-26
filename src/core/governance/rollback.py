@@ -1,5 +1,5 @@
 """
-Lancelot vNext4: Rollback Snapshot System
+Rollback Snapshot System
 
 Creates pre-execution snapshots for T1 actions and provides
 rollback callables for the AsyncVerificationQueue.

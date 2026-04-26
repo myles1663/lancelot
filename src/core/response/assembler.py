@@ -5,7 +5,7 @@ The assembler is the final stage before returning a response to the user.
 It separates verbose scaffolding (assumptions, risks, decision points, traces)
 into War Room artifacts and returns only clean, concise chat output.
 
-V29: Channel-aware assembly — War Room gets full content, Telegram stays tight.
+Channel-aware assembly: War Room gets full content, Telegram stays tight.
      Auto-document creation for long research results.
 """
 
@@ -63,7 +63,7 @@ class ResponseAssembler:
             receipts: List of Receipt objects (optional)
             honesty_status: Honesty gate status string (optional)
             channel: Delivery channel — "warroom", "telegram", or "api" (default).
-                     V29: Controls truncation limits and auto-document behavior.
+                     Controls truncation limits and auto-document behavior.
 
         Returns:
             AssembledResponse with clean chat and War Room artifacts.
@@ -111,11 +111,11 @@ class ResponseAssembler:
                 session_id=self.session_id,
             ))
 
-        # V29: Auto-document creation for long content
+        # Auto-document creation for long content
         # When content exceeds the threshold, save full text as a War Room
         # artifact and optionally trigger document creation
         if chat and OutputPolicy.needs_auto_document(chat):
-            logger.info("V29: Content exceeds auto-document threshold (%d chars, %d lines) — "
+            logger.info("Content exceeds auto-document threshold (%d chars, %d lines) — "
                         "preserving full content as artifact",
                         len(chat), len(chat.split("\n")))
             artifacts.append(WarRoomArtifact(
@@ -130,7 +130,7 @@ class ResponseAssembler:
                 session_id=self.session_id,
             ))
 
-        # V29: Enforce chat limits — channel-aware
+        # Enforce chat limits by channel.
         chat = OutputPolicy.enforce_chat_limits(chat, channel=channel)
 
         return AssembledResponse(

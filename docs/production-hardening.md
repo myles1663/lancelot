@@ -126,7 +126,10 @@ Requirements:
 - document who can recover it
 - prefer a Docker secret or external secret manager over a long-lived production `.env` copy
 
-If the vault key is missing, credentials will not survive restart correctly. That is acceptable for development, not for production.
+If `.env` is missing but the Docker secret/external secret manager and persisted data
+volumes are intact, the container should still start and recover from vault/onboarding
+state. If the vault key itself is missing, credentials will not survive restart
+correctly. That is acceptable for development, not for production.
 
 ### Vault mismatch response
 
@@ -197,12 +200,8 @@ Production expectation:
 - disabled features report disabled
 - uninitialized features report not initialized
 - broken runtime paths report degraded with reasons
-- `/health/ready` includes `startup_validation.ready=true`
-- `startup_validation.blocked` and `startup_validation.degraded` are empty
 
 Healthy-looking defaults are not acceptable evidence of readiness.
-
-Startup validation is the first health surface to inspect after deployment. Treat any `blocked` finding as fail-closed misconfiguration. Treat any `degraded` finding as an explicit unavailable lane, not as a warning to ignore.
 
 ---
 

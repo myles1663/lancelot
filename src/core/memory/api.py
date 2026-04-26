@@ -1,5 +1,5 @@
 """
-Memory vNext API — FastAPI endpoints for memory operations.
+Structured Memory API — FastAPI endpoints for memory operations.
 
 This module provides REST API endpoints for:
 - Core block management
@@ -288,7 +288,7 @@ def get_memory_service():
         if not FEATURE_MEMORY_VNEXT:
             raise HTTPException(
                 status_code=503,
-                detail="Memory vNext is disabled. Set FEATURE_MEMORY_VNEXT=true"
+                detail="Structured memory is disabled. Set FEATURE_MEMORY_VNEXT=true"
             )
 
         from .store import CoreBlockStore

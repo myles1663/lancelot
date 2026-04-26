@@ -175,6 +175,21 @@ class ActionCardStore:
         # Filter out expired cards in Python (simpler than timestamp math in SQL)
         return [c for c in cards if not c.is_expired()]
 
+    def list_pending_by_quest(self, quest_id: str, limit: int = 50) -> List[ActionCard]:
+        """List unresolved, non-expired cards associated with a quest/work item."""
+        conn = self._get_connection()
+        cursor = conn.execute(
+            """
+            SELECT * FROM action_cards
+             WHERE resolved = 0 AND quest_id = ?
+             ORDER BY created_at DESC
+             LIMIT ?
+            """,
+            (quest_id, max(1, min(int(limit), 200))),
+        )
+        cards = [self._row_to_card(row) for row in cursor.fetchall()]
+        return [c for c in cards if not c.is_expired()]
+
     def list_all(self, limit: int = 100, include_resolved: bool = True) -> List[ActionCard]:
         """List cards with optional resolved filter."""
         if include_resolved:

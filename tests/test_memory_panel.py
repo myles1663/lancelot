@@ -43,7 +43,7 @@ from src.core.memory.schemas import (
 # ---------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def enable_memory_vnext(monkeypatch):
-    """Keep Memory vNext enabled even when earlier tests imported feature flags first."""
+    """Keep structured memory enabled even when earlier tests imported feature flags first."""
     monkeypatch.setenv("FEATURE_MEMORY_VNEXT", "true")
     feature_flags.reload_flags()
     yield

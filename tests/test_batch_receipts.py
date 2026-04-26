@@ -1,4 +1,4 @@
-"""Tests for vNext4 batch receipt system (Prompts 6-7)."""
+"""Tests for batch receipt system."""
 
 import json
 import os

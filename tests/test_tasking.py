@@ -1,5 +1,5 @@
 """
-Tests for TaskGraph, TaskRun, TaskStore, and PlanCompiler (Fix Pack V1 PR4).
+Tests for TaskGraph, TaskRun, TaskStore, and PlanCompiler.
 """
 
 import os

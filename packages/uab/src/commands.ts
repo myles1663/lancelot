@@ -13,12 +13,12 @@
  *   /apptype       — Type text into a UI element
  *   /appstate      — Get current app state
  *   /uabstatus     — Show UAB service status
- *   Phase 3:
+ *   Input and window-control endpoints:
  *   /keypress      — Send a keypress
  *   /hotkey        — Send a hotkey combo
  *   /appwin        — Window management
  *   /screenshot    — Capture window screenshot
- *   Phase 4:
+ *   Operations endpoints:
  *   /uabhealth     — Connection health status
  *   /uabcache      — Cache statistics
  *   /uabaudit      — Recent action audit log
@@ -307,7 +307,7 @@ export function registerUABCommands(bot: Bot<Context>): void {
     }
   });
 
-  // ─── Phase 3: /keypress — Send a keypress ────────────────────
+  // ─── /keypress — Send a keypress ─────────────────────────────
 
   bot.command('keypress', async (ctx) => {
     const key = ctx.match?.trim();
@@ -334,7 +334,7 @@ export function registerUABCommands(bot: Bot<Context>): void {
     }
   });
 
-  // ─── Phase 3: /hotkey — Send a hotkey combo ─────────────────
+  // ─── /hotkey — Send a hotkey combo ───────────────────────────
 
   bot.command('hotkey', async (ctx) => {
     const args = ctx.match?.trim();
@@ -362,7 +362,7 @@ export function registerUABCommands(bot: Bot<Context>): void {
     }
   });
 
-  // ─── Phase 3: /appwin — Window management ───────────────────
+  // ─── /appwin — Window management ─────────────────────────────
 
   bot.command('appwin', async (ctx) => {
     const args = (ctx.match || '').trim().split(/\s+/);
@@ -433,7 +433,7 @@ export function registerUABCommands(bot: Bot<Context>): void {
     }
   });
 
-  // ─── Phase 3: /screenshot — Capture window screenshot ───────
+  // ─── /screenshot — Capture window screenshot ─────────────────
 
   bot.command('screenshot', async (ctx) => {
     const connections = uab.getConnections();
@@ -512,7 +512,7 @@ export function registerUABCommands(bot: Bot<Context>): void {
     await ctx.reply(text, { parse_mode: 'HTML' });
   });
 
-  // ─── Phase 4: /uabhealth — Connection health ─────────────────
+  // ─── /uabhealth — Connection health ──────────────────────────
 
   bot.command('uabhealth', async (ctx) => {
     const health = uab.getHealthSummary();
@@ -537,7 +537,7 @@ export function registerUABCommands(bot: Bot<Context>): void {
     await ctx.reply(text, { parse_mode: 'HTML' });
   });
 
-  // ─── Phase 4: /uabcache — Cache statistics ────────────────────
+  // ─── /uabcache — Cache statistics ────────────────────────────
 
   bot.command('uabcache', async (ctx) => {
     const stats = uab.getCacheStats();
@@ -554,7 +554,7 @@ export function registerUABCommands(bot: Bot<Context>): void {
     await ctx.reply(text, { parse_mode: 'HTML' });
   });
 
-  // ─── Phase 4: /uabaudit — Action audit log ────────────────────
+  // ─── /uabaudit — Action audit log ────────────────────────────
 
   bot.command('uabaudit', async (ctx) => {
     const limit = parseInt(ctx.match?.trim() || '10', 10);
@@ -577,7 +577,7 @@ export function registerUABCommands(bot: Bot<Context>): void {
     await ctx.reply(text, { parse_mode: 'HTML' });
   });
 
-  // ─── Phase 4: /chain — Execute an action chain ────────────────
+  // ─── /chain — Execute an action chain ────────────────────────
 
   bot.command('chain', async (ctx) => {
     const json = ctx.match?.trim();

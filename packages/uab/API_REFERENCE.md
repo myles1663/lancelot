@@ -858,8 +858,8 @@ new UABServer(options?: ServerOptions)
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `port` | `number` | `3100` | Port to listen on |
-| `host` | `string` | `'127.0.0.1'` | Bind address. Non-loopback hosts require `apiKey`. |
-| `apiKey` | `string` | - | Optional for loopback development. Required for non-loopback binds and installed services. `X-API-Key` header on protected POST requests. |
+| `host` | `string` | `'0.0.0.0'` | Bind address |
+| `apiKey` | `string` | — | Required. `X-API-Key` header on all POST requests |
 | `connector` | `ConnectorOptions` | Auto-detected | Override connector settings |
 | `maxBodySize` | `number` | `1048576` | Max request body size in bytes (1MB) |
 
@@ -874,7 +874,7 @@ new UABServer(options?: ServerOptions)
 
 ### Authentication
 
-Installed services configure an API key, so POST endpoints require the `X-API-Key` header. Raw `UABServer` instances may omit `apiKey` only when bound to loopback. The API key is generated during installation and stored at:
+All POST endpoints require the `X-API-Key` header. The API key is generated during installation and stored at:
 - Windows: `%LOCALAPPDATA%\UAB Bridge\api-key`
 - macOS: `~/Library/Application Support/UAB Bridge/api-key`
 

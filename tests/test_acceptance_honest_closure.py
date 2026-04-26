@@ -371,8 +371,8 @@ class TestAC5_NoFakeWorkProposals:
         ctx = ResponseContext(
             text=(
                 "I will now proceed with the feasibility study to assess "
-                "the viability of this integration. Phase 1: Research (2 hours). "
-                "Phase 2: Development (4 hours)."
+                "the viability of this integration. Stage 1: Research (2 hours). "
+                "Stage 2: Development (4 hours)."
             )
         )
         result = enforce_no_simulated_work(ctx)

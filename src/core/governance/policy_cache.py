@@ -1,5 +1,5 @@
 """
-Lancelot vNext4: Precomputed Policy Cache
+Precomputed Policy Cache
 
 Compiles allow/deny decisions at boot time for T0/T1 actions.
 Provides O(1) lookup at runtime, with cache-miss fallback to

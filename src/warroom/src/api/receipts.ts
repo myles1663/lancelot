@@ -52,7 +52,7 @@ export function fetchReceiptStats(since?: string) {
   return apiGet<{ stats: ReceiptStats }>('/api/receipts/stats', since ? { since } : undefined)
 }
 
-// V29: Receipt context — children, parent, quest sibling count
+// Receipt context — children, parent, quest sibling count
 export interface ReceiptContext {
   children: ReceiptItem[]
   quest_receipts_count: number | null

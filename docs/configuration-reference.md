@@ -33,30 +33,21 @@ Local-only control-plane URLs such as `LOCAL_LLM_URL` and `HOST_AGENT_URL` are n
 
 ---
 
-## Startup Validation
-
-At boot, Lancelot validates the operator-facing configuration once and exposes the same structured report through `/health/ready` under `startup_validation`.
-
-The report separates:
-
-- `required_missing` — required production settings that are absent
-- `optional_missing` — settings that can be completed through onboarding or feature setup
-- `degraded` — missing or incomplete configuration that leaves a runtime lane unavailable
-- `blocked` — fail-closed configuration errors, such as missing production auth or local-control URLs pointed at public hosts
-- `warnings` — explicit development or recovery modes the operator should know about
-
-Readiness is false when `blocked` or `degraded` is non-empty. The process can still start so the War Room and setup surfaces can explain the problem instead of leaving the operator with only boot logs.
-
----
-
 ## Environment Variables (`.env`)
 
-The `.env` file is the primary configuration for secrets and runtime settings. It is never committed to git.
-Start from the repo template:
+The `.env` file is an optional deployment override file. It is never committed to git.
+Fresh installs can start without it when configuration already lives in Docker secrets,
+the encrypted vault, or persisted onboarding state. Create `.env` when you need to
+bootstrap a new instance or override provider, auth, local-model, mount, or feature
+settings:
 
 ```bash
 cp .env.example .env
 ```
+
+Secrets that are entered through onboarding or migrated at startup should be treated as
+vault state after boot, not as long-lived `.env` values. A missing `.env` must not block
+container recovery when the vault key and persisted data volumes are still present.
 
 ### LLM API Keys
 
@@ -153,6 +144,16 @@ The default deployment uses `LOCAL_LLM_URL` for every local-model role. Operator
 |----------|----------|---------|-------------|
 | `LANCELOT_LOG_LEVEL` | No | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `LANCELOT_CHAT_RUN_STALE_AFTER_S` | No | `3600` | Startup cleanup threshold for async Command Center runs that were still queued/running when the previous gateway process exited |
+
+### Command Center Continuity
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `LANCELOT_WORK_QUIET_CHECKPOINT_AFTER_S` | No | `300` | Quiet-phase threshold for automatically checkpointing active work when the Command Center polls `/api/work/active` |
+| `LANCELOT_CHAT_HISTORY_MAX_MESSAGES` | No | `200` | Maximum recent chat messages retained verbatim before deterministic compaction runs |
+| `LANCELOT_CHAT_HISTORY_RECENT_KEEP` | No | `120` | Number of most recent chat messages kept verbatim after compaction |
+| `LANCELOT_CHAT_HISTORY_COMPACT_BATCH` | No | `40` | Number of older chat messages summarized per deterministic compaction record |
+| `LANCELOT_CHAT_SUMMARIES_MAX` | No | `40` | Maximum compacted chat summary records retained in `lancelot_data/chat/chat_summaries.json` |
 
 ### Integrations
 
@@ -556,7 +557,6 @@ audit:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `UAB_DAEMON_URL` | `http://host.docker.internal:7900` | UAB daemon address (for container → host communication) |
-| `UAB_DAEMON_HOST` | `127.0.0.1` | Host-side bind address for the compatibility daemon. Use `0.0.0.0` only for an explicit trusted bridge. |
 | `UAB_DAEMON_PORT` | `7900` | UAB daemon listen port (for host-side startup) |
 | `UAB_LOG_LEVEL` | `info` | Daemon log level: `debug`, `info`, `warn`, `error` |
 | `UAB_LOG_FILE` | _(none)_ | Optional daemon log file path |
@@ -584,12 +584,13 @@ The runtime data directory is no longer used as a source-controlled seed locatio
 | Path | Description |
 |------|-------------|
 | `lancelot_data/receipts/` | Audit trail directory (`receipts.db` immutable log + staging tables, plus `receipt_integrity_key.json` for the persisted finalized-receipt signing key when no external key override is configured) |
-| `lancelot_data/chat_log.json` | Conversation history |
+| `lancelot_data/chat/chat_log.json` | Recent conversation history retained verbatim |
+| `lancelot_data/chat/chat_summaries.json` | Deterministic summaries of compacted older chat history |
 | `lancelot_data/USER.md` | Owner profile |
 | `lancelot_data/RULES.md` | Runtime copy of the operating-rules bootstrap template |
 | `lancelot_data/CAPABILITIES.md` | Runtime copy of the capabilities bootstrap template |
 | `lancelot_data/scheduler.sqlite` | Scheduler job state and run history |
-| `lancelot_data/memory.sqlite` | Memory database (if Memory vNext enabled) |
+| `lancelot_data/memory.sqlite` | Memory database (if structured memory enabled) |
 | `lancelot_data/skills_registry.json` | Installed skills |
 | `lancelot_data/skill_proposals.json` | Skill proposal index and review state |
 | `lancelot_data/skill_proposals/` | Per-proposal governed artifact packages (`skill.yaml`, `security_manifest.yaml`, code, tests, README, hashes) |
@@ -598,6 +599,7 @@ The runtime data directory is no longer used as a source-controlled seed locatio
 | `lancelot_data/apl/` | APL decision logs and rules |
 | `lancelot_data/governance/` | Policy cache and intent templates |
 | `lancelot_data/governance/trust_ledger.json` | Persisted Trust Ledger records, proposals, and graduation history |
+| `lancelot_data/work/work_ledger.sqlite` | Active-work ledger for long-running Command Center tasks and checkpoints |
 | `lancelot_data/receipts/uab/` | UAB action receipt exports and session artifacts |
 | `lancelot_data/receipts/uab/sessions/` | UAB session summaries |
 | `config/bootstrap/` | Source-controlled bootstrap templates seeded into the runtime data dir |

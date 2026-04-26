@@ -361,6 +361,22 @@ class ChatRunStore:
         conn = self._get_connection()
         return [self._row_to_run(row) for row in conn.execute(query, params).fetchall()]
 
+    def list_terminal_retries(self, *, limit: int = 200) -> list[ChatRun]:
+        """Return recent retry runs that reached an operator-visible terminal state."""
+        safe_limit = max(1, min(int(limit), 1000))
+        conn = self._get_connection()
+        rows = conn.execute(
+            """
+            SELECT * FROM chat_runs
+             WHERE retry_of_run_id != ''
+               AND status IN ('blocked', 'succeeded', 'failed', 'cancelled')
+             ORDER BY updated_at DESC
+             LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+        return [self._row_to_run(row) for row in rows]
+
     def mark_running(self, run_id: str) -> Optional[ChatRun]:
         now = _utc_now()
         with self._transaction() as conn:

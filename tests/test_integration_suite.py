@@ -8,11 +8,11 @@ from orchestrator import LancelotOrchestrator, RuntimeState
 from receipts import ActionType, ReceiptStatus
 from security import InputSanitizer
 
-class TestLancelotVNext(unittest.TestCase):
+class TestLancelotIntegration(unittest.TestCase):
     
     @classmethod
     def setUpClass(cls):
-        print("\n--- Starting Lancelot vNext Integration Suite ---")
+        print("\n--- Starting Lancelot Integration Suite ---")
         # Setup clean data dir
         ts = int(time.time())
         cls.data_dir = f"/home/lancelot/data/test_suite_{ts}"

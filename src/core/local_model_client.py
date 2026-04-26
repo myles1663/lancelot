@@ -311,7 +311,7 @@ class LocalModelClient:
     def verify_routing_intent(self, text: str) -> str:
         """Verify routing intent using the local model as a second opinion.
 
-        V21: Used when the keyword classifier produces PLAN_REQUEST or
+        Used when the keyword classifier produces PLAN_REQUEST or
         EXEC_REQUEST but the message is long enough to be ambiguous.
         The local model reads the full message and decides if the user
         actually wants a plan, an action, or is asking a question.
@@ -327,7 +327,7 @@ class LocalModelClient:
         )
 
     # ------------------------------------------------------------------
-    # Fix Pack V8: Chat completions with tool/function calling
+    # Chat completions with tool/function calling
     # ------------------------------------------------------------------
 
     def chat_with_tools(

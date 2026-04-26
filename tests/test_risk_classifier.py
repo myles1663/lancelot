@@ -1,4 +1,4 @@
-"""Tests for vNext4 RiskClassifier (Prompts 4-5)."""
+"""Tests for RiskClassifier."""
 
 import pytest
 import os

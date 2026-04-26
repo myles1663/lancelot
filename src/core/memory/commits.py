@@ -1,5 +1,5 @@
 """
-Memory vNext Commits — Atomic memory edit management with rollback.
+Structured Memory Commits — Atomic memory edit management with rollback.
 
 This module provides the CommitManager for:
 - Staged edit workflow (begin → add edits → finish)

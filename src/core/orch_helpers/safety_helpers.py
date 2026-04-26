@@ -1,4 +1,4 @@
-# V30: Safety gate helper functions extracted from orchestrator.py
+# Safety gate helper functions extracted from orchestrator.py
 # These are pure functions — no instance state (some have stdout logging).
 # Kept separate so safety checks stay readable and testable.
 
@@ -41,7 +41,7 @@ def classify_tool_call_safety(skill_name: str, inputs: dict, *, channel: str = "
         return "escalate"
 
     if skill_name == "github_search":
-        # V24: All GitHub search actions are read-only API calls
+        # All GitHub search actions are read-only API calls
         return "auto"
 
     if skill_name == "command_runner":
@@ -146,7 +146,7 @@ def _git_subcommand(args: list[str]) -> str:
 
 
 def is_narration_without_content(text: str) -> bool:
-    """V29: Detect when the model narrates intent instead of producing content.
+    """Detect when the model narrates intent instead of producing content.
 
     After a tool-heavy agentic loop (3+ tool calls), the model sometimes
     returns a brief statement like "I now have comprehensive fresh data.
@@ -178,7 +178,7 @@ def is_narration_without_content(text: str) -> bool:
 
 
 def strip_failure_narration(text: str) -> str:
-    """V22: Remove tool-failure narration from LLM response.
+    """Remove tool-failure narration from LLM response.
 
     Gemini tends to narrate failures even when instructed not to:
     'I encountered an issue with X. Let me try a different approach...'
@@ -209,7 +209,7 @@ def strip_failure_narration(text: str) -> str:
 
     if cleaned != text:
         logger.info(
-            "V22: Stripped failure narration (%d -> %d chars)",
+            "Stripped failure narration (%d -> %d chars)",
             len(text),
             len(cleaned),
         )

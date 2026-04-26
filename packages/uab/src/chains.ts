@@ -1,7 +1,7 @@
 /**
  * UAB Action Chains — Multi-step workflow execution engine.
  *
- * Phase 4: Automation workflows.
+ * Automation workflows.
  * - Sequential action chains with verification between steps
  * - Wait-for-element conditions (poll until element appears)
  * - Conditional branching (if element exists, do X)

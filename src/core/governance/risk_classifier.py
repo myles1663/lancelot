@@ -1,5 +1,5 @@
 """
-Lancelot vNext4: Risk Classifier
+Risk Classifier
 
 Classifies actions into risk tiers (T0-T3) based on capability,
 scope, target patterns, and Soul escalation overrides.

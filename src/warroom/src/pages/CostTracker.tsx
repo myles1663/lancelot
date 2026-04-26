@@ -50,7 +50,7 @@ export function CostTracker() {
   const [keyLoading, setKeyLoading] = useState(false)
   const [keyError, setKeyError] = useState<string | null>(null)
 
-  // V28: OAuth state (Anthropic)
+  // OAuth state (Anthropic)
   const [oauthStatus, setOauthStatus] = useState<OAuthStatusResponse | null>(null)
   const [oauthLoading, setOauthLoading] = useState(false)
 
@@ -85,7 +85,7 @@ export function CostTracker() {
   useEffect(() => {
     void loadProviders()
     void loadProviderKeys()
-    // V28: Fetch OAuth status
+    // Fetch OAuth status
     fetchOAuthStatus()
       .then(res => setOauthStatus(res))
       .catch((error) => showStatus(getErrorMessage(error, 'Failed to load Anthropic OAuth status')))
@@ -189,7 +189,7 @@ export function CostTracker() {
     }
   }
 
-  // V28: OAuth handlers
+  // OAuth handlers
   const handleOAuthSetup = async () => {
     setOauthLoading(true)
     try {
@@ -574,7 +574,7 @@ export function CostTracker() {
         </div>
       </section>
 
-      {/* ======= V28: Anthropic OAuth Section ======= */}
+      {/* ======= Anthropic OAuth Section ======= */}
       <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
         <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
           Anthropic OAuth

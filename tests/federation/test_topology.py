@@ -215,6 +215,38 @@ class TestTopologyPersistence:
         # Should not raise
         assert reg.peer_count() == 1
 
+    def test_legacy_list_payload_is_ignored_without_warning(self, caplog):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "topology.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump([], f)
+
+            caplog.set_level("INFO")
+            reg = TopologyRegistry(
+                self_instance_id="self-001",
+                persistence_path=path,
+            )
+
+            assert reg.peer_count() == 0
+            assert "Ignoring legacy topology payload" in caplog.text
+            assert "Failed to load topology from disk" not in caplog.text
+
+    def test_non_object_peers_payload_is_ignored_without_warning(self, caplog):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "topology.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"peers": []}, f)
+
+            caplog.set_level("INFO")
+            reg = TopologyRegistry(
+                self_instance_id="self-001",
+                persistence_path=path,
+            )
+
+            assert reg.peer_count() == 0
+            assert "Ignoring topology peers payload" in caplog.text
+            assert "Failed to load topology from disk" not in caplog.text
+
     def test_heartbeat_updates_survive_reopen(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "topology.json")

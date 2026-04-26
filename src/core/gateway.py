@@ -51,6 +51,7 @@ from typing import Any
 from oauth_callback_pages import render_callback_exception_page, render_callback_page
 from src.core.runtime_pause import init_runtime_pause
 from chat_runs import ChatRun, ChatRunStore
+from work_ledger import WorkItem, WorkLedgerStore
 import feature_flags as _ff
 from shared.receipts import (
     ActionType,
@@ -69,6 +70,7 @@ MAX_REQUEST_SIZE = 20_971_520
 
 # F8: Startup timestamp for uptime tracking
 _startup_time = None
+_gateway_started = False
 
 # Error rate tracking
 _error_count = 0
@@ -145,8 +147,8 @@ try:
         _boot_vault = _BootVault(config_path="config/vault.yaml")
         secret_cache.bootstrap(_boot_vault)
         secret_cache.scrub_environ()
-        # Remove the vault key from the process environment after the vault
-        # has loaded it; _boot_vault already holds the cipher in memory.
+        # Scrub vault key itself from environ; closes the remaining /proc exposure.
+        # Safe because _boot_vault already holds the cipher in memory.
         if "LANCELOT_VAULT_KEY" in os.environ:
             del os.environ["LANCELOT_VAULT_KEY"]
             logger.info("LANCELOT_VAULT_KEY scrubbed from os.environ (vault cipher in memory).")
@@ -170,6 +172,7 @@ _async_chat_worker_slot_lock: asyncio.Lock | None = None
 _async_chat_worker_slot_loop: asyncio.AbstractEventLoop | None = None
 _chat_progress_subscription_registered = False
 CHAT_RUN_STALE_AFTER_SECONDS = int(os.getenv("LANCELOT_CHAT_RUN_STALE_AFTER_S", "3600"))
+ACTIVE_WORK_QUIET_CHECKPOINT_AFTER_SECONDS = int(os.getenv("LANCELOT_WORK_QUIET_CHECKPOINT_AFTER_S", "300"))
 
 # Long-lived services are created at import time and wired into startup phases.
 main_orchestrator = LancelotOrchestrator(data_dir="/home/lancelot/data")
@@ -182,6 +185,8 @@ webhook_auth = WebhookAuthenticator()
 
 sentry = MCPSentry(data_dir="/home/lancelot/data")
 chat_run_store = ChatRunStore("/home/lancelot/data/chat/async_runs.sqlite")
+work_ledger_store = WorkLedgerStore("/home/lancelot/data/work/work_ledger.sqlite")
+main_orchestrator.work_ledger_store = work_ledger_store
 
 # Crusader Mode: session-scoped, non-persistent
 crusader_mode = CrusaderMode()
@@ -279,6 +284,7 @@ def _sync_gateway_runtime_bindings() -> None:
         "chat_poller": chat_poller,
         "telegram_bot": telegram_bot,
         "scheduler_service": scheduler_service,
+        "work_ledger_store": work_ledger_store,
         "subsystem_manager": subsystem_manager,
         "_boot_vault": _boot_vault,
         "secret_cache": secret_cache,
@@ -364,7 +370,7 @@ def _shutdown_federation(objects):
     return _gateway_boot_support._shutdown_federation(objects)
 
 async def startup_event():
-    global _boot_result, scheduler_service, _startup_time
+    global _boot_result, scheduler_service, _startup_time, _gateway_started
 
     _sync_gateway_runtime_bindings()
     _boot_result = await boot(app, _build_boot_config())
@@ -372,28 +378,44 @@ async def startup_event():
     scheduler_service = _gateway_boot_support.scheduler_service
     if _boot_result is not None:
         _startup_time = _boot_result.env.startup_time or time.time()
+    _gateway_started = True
     _register_chat_progress_recorder()
     stale_runs = chat_run_store.fail_stale_active_runs(
         max_age_seconds=CHAT_RUN_STALE_AFTER_SECONDS,
         reason="Async chat run was still active after gateway restart.",
     )
+    for stale_run in stale_runs:
+        _sync_work_ledger_from_chat_run(stale_run, event_type="chat_run_stale_failed")
+    superseded = _reconcile_superseded_retry_work()
+    work_ledger_store.checkpoint_quiet_work(
+        max_quiet_seconds=CHAT_RUN_STALE_AFTER_SECONDS,
+        reason="gateway_startup_stale_work",
+    )
     if stale_runs:
         logger.warning("Marked %d stale async chat run(s) failed after startup.", len(stale_runs))
+    if superseded:
+        logger.info("Closed %d superseded retry source work item(s) after startup.", superseded)
 
 async def shutdown_event():
-    global _boot_result, scheduler_service, _startup_time
+    global _boot_result, scheduler_service, _startup_time, _gateway_started
 
+    work_ledger_store.checkpoint_open_work(
+        reason="gateway_shutdown",
+        dedupe_window_seconds=60,
+    )
     for task in list(_async_chat_tasks):
         task.cancel()
     if _async_chat_tasks:
         await asyncio.gather(*list(_async_chat_tasks), return_exceptions=True)
         _async_chat_tasks.clear()
     chat_run_store.close()
+    work_ledger_store.close()
     _sync_gateway_runtime_bindings()
     await shutdown(app, _boot_result)
     scheduler_service = _gateway_boot_support.scheduler_service
     _boot_result = None
     _startup_time = None
+    _gateway_started = False
 
 _sync_gateway_runtime_bindings()
 
@@ -593,6 +615,123 @@ def _can_access_chat_run(run: ChatRun, identity) -> bool:
     return bool(auth_method == "api_key" or not run.session_id or run.session_id == identity_session_id)
 
 
+def _can_access_work_item(item: WorkItem, identity) -> bool:
+    auth_method = getattr(identity, "auth_method", "")
+    identity_session_id = getattr(identity, "session_id", "")
+    return bool(auth_method == "api_key" or not item.session_id or item.session_id == identity_session_id)
+
+
+def _sync_work_ledger_from_chat_run(
+    run: ChatRun | None,
+    *,
+    event_type: str = "chat_run_updated",
+    metadata: dict[str, Any] | None = None,
+) -> WorkItem | None:
+    if run is None:
+        return None
+    try:
+        item = work_ledger_store.upsert_from_chat_run(
+            run,
+            event_type=event_type,
+            metadata=metadata,
+        )
+        _close_superseded_retry_source(run)
+        return item
+    except Exception as exc:
+        logger.warning(
+            "Failed to sync work ledger from chat run %s: %s",
+            getattr(run, "run_id", "unknown"),
+            exc,
+        )
+        return None
+
+
+def _close_superseded_retry_source(run: ChatRun | None) -> WorkItem | None:
+    if run is None:
+        return None
+    retry_of = str(getattr(run, "retry_of_run_id", "") or "").strip()
+    status = str(getattr(run, "status", "") or "").strip().lower()
+    if not retry_of or status not in _TERMINAL_CHAT_RUN_STATUSES:
+        return None
+    return work_ledger_store.mark_superseded_by_retry(
+        retry_of,
+        retry_run_id=run.run_id,
+        retry_status=status,
+    )
+
+
+def _reconcile_superseded_retry_work(*, limit: int = 200) -> int:
+    closed = 0
+    try:
+        retries = chat_run_store.list_terminal_retries(limit=limit)
+    except Exception as exc:
+        logger.warning("Failed to list terminal retries for work reconciliation: %s", exc)
+        return 0
+
+    for retry in retries:
+        try:
+            before = work_ledger_store.get_work(retry.retry_of_run_id)
+            updated = _close_superseded_retry_source(retry)
+            if (
+                before is not None
+                and before.status not in {"completed", "failed", "cancelled"}
+                and updated is not None
+                and updated.status in {"completed", "failed", "cancelled"}
+            ):
+                closed += 1
+        except Exception as exc:
+            logger.warning(
+                "Failed to close superseded work %s from retry %s: %s",
+                getattr(retry, "retry_of_run_id", "unknown"),
+                getattr(retry, "run_id", "unknown"),
+                exc,
+            )
+    return closed
+
+
+def _archive_pending_actioncards_for_work(
+    quest_id: str,
+    *,
+    identity,
+    reason: str,
+) -> list[dict[str, Any]]:
+    card_store = getattr(app.state, "actioncard_store", None)
+    card_resolver = getattr(app.state, "actioncard_resolver", None)
+    if card_store is None or card_resolver is None:
+        return []
+    list_by_quest = getattr(card_store, "list_pending_by_quest", None)
+    archive_card = getattr(card_resolver, "archive", None)
+    if not callable(list_by_quest) or not callable(archive_card):
+        return []
+
+    archived: list[dict[str, Any]] = []
+    try:
+        cards = list_by_quest(quest_id, limit=50)
+    except Exception as exc:
+        logger.warning("Failed to list ActionCards for archived work %s: %s", quest_id, exc)
+        return []
+
+    for card in cards:
+        try:
+            result = archive_card(
+                card.card_id,
+                channel="work_archive",
+                operator_id=getattr(identity, "operator_id", ""),
+                session_id=getattr(identity, "session_id", ""),
+                actor=getattr(identity, "display_name", "") or getattr(identity, "operator_id", ""),
+                reason=f"Work item archived: {reason}",
+            )
+            if result.get("status") == "archived":
+                archived.append({
+                    "card_id": card.card_id,
+                    "title": card.title,
+                    "source_system": card.source_system,
+                })
+        except Exception as exc:
+            logger.warning("Failed to archive ActionCard %s for work %s: %s", card.card_id, quest_id, exc)
+    return archived
+
+
 def _emit_chat_run_event(event_type: str, run: ChatRun, **extra: Any) -> None:
     try:
         from event_bus import Event, event_bus
@@ -660,6 +799,19 @@ def _record_persisted_chat_progress(
         degraded_reason=degraded_reason,
         metadata=metadata,
     )
+    if run is not None:
+        ledger_metadata = dict(metadata or {})
+        if severity:
+            ledger_metadata["severity"] = severity
+        if degraded is not None:
+            ledger_metadata["degraded"] = bool(degraded)
+        if degraded_reason:
+            ledger_metadata["degraded_reason"] = degraded_reason
+        _sync_work_ledger_from_chat_run(
+            run,
+            event_type="chat_run_progress",
+            metadata=ledger_metadata,
+        )
     if run is not None and run.status not in {"succeeded", "failed", "cancelled"}:
         _emit_chat_run_event("chat.run_progress", run)
     return run
@@ -723,6 +875,7 @@ def _classify_chat_run_status(response_text: str) -> str:
     lowered = text.lower()
     if (
         "send `continue` after approval" in lowered
+        or "continue control to resume" in lowered
         or "approval id:" in lowered
         or "approval group id:" in lowered
         or "pending_approval" in lowered
@@ -744,9 +897,13 @@ _FAST_RUNTIME_STATUS_COMMANDS = {
 }
 _OPERATIONAL_REPORT_TRIGGERS = (
     "operational smoke report",
+    "operator acceptance smoke test",
+    "operator acceptance test",
     "operational report",
     "runtime health report",
     "system health report",
+    "runtime health and active work status",
+    "active work status",
     "health report for this lancelot instance",
 )
 
@@ -910,10 +1067,16 @@ def _try_handle_operational_report_command(
 
     snapshot = health_check()
     if isinstance(snapshot, JSONResponse):
+        diagnostic_source = (
+            "standalone gateway import; use GET /api/operator/smoke for live gateway status"
+            if not _gateway_started
+            else "live gateway process"
+        )
         response_text = (
             "**Operational Smoke Report**\n"
             "---\n"
             "Result: degraded\n"
+            f"Diagnostic source: {diagnostic_source}\n"
             "Checked: internal health snapshot\n"
             "Gateway health could not be assembled. Check `/health` and gateway logs.\n"
             "No repository writes, deployments, or external messages were performed."
@@ -944,6 +1107,7 @@ def _try_handle_operational_report_command(
         if payload.get("ready")
     ]
     scheduler = _scheduler_report_snapshot()
+    active_work = _active_work_report_snapshot()
 
     degraded: list[str] = []
     for component, status in sorted(components.items()):
@@ -956,6 +1120,7 @@ def _try_handle_operational_report_command(
     if scheduler["status"] not in {"running", "initialized"}:
         degraded.append(f"scheduler={scheduler['status']}")
     degraded.extend(scheduler["degraded_conditions"])
+    degraded.extend(active_work["degraded_conditions"])
 
     result = "ok" if not degraded else "degraded"
     local_role_summary = (
@@ -972,11 +1137,17 @@ def _try_handle_operational_report_command(
         "**Operational Smoke Report**",
         "---",
         f"Result: {result}",
+        (
+            "Diagnostic source: live gateway process"
+            if _gateway_started
+            else "Diagnostic source: standalone gateway import; use GET /api/operator/smoke for live gateway status"
+        ),
         "Checked:",
         "- Gateway health snapshot via internal `/health` handler",
         "- Local model role health from the role router status",
         "- Scheduler service state and registered job records",
-        "- Visible degraded conditions from component, role, and scheduler state",
+        "- Active work ledger state",
+        "- Visible degraded conditions from component, role, scheduler, and active-work state",
         "",
         "Findings:",
         f"- Gateway: {components.get('gateway', 'unknown')}",
@@ -985,6 +1156,7 @@ def _try_handle_operational_report_command(
         f"- Sentry: {components.get('sentry', 'unknown')}",
         f"- Local model lane: {components.get('local_llm', 'unknown')} ({local_role_summary})",
         f"- Scheduler: {scheduler_summary}",
+        f"- Active work: {active_work['status']} ({active_work['count']} open item(s))",
     ]
 
     if enabled_roles:
@@ -1012,10 +1184,31 @@ def _try_handle_operational_report_command(
         if len(scheduler["jobs"]) > 8:
             lines.append(f"  - ... {len(scheduler['jobs']) - 8} additional jobs omitted")
 
+    if active_work["items"]:
+        lines.append("- Active work items:")
+        for item in active_work["items"][:5]:
+            lines.append(
+                f"  - {item['quest_id']}: {item['status']}/{item['phase']} - {item['objective']}"
+            )
+        if len(active_work["items"]) > 5:
+            lines.append(f"  - ... {len(active_work['items']) - 5} additional items omitted")
+
     if degraded:
         lines.append(f"- Degraded conditions: {', '.join(degraded)}")
     else:
         lines.append("- Degraded conditions: none visible from these checks")
+
+    notices = _operator_notice_snapshot(degraded)
+    if notices["action_required"]:
+        lines.append("- Operator action required:")
+        for notice in notices["action_required"]:
+            lines.append(f"  - {notice}")
+    else:
+        lines.append("- Operator action required: none from these checks")
+    if notices["expected"]:
+        lines.append("- Expected operator notices:")
+        for notice in notices["expected"]:
+            lines.append(f"  - {notice}")
 
     lines.append("- Write safety: no repository writes, deployments, or external messages were performed")
     uptime = snapshot.get("uptime_seconds", 0) if isinstance(snapshot, dict) else 0
@@ -1030,6 +1223,7 @@ def _try_handle_operational_report_command(
             "local_model_role_health",
             "scheduler_service_state",
             "registered_scheduler_jobs",
+            "active_work_ledger",
         ],
         degraded_conditions=degraded,
         result=result,
@@ -1038,6 +1232,71 @@ def _try_handle_operational_report_command(
         channel=channel,
     )
     return response_text
+
+
+def _operator_notice_snapshot(degraded: list[str]) -> dict[str, list[str]]:
+    action_required = [
+        f"{condition}. Investigate before continuing customer-facing work."
+        for condition in degraded
+    ]
+    expected: list[str] = []
+    if getattr(_ff, "FEATURE_TOOLS_HOST_EXECUTION", False):
+        expected.append(
+            "Host execution provider is enabled for this local operator instance; commands run in container Linux."
+        )
+    if getattr(_ff, "FEATURE_TOOLS_HOST_BRIDGE", False):
+        expected.append(
+            "Host bridge provider is enabled; commands can cross from the container to the host agent."
+        )
+    if getattr(_ff, "FEATURE_HOST_WRITE_COMMANDS", False):
+        expected.append(
+            "Host write commands are enabled; keep this off for customer deployments unless explicitly required."
+        )
+    if getattr(_ff, "FEATURE_TOOLS_UAB", False) or getattr(_ff, "FEATURE_HIVE_UAB", False):
+        expected.append(
+            "UAB desktop bridge is enabled; verify the daemon before desktop-control workflows."
+        )
+    return {
+        "action_required": action_required,
+        "expected": expected,
+    }
+
+
+def _active_work_report_snapshot() -> dict[str, Any]:
+    store = work_ledger_store
+    if store is None:
+        return {
+            "status": "unavailable",
+            "count": 0,
+            "items": [],
+            "degraded_conditions": ["active work ledger is not initialized"],
+        }
+
+    try:
+        items = store.list_work(include_terminal=False, limit=10)
+    except Exception as exc:
+        return {
+            "status": "error",
+            "count": 0,
+            "items": [],
+            "degraded_conditions": [f"active work list failed: {exc}"],
+        }
+
+    payloads = []
+    for item in items:
+        payloads.append({
+            "quest_id": str(getattr(item, "quest_id", ""))[:80],
+            "status": str(getattr(item, "status", ""))[:40],
+            "phase": str(getattr(item, "phase", ""))[:40],
+            "objective": _preview_text(str(getattr(item, "objective", "")), limit=140),
+        })
+
+    return {
+        "status": "ok",
+        "count": len(payloads),
+        "items": payloads,
+        "degraded_conditions": [],
+    }
 
 
 def _scheduler_report_snapshot() -> dict[str, Any]:
@@ -1213,7 +1472,14 @@ async def _execute_async_chat_run(
             )
             return
 
+        _sync_work_ledger_from_chat_run(run, event_type="chat_run_started")
         _emit_chat_run_event("chat.run_started", run)
+        _record_persisted_chat_progress(
+            run_id,
+            phase="execution",
+            message="Worker slot acquired; starting governed chat turn.",
+            metadata={"wait_reason": "execution_start"},
+        )
 
         try:
             response_text = await _execute_chat_turn(
@@ -1226,6 +1492,7 @@ async def _execute_async_chat_run(
             current = chat_run_store.get(run_id)
             if current is not None and current.status == "cancelled":
                 logger.info("Async chat run %s finished after operator cancellation; preserving cancelled state.", run_id)
+                _sync_work_ledger_from_chat_run(current, event_type="chat_run_cancelled")
                 return
 
             status = _classify_chat_run_status(response_text)
@@ -1254,11 +1521,13 @@ async def _execute_async_chat_run(
                 event_name = "chat.run_blocked" if status == "blocked" else (
                     "chat.run_failed" if status == "failed" else "chat.run_completed"
                 )
+                _sync_work_ledger_from_chat_run(run, event_type=event_name.replace(".", "_"))
                 _emit_chat_run_event(event_name, run)
         except Exception as exc:
             logger.exception("Async chat run failed: %s", run_id)
             run = chat_run_store.fail(run_id, str(exc))
             if run is not None:
+                _sync_work_ledger_from_chat_run(run, event_type="chat_run_failed")
                 _emit_chat_run_event("chat.run_failed", run)
 
     if _is_fast_runtime_command(message):
@@ -1282,6 +1551,7 @@ async def _execute_async_chat_run(
         current = chat_run_store.get(run_id)
         if current is not None and current.status == "cancelled":
             logger.info("Async chat run %s was cancelled while waiting for worker slot.", run_id)
+            _sync_work_ledger_from_chat_run(current, event_type="chat_run_cancelled")
             return
         await _execute_in_worker_slot()
 
@@ -1442,6 +1712,7 @@ async def chat_async(request: Request):
             operator_id=getattr(identity, "operator_id", ""),
             message=message,
         )
+        _sync_work_ledger_from_chat_run(run, event_type="chat_run_queued")
         _emit_chat_run_event("chat.run_queued", run)
 
         task = asyncio.create_task(
@@ -1544,6 +1815,7 @@ async def cancel_chat_run(run_id: str, request: Request):
         cancelled = chat_run_store.request_cancel(run_id, reason=reason)
         if cancelled is None:
             return error_response(404, f"Chat run not found: {run_id}", request_id=request_id)
+        _sync_work_ledger_from_chat_run(cancelled, event_type="chat_run_cancelled")
         _emit_chat_run_event("chat.run_cancelled", cancelled)
         return {
             "cancelled": cancelled.status == "cancelled",
@@ -1602,6 +1874,7 @@ async def retry_chat_run(run_id: str, request: Request):
         if retry is None:
             return error_response(404, f"Chat run not found: {run_id}", request_id=request_id)
 
+        _sync_work_ledger_from_chat_run(retry, event_type="chat_run_retry_queued")
         _emit_chat_run_event("chat.run_queued", retry)
         task = asyncio.create_task(
             _execute_async_chat_run(
@@ -1625,6 +1898,278 @@ async def retry_chat_run(run_id: str, request: Request):
         }
     except Exception as e:
         logger.error("[%s] Async chat run retry failed for %s: %s", request_id, run_id, e)
+        return error_response(500, "Internal server error", request_id=request_id)
+
+
+@app.get("/api/work/active")
+async def list_active_work(request: Request, limit: int = 25):
+    """Return active work ledger items for the authenticated operator session."""
+    if not verify_token(request):
+        return error_response(401, "Unauthorized")
+    try:
+        from src.core.auth_api import resolve_authenticated_identity
+
+        identity = resolve_authenticated_identity(request)
+        session_id = "" if getattr(identity, "auth_method", "") == "api_key" else getattr(identity, "session_id", "")
+        safe_limit = max(1, min(int(limit), 100))
+        work_ledger_store.checkpoint_quiet_work(
+            max_quiet_seconds=ACTIVE_WORK_QUIET_CHECKPOINT_AFTER_SECONDS,
+            reason="quiet_phase",
+            session_id=session_id,
+            limit=safe_limit,
+        )
+        items = work_ledger_store.list_work(session_id=session_id, include_terminal=False, limit=safe_limit)
+        return {
+            "items": [item.to_dict() for item in items],
+            "count": len(items),
+        }
+    except Exception as e:
+        logger.error("Active work list failed: %s", e)
+        return error_response(500, "Internal server error")
+
+
+@app.get("/api/work/{quest_id}")
+async def get_work_item(quest_id: str, request: Request):
+    """Return one active work item with recent events and checkpoints."""
+    if not verify_token(request):
+        return error_response(401, "Unauthorized")
+    try:
+        from src.core.auth_api import resolve_authenticated_identity
+
+        identity = resolve_authenticated_identity(request)
+        item = work_ledger_store.get_work(quest_id)
+        if item is None or not _can_access_work_item(item, identity):
+            return error_response(404, f"Work item not found: {quest_id}")
+
+        return {
+            "item": item.to_dict(),
+            "events": [event.to_dict() for event in work_ledger_store.list_events(quest_id, limit=50)],
+            "checkpoints": work_ledger_store.list_checkpoints(quest_id, limit=10),
+        }
+    except Exception as e:
+        logger.error("Work item lookup failed for %s: %s", quest_id, e)
+        return error_response(500, "Internal server error")
+
+
+@app.post("/api/work/{quest_id}/checkpoint")
+async def checkpoint_work_item(quest_id: str, request: Request):
+    """Create a durable checkpoint for an active work item."""
+    request_id = make_request_id()
+    if not verify_token(request):
+        return error_response(401, "Unauthorized", request_id=request_id)
+    try:
+        from src.core.auth_api import resolve_authenticated_identity
+
+        identity = resolve_authenticated_identity(request)
+        item = work_ledger_store.get_work(quest_id)
+        if item is None or not _can_access_work_item(item, identity):
+            return error_response(404, f"Work item not found: {quest_id}", request_id=request_id)
+
+        body = await _optional_json_body(request)
+        reason = str(body.get("reason") or "operator_checkpoint")
+        checkpoint = work_ledger_store.create_checkpoint(quest_id, reason=reason)
+        if checkpoint is None:
+            return error_response(404, f"Work item not found: {quest_id}", request_id=request_id)
+        return {
+            "checkpoint": checkpoint,
+            "quest_id": quest_id,
+            "request_id": request_id,
+        }
+    except Exception as e:
+        logger.error("[%s] Work checkpoint failed for %s: %s", request_id, quest_id, e)
+        return error_response(500, "Internal server error", request_id=request_id)
+
+
+@app.post("/api/work/{quest_id}/resume")
+async def resume_work_item(quest_id: str, request: Request):
+    """Resume a blocked, failed, or cancelled work item by replaying its retained chat run."""
+    request_id = make_request_id()
+    if not verify_token(request):
+        return error_response(401, "Unauthorized", request_id=request_id)
+    client_ip = request.client.host if request.client else "unknown"
+    if not rate_limiter.check(client_ip):
+        return error_response(429, "Rate limit exceeded. Try again later.", request_id=request_id)
+    try:
+        from src.core.runtime_pause import get_runtime_pause_status, is_runtime_paused
+        from src.core.auth_api import resolve_authenticated_identity
+
+        if is_runtime_paused():
+            pause_state = get_runtime_pause_status()
+            return error_response(
+                423,
+                pause_state.get("reason") or "Runtime paused by operator",
+                request_id=request_id,
+            )
+
+        identity = resolve_authenticated_identity(request)
+        item = work_ledger_store.get_work(quest_id)
+        if item is None or not _can_access_work_item(item, identity):
+            return error_response(404, f"Work item not found: {quest_id}", request_id=request_id)
+
+        source_run_id = item.last_chat_run_id or item.quest_id
+        original = chat_run_store.get(source_run_id)
+        if original is None or not _can_access_chat_run(original, identity):
+            return error_response(404, f"Chat run not found: {source_run_id}", request_id=request_id)
+        if original.status not in {"failed", "cancelled", "blocked"}:
+            return error_response(
+                409,
+                "Only failed, cancelled, or blocked work can be resumed; "
+                f"current chat run status is {original.status}.",
+                request_id=request_id,
+            )
+
+        try:
+            retry = chat_run_store.create_retry(
+                source_run_id,
+                request_id=request_id,
+                session_id=getattr(identity, "session_id", ""),
+                operator_id=getattr(identity, "operator_id", ""),
+            )
+        except ValueError as exc:
+            return error_response(409, str(exc), request_id=request_id)
+        if retry is None:
+            return error_response(404, f"Chat run not found: {source_run_id}", request_id=request_id)
+
+        work_ledger_store.append_event(
+            quest_id=item.quest_id,
+            event_type="work_resume_requested",
+            summary=f"Resume queued as chat run {retry.run_id}.",
+            phase=item.phase,
+            status=item.status,
+            metadata={"source_run_id": source_run_id, "retry_run_id": retry.run_id},
+        )
+        _sync_work_ledger_from_chat_run(retry, event_type="chat_run_resume_queued")
+        _emit_chat_run_event("chat.run_queued", retry)
+
+        task = asyncio.create_task(
+            _execute_async_chat_run(
+                retry.run_id,
+                message=retry.message_text,
+                user=retry.user,
+                channel=retry.channel,
+                identity=identity,
+            )
+        )
+        _track_async_chat_task(task)
+
+        return {
+            "accepted": True,
+            "response": "Resume queued for governed execution.",
+            "status": retry.status,
+            "run_id": retry.run_id,
+            "run": _chat_run_payload(retry),
+            "source_quest_id": quest_id,
+            "request_id": request_id,
+        }
+    except Exception as e:
+        logger.error("[%s] Work resume failed for %s: %s", request_id, quest_id, e)
+        return error_response(500, "Internal server error", request_id=request_id)
+
+
+@app.post("/api/work/{quest_id}/archive")
+async def archive_work_item(quest_id: str, request: Request):
+    """Archive an operator-visible work item without deleting its ledger history."""
+    request_id = make_request_id()
+    authz_error = _require_request_capability(
+        request,
+        "platform.admin",
+        request_id=request_id,
+    )
+    if authz_error is not None:
+        return authz_error
+    try:
+        from src.core.auth_api import resolve_authenticated_identity
+
+        identity = resolve_authenticated_identity(request)
+        item = work_ledger_store.get_work(quest_id)
+        if item is None:
+            return error_response(404, f"Work item not found: {quest_id}", request_id=request_id)
+
+        body = await _optional_json_body(request)
+        reason = _preview_text(
+            str(body.get("reason") or "Archived by operator from Command Center."),
+            limit=500,
+        )
+        source_run_id = item.last_chat_run_id or item.quest_id
+        source_run = chat_run_store.get(source_run_id)
+        if (
+            source_run is not None
+            and source_run.status not in {"succeeded", "failed", "cancelled"}
+        ):
+            cancelled = chat_run_store.request_cancel(source_run_id, reason=reason)
+            if cancelled is not None:
+                _sync_work_ledger_from_chat_run(
+                    cancelled,
+                    event_type="chat_run_archived_cancelled",
+                    metadata={"archive_reason": reason},
+                )
+                _emit_chat_run_event("chat.run_cancelled", cancelled)
+
+        archived = work_ledger_store.archive_work(
+            quest_id,
+            reason=reason,
+            archived_by_run_id=source_run_id,
+            archived_by_operator_id=getattr(identity, "operator_id", ""),
+            archived_by_session_id=getattr(identity, "session_id", ""),
+        )
+        if archived is None:
+            return error_response(404, f"Work item not found: {quest_id}", request_id=request_id)
+        archived_actioncards = _archive_pending_actioncards_for_work(
+            quest_id,
+            identity=identity,
+            reason=reason,
+        )
+
+        return {
+            "archived": True,
+            "item": archived.to_dict(),
+            "archived_actioncards": archived_actioncards,
+            "events": [event.to_dict() for event in work_ledger_store.list_events(quest_id, limit=10)],
+            "checkpoints": work_ledger_store.list_checkpoints(quest_id, limit=3),
+            "request_id": request_id,
+        }
+    except Exception as e:
+        logger.error("[%s] Work archive failed for %s: %s", request_id, quest_id, e)
+        return error_response(500, "Internal server error", request_id=request_id)
+
+
+@app.get("/api/operator/smoke")
+async def operator_smoke_report(request: Request):
+    """Run a read-only operator smoke report from the live gateway process."""
+    request_id = make_request_id()
+    authz_error = _require_request_capability(
+        request,
+        "platform.admin",
+        request_id=request_id,
+    )
+    if authz_error is not None:
+        return authz_error
+    try:
+        from src.core.auth_api import resolve_authenticated_identity
+
+        identity = resolve_authenticated_identity(request)
+        report = _try_handle_operational_report_command(
+            "Please produce a read-only operational smoke report for this Lancelot instance.",
+            quest_id=f"operator-smoke-{request_id}",
+            identity=identity,
+            channel="warroom",
+        )
+        if report is None:
+            return error_response(
+                500,
+                "Operational smoke report command was not recognized.",
+                request_id=request_id,
+            )
+
+        degraded = "Result: degraded" in report
+        return {
+            "ok": not degraded,
+            "source": "live_gateway",
+            "report": report,
+            "request_id": request_id,
+        }
+    except Exception as e:
+        logger.error("[%s] Operator smoke report failed: %s", request_id, e)
         return error_response(500, "Internal server error", request_id=request_id)
 
 
@@ -1760,7 +2305,7 @@ async def mfa_submit(request: Request):
         return error_response(500, "Internal server error", request_id=request_id)
 
 
-# --- Secret Rotation Endpoint ---
+# â”€â”€ Secret Rotation Endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 @app.post("/api/secrets/reload")
 async def reload_secrets(request: Request):
     """Reload secrets from vault into cache without restart.

@@ -14,7 +14,7 @@ The network allowlist is a first-class governance subsystem with a single canoni
 
 Not every named governance concept is implemented as a single top-level package. Operator-critical controls such as the network allowlist and kill-switch contract are now centralized, while some supporting concepts remain intentionally clustered across a small set of focused modules. The plan artifact is implemented that way today: builder, renderer, and type modules form one bounded planning artifact cluster rather than a standalone API service.
 
-**V30 Orchestrator Decomposition — Phase 1** (v0.2.30): The monolithic `orchestrator.py` has been decomposed into the orchestrator proper plus a `src/core/orch_helpers/` package containing 13 extracted pure functions across three modules: `intent_helpers.py` (6 functions), `safety_helpers.py` (5 functions), and `response_helpers.py` (2 functions). The orchestrator retains thin delegator methods that call the extracted helpers, preserving the existing call-site interface. Phase 1 is conservative — only stateless pure functions were extracted; stateful methods and anything touching `self` remain in `orchestrator.py`.
+**Orchestrator Decomposition:** The monolithic `orchestrator.py` has been decomposed into the orchestrator proper plus a `src/core/orch_helpers/` package containing 13 extracted pure functions across three modules: `intent_helpers.py` (6 functions), `safety_helpers.py` (5 functions), and `response_helpers.py` (2 functions). The orchestrator retains thin delegator methods that call the extracted helpers, preserving the existing call-site interface. The first extraction pass is conservative: only stateless pure functions were extracted; stateful methods and anything touching `self` remain in `orchestrator.py`.
 
 <p align="center">
   <img src="images/fig1_system_architecture.svg" alt="Lancelot System Architecture — Subsystem Relationships and Data Flows" width="900">
@@ -39,9 +39,9 @@ User Input
 
 The input layer is a hard boundary. Prompt injection attempts are detected and blocked before the message reaches any LLM.
 
-**V28 Injection Detection Gate** (v0.2.28): After `InputSanitizer.sanitize()` in `chat()`, if the `[SUSPICIOUS INPUT DETECTED]` prefix is present, the method returns a clear refusal immediately instead of routing the flagged input through the pipeline. This short-circuits processing of detected injection attempts before any downstream subsystem is invoked.
+**Injection Detection Gate:** After `InputSanitizer.sanitize()` in `chat()`, if the `[SUSPICIOUS INPUT DETECTED]` prefix is present, the method returns a clear refusal immediately instead of routing the flagged input through the pipeline. This short-circuits processing of detected injection attempts before any downstream subsystem is invoked.
 
-**V28 Gateway Channel Passthrough** (v0.2.28): The `/chat` endpoint previously hardcoded `channel="warroom"`, ignoring client-supplied channel values. It now reads `channel` from the JSON body (default: `"warroom"`), enabling proper Telegram truncation when API clients specify `channel="telegram"`.
+**Gateway Channel Passthrough:** The `/chat` endpoint reads `channel` from the JSON body (default: `"warroom"`), enabling proper Telegram truncation when API clients specify `channel="telegram"`.
 
 ### 2. Intent Classification
 
@@ -53,20 +53,20 @@ The orchestrator classifies the message into one of five intent types:
 | `EXEC_REQUEST` | Direct action request (high-risk) | Planning Pipeline → Permission |
 | `EXEC_REQUEST` | Direct action request (low-risk: search, draft, summarize) | Agentic Loop (just-do-it) |
 
-> **v0.2.27 Low-Risk Classifier Fix:** The `_is_low_risk_exec` method now includes write-oriented action verbs (`create`, `write`, `save`, `update`, `modify`, `edit`) in its high-risk signal list. Previously, requests containing these verbs could be classified as low-risk and routed directly to the agentic loop, bypassing the PlanningPipeline, TaskGraph, and Permission flow. This fix ensures that all write-oriented actions go through full governance.
+> **Low-Risk Classifier Fix:** The `_is_low_risk_exec` method includes write-oriented action verbs (`create`, `write`, `save`, `update`, `modify`, `edit`) in its high-risk signal list. This ensures that all write-oriented actions go through full governance.
 
-> **V28 Unified Classifier Write-Verb Guard** (v0.2.28): When the unified classifier returns `action_low_risk`, the orchestrator now cross-checks for write verbs (create, delete, send, deploy, etc.) before routing to the agentic loop. Read/search actions are trusted as low-risk. Write actions are kept in the `EXEC_REQUEST` governance path with permission gates, preventing the classifier from inadvertently bypassing governance for destructive operations.
+> **Unified Classifier Write-Verb Guard:** When the unified classifier returns `action_low_risk`, the orchestrator cross-checks for write verbs (create, delete, send, deploy, etc.) before routing to the agentic loop. Read/search actions are trusted as low-risk. Write actions stay in the `EXEC_REQUEST` governance path with permission gates, preventing the classifier from bypassing governance for destructive operations.
 | `MIXED_REQUEST` | Contains both planning and execution | Planning Pipeline |
 | `KNOWLEDGE_REQUEST` | Information retrieval / research | Flagship Fast/Deep |
 | `CONVERSATIONAL` | General conversation | Local or Flagship Fast |
 
-**V30 Intent Helper Extraction** (v0.2.30): The six intent-classification helper functions (including keyword matching, low-risk detection, and continuation logic) have been extracted from `orchestrator.py` into `src/core/orch_helpers/intent_helpers.py`. The orchestrator's classification methods now delegate to these pure functions, making them independently testable without instantiating the full orchestrator.
+**Intent Helper Extraction:** The six intent-classification helper functions (including keyword matching, low-risk detection, and continuation logic) have been extracted from `orchestrator.py` into `src/core/orch_helpers/intent_helpers.py`. The orchestrator's classification methods delegate to these pure functions, making them independently testable without instantiating the full orchestrator.
 
-**V23 Unified Classifier** (`FEATURE_UNIFIED_CLASSIFICATION`): When enabled, a single Gemini Flash call with structured output replaces the multi-function keyword chain. Returns intent, confidence, is_continuation, and requires_tools in one JSON response. Falls back to the keyword chain on failure.
+**Unified Classifier** (`FEATURE_UNIFIED_CLASSIFICATION`): When enabled, a single Gemini Flash call with structured output replaces the multi-function keyword chain. Returns intent, confidence, is_continuation, and requires_tools in one JSON response. Falls back to the keyword chain on failure.
 
 **Legacy pipeline** (when unified classifier disabled): Two-stage — (1) deterministic keyword matching (`classify_intent()`) for fast initial routing, then (2) LLM-based verification via the local model (`_verify_intent_with_llm()`) for ambiguous cases where messages >80 chars match PLAN/EXEC keywords incidentally.
 
-**V24 Competitive Scan Memory** (`FEATURE_COMPETITIVE_SCAN`, default `false`, requires `MEMORY_VNEXT`): When a `KNOWLEDGE_REQUEST` is detected as competitive research, `src/core/competitive_scan.py` stores the scan in episodic memory, retrieves previous scans for the same target, and generates a diff against the last result. This gives longitudinal competitive intelligence without re-running full research each time.
+**Competitive Scan Memory** (`FEATURE_COMPETITIVE_SCAN`, default `false`, requires `FEATURE_MEMORY_VNEXT`): When a `KNOWLEDGE_REQUEST` is detected as competitive research, `src/core/competitive_scan.py` stores the scan in episodic memory, retrieves previous scans for the same target, and generates a diff against the last result. This gives longitudinal competitive intelligence without re-running full research each time.
 
 ### 3. Model Routing
 
@@ -82,7 +82,7 @@ The Model Router selects the appropriate LLM lane based on task type, risk level
 
 **Escalation triggers:** If the fast lane fails, if risk keywords are detected, or if the task involves multi-step planning, the router automatically escalates to the deep lane. Every routing decision produces a `RouterDecision` record with lane, model, rationale, timing, and outcome.
 
-**V27 Dual-Mode Providers** (`FEATURE_PROVIDER_SDK`, v0.2.13): Providers now operate in one of two modes, configured per-provider via the `mode` field in `models.yaml` and selected during onboarding through the `LANCELOT_PROVIDER_MODE` env var:
+**Dual-Mode Providers** (`FEATURE_PROVIDER_SDK`): Providers operate in one of two modes, configured per-provider via the `mode` field in `models.yaml` and selected during onboarding through the `LANCELOT_PROVIDER_MODE` env var:
 
 - **SDK mode** — Full Python SDK integration (e.g. `google-genai`, `openai`, `anthropic`, `xai`). Supports extended thinking, streaming responses, and native tool calling. In SDK mode the ModelRouter routes through `ProviderClient.generate()` rather than the REST-based `FlagshipClient.complete()`.
 - **API mode** — Lightweight REST calls via `FlagshipClient`. No SDK dependency, lower memory footprint, suitable for constrained environments.
@@ -119,9 +119,9 @@ That privacy boundary now exists as a dedicated subsystem: `src/core/frontier_sc
 
 ### 4. Planning Pipeline (for complex requests)
 
-**V28 Simple Action Detector** (v0.2.28): In the `EXEC_REQUEST` path, the orchestrator's `_build_simple_action_plan()` method detects single-action requests (create file, send message, run command) via a keyword→skill mapping. When matched, it produces a targeted 3-step `PlanArtifact` directly, bypassing the generic plan builder and LLM enrichment. This saves an API call and produces cleaner permission requests for straightforward actions.
+**Simple Action Detector:** In the `EXEC_REQUEST` path, the orchestrator's `_build_simple_action_plan()` method detects single-action requests (create file, send message, run command) via a keyword→skill mapping. When matched, it produces a targeted 3-step `PlanArtifact` directly, bypassing the generic plan builder and LLM enrichment. This saves an API call and produces cleaner permission requests for straightforward actions.
 
-**V28 EXEC_REQUEST Continuation Guard** (v0.2.28): `EXEC_REQUEST` continuations are no longer rerouted to the agentic loop, which would bypass permission gates. Only `PLAN_REQUEST` and `MIXED_REQUEST` continuations bypass the planning pipeline — `EXEC_REQUEST` continuations stay in the governance flow, preserving the approval and permission gates for all high-risk action requests across multi-turn conversations.
+**EXEC_REQUEST Continuation Guard:** `EXEC_REQUEST` continuations are not rerouted to the agentic loop, which would bypass permission gates. Only `PLAN_REQUEST` and `MIXED_REQUEST` continuations bypass the planning pipeline; `EXEC_REQUEST` continuations stay in the governance flow, preserving the approval and permission gates for high-risk action requests across multi-turn conversations.
 
 For `PLAN_REQUEST` or `MIXED_REQUEST` intents, the Planning Pipeline builds a structured plan:
 
@@ -141,21 +141,21 @@ For plans that require execution, the three-agent loop runs:
 
 Each step generates a receipt linked to the parent plan via `parent_id` and `quest_id`, forming a traceable chain.
 
-**V25 Autonomy Loop v2** (`FEATURE_DEEP_REASONING_LOOP`, v0.2.11): Three new phases extend the autonomy loop with pre-execution reasoning, structured governance feedback, and experiential learning.
+**Deep Reasoning Loop** (`FEATURE_DEEP_REASONING_LOOP`): The execution loop includes pre-execution reasoning, structured governance feedback, and experiential learning.
 
-**Phase 1 — Deep Reasoning Pass.** Before the agentic loop begins, a dedicated reasoning pass analyzes the request using a deep model with high thinking budget. The orchestrator evaluates `_should_use_deep_reasoning()` triggers (request complexity, tool requirements, risk indicators) and, when triggered, calls `_build_reasoning_instruction()` to assemble a reasoning-focused system prompt. The `_deep_reasoning_pass()` method then calls `provider.generate()` with the deep model lane and elevated thinking tokens. The output is captured as a `ReasoningArtifact` (defined in `src/core/reasoning_artifact.py`) and injected as structured context into `_agentic_generate()`. This means Lancelot thinks deeply about what it needs to do — identifying capability gaps, anticipating risks, and forming a strategy — before it takes any action. The reasoning output is also scanned for `CAPABILITY GAP:` markers, which identify tools or skills the system lacks for the current task.
+**Deep Reasoning Pass.** Before the agentic loop begins, a dedicated reasoning pass analyzes the request using a deep model with high thinking budget. The orchestrator evaluates `_should_use_deep_reasoning()` triggers (request complexity, tool requirements, risk indicators) and, when triggered, calls `_build_reasoning_instruction()` to assemble a reasoning-focused system prompt. The `_deep_reasoning_pass()` method then calls `provider.generate()` with the deep model lane and elevated thinking tokens. The output is captured as a `ReasoningArtifact` (defined in `src/core/reasoning_artifact.py`) and injected as structured context into `_agentic_generate()`. This means Lancelot thinks deeply about what it needs to do — identifying capability gaps, anticipating risks, and forming a strategy — before it takes any action. The reasoning output is also scanned for `CAPABILITY GAP:` markers, which identify tools or skills the system lacks for the current task.
 
-**V27 Extended Thinking** (v0.2.13): When the Anthropic provider is running in SDK mode, the deep reasoning pass leverages Claude's native extended thinking capability. The thinking budget is configurable per-lane via the `thinking` key in `models.yaml` (e.g. `thinking: { enabled: true, budget_tokens: 10000 }` on the `deep` lane). The `AnthropicProviderClient` parses thinking blocks from the API response and extracts them into the `ReasoningArtifact`, giving the orchestrator access to the model's internal chain-of-thought alongside the final output.
+**Extended Thinking:** When the Anthropic provider is running in SDK mode, the deep reasoning pass leverages Claude's native extended thinking capability. The thinking budget is configurable per-lane via the `thinking` key in `models.yaml` (e.g. `thinking: { enabled: true, budget_tokens: 10000 }` on the `deep` lane). The `AnthropicProviderClient` parses thinking blocks from the API response and extracts them into the `ReasoningArtifact`.
 
-**Phase 3 — Governed Negotiation.** When governance blocks an action, the system no longer returns a generic `BLOCKED` message. Instead, it constructs a `GovernanceFeedback` dataclass (from `reasoning_artifact.py`) containing the blocked action, the policy rule that triggered the block, and a set of structured alternative approaches the model can pursue. This feedback is injected back into the agentic loop context, allowing the model to adapt its plan — choosing a lower-risk path, requesting approval, or decomposing the action — rather than stalling.
+**Governed Negotiation.** When governance blocks an action, the system no longer returns a generic `BLOCKED` message. Instead, it constructs a `GovernanceFeedback` dataclass (from `reasoning_artifact.py`) containing the blocked action, the policy rule that triggered the block, and a set of structured alternative approaches the model can pursue. This feedback is injected back into the agentic loop context, allowing the model to adapt its plan — choosing a lower-risk path, requesting approval, or decomposing the action — rather than stalling.
 
-**Phase 6 — Task Experience Memory.** After task completion, the orchestrator calls `_record_task_experience()`, which stores a `TaskExperience` dataclass (from `reasoning_artifact.py`) in episodic memory under the `task_experience` namespace. Each experience record captures the original request, the reasoning artifact, capability gaps encountered, actions taken, the outcome, and a duration. On future requests, the context compiler can retrieve relevant past experiences, enabling Lancelot to learn from previous successes and failures — avoiding repeated mistakes and reusing strategies that worked.
+**Task Experience Memory.** After task completion, the orchestrator calls `_record_task_experience()`, which stores a `TaskExperience` dataclass (from `reasoning_artifact.py`) in episodic memory under the `task_experience` namespace. Each experience record captures the original request, the reasoning artifact, capability gaps encountered, actions taken, the outcome, and a duration. On future requests, the context compiler can retrieve relevant past experiences, enabling Lancelot to learn from previous successes and failures — avoiding repeated mistakes and reusing strategies that worked.
 
-**v0.2.27 TaskRun Status Fix.** After `_execute_with_llm` succeeds in the agentic loop, the TaskRun status is now explicitly updated to `SUCCEEDED`. Previously, the TaskRun status reflected the TaskRunner's template-step failure even though the agentic loop had successfully completed the task. This fix ensures that the TaskRun status accurately reflects the actual outcome of execution.
+**TaskRun Status Fix.** After `_execute_with_llm` succeeds in the agentic loop, the TaskRun status is explicitly updated to `SUCCEEDED`. This ensures that the TaskRun status accurately reflects the actual outcome of execution.
 
-**V28 Structured Reformat Gate** (v0.2.28): `_agentic_generate()` now accepts a `skip_structured_reformat` parameter. When called from `_execute_with_llm()` or `_enrich_plan_with_llm()`, the structured JSON reformat step is skipped — it always failed for free-form output, wasting an API call. This eliminates a redundant LLM round-trip on execution and plan enrichment paths.
+**Structured Reformat Gate:** `_agentic_generate()` accepts a `skip_structured_reformat` parameter. When called from `_execute_with_llm()` or `_enrich_plan_with_llm()`, the structured JSON reformat step is skipped. This eliminates a redundant LLM round-trip on execution and plan enrichment paths.
 
-**V30 Safety & Response Helper Extraction** (v0.2.30): Five safety-related pure functions (risk checks, governance validations, input boundary enforcement) were extracted into `src/core/orch_helpers/safety_helpers.py`, and two response-assembly helpers were extracted into `src/core/orch_helpers/response_helpers.py`. Together with the intent helpers, this completes Phase 1 of the orchestrator decomposition — 13 stateless functions moved out, thin delegators left in place.
+**Safety & Response Helper Extraction:** Five safety-related pure functions (risk checks, governance validations, input boundary enforcement) were extracted into `src/core/orch_helpers/safety_helpers.py`, and two response-assembly helpers were extracted into `src/core/orch_helpers/response_helpers.py`. Together with the intent helpers, this completes the first orchestrator decomposition pass: 13 stateless functions moved out, thin delegators left in place.
 
 ### 6. Risk Classification & Governance
 
@@ -227,7 +227,7 @@ Every action — LLM call, tool execution, file operation, memory edit, schedule
 
 Receipts form the ground truth of system behavior. They are persisted to `lancelot_data/receipts/` and are searchable through the War Room.
 
-**V29 Receipt Context Endpoint** (v0.2.29): `GET /api/receipts/{id}/context` returns the receipt's child receipts, parent summary, and quest sibling count in a single response. This powers the Receipt Explorer's context connections panel, enabling drill-down from any receipt to its parent chain, child operations, and sibling receipts within the same quest — without requiring multiple API calls.
+**Receipt Context Endpoint:** `GET /api/receipts/{id}/context` returns the receipt's child receipts, parent summary, and quest sibling count in a single response. This powers the Receipt Explorer's context connections panel, enabling drill-down from any receipt to its parent chain, child operations, and sibling receipts within the same quest without requiring multiple API calls.
 
 ### Runtime-Truthful Status Surfaces
 
@@ -282,7 +282,7 @@ If any CRITICAL invariant fails, the Soul is rejected and the previous version r
 
 **Amendment workflow:** `PENDING` → owner approves → `APPROVED` → owner activates → `ACTIVATED` (with linter validation). This prevents accidental or unauthorized governance changes.
 
-**V24 — System instruction architecture:** The Soul now includes a `SELF-KNOWLEDGE` section containing 10 subsystem descriptions that Lancelot loads at startup. This gives the model accurate self-referential knowledge (capabilities, architecture, limitations) without relying on the model's pretraining. A companion soul directive requires **sourced intelligence** — all research-type responses must cite URLs, enforced by the Response Governor.
+**System instruction architecture:** The Soul includes a `SELF-KNOWLEDGE` section containing subsystem descriptions that Lancelot loads at startup. This gives the model accurate self-referential knowledge (capabilities, architecture, limitations) without relying on the model's pretraining. A companion soul directive requires **sourced intelligence**: all research-type responses must cite URLs, enforced by the Response Governor.
 
 For a deeper dive, see [Governance](governance.md).
 
@@ -301,7 +301,7 @@ Lancelot maintains structured memory across four tiers:
 
 **Quarantine:** Risky memory writes (those that modify core blocks or contain sensitive patterns) land in quarantine. Promotion to active memory requires owner verification or approval.
 
-**Context compiler:** Before each LLM call, the context compiler assembles memory tiers into a token-budgeted context window. Priority is Core > Working > Episodic > Archival, with LRU eviction when the budget is exceeded. The orchestrator records the active objective into quest-scoped working memory before compilation, and the scheduler ensures working compaction, episodic summarization to archival, archival decay, and integrity audit jobs stay registered.
+**Context compiler:** Before each LLM call, the context compiler assembles memory tiers into a token-budgeted context window. Priority is Core > Working > Episodic > Archival, with LRU eviction when the budget is exceeded. The orchestrator records the active objective into quest-scoped working memory before compilation, appends the compact Active Work Ledger state for long-running Command Center work, and the scheduler ensures working compaction, episodic summarization to archival, archival decay, and integrity audit jobs stay registered.
 
 For more details, see [Memory](memory.md).
 
@@ -318,7 +318,7 @@ Skills are Lancelot's extensibility mechanism — modular capabilities with decl
 - **USER** skills: Installed by the owner
 - **MARKETPLACE** skills: Third-party, restricted to `read_input`, `write_output`, `read_config` permissions only
 
-**V24 — `github_search`** (`FEATURE_GITHUB_SEARCH`, default `true`): Queries the GitHub REST API for repositories, commits, issues, and releases. Returns structured results with source URLs, enabling sourced intelligence in research responses.
+**`github_search`** (`FEATURE_GITHUB_SEARCH`, default `true`): Queries the GitHub REST API for repositories, commits, issues, and releases. Returns structured results with source URLs, enabling sourced intelligence in research responses.
 
 **Skill Factory:** A governed proposal pipeline for creating new skills. The factory writes a review package (`skill.yaml`, `security_manifest.yaml`, `execute.py`, generated tests, README), evaluates that package through the shared Skill Security Pipeline, persists artifact hashes, and requires owner approval before the exact reviewed artifact can be installed.
 
@@ -544,7 +544,7 @@ SQLite-backed job scheduler supporting cron and interval triggers.
 
 ### OAuth Token Manager (Anthropic OAuth)
 
-**V28** (`FEATURE_ANTHROPIC_OAUTH`, v0.2.14): `src/core/oauth_token_manager.py` provides an alternative authentication path for the Anthropic provider using OAuth 2.0 with PKCE, replacing the static API key when enabled.
+**Anthropic OAuth** (`FEATURE_ANTHROPIC_OAUTH`): `src/core/oauth_token_manager.py` provides an alternative authentication path for the Anthropic provider using OAuth 2.0 with PKCE, replacing the static API key when enabled.
 
 **Token lifecycle:**
 1. **Initiation** — `POST /oauth/initiate` (Provider API) starts the PKCE flow: generates `code_verifier` + `code_challenge`, builds the Anthropic authorization URL, and returns it to the owner.
@@ -554,7 +554,7 @@ SQLite-backed job scheduler supporting cron and interval triggers.
 5. **Revocation** — `POST /oauth/revoke` invalidates both tokens at Anthropic and removes them from the vault.
 6. **Status** — `GET /oauth/status` returns current token validity, expiry time, and provider binding.
 
-**Required header** (v0.2.15): When using OAuth Bearer authentication, all requests to the Anthropic API must include the `anthropic-beta: oauth-2025-04-20` header. The `AnthropicProviderClient` attaches this header automatically whenever an OAuth token is in use.
+**Required header:** When using OAuth Bearer authentication, all requests to the Anthropic API must include the `anthropic-beta: oauth-2025-04-20` header. The `AnthropicProviderClient` attaches this header automatically whenever an OAuth token is in use.
 
 **Fallback:** When the feature flag is disabled or no OAuth token is present, the Anthropic provider falls back to API key authentication. OAuth and API key auth are mutually exclusive per session; OAuth takes priority when a valid token exists.
 
@@ -580,7 +580,7 @@ SQLite-backed job scheduler supporting cron and interval triggers.
 
 ### Google OAuth Manager (Gmail + Calendar)
 
-**v0.2.26** (`FEATURE_GOOGLE_OAUTH`, default disabled): `src/core/google_oauth_manager.py` provides OAuth 2.0 Authorization Code + PKCE flow for Google APIs, enabling Gmail and Calendar connectors to authenticate with properly scoped, vault-stored, auto-refreshing credentials.
+**Google OAuth** (`FEATURE_GOOGLE_OAUTH`, default disabled): `src/core/google_oauth_manager.py` provides OAuth 2.0 Authorization Code + PKCE flow for Google APIs, enabling Gmail and Calendar connectors to authenticate with properly scoped, vault-stored, auto-refreshing credentials.
 
 **How it works:**
 1. **Initiation** — `POST /api/google-oauth/start` generates a PKCE challenge, builds the Google consent URL with Gmail + Calendar scopes, and returns it to the owner.
@@ -628,7 +628,7 @@ The War Room is a React SPA (Vite + React 18 + TypeScript + Tailwind) providing 
 
 The War Room communicates with Lancelot exclusively through the Gateway REST API — it has no direct access to internal objects.
 
-**V29 Receipt Explorer UI Polish** (v0.2.29): The Receipts panel received a comprehensive UI upgrade. A new Gateway endpoint `GET /api/receipts/{id}/context` returns child receipts, parent summary, and quest sibling count for any given receipt, enabling the frontend to render full operation context without multiple round-trips. The receipt table now includes an **action type** column with color-coded badges (e.g. `llm_call`, `tool_exec`, `governance_decision`), making it possible to visually scan receipt streams by operation category. The expanded detail panel shows **context connections** — quest links to trace the originating quest, parent links to navigate up the receipt chain, and child operation counts to drill down — alongside **human-readable I/O** (decoded inputs and outputs instead of raw JSON) and **metadata pills** for duration, token count, and cognition tier. A new **quest filter mode** allows filtering the receipt table to a single `quest_id`, tracing an entire operation lifecycle from initial request through planning, execution, and verification steps.
+**Receipt Explorer UI Polish:** The Receipts panel received a comprehensive UI upgrade. A new Gateway endpoint `GET /api/receipts/{id}/context` returns child receipts, parent summary, and quest sibling count for any given receipt, enabling the frontend to render full operation context without multiple round-trips. The receipt table includes an **action type** column with color-coded badges (e.g. `llm_call`, `tool_exec`, `governance_decision`), making it possible to visually scan receipt streams by operation category. The expanded detail panel shows **context connections**: quest links to trace the originating quest, parent links to navigate up the receipt chain, and child operation counts to drill down, alongside **human-readable I/O** and **metadata pills** for duration, token count, and cognition tier. A **quest filter mode** allows filtering the receipt table to a single `quest_id`, tracing an operation lifecycle from initial request through planning, execution, and verification steps.
 
 ---
 
@@ -646,7 +646,7 @@ Execution:     Command denylist → Path traversal → Workspace boundary → Do
 Output:        Receipt generation → PII redaction → Structured output parsing → Claim verification → Presentation → Response assembly
 ```
 
-**v0.2.27 Assembler Fix (Response Assembly):** The `extract_verbose_sections` function in `src/core/response/policies.py` was changed from a **whitelist** to a **blocklist** approach. Previously, any `##` section not matching the `_CHAT_HEADERS` whitelist was routed to War Room artifacts, which caused empty chat responses when agentic loop output contained `##` headers not on the whitelist. Now, only sections matching `_VERBOSE_HEADERS` (Assumptions, Decision Points, Risks, Done When, Context, MVP Path, Test Plan, Estimate, References) are routed to verbose/War Room artifacts — everything else stays in the chat response.
+**Assembler Fix (Response Assembly):** The `extract_verbose_sections` function in `src/core/response/policies.py` uses a **blocklist** approach. Only sections matching `_VERBOSE_HEADERS` (Assumptions, Decision Points, Risks, Done When, Context, MVP Path, Test Plan, Estimate, References) are routed to verbose/War Room artifacts; everything else stays in the chat response.
 
 **Key principles:**
 - The model is treated as **untrusted logic** inside a governed system
@@ -669,7 +669,7 @@ A core architectural principle: **any subsystem can be disabled without breaking
 | Skills | Only built-in capabilities available |
 | Health Monitor | No background health checks, endpoints still respond |
 | Scheduler | No automated jobs, manual execution still works |
-| Memory vNext | Falls back to basic context management |
+| Structured memory | Falls back to basic context management |
 | GitHub Search | `github_search` skill unavailable, other research tools still work |
 | Competitive Scan | No scan memory or diffing; research still works, just stateless |
 | Deep Reasoning Loop | No pre-execution reasoning pass; agentic loop runs without strategic analysis |
@@ -731,8 +731,8 @@ This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FE
 
 7. **Docker-first deployment.** The Tool Fabric relies on Docker for execution sandboxing. Bare-metal is supported but loses the container isolation that makes tool execution safe.
 
-**V29 Launcher pre-flight checks** (v0.2.15): The launcher scripts (`launch.ps1`, `launch.sh`) run a pre-flight sequence before `docker compose up`: verify the Docker CLI is installed, verify the Docker daemon is running, and check that ports 8000 and 8080 are available. Any failure produces a human-readable error with a suggested fix and a link to the GitHub issues page (`https://github.com/myles1663/lancelot/issues`) for support.
+**Launcher pre-flight checks:** The launcher scripts (`launch.ps1`, `launch.sh`) run a pre-flight sequence before `docker compose up`: verify the Docker CLI is installed, verify the Docker daemon is running, and check that ports 8000 and 8080 are available. Any failure produces a human-readable error with a suggested fix and a link to the GitHub issues page (`https://github.com/myles1663/lancelot/issues`) for support.
 
-**V30 uv dependency locking** (v0.2.30): Docker builds now use [uv](https://github.com/astral-sh/uv) instead of pip for Python dependency management. Dependencies are declared in `pyproject.toml` and locked via `uv.lock`, providing deterministic, reproducible builds — the exact same package versions are installed every time regardless of when or where the image is built. This eliminates a class of "works on my machine" issues caused by floating pip resolution.
+**uv dependency locking:** Docker builds use [uv](https://github.com/astral-sh/uv) instead of pip for Python dependency management. Dependencies are declared in `pyproject.toml` and locked via `uv.lock`, providing deterministic, reproducible builds: the exact same package versions are installed every time regardless of when or where the image is built.
 
-**V30 Orchestrator decomposition strategy** (v0.2.30): Phase 1 extracts only stateless pure functions from the orchestrator into `src/core/orch_helpers/`, keeping the existing call-site interface intact via thin delegators. This is a deliberate incremental approach — the orchestrator's stateful methods and `self`-dependent logic remain untouched, minimizing regression risk while improving testability and readability of the extracted helpers.
+**Orchestrator decomposition strategy:** The first pass extracts only stateless pure functions from the orchestrator into `src/core/orch_helpers/`, keeping the existing call-site interface intact via thin delegators. This is a deliberate incremental approach: the orchestrator's stateful methods and `self`-dependent logic remain untouched, minimizing regression risk while improving testability and readability of the extracted helpers.
