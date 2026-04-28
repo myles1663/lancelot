@@ -85,7 +85,7 @@ class OutputPolicy:
     # Markdown section headers that indicate verbose content to route to War Room.
     # Keep in chat: Goal, Plan Steps, Next Action
     # Route to War Room: everything else
-    _VERBOSE_HEADERS = re.compile(
+    VERBOSE_HEADER_PATTERN = re.compile(
         r"^##\s*(Assumptions|Decision\s+Points|Risks|Done\s+When|Context|"
         r"MVP\s+Path|Test\s+Plan|Estimate|References)\s*$",
         re.IGNORECASE | re.MULTILINE,
@@ -192,7 +192,7 @@ class OutputPolicy:
             # competitive analyses) that are NOT planner scaffolding.
             # Only sections explicitly flagged as verbose are routed out.
             if section.strip().startswith("## "):
-                if OutputPolicy._VERBOSE_HEADERS.search(section):
+                if OutputPolicy.VERBOSE_HEADER_PATTERN.search(section):
                     verbose_parts.append(section.strip())
                 else:
                     # Default: keep in chat (section not on verbose blocklist)

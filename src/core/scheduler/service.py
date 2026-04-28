@@ -8,6 +8,7 @@ Public API:
     list_jobs()       → list[JobRecord]
     get_job(job_id)   → JobRecord | None
     run_now(job_id)   → JobRecord
+    record_job_result(job_id, status, error) → JobRecord
     enable_job(job_id)  → None
     disable_job(job_id) → None
     last_scheduler_tick_at → str | None
@@ -56,6 +57,7 @@ class JobRecord(BaseModel):
     description: str = ""
     last_run_at: Optional[str] = None
     last_run_status: Optional[str] = None
+    last_run_error: Optional[str] = None
     run_count: int = 0
     registered_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(),
@@ -77,6 +79,11 @@ class SchedulerService:
         self._last_tick: Optional[str] = None
 
         self._init_db()
+
+    @property
+    def data_dir(self) -> Path:
+        """Directory used for scheduler persistence artifacts."""
+        return self._data_dir
 
     @property
     def last_scheduler_tick_at(self) -> Optional[str]:
@@ -111,6 +118,7 @@ class SchedulerService:
                     description TEXT DEFAULT '',
                     last_run_at TEXT,
                     last_run_status TEXT,
+                    last_run_error TEXT,
                     run_count INTEGER DEFAULT 0,
                     registered_at TEXT NOT NULL
                 )
@@ -125,6 +133,10 @@ class SchedulerService:
                 conn.execute("ALTER TABLE jobs ADD COLUMN timezone TEXT DEFAULT 'UTC'")
             except sqlite3.OperationalError as exc:
                 logger.debug("Scheduler jobs.timezone migration skipped: %s", exc)
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN last_run_error TEXT")
+            except sqlite3.OperationalError as exc:
+                logger.debug("Scheduler jobs.last_run_error migration skipped: %s", exc)
             conn.commit()
         finally:
             conn.close()
@@ -275,6 +287,11 @@ class SchedulerService:
             tz = row["timezone"] or "UTC"
         except (IndexError, KeyError) as exc:
             logger.debug("Scheduler job row missing timezone; defaulting to UTC: %s", exc)
+        last_run_error = None
+        try:
+            last_run_error = row["last_run_error"]
+        except (IndexError, KeyError) as exc:
+            logger.debug("Scheduler job row missing last_run_error; defaulting to None: %s", exc)
         return JobRecord(
             id=row["id"],
             name=row["name"],
@@ -290,6 +307,7 @@ class SchedulerService:
             description=row["description"] or "",
             last_run_at=row["last_run_at"],
             last_run_status=row["last_run_status"],
+            last_run_error=last_run_error,
             run_count=row["run_count"],
             registered_at=row["registered_at"],
         )
@@ -369,6 +387,47 @@ class SchedulerService:
 
         self._last_tick = now
         logger.info("job_triggered: %s", job_id)
+        return self.get_job(job_id)
+
+    def record_job_result(
+        self,
+        job_id: str,
+        status: str,
+        *,
+        error: str = "",
+        when: Optional[str] = None,
+    ) -> JobRecord:
+        """Persist the latest execution result for a scheduled job.
+
+        The scheduler record is operator-facing state, so failures must be
+        visible through the API and smoke report instead of existing only in
+        receipts or container logs.
+        """
+        job = self.get_job(job_id)
+        if job is None:
+            raise SchedulerError(f"Job '{job_id}' not found")
+
+        normalized_status = (status or "").strip().lower()
+        if normalized_status not in {"succeeded", "failed", "skipped", "triggered"}:
+            raise SchedulerError(f"Invalid job result status: {status}")
+
+        now = when or datetime.now(timezone.utc).isoformat()
+        bounded_error = str(error or "")[:1000] or None
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                """UPDATE jobs
+                   SET last_run_at = ?, last_run_status = ?,
+                       last_run_error = ?, run_count = run_count + 1
+                   WHERE id = ?""",
+                (now, normalized_status, bounded_error, job_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        self._last_tick = now
+        logger.info("job_result_recorded: %s status=%s", job_id, normalized_status)
         return self.get_job(job_id)
 
     def create_job(

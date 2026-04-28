@@ -88,52 +88,22 @@ def check_chain_integrity(
     Returns:
         ChainIntegrityResult with CHAIN_INTACT or CHAIN_ANOMALY.
     """
-    conn = receipt_service._get_connection()
-
-    # Fetch all receipts in the period
-    base_where = "WHERE timestamp >= ? AND timestamp <= ?"
-    params: List[Any] = [period_start, period_end]
-    if quest_id:
-        base_where += " AND quest_id = ?"
-        params.append(quest_id)
-
-    # Total receipts in period
-    count_cursor = conn.execute(
-        f"SELECT COUNT(*) as cnt FROM receipts {base_where}", params
+    summary = receipt_service.summarize_parent_chain(
+        since=period_start,
+        until=period_end,
+        quest_id=quest_id,
     )
-    total_receipts = count_cursor.fetchone()["cnt"]
-
-    # Receipts with parent_ids in the period
-    parent_cursor = conn.execute(
-        f"""SELECT COUNT(*) as cnt FROM receipts
-            {base_where} AND parent_id IS NOT NULL AND parent_id != ''""",
-        params,
-    )
-    receipts_with_parents = parent_cursor.fetchone()["cnt"]
-
-    # Find orphaned parents: receipts in the period whose parent_id
-    # doesn't exist ANYWHERE in the receipt store
-    orphan_sql = f"""
-        SELECT r.id, r.parent_id, r.timestamp
-        FROM receipts r
-        {base_where}
-          AND r.parent_id IS NOT NULL
-          AND r.parent_id != ''
-          AND NOT EXISTS (
-              SELECT 1 FROM receipts p WHERE p.id = r.parent_id
-          )
-        ORDER BY r.timestamp ASC
-    """
-    orphan_cursor = conn.execute(orphan_sql, params)
-    orphan_rows = orphan_cursor.fetchall()
+    total_receipts = int(summary["total_receipts"])
+    receipts_with_parents = int(summary["receipts_with_parents"])
+    orphan_rows = summary["missing_parent_gaps"]
 
     gaps: List[ChainGap] = []
     for row in orphan_rows:
         gaps.append(ChainGap(
-            receipt_id=row["id"],
-            orphaned_parent_id=row["parent_id"],
+            receipt_id=row["receipt_id"],
+            orphaned_parent_id=row["orphaned_parent_id"],
             gap_type="missing_parent",
-            receipt_timestamp=row["timestamp"],
+            receipt_timestamp=row["receipt_timestamp"],
         ))
 
     status = "CHAIN_ANOMALY" if gaps else "CHAIN_INTACT"

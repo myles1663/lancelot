@@ -222,6 +222,23 @@ class TestRunNow:
         with pytest.raises(SchedulerError, match="not found"):
             service.run_now("nonexistent")
 
+    def test_record_job_result_persists_failure_context(self, service):
+        service.register_from_config()
+        result = service.record_job_result(
+            "health_sweep",
+            "failed",
+            error="script missing: sync_ticket_sentinel.py",
+        )
+
+        assert result.last_run_at is not None
+        assert result.last_run_status == "failed"
+        assert result.last_run_error == "script missing: sync_ticket_sentinel.py"
+        assert result.run_count == 1
+
+        reloaded = service.get_job("health_sweep")
+        assert reloaded.last_run_status == "failed"
+        assert reloaded.last_run_error == "script missing: sync_ticket_sentinel.py"
+
 
 # ===================================================================
 # Heartbeat field

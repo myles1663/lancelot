@@ -59,6 +59,41 @@ async def test_get_flags_exposes_dependency_edges_for_graph_rendering():
     ]
 
 
+@pytest.mark.asyncio
+async def test_get_flags_has_operator_metadata_and_clean_public_text():
+    payload = await flags_api.get_flags()
+    flags = payload["flags"]
+
+    for name in [
+        "FEATURE_A2A",
+        "FEATURE_ACTION_CARDS",
+        "FEATURE_GOOGLE_OAUTH",
+        "FEATURE_INCIDENT_RESPONSE",
+        "FEATURE_OBSERVABILITY",
+        "FEATURE_TIME_TRAVEL",
+        "FEATURE_TOOL_FLOW_STREAMING",
+    ]:
+        assert flags[name]["category"] != "Other"
+        assert flags[name]["description"]
+        assert flags[name]["warning"]
+
+    bad_fragments = (
+        "\u00c3",
+        "\u00c2",
+        "\u00e2\u20ac",
+        "\u00e2\u0080",
+        "\u0080",
+        "\u0099",
+        "\u009c",
+        "\u009d",
+    )
+    for name, flag in flags.items():
+        for field in ("description", "warning", "confirm_enable", "category"):
+            value = flag.get(field)
+            if isinstance(value, str):
+                assert not any(fragment in value for fragment in bad_fragments), (name, field, value)
+
+
 def test_validate_flag_dependencies_blocks_enabling_uab_without_parents(monkeypatch):
     import feature_flags as ff
 

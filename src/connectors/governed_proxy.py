@@ -61,7 +61,7 @@ class GovernedConnectorProxy:
         operations = self._registry.get_operations(connector_id)
         for op in operations:
             cap_id = op.full_capability_id
-            self._classifier._defaults[cap_id] = op.default_tier
+            self._classifier.set_default_tier(cap_id, op.default_tier)
             logger.debug(
                 "Registered tier %s for %s", op.default_tier.name, cap_id
             )
@@ -70,7 +70,7 @@ class GovernedConnectorProxy:
         """Look up the risk tier for a specific operation."""
         op = self._registry.get_operation(connector_id, operation_id)
         cap_id = op.full_capability_id
-        return self._classifier._defaults.get(cap_id, RiskTier.T3_IRREVERSIBLE)
+        return self._classifier.get_default_tier(cap_id, RiskTier.T3_IRREVERSIBLE)
 
     def execute_governed(
         self,

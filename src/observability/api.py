@@ -25,6 +25,7 @@ from src.observability.config import (
     OTelConfig,
     WebhookConfig,
     MetricsApiConfig,
+    describe_otel_export_status,
     load_config,
     save_config,
 )
@@ -111,8 +112,15 @@ def _configure_bridge_safe(config: ObservabilityConfig) -> tuple[list[str], list
         from src.observability.receipt_bridge import configure_bridge
         from src.observability.otel_provider import is_initialized
 
+        otel_export_active = bool(config.otel.enabled and config.otel.endpoint and is_initialized())
+        bridge_active = bool(
+            otel_export_active
+            or (config.webhooks.enabled and config.webhooks.endpoints)
+            or _get_incident_response_flag()
+        )
         configure_bridge(
-            enabled=config.otel.enabled and is_initialized(),
+            enabled=bridge_active,
+            otel_enabled=otel_export_active,
             sampling_rate=config.otel.sampling_rate_t0_t1,
         )
     except Exception as exc:
@@ -141,6 +149,24 @@ def _get_bridge_enabled_status() -> tuple[bool, Optional[str]]:
         return _enabled, None
     except Exception as exc:
         return False, str(exc)
+
+
+def _get_span_export_enabled_status() -> tuple[bool, Optional[str]]:
+    try:
+        from src.observability.receipt_bridge import _otel_enabled
+
+        return _otel_enabled, None
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _get_incident_response_flag() -> bool:
+    try:
+        from src.core import feature_flags
+
+        return bool(getattr(feature_flags, "FEATURE_INCIDENT_RESPONSE", False))
+    except Exception:
+        return False
 
 
 def _get_webhook_engine_safe() -> tuple[Any | None, Optional[str]]:
@@ -248,6 +274,19 @@ async def otel_status():
         degraded_reasons.append("Receipt bridge status unavailable")
         runtime_errors.append(bridge_error)
 
+    span_export_active, span_export_error = _get_span_export_enabled_status()
+    if span_export_error:
+        degraded_reasons.append("OTel span export status unavailable")
+        runtime_errors.append(span_export_error)
+
+    otel_status = describe_otel_export_status(
+        config.otel,
+        initialized=otel_initialized,
+        span_export_active=span_export_active,
+    )
+    if otel_status["state"] in {"missing_endpoint", "bridge_inactive", "not_initialized"}:
+        degraded_reasons.append(otel_status["message"])
+
     return {
         "runtime_degraded": bool(degraded_reasons),
         "degraded_reasons": degraded_reasons,
@@ -258,7 +297,13 @@ async def otel_status():
             "enabled": config.otel.enabled,
             "initialized": otel_initialized,
             "bridge_active": bridge_enabled,
+            "span_export_active": span_export_active,
+            "state": otel_status["state"],
+            "spans_exported": otel_status["spans_exported"],
             "endpoint": config.otel.endpoint or "(not configured)",
+            "export_destination": otel_status["export_destination"],
+            "message": otel_status["message"],
+            "operator_action": otel_status["operator_action"],
             "sampling_rate_t0_t1": config.otel.sampling_rate_t0_t1,
             "export_interval_s": config.otel.export_interval_s,
         },

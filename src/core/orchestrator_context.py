@@ -54,34 +54,28 @@ def init_context_cache(runtime: Any) -> None:
             "context_caching_unsupported",
             extra={"provider": runtime.provider.provider_name},
         )
-        runtime._cache = None
+        runtime.clear_context_cache()
         return
 
     try:
-        from google.genai import types as gemini_types
-
-        system_instruction = runtime._build_system_instruction()
+        system_instruction = runtime.build_system_instruction()
         cache_contents = (
             f"Rules:\n{runtime.rules_context}\n\n"
             f"User Context:\n{runtime.user_context}\n\n"
             f"Memory Summary:\n{runtime.memory_summary}"
         )
 
-        gemini_client = runtime.provider._client
-        runtime._cache = gemini_client.caches.create(
-            model=runtime._cache_model,
-            config=gemini_types.CreateCachedContentConfig(
-                contents=[cache_contents],
-                system_instruction=system_instruction,
-                ttl=f"{runtime._cache_ttl}s",
-                display_name="lancelot-cold-memory",
-            ),
+        cache = runtime.create_context_cache(
+            contents=cache_contents,
+            system_instruction=system_instruction,
+            display_name="lancelot-cold-memory",
         )
+        runtime.set_context_cache(cache)
         _logger.info(
             "context_cache_created",
             extra={
-                "cache_name": runtime._cache.name,
-                "ttl_s": runtime._cache_ttl,
+                "cache_name": runtime.context_cache_name(),
+                "ttl_s": runtime.context_cache_ttl_seconds(),
             },
         )
     except Exception as exc:
@@ -89,7 +83,7 @@ def init_context_cache(runtime: Any) -> None:
             "context_cache_unavailable",
             extra={"error": str(exc)},
         )
-        runtime._cache = None
+        runtime.clear_context_cache()
 
 
 def query_memory(runtime: Any, query_text: str, n_results: int = 3) -> str:
@@ -124,7 +118,7 @@ def log_rule_candidate(runtime: Any, content: str) -> None:
 
 def update_rules(runtime: Any, new_knowledge: str) -> None:
     """Append validated knowledge to RULES.md and refresh its signature."""
-    valid, reason = runtime._validate_rule_content(new_knowledge)
+    valid, reason = runtime.validate_rule_content(new_knowledge)
     if not valid:
         _logger.warning("Rule rejected: %s", reason)
         return
@@ -147,6 +141,6 @@ def update_rules(runtime: Any, new_knowledge: str) -> None:
         with open(sig_path, "w") as sig_file:
             sig_file.write(sig)
 
-        runtime._init_context_cache()
+        runtime.initialize_context_cache()
     except Exception as exc:
         _logger.warning("Error updating rules: %s", exc)

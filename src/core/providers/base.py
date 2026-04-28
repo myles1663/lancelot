@@ -241,3 +241,15 @@ class ProviderClient(ABC):
             True if the model exists and is usable.
         """
         ...
+
+    def create_context_cache(
+        self,
+        *,
+        model: str,
+        contents: str,
+        system_instruction: str,
+        ttl_s: int,
+        display_name: str,
+    ) -> Any:
+        """Create a provider-native context cache when the provider supports it."""
+        raise NotImplementedError(f"{self.provider_name} does not support context caching")

@@ -9,9 +9,7 @@ _gov_logger = _logging.getLogger("orchestrator")
 
 
 def _clear_deep_model_validation_cache(runtime: Any) -> None:
-    for attr in list(vars(runtime)):
-        if attr.startswith("_deep_model_valid_"):
-            delattr(runtime, attr)
+    runtime.invalidate_deep_model_validation_cache()
 
 
 def _apply_provider_profile(runtime: Any, provider_name: str, *, context: str) -> None:
@@ -20,10 +18,12 @@ def _apply_provider_profile(runtime: Any, provider_name: str, *, context: str) -
         registry = ProfileRegistry()
         if registry.has_provider(provider_name):
             profile = registry.get_profile(provider_name)
-            runtime.model_name = profile.fast.model
-            runtime._deep_model_name = profile.deep.model
-            runtime._cache_model = profile.cache.model if profile.cache else runtime.model_name
-            runtime._deep_thinking_config = profile.deep.thinking
+            runtime.set_provider_lane_configuration(
+                fast_model=profile.fast.model,
+                deep_model=profile.deep.model,
+                cache_model=profile.cache.model if profile.cache else profile.fast.model,
+                deep_thinking_config=profile.deep.thinking,
+            )
     except Exception as profile_exc:
         _logging.warning(
             "Provider profile lookup failed during %s; keeping current model names: %s",
@@ -56,18 +56,19 @@ def switch_provider(runtime: Any, provider_name: str) -> str:
     api_key = os.getenv(api_key_var, "") if api_key_var else ""
     auth_token = ""
     if provider_name == "anthropic" and not api_key:
-        auth_token = runtime._get_anthropic_oauth_token()
+        auth_token = runtime.get_anthropic_oauth_token()
     elif provider_name == "openai-codex":
-        auth_token = runtime._get_openai_codex_oauth_token()
+        auth_token = runtime.get_openai_codex_oauth_token()
 
-    has_codex_cli_auth = provider_name == "openai-codex" and runtime._has_openai_codex_cli_auth()
+    has_codex_cli_auth = provider_name == "openai-codex" and runtime.has_openai_codex_cli_auth()
     if not api_key and not auth_token and not has_codex_cli_auth:
         raise ValueError(f"No API key or OAuth token configured for {provider_name}")
 
     provider_mode = os.getenv("LANCELOT_PROVIDER_MODE", "sdk")
     provider_kwargs = {}
-    if getattr(runtime, "_stop_event", None) is not None:
-        provider_kwargs["stop_event"] = runtime._stop_event
+    stop_event = runtime.provider_stop_event()
+    if stop_event is not None:
+        provider_kwargs["stop_event"] = stop_event
     new_provider = create_provider(
         provider_name,
         api_key,
@@ -76,12 +77,14 @@ def switch_provider(runtime: Any, provider_name: str) -> str:
         **provider_kwargs,
     )
 
-    runtime.provider = new_provider
-    runtime._provider_name = provider_name
-    runtime._provider_mode = provider_mode
+    runtime.set_provider_runtime(
+        new_provider,
+        provider_name=provider_name,
+        provider_mode=provider_mode,
+    )
     _apply_provider_profile(runtime, provider_name, context="hot-swap")
 
-    runtime._cache = None
+    runtime.clear_context_cache()
     _clear_deep_model_validation_cache(runtime)
 
     auth_method = (
@@ -136,33 +139,24 @@ def has_openai_codex_cli_auth() -> bool:
 
 def set_lane_model(runtime: Any, lane: str, model_id: str) -> None:
     """Override the model assigned to a specific lane at runtime."""
-    if lane == "fast":
-        runtime.model_name = model_id
-    elif lane == "deep":
-        runtime._deep_model_name = model_id
-        _clear_deep_model_validation_cache(runtime)
-    elif lane == "cache":
-        runtime._cache_model = model_id
-        runtime._cache = None
-    else:
-        raise ValueError(f"Unknown lane: {lane}")
+    runtime.set_model_lane(lane, model_id)
     _gov_logger.info("Lane '%s' model overridden to %s", lane, model_id)
 
 
 def get_deep_model(runtime: Any) -> str:
     """Return the deep/reasoning model name with graceful fallback."""
-    deep_model = getattr(runtime, "_deep_model_name", "") or os.getenv("GEMINI_DEEP_MODEL", "")
+    deep_model = runtime.deep_model_name() or os.getenv("GEMINI_DEEP_MODEL", "")
     if not deep_model:
         return runtime.model_name
 
-    cache_key = f"_deep_model_valid_{deep_model}"
-    if hasattr(runtime, cache_key):
-        return deep_model if getattr(runtime, cache_key) else runtime.model_name
+    cached_validation = runtime.cached_deep_model_validation(deep_model)
+    if cached_validation is not None:
+        return deep_model if cached_validation else runtime.model_name
 
     try:
         if runtime.provider:
             if runtime.provider.validate_model(deep_model):
-                setattr(runtime, cache_key, True)
+                runtime.record_deep_model_validation(deep_model, True)
                 _gov_logger.debug(
                     "deep_model_validated",
                     extra={"model": deep_model},
@@ -178,7 +172,7 @@ def get_deep_model(runtime: Any) -> str:
                 "error": str(exc),
             },
         )
-        setattr(runtime, cache_key, False)
+        runtime.record_deep_model_validation(deep_model, False)
 
     return runtime.model_name
 
@@ -228,7 +222,7 @@ def route_model(runtime: Any, user_message: str) -> str:
         needs_deep = True
 
     if needs_deep:
-        deep = runtime._get_deep_model()
+        deep = runtime.get_deep_model()
         if deep != runtime.model_name:
             _gov_logger.debug(
                 "deep_model_selected",

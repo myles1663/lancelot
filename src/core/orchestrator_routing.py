@@ -73,7 +73,7 @@ def is_simple_for_local(runtime: Any, prompt: str) -> bool:
     if len(prompt) > 500:
         return False
 
-    if runtime._is_continuation(prompt):
+    if runtime.is_continuation(prompt):
         return False
 
     prompt_lower = prompt.lower()

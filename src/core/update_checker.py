@@ -17,7 +17,7 @@ import urllib.error
 from pathlib import Path
 from typing import Optional
 
-from src.core.outbound_http import assert_url_allowed
+from src.core.outbound_http import OutboundNetworkError, assert_url_allowed
 
 logger = logging.getLogger("lancelot.update_checker")
 
@@ -27,6 +27,7 @@ logger = logging.getLogger("lancelot.update_checker")
 DEFAULT_CHECK_INTERVAL = 6 * 3600  # 6 hours
 DISMISS_REAPPEAR_SECONDS = 24 * 3600  # 24 hours
 NON_DISMISSIBLE_SEVERITIES = {"important", "critical"}
+EXPECTED_NETWORK_ERRNOS = {-3, -2, 101, 110, 111}
 
 _VERSION_URL = os.getenv(
     "LANCELOT_VERSION_URL",
@@ -69,6 +70,9 @@ class UpdateChecker:
         self._released_at: Optional[str] = None
         self._checked_at: Optional[float] = None
         self._check_error: Optional[str] = None
+        self._check_error_kind: Optional[str] = None
+        self._check_state: str = "unchecked"
+        self._next_check_after: Optional[float] = None
 
         # Dismissal state
         self._dismissed_at: Optional[float] = None
@@ -127,6 +131,18 @@ class UpdateChecker:
                 elif time.time() - self._dismissed_at > DISMISS_REAPPEAR_SECONDS:
                     show_banner = True
 
+            operator_message = None
+            if self._check_state == "offline":
+                operator_message = (
+                    "Version check is offline; the local instance is running with "
+                    "the installed version and will retry automatically."
+                )
+            elif self._check_state == "failed":
+                operator_message = (
+                    "Version check failed; review check_error_kind and retry from "
+                    "the updates panel when network policy is configured."
+                )
+
             return {
                 "current_version": self._current_version,
                 "latest_version": self._latest_version,
@@ -137,6 +153,10 @@ class UpdateChecker:
                 "released_at": self._released_at,
                 "checked_at": self._checked_at,
                 "check_error": self._check_error,
+                "check_error_kind": self._check_error_kind,
+                "check_state": self._check_state,
+                "next_check_after": self._next_check_after,
+                "operator_message": operator_message,
                 "show_banner": show_banner,
             }
 
@@ -165,13 +185,21 @@ class UpdateChecker:
                 data = json.loads(resp.read().decode())
 
             with self._lock:
+                checked_at = time.time()
                 self._latest_version = data.get("latest", self._current_version)
                 self._severity = data.get("severity", "info")
                 self._message = data.get("message")
                 self._changelog_url = data.get("changelog_url")
                 self._released_at = data.get("released_at")
-                self._checked_at = time.time()
+                self._checked_at = checked_at
                 self._check_error = None
+                self._check_error_kind = None
+                self._check_state = (
+                    "update_available"
+                    if self._latest_version != self._current_version
+                    else "up_to_date"
+                )
+                self._next_check_after = checked_at + self._check_interval
 
             if self._latest_version != self._current_version:
                 logger.info(
@@ -182,13 +210,38 @@ class UpdateChecker:
                 logger.debug("Version check: up to date (%s)", self._current_version)
 
         except Exception as exc:
+            error_kind = _classify_check_error(exc)
+            check_state = "offline" if error_kind == "network_unreachable" else "failed"
             with self._lock:
-                self._checked_at = time.time()
+                checked_at = time.time()
+                self._checked_at = checked_at
                 self._check_error = str(exc)
-            if _is_expected_network_failure(exc):
-                logger.info("Version check unavailable: %s", exc)
+                self._check_error_kind = error_kind
+                self._check_state = check_state
+                self._next_check_after = checked_at + self._check_interval
+            if error_kind == "network_unreachable":
+                logger.debug(
+                    "Version check deferred; update manifest service is unreachable. "
+                    "Will retry in %ds (url=%s, error=%s)",
+                    self._check_interval,
+                    _VERSION_URL,
+                    exc,
+                )
             else:
                 logger.warning("Version check failed: %s", exc)
+
+
+def _classify_check_error(exc: Exception) -> str:
+    """Return the operator-facing error class for a failed version check."""
+    if isinstance(exc, OutboundNetworkError):
+        return "blocked_by_policy"
+    if _is_expected_network_failure(exc):
+        return "network_unreachable"
+    if isinstance(exc, urllib.error.HTTPError):
+        return "manifest_http_error"
+    if isinstance(exc, (json.JSONDecodeError, UnicodeDecodeError, ValueError)):
+        return "manifest_parse_error"
+    return "unexpected_error"
 
 
 def _is_expected_network_failure(exc: Exception) -> bool:
@@ -200,8 +253,8 @@ def _is_expected_network_failure(exc: Exception) -> bool:
         if isinstance(reason, (socket.gaierror, TimeoutError, ConnectionError)):
             return True
         if isinstance(reason, OSError):
-            return reason.errno in {-3, -2, 101, 110, 111}
+            return reason.errno in EXPECTED_NETWORK_ERRNOS
     if isinstance(exc, OSError):
-        return exc.errno in {-3, -2, 101, 110, 111}
+        return exc.errno in EXPECTED_NETWORK_ERRNOS
     return False
 

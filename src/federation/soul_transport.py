@@ -963,7 +963,7 @@ class SoulTransport:
                 initiated_ts = event.initiated_at
                 if not initiated_ts:
                     continue
-                started = SoulTransport._parse_timestamp(initiated_ts)
+                started = SoulTransport.parse_timestamp(initiated_ts)
                 if started is None:
                     continue
                 if now - started < float(event.timeout_seconds or self._timeout_s):
@@ -984,12 +984,14 @@ class SoulTransport:
                 continue
 
     @staticmethod
-    def _parse_timestamp(value: str) -> Optional[float]:
+    def parse_timestamp(value: str) -> Optional[float]:
         from datetime import datetime
         try:
             return datetime.fromisoformat(value).timestamp()
         except Exception:
             return None
+
+    _parse_timestamp = parse_timestamp
 
     def _get_current_soul(self) -> Optional[Soul]:
         """Resolve the current live Soul from runtime or store."""

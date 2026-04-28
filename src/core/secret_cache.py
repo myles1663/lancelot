@@ -11,6 +11,7 @@ the secret is auto-migrated into the vault (first-run / backward compat).
 Public API:
     bootstrap(vault)     — Load secrets from vault; auto-migrate from env.
     get(key, default="") — Thread-safe cache lookup (drop-in os.getenv replacement).
+    set_cached(key, value) — Update an already-bootstrapped cache entry.
     is_bootstrapped()    — Guard for fallback paths.
     scrub_environ()      — Remove migrated secrets from os.environ.
     reload(vault)        — Re-read vault into cache (for hot rotation).
@@ -123,6 +124,14 @@ def get(key: str, default: str = "") -> str:
         return os.getenv(key, default)
     with _lock:
         return _cache.get(key, default)
+
+
+def set_cached(key: str, value: str) -> None:
+    """Update a cache entry after the canonical secret has been persisted."""
+    if not _bootstrapped:
+        raise RuntimeError("secret_cache must be bootstrapped before set_cached()")
+    with _lock:
+        _cache[key] = value
 
 
 def is_bootstrapped() -> bool:

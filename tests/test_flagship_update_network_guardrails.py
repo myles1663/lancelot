@@ -43,6 +43,8 @@ def test_update_checker_fails_closed_when_allowlist_blocks(monkeypatch):
 
     mock_open.assert_not_called()
     assert "network allowlist" in (status["check_error"] or "")
+    assert status["check_state"] == "failed"
+    assert status["check_error_kind"] == "blocked_by_policy"
 
 
 def test_core_allowlist_domain_bypasses_private_ip_guard(monkeypatch):

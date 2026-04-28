@@ -29,9 +29,9 @@ def _generate_structured_summary(
     tool_receipts: list[dict[str, Any]],
     claim_verification: bool,
 ) -> str | None:
-    msg = runtime._build_frontier_user_message(user_prompt)
-    result = runtime._provider_generate(
-        model=runtime._route_model(prompt),
+    msg = runtime.build_frontier_user_message(user_prompt)
+    result = runtime.provider_generate(
+        model=runtime.route_model(prompt),
         messages=[msg],
         system_instruction=system_instruction,
         config={

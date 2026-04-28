@@ -474,8 +474,8 @@ class ModelRouter:
     def _resolve_model_name(self, lane: str) -> str:
         """Get the model name from the flagship client's profile."""
         try:
-            if hasattr(self._flagship, '_profile'):
-                lc = self._flagship._get_lane_config(lane)
+            if hasattr(self._flagship, "get_lane_config"):
+                lc = self._flagship.get_lane_config(lane)
                 return lc.model
         except Exception as exc:
             logger.warning(

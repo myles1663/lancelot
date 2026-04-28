@@ -56,7 +56,7 @@ def llm_call_with_retry(
             raise
         except Exception as exc:
             last_exc = exc
-            if attempt < max_retries and runtime._is_retryable_error(exc):
+            if attempt < max_retries and runtime.is_retryable_error(exc):
                 delay = base_delay * (2**attempt)
                 _logger.warning(
                     "llm_api_transient_error",
@@ -69,7 +69,7 @@ def llm_call_with_retry(
                 )
                 wait_before_provider_retry(
                     delay,
-                    getattr(runtime, "_stop_event", None),
+                    runtime.provider_stop_event(),
                     provider="orchestrator",
                 )
             else:
@@ -89,21 +89,21 @@ def text_only_generate(
         return "Error: LLM provider not initialized."
 
     if not system_instruction:
-        system_instruction = runtime._build_system_instruction()
+        system_instruction = runtime.build_system_instruction()
 
     ctx = context_str or runtime.context_env.get_context_string()
     full_text = f"{ctx}\n\n{prompt}"
 
     try:
-        msg = runtime._build_frontier_user_message(full_text, images=image_parts)
+        msg = runtime.build_frontier_user_message(full_text, images=image_parts)
         messages = [msg]
 
-        result = runtime._llm_call_with_retry(
-            lambda: runtime._provider_generate(
-                model=runtime._route_model(prompt),
+        result = runtime.llm_call_with_retry(
+            lambda: runtime.provider_generate(
+                model=runtime.route_model(prompt),
                 messages=messages,
                 system_instruction=system_instruction,
-                config={"thinking": runtime._get_thinking_config()},
+                config={"thinking": runtime.get_thinking_config()},
             )
         )
         return result.text if result.text else ""
@@ -149,7 +149,7 @@ def should_use_deep_reasoning(runtime: Any, user_message: str) -> bool:
     if words.issubset(conversational) or len(words) <= 2:
         return False
 
-    if runtime._is_continuation(user_message):
+    if runtime.is_continuation(user_message):
         return False
 
     reasoning_indicators = {
@@ -190,7 +190,7 @@ def should_use_deep_reasoning(runtime: Any, user_message: str) -> bool:
     if any(phrase in lower for phrase in reasoning_phrases):
         return True
 
-    if runtime._needs_research(user_message):
+    if runtime.needs_research(user_message):
         return True
 
     if len(user_message) > 100 and "?" in user_message:

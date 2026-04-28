@@ -42,7 +42,7 @@ async def oauth_anthropic_callback(request: Request):
         if success:
             # Recover provider wiring if startup ran before OAuth was available.
             if main_orchestrator.provider is None:
-                main_orchestrator._init_provider()
+                main_orchestrator.initialize_provider()
                 if main_orchestrator.provider:
                     logger.info("Provider hot-initialized via OAuth callback.")
 
@@ -111,11 +111,11 @@ async def oauth_codex_callback(request: Request):
         success = manager.exchange_code(code, state)
         if success:
             # Re-init provider if it wasn't initialized at startup
-            if main_orchestrator.provider is None or main_orchestrator._provider_name != "openai-codex":
+            if main_orchestrator.provider is None or main_orchestrator.active_provider_name != "openai-codex":
                 # Switch to openai-codex provider
                 os.environ["LANCELOT_PROVIDER"] = "openai-codex"
                 os.environ["LANCELOT_AUTH_MODE"] = "OAUTH"
-                main_orchestrator._init_provider()
+                main_orchestrator.initialize_provider()
                 if main_orchestrator.provider:
                     logger.info("Provider hot-initialized via Codex OAuth callback.")
 

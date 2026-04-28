@@ -286,8 +286,7 @@ class TestErrorHandling:
 
     def test_model_name_fallback_logs_warning(self, registry, mock_local, caplog):
         flagship = MagicMock()
-        flagship._profile = object()
-        flagship._get_lane_config.side_effect = RuntimeError("profile unavailable")
+        flagship.get_lane_config.side_effect = RuntimeError("profile unavailable")
         flagship.complete.return_value = "ok"
         router = ModelRouter(
             registry=registry,

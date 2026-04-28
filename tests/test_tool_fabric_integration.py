@@ -145,7 +145,7 @@ class TestToolFabricInit:
         if hasattr(notice_logger, "_lancelot_emitted_notice_codes"):
             delattr(notice_logger, "_lancelot_emitted_notice_codes")
 
-        caplog.set_level(logging.WARNING, logger="lancelot.operator_notice")
+        caplog.set_level(logging.INFO, logger="lancelot.operator_notice")
         fabric_module._emit_operator_notice_once(
             "host_execution_enabled",
             "Host execution provider enabled; commands run in container Linux.",

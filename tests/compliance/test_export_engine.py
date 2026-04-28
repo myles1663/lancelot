@@ -60,11 +60,7 @@ def _mock_receipt_service_for_resolve(receipts_exist=True, count=10):
     """Mock for resolve_period tests."""
     svc = MagicMock()
     svc.list.return_value = [_make_receipt()] if receipts_exist else []
-    conn = MagicMock()
-    svc._get_connection.return_value = conn
-    cursor = MagicMock()
-    cursor.fetchone.return_value = {"cnt": count}
-    conn.execute.return_value = cursor
+    svc.count.return_value = count
     return svc
 
 
@@ -73,14 +69,7 @@ def _mock_receipt_service_for_fetch(receipts=None):
     if receipts is None:
         receipts = [_make_receipt()]
     svc = MagicMock()
-    conn = MagicMock()
-    svc._get_connection.return_value = conn
-    cursor = MagicMock()
-    # _row_to_receipt is called per row
-    rows = [MagicMock() for _ in receipts]
-    cursor.fetchall.return_value = rows
-    conn.execute.return_value = cursor
-    svc._row_to_receipt.side_effect = receipts
+    svc.list_chronological.return_value = receipts
     return svc
 
 
@@ -91,38 +80,15 @@ def _mock_receipt_service_for_export(receipts=None, count=5):
 
     svc = MagicMock()
 
-    # resolve_period needs: svc.list, svc._get_connection
+    # resolve_period/fetch_receipts use public ReceiptService query methods.
     svc.list.return_value = receipts
-
-    conn = MagicMock()
-    svc._get_connection.return_value = conn
-
-    # resolve_period count query
-    count_cursor = MagicMock()
-    count_cursor.fetchone.return_value = {"cnt": count}
-
-    # fetch_receipts query
-    fetch_cursor = MagicMock()
-    rows = [MagicMock() for _ in receipts]
-    fetch_cursor.fetchall.return_value = rows
-
-    # chain_integrity queries: total count, parent count, orphan query
-    chain_count_cursor = MagicMock()
-    chain_count_cursor.fetchone.return_value = {"cnt": count}
-    chain_parent_cursor = MagicMock()
-    chain_parent_cursor.fetchone.return_value = {"cnt": count - 1}
-    chain_orphan_cursor = MagicMock()
-    chain_orphan_cursor.fetchall.return_value = []
-
-    conn.execute.side_effect = [
-        count_cursor,        # resolve_period
-        fetch_cursor,        # fetch_receipts
-        chain_count_cursor,  # check_chain_integrity total
-        chain_parent_cursor, # check_chain_integrity parents
-        chain_orphan_cursor, # check_chain_integrity orphans
-    ]
-
-    svc._row_to_receipt.side_effect = receipts
+    svc.count.return_value = count
+    svc.list_chronological.return_value = receipts
+    svc.summarize_parent_chain.return_value = {
+        "total_receipts": count,
+        "receipts_with_parents": max(count - 1, 0),
+        "missing_parent_gaps": [],
+    }
     svc.create.side_effect = lambda r: r  # pass-through for export receipt
     return svc
 
@@ -237,23 +203,25 @@ class TestFetchReceipts:
     def test_quest_id_filter_applied(self):
         svc = _mock_receipt_service_for_fetch([_make_receipt()])
         fetch_receipts(svc, "2026-01-01", "2026-01-31", quest_id="q-123")
-        conn = svc._get_connection()
-        sql_arg = conn.execute.call_args[0][0]
-        assert "quest_id" in sql_arg
+        svc.list_chronological.assert_called_once_with(
+            since="2026-01-01",
+            until="2026-01-31",
+            quest_id="q-123",
+        )
 
     def test_empty_result(self):
         svc = _mock_receipt_service_for_fetch([])
-        svc._get_connection().execute().fetchall.return_value = []
-        svc._row_to_receipt.side_effect = []
         result = fetch_receipts(svc, "2026-01-01", "2026-01-31")
         assert result == []
 
     def test_no_quest_id_omits_filter(self):
         svc = _mock_receipt_service_for_fetch([_make_receipt()])
         fetch_receipts(svc, "2026-01-01", "2026-01-31", quest_id=None)
-        conn = svc._get_connection()
-        sql_arg = conn.execute.call_args[0][0]
-        assert "quest_id" not in sql_arg
+        svc.list_chronological.assert_called_once_with(
+            since="2026-01-01",
+            until="2026-01-31",
+            quest_id=None,
+        )
 
 
 # ---------------------------------------------------------------------------

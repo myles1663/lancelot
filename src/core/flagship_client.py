@@ -129,6 +129,10 @@ class FlagshipClient:
 
     def _get_lane_config(self, lane: str) -> LaneConfig:
         """Get the LaneConfig for the specified lane."""
+        return self.get_lane_config(lane)
+
+    def get_lane_config(self, lane: str) -> LaneConfig:
+        """Return the LaneConfig for a public router lane name."""
         if lane == "fast":
             return self._profile.fast
         elif lane == "deep":

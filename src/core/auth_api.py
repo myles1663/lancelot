@@ -351,7 +351,7 @@ def _persist_secret(env_key: str, vault_key: str, stored_value: str) -> None:
 
             vault = CredentialVault()
             vault.store(vault_key, stored_value, type="system_secret")
-            secret_cache._cache[env_key] = stored_value
+            secret_cache.set_cached(env_key, stored_value)
             return
     except Exception as exc:
         logger.warning("Vault update failed for %s, falling back to env: %s", env_key, exc)

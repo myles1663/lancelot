@@ -198,6 +198,21 @@ class SkillRegistry:
         """Get a single skill by name, or None if not found."""
         return self._skills.get(name)
 
+    def ensure_system_skill(self, name: str, version: str = "1.0.0") -> SkillEntry:
+        """Ensure a built-in system skill exists in the registry."""
+        entry = self._skills.get(name)
+        if entry is not None:
+            return entry
+        entry = SkillEntry(
+            name=name,
+            version=version,
+            enabled=True,
+            ownership=SkillOwnership.SYSTEM,
+        )
+        self._skills[name] = entry
+        self._save()
+        return entry
+
     def uninstall_skill(self, name: str) -> None:
         """Remove a skill from the registry.
 

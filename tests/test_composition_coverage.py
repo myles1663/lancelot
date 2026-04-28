@@ -493,7 +493,20 @@ def _install_boot_success_modules(monkeypatch):
             sampling_rate_t0_t1=1.0,
         ),
     )
-    monkeypatch.setitem(sys.modules, "observability.config", _module(load_config=lambda: obs_config))
+    monkeypatch.setitem(
+        sys.modules,
+        "observability.config",
+        _module(
+            load_config=lambda: obs_config,
+            describe_otel_export_status=lambda *_args, **_kwargs: {
+                "state": "active",
+                "spans_exported": True,
+                "export_destination": "http://otel.invalid",
+                "message": "OTel export is active",
+                "operator_action": None,
+            },
+        ),
+    )
     monkeypatch.setitem(sys.modules, "observability.otel_provider", _module(init_otel=lambda **_: True))
     monkeypatch.setitem(sys.modules, "observability.receipt_bridge", _module(configure_bridge=remember("configure_bridge")))
     monkeypatch.setitem(sys.modules, "observability.webhook_engine", _module(init_webhook_engine=remember("init_webhook_engine")))
@@ -653,11 +666,24 @@ async def test_boot_composition_root_wires_optional_success_paths(monkeypatch):
         def _sanitize_for_telegram(self, content):
             return content
 
+        def sanitize_for_telegram(self, content):
+            return self._sanitize_for_telegram(content)
+
         def _on_actioncard_event(self, *_):
             pass
 
+        def handle_actioncard_event(self, *args):
+            return self._on_actioncard_event(*args)
+
         def _on_actioncard_resolved_event(self, *_):
             pass
+
+        def handle_actioncard_resolved_event(self, *args):
+            return self._on_actioncard_resolved_event(*args)
+
+        def attach_actioncard_runtime(self, *, resolver=None, store=None):
+            self._action_card_resolver = resolver
+            self._action_card_store = store
 
     telegram_bot = TelegramBot()
 
@@ -761,6 +787,9 @@ class _FakeToolLoopSelf:
     def _build_openai_tool_declarations(self):
         return []
 
+    def build_openai_tool_declarations(self):
+        return self._build_openai_tool_declarations()
+
     def _build_system_instruction(self):
         return "system"
 
@@ -797,8 +826,17 @@ class _FakeToolLoopSelf:
     def _agentic_generate(self, *_, **__):
         return "flagship-fallback"
 
+    def agentic_generate(self, *args, **kwargs):
+        return self._agentic_generate(*args, **kwargs)
+
     def _format_tool_receipts(self, receipts, note="", error=None):
         return f"{note}:{len(receipts)}:{error or ''}"
+
+    def format_tool_receipts(self, receipts, note="", error=None):
+        return self._format_tool_receipts(receipts, note=note, error=error)
+
+    def set_last_tool_receipts(self, receipts):
+        self._last_tool_receipts = receipts
 
     def _strip_failure_narration(self, text):
         return text
@@ -806,8 +844,14 @@ class _FakeToolLoopSelf:
     def _classify_tool_call_safety(self, *_):
         return "auto"
 
+    def classify_tool_call_safety(self, *args):
+        return self._classify_tool_call_safety(*args)
+
     def _record_governance_event(self, *args):
         self.governance_events.append(args)
+
+    def record_governance_event(self, *args):
+        return self._record_governance_event(*args)
 
     def _is_narration_without_content(self, *_):
         return False
@@ -818,8 +862,14 @@ class _FakeToolLoopSelf:
     def _get_trust_summary(self, *_):
         return "trust summary"
 
+    def get_trust_summary(self, *args):
+        return self._get_trust_summary(*args)
+
     def _suggest_alternatives(self, *_):
         return ["alternative"]
+
+    def suggest_alternatives(self, *args):
+        return self._suggest_alternatives(*args)
 
 
 def test_agentic_generate_returns_text_when_model_does_not_call_tools():

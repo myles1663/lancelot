@@ -29,10 +29,10 @@ class _Runtime:
             )
         )
 
-    def _classify_tool_call_safety(self, *_):
+    def classify_tool_call_safety(self, *_):
         return "auto"
 
-    def _record_governance_event(self, *args):
+    def record_governance_event(self, *args):
         self.governance_events.append(args)
 
 

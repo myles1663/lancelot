@@ -378,6 +378,76 @@ FLAG_META = {
     },
 }
 
+FLAG_META.update({
+    "FEATURE_GOOGLE_OAUTH": {
+        "description": "Google OAuth support for Gmail and Calendar connectors using Authorization Code plus PKCE.",
+        "category": "Authentication",
+        "requires": ["FEATURE_CONNECTORS"],
+        "conflicts": [],
+        "warning": "Requires a configured Google OAuth client and local callback routing. Disable when Google connectors are not in use.",
+    },
+    "FEATURE_TOOL_FLOW_STREAMING": {
+        "description": "Streams tool and governance progress events to operator-facing clients while a Command Center run is active.",
+        "category": "Runtime",
+        "requires": ["FEATURE_AGENTIC_LOOP"],
+        "conflicts": [],
+        "warning": "Adds live event traffic for each governed run. Keep enabled for operator visibility during long-running work.",
+    },
+    "FEATURE_ACTION_CARDS": {
+        "description": "Channel-neutral approval and action cards used by War Room and messaging surfaces for governed decisions.",
+        "category": "Governance",
+        "requires": ["FEATURE_RISK_TIERED_GOVERNANCE"],
+        "conflicts": [],
+        "warning": "Disabling removes interactive approval cards; governed actions may fall back to text-only approval flows.",
+    },
+    "FEATURE_OBSERVABILITY": {
+        "description": "Observability subsystem for runtime metrics, health surfaces, receipt bridge signals, and optional OpenTelemetry export.",
+        "category": "Operations",
+        "requires": [],
+        "conflicts": [],
+        "warning": "When disabled, local health endpoints remain available but external telemetry export and observability panels may show limited data.",
+    },
+    "FEATURE_TIME_TRAVEL": {
+        "description": "Time-travel debugging subsystem for inspecting historical runtime state and governance events.",
+        "category": "Operations",
+        "requires": ["FEATURE_BATCH_RECEIPTS"],
+        "conflicts": [],
+        "warning": "Stores additional diagnostic state. Disable in minimal deployments that do not need replay/debug inspection.",
+    },
+    "FEATURE_A2A": {
+        "description": "Agent-to-Agent protocol support for signed cross-instance handoffs and coordination.",
+        "category": "Federation",
+        "requires": ["FEATURE_FEDERATION"],
+        "conflicts": [],
+        "warning": "Enables A2A endpoints and peer-facing coordination paths. Keep federation keys and allowlists configured before customer use.",
+    },
+    "FEATURE_INCIDENT_RESPONSE": {
+        "description": "Incident response playbook engine for governed triage, containment, and operator notification workflows.",
+        "category": "Operations",
+        "requires": ["FEATURE_ACTION_CARDS"],
+        "conflicts": [],
+        "warning": "Playbooks can trigger operator-facing containment workflows. Review playbook configuration before enabling in production.",
+    },
+})
+
+_PUBLIC_TEXT_REPLACEMENTS = {
+    "\u00e2\u0080\u0094": "-",
+    "\u00e2\u20ac\u201d": "-",
+    "\u00e2\u0080\u0093": "-",
+    "\u00e2\u20ac\u201c": "-",
+    "\u00e2\u0086\u0092": "->",
+    "\u00e2\u2020\u2019": "->",
+    "\u00e2\u0080\u0099": "'",
+    "\u00e2\u20ac\u2122": "'",
+}
+
+
+def _public_text(value: str) -> str:
+    text = str(value or "")
+    for bad, replacement in _PUBLIC_TEXT_REPLACEMENTS.items():
+        text = text.replace(bad, replacement)
+    return text
+
 
 @router.get("")
 async def get_flags():
@@ -394,16 +464,16 @@ async def get_flags():
                     entry = {
                         "enabled": val,
                         "restart_required": attr in ff.RESTART_REQUIRED_FLAGS,
-                        "description": meta.get("description", ""),
-                        "category": meta.get("category", "Other"),
+                        "description": _public_text(meta.get("description", "")),
+                        "category": _public_text(meta.get("category", "Other")),
                         "requires": meta.get("requires", []),
                         "conflicts": meta.get("conflicts", []),
-                        "warning": meta.get("warning", ""),
+                        "warning": _public_text(meta.get("warning", "")),
                     }
                     if meta.get("has_editor"):
                         entry["has_editor"] = meta["has_editor"]
                     if meta.get("confirm_enable"):
-                        entry["confirm_enable"] = meta["confirm_enable"]
+                        entry["confirm_enable"] = _public_text(meta["confirm_enable"])
                     if meta.get("hidden"):
                         entry["hidden"] = True
                     flags[attr] = entry

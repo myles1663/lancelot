@@ -34,6 +34,11 @@ def init_receipts_api(data_dir: str) -> None:
         logger.warning("Receipts API init failed: %s", exc)
 
 
+def get_receipt_service_instance():
+    """Return the initialized receipt service, or None before API startup."""
+    return _receipt_service
+
+
 def _safe_error(status_code: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": message, "status": status_code})
 

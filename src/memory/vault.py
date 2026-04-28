@@ -36,15 +36,15 @@ class SecretVault:
 
         # Priority 2: Existing key file
         if os.path.exists(self.key_file):
-            logger.warning(
-                "Loading vault key from file. Set VAULT_ENCRYPTION_KEY env var for production use."
-            )
+            logger.info("Loading vault key from existing local key file: %s", self.key_file)
             with open(self.key_file, "rb") as f:
                 return f.read()
 
         # Priority 3: Generate new key
         logger.warning(
-            "Generating new vault key and saving to file. Set VAULT_ENCRYPTION_KEY env var for production use."
+            "Generating new vault key file at %s. Configure VAULT_ENCRYPTION_KEY before "
+            "production if centralized key management is required.",
+            self.key_file,
         )
         key = Fernet.generate_key()
         os.makedirs(self.data_dir, exist_ok=True)

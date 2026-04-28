@@ -10,19 +10,19 @@ from orchestrator_routing import (
 
 
 def test_is_simple_for_local_routes_status_to_local():
-    runtime = SimpleNamespace(_is_continuation=lambda _prompt: False)
+    runtime = SimpleNamespace(is_continuation=lambda _prompt: False)
 
     assert is_simple_for_local(runtime, "show current health status") is True
 
 
 def test_is_simple_for_local_keeps_continuations_on_frontier():
-    runtime = SimpleNamespace(_is_continuation=lambda _prompt: True)
+    runtime = SimpleNamespace(is_continuation=lambda _prompt: True)
 
     assert is_simple_for_local(runtime, "go for it") is False
 
 
 def test_is_simple_for_local_keeps_complex_requests_on_frontier():
-    runtime = SimpleNamespace(_is_continuation=lambda _prompt: False)
+    runtime = SimpleNamespace(is_continuation=lambda _prompt: False)
 
     assert is_simple_for_local(runtime, "review the architecture and recommend a plan") is False
 

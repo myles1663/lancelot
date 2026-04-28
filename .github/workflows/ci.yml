@@ -54,6 +54,10 @@ jobs:
             tests/test_kill_switch_contract.py \
             tests/test_feature_f1_f8.py::TestHealthCheckEnhanced \
             tests/test_feature_f1_f8.py::TestReadinessEndpoint \
+            tests/test_gateway_health.py \
+            tests/observability/test_api.py \
+            tests/observability/test_receipt_bridge.py \
+            tests/observability/test_otel_provider.py \
             tests/test_chat_runs.py::test_local_model_health_summary_accepts_ready_role_lane \
             tests/test_chat_runs.py::test_fast_runtime_status_command_formats_health_snapshot \
             tests/test_chat_runs.py::test_chat_run_status_classifier_identifies_operator_blocking \
@@ -68,8 +72,10 @@ jobs:
             tests/test_chat_runs.py::test_chat_run_cancel_endpoint_marks_run_cancelled \
             tests/test_chat_runs.py::test_chat_run_retry_endpoint_queues_new_run \
             tests/test_chat_runs.py::test_chat_run_retry_endpoint_queues_blocked_run \
-            tests/test_gateway_control_routes.py \
-            tests/test_gateway_live_routes.py \
+            tests/test_boot_environment.py \
+            tests/test_subsystem_runtime_contract.py \
+            tests/test_update_checker.py \
+            tests/test_flagship_update_network_guardrails.py \
             tests/test_token_url_hardening.py::test_live_websocket_rejects_query_param_tokens \
             tests/test_orchestrator_approval.py \
             tests/test_orchestrator_context.py \
@@ -88,6 +94,7 @@ jobs:
             tests/test_tool_loop_results.py \
             tests/test_tool_loop_structured.py \
             tests/test_tool_loop_local.py \
+            tests/test_composition_coverage.py::test_boot_composition_root_wires_optional_success_paths \
             tests/test_composition_coverage.py::test_agentic_generate_blocks_escalated_tool_without_write_permission \
             tests/test_composition_coverage.py::test_agentic_generate_groups_multiple_escalated_tool_calls \
             tests/test_composition_coverage.py::test_agentic_generate_rejects_missing_tool_inputs_before_approval

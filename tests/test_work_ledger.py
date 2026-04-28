@@ -129,6 +129,30 @@ def test_work_ledger_context_block_prefers_current_quest_then_session(tmp_path):
         store.close()
 
 
+def test_work_ledger_lists_and_renders_items_for_same_operator_across_sessions(tmp_path):
+    store = WorkLedgerStore(str(tmp_path / "work.sqlite"))
+    try:
+        store.upsert_work(
+            quest_id="quest-1",
+            objective="work from prior browser session",
+            session_id="old-session",
+            operator_id="op-1",
+            status="active",
+            phase="execution",
+            next_action="Continue the governed run",
+        )
+
+        assert store.list_work(session_id="new-session") == []
+        operator_items = store.list_work(session_id="new-session", operator_id="op-1")
+        assert [item.quest_id for item in operator_items] == ["quest-1"]
+
+        block = store.render_context_block(session_id="new-session", operator_id="op-1")
+        assert "work from prior browser session" in block
+        assert "Continue the governed run" in block
+    finally:
+        store.close()
+
+
 def test_work_ledger_checkpoint_dedupes_within_policy_window(tmp_path):
     store = WorkLedgerStore(str(tmp_path / "work.sqlite"))
     try:

@@ -1,9 +1,9 @@
 /**
  * UAB Permissions - daemon-local action safety model.
  *
- * Keep this taxonomy aligned with src/tools/providers/uab_bridge.py. The Python
- * bridge is the governance-facing classifier; this layer provides the daemon's
- * local confirmation and audit guardrails.
+ * Keep this taxonomy aligned with docs/risk-terminology.md and the Python
+ * bridge. The Python bridge is the governance-facing classifier; this layer
+ * provides the daemon's local confirmation and audit guardrails.
  */
 
 import type { ActionType, DetectedApp } from './types.js';
@@ -38,6 +38,15 @@ const MODIFYING_ACTIONS = new Set(ACTION_RISK_MANIFEST.mutating);
 const SAFE_ACTIONS = new Set(ACTION_RISK_MANIFEST.read_only);
 
 export type RiskLevel = 'safe' | 'moderate' | 'destructive';
+
+export const RISK_TERMINOLOGY: Record<RiskLevel, {
+  toolFabric: 'low' | 'medium' | 'high';
+  governance: 'T0/T1' | 'T1/T2' | 'T3';
+}> = {
+  safe: { toolFabric: 'low', governance: 'T0/T1' },
+  moderate: { toolFabric: 'medium', governance: 'T1/T2' },
+  destructive: { toolFabric: 'high', governance: 'T3' },
+};
 
 export interface PermissionCheck {
   allowed: boolean;

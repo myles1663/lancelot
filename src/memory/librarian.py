@@ -5,8 +5,7 @@ import datetime
 import logging
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-from google import genai
-from receipts import create_receipt, get_receipt_service, ActionType, ReceiptStatus, CognitionTier
+from receipts import create_receipt, get_receipt_service, ActionType, CognitionTier
 
 
 logger = logging.getLogger(__name__)
@@ -228,18 +227,9 @@ class Librarian:
         self.action_handler = FileAction(receipt_service=self.receipt_service)
         self.process_queue = []
         self.observer = Observer()
-        self.client = None
-        self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-        self._init_gemini()
-        
+
         # Ignored paths to prevent loops
         self.ignored_dirs = [".trash", "logs", "chroma_db", "artifacts"]
-
-    def _init_gemini(self):
-        api_key = os.getenv("GEMINI_API_KEY")
-        if api_key:
-            self.client = genai.Client(api_key=api_key)
-            self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
     def start_watching(self):
         """Starts the watchdog observer."""
@@ -256,7 +246,7 @@ class Librarian:
         return False
 
     def process_file(self, file_path):
-        """Analyzes and organizes a single file."""
+        """Stages a local file for operator review."""
         if self._is_ignored(file_path):
             return
 
@@ -266,73 +256,35 @@ class Librarian:
 
         logger.info("Librarian processing: %s", filename)
         
-        # Create Receipt for Analysis
+        # Record deterministic local intake without sending file content to a provider.
         start_time = __import__("time").time()
         receipt = create_receipt(
-            ActionType.LLM_CALL, # It involves LLM usually
-            "analyze_file",
+            ActionType.FILE_OP,
+            "stage_file_for_review",
             {"filename": filename, "path": file_path},
-            tier=CognitionTier.CLASSIFICATION
+            tier=CognitionTier.DETERMINISTIC
         )
         self.receipt_service.create(receipt)
-        
-        # 1. Analyze Content
+
         try:
             with open(file_path, "r", errors='ignore') as f:
-                content = f.read(2000) # Read first 2k chars
-            
-            # Simple simulation of analysis success for receipt
-            # Future semantic tagging can use an LLM here.
-            
+                content = f.read(2000)
+
             duration = int((__import__("time").time() - start_time) * 1000)
             self.receipt_service.update(receipt.complete(
-                {"status": "analyzed", "preview_len": len(content)}, 
+                {"status": "staged", "preview_len": len(content)},
                 duration
             ))
-                
+
         except Exception as e:
-            # Not raising here to keep process alive, but failing receipt
             duration = int((__import__("time").time() - start_time) * 1000)
             self.receipt_service.update(receipt.fail(str(e), duration))
             logger.warning("Error reading file %s: %s", filename, e)
             return
 
-        if not self.client:
-            logger.info("Gemini not ready, skipping librarian tag for %s", filename)
-            return
-
-        try:
-            prompt = (
-                f"Analyze this file content and provide: 1. A 1-sentence summary. "
-                f"2. A Category (one of: Documents, Images, Code, Data, Other). "
-                f"Format: Summary: ... | Category: ...\n\nContent:\n{content}"
-            )
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-            )
-            text = response.text.strip()
-            
-            # Parse
-            summary = text.split("|")[0].replace("Summary:", "").strip()
-            category = "Other"
-            if "Category:" in text:
-                category = text.split("Category:")[1].strip()
-                # Clean up category
-                for valid in ["Documents", "Images", "Code", "Data"]:
-                    if valid in category:
-                        category = valid
-                        break
-
-            # 2. Update Memory
-            self._update_memory_summary(filename, summary, category)
-            
-            # 3. Organize
-            dst_folder = os.path.join(self.data_dir, category)
-            self.action_handler.safe_move(file_path, dst_folder, f"Organized into {category} based on content analysis.")
-            
-        except Exception as e:
-            logger.warning("Error processing file with Gemini for %s: %s", filename, e)
+        self._update_memory_summary(filename, "Queued for operator review.", "Unsorted")
+        dst_folder = os.path.join(self.data_dir, "Unsorted")
+        self.action_handler.safe_move(file_path, dst_folder, "Staged for operator review without model classification.")
 
     def _update_memory_summary(self, filename, summary, category):
         summary_path = os.path.join(self.data_dir, "MEMORY_SUMMARY.md")

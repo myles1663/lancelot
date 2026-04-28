@@ -38,7 +38,7 @@ def _fallback_to_flagship(
     allow_writes: bool,
     context_str: str | None,
 ) -> str:
-    return runtime._agentic_generate(
+    return runtime.agentic_generate(
         prompt=prompt,
         system_instruction=system_instruction,
         allow_writes=allow_writes,
@@ -269,7 +269,7 @@ def _check_local_sentry(
     inputs: dict[str, Any],
     allow_writes: bool,
 ) -> tuple[str, str | None, bool]:
-    safety = runtime._classify_tool_call_safety(skill_name, inputs)
+    safety = runtime.classify_tool_call_safety(skill_name, inputs)
     sentry_req_id = None
     sentry_blocked = False
 
@@ -317,8 +317,8 @@ def _local_approval_result(
             action_detail=str(inputs)[:200],
             blocked_reason="Requires Commander approval",
             permission_state="PENDING" if sentry_req_id else "DENIED",
-            trust_record_summary=runtime._get_trust_summary(skill_name, inputs),
-            alternatives=runtime._suggest_alternatives(skill_name, inputs),
+            trust_record_summary=runtime.get_trust_summary(skill_name, inputs),
+            alternatives=runtime.suggest_alternatives(skill_name, inputs),
             resolution_hint="Commander can approve in War Room > Governance Dashboard",
             request_id=sentry_req_id or "",
         )
@@ -471,11 +471,11 @@ def local_agentic_generate(
             context_str=context_str,
         )
 
-    tools = runtime._build_openai_tool_declarations()
+    tools = runtime.build_openai_tool_declarations()
     messages = _initial_local_messages(runtime, prompt, context_str)
 
     tool_receipts = []
-    runtime._last_tool_receipts = tool_receipts
+    runtime.set_last_tool_receipts(tool_receipts)
     total_est_tokens = 0
     quest_id = getattr(runtime, "_current_quest_id", None) or ""
     channel = getattr(runtime, "_current_channel", "api")
@@ -490,6 +490,18 @@ def local_agentic_generate(
         )
 
         try:
+            emitter = getattr(runtime, "emit_chat_progress", None)
+            if not callable(emitter):
+                emitter = getattr(runtime, "_emit_chat_progress", None)
+            if callable(emitter):
+                emitter(
+                    "local_model_call",
+                    f"Waiting for local utility model response (timeout: {local_model_timeout:g}s)",
+                    model=local_model_label,
+                    wait_reason="local_model_call",
+                    iteration=iteration + 1,
+                    timeout_s=local_model_timeout,
+                )
             result = local_model.chat_with_tools(
                 messages=messages,
                 tools=tools,
@@ -507,7 +519,7 @@ def local_agentic_generate(
                 },
             )
             if tool_receipts:
-                return runtime._format_tool_receipts(
+                return runtime.format_tool_receipts(
                     tool_receipts,
                     note=f"Stopped after local planner error: {exc}. Results so far:",
                 )
@@ -644,7 +656,7 @@ def local_agentic_generate(
         "local_agentic_max_iterations_reached",
         extra={"max_iterations": MAX_LOCAL_ITERATIONS},
     )
-    return runtime._format_tool_receipts(
+    return runtime.format_tool_receipts(
         tool_receipts,
         note="Reached maximum local tool call limit. Here's what I found:",
     )

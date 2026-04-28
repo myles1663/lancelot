@@ -1,335 +1,30 @@
+"""State machine for first-run provider, comms, and auth setup."""
+
 import os
 import json
 import secrets
 import logging
-from pathlib import Path
 
 from src.core.onboarding_snapshot import OnboardingSnapshot, OnboardingState
 from src.core import recovery_commands
 from src.core.outbound_http import OutboundNetworkError, assert_url_allowed
 from src.core.local_utility_setup import handle_local_utility_setup
+from src.ui.onboarding_catalog import COMMS_CONNECTORS, PROVIDERS, _DEFAULT_FEATURE_FLAGS
+from src.ui.onboarding_provider_detection import (
+    has_codex_cli_auth as _detect_codex_cli_auth,
+    load_persisted_provider as _detect_persisted_provider,
+)
 
 
 logger = logging.getLogger(__name__)
 
 
 def _has_codex_cli_auth() -> bool:
-    """Return True when mounted Codex CLI auth is available during onboarding."""
-    try:
-        from src.core.providers.codex_cli_client import has_codex_cli_auth
-        return has_codex_cli_auth()
-    except Exception as exc:
-        logger.warning("Onboarding failed to inspect Codex CLI auth: %s", exc)
-        return False
+    return _detect_codex_cli_auth()
 
 
 def _load_persisted_provider() -> str:
-    """Return the durable active provider when provider persistence is available."""
-    candidates = []
-    configured_data_dir = os.getenv("LANCELOT_DATA_DIR", "").strip()
-    if configured_data_dir:
-        candidates.append(Path(configured_data_dir) / "provider_config.json")
-
-    candidates.append(Path("/home/lancelot/data/provider_config.json"))
-    candidates.append(Path("lancelot_data/provider_config.json"))
-
-    seen = set()
-    for path in candidates:
-        normalized = str(path)
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        try:
-            if path.exists():
-                data = json.loads(path.read_text(encoding="utf-8"))
-                provider = (data.get("active_provider") or "").strip()
-                if provider:
-                    return provider
-        except Exception as exc:
-            logger.warning("Onboarding failed to read persisted provider from %s: %s", path, exc)
-
-    return ""
-
-# ---------------------------------------------------------------------------
-# Provider configuration mirrors installer/src/constants.mjs
-# ---------------------------------------------------------------------------
-PROVIDERS = {
-    "gemini": {
-        "name": "Google Gemini",
-        "env_var": "GEMINI_API_KEY",
-        "env_provider": "gemini",
-        "prefix": "AIza",
-        "signup": "https://aistudio.google.com/apikey",
-        "recommended": True,
-        "description": "Generous free tier, fast models",
-    },
-    "openai": {
-        "name": "OpenAI",
-        "env_var": "OPENAI_API_KEY",
-        "env_provider": "openai",
-        "prefix": "sk-",
-        "signup": "https://platform.openai.com/api-keys",
-        "description": "GPT-4o, pay-as-you-go",
-    },
-    "anthropic": {
-        "name": "Anthropic",
-        "env_var": "ANTHROPIC_API_KEY",
-        "env_provider": "anthropic",
-        "prefix": "sk-ant-",
-        "signup": "https://console.anthropic.com/",
-        "description": "Claude, pay-as-you-go",
-    },
-    "xai": {
-        "name": "xAI (Grok)",
-        "env_var": "XAI_API_KEY",
-        "env_provider": "xai",
-        "prefix": "xai-",
-        "signup": "https://console.x.ai/",
-        "description": "Grok models, pay-as-you-go",
-    },
-    "nvidia": {
-        "name": "NVIDIA Nemotron",
-        "env_var": "NVIDIA_API_KEY",
-        "env_provider": "nvidia",
-        "prefix": "nvapi-",
-        "signup": "https://build.nvidia.com/",
-        "description": "Nemotron models via NIM, free tier available",
-    },
-    "openai-codex": {
-        "name": "OpenAI (Codex/Pro)",
-        "env_var": None,
-        "env_provider": "openai-codex",
-        "prefix": None,
-        "signup": "https://chatgpt.com/",
-        "description": "ChatGPT Plus/Pro subscription via OAuth — flat rate, no per-token billing",
-        "oauth_only": True,
-    },
-}
-
-# ---------------------------------------------------------------------------
-# Comms connector definitions for supported messaging platforms
-# ---------------------------------------------------------------------------
-COMMS_CONNECTORS = {
-    "telegram": {
-        "name": "Telegram",
-        "description": "Simple setup via BotFather",
-        "recommended": True,
-        "setup_type": "custom",  # Uses existing detailed flow
-    },
-    "google_chat": {
-        "name": "Google Chat",
-        "description": "Requires Google Cloud project",
-        "setup_type": "custom",  # Uses existing ADC flow
-    },
-    "slack": {
-        "name": "Slack",
-        "description": "Slack workspace integration",
-        "setup_type": "guided",
-        "steps": [
-            {
-                "key": "slack_bot_token",
-                "prompt": (
-                    "**Slack Setup**\n\n"
-                    "1. Go to [Slack API Apps](https://api.slack.com/apps) and create a new app\n"
-                    "2. Under **OAuth & Permissions**, add these scopes:\n"
-                    "   `channels:read`, `channels:history`, `chat:write`, `reactions:write`, `files:write`\n"
-                    "3. Install the app to your workspace\n"
-                    "4. Copy the **Bot User OAuth Token** (starts with `xoxb-`)\n\n"
-                    "Paste your Bot Token below:"
-                ),
-                "env_var": "SLACK_BOT_TOKEN",
-                "vault_key": "slack.bot_token",
-                "prefix": "xoxb-",
-            },
-            {
-                "key": "slack_channel",
-                "prompt": (
-                    "Token accepted.\n\n"
-                    "Enter the **Channel ID** where Lancelot should listen.\n"
-                    "(Right-click a channel > View channel details > copy the Channel ID at the bottom)"
-                ),
-                "env_var": "SLACK_CHANNEL_ID",
-                "vault_key": None,
-            },
-        ],
-    },
-    "discord": {
-        "name": "Discord",
-        "description": "Discord server integration",
-        "setup_type": "guided",
-        "steps": [
-            {
-                "key": "discord_bot_token",
-                "prompt": (
-                    "**Discord Setup**\n\n"
-                    "1. Go to [Discord Developer Portal](https://discord.com/developers/applications)\n"
-                    "2. Create a **New Application**\n"
-                    "3. Go to **Bot** tab > click **Add Bot**\n"
-                    "4. Under **Token**, click **Copy**\n"
-                    "5. Under **Privileged Gateway Intents**, enable **Message Content Intent**\n"
-                    "6. Use the OAuth2 URL Generator to invite the bot to your server\n"
-                    "   (scopes: `bot`; permissions: `Send Messages`, `Read Message History`)\n\n"
-                    "Paste your Bot Token below:"
-                ),
-                "env_var": "DISCORD_BOT_TOKEN",
-                "vault_key": "discord.bot_token",
-            },
-            {
-                "key": "discord_channel_id",
-                "prompt": (
-                    "Token accepted.\n\n"
-                    "Enter the **Channel ID** where Lancelot should operate.\n"
-                    "(Enable Developer Mode in Discord settings, then right-click channel > Copy Channel ID)"
-                ),
-                "env_var": "DISCORD_CHANNEL_ID",
-                "vault_key": None,
-            },
-        ],
-    },
-    "teams": {
-        "name": "Microsoft Teams",
-        "description": "Teams channel integration via Graph API",
-        "setup_type": "guided",
-        "steps": [
-            {
-                "key": "teams_token",
-                "prompt": (
-                    "**Microsoft Teams Setup**\n\n"
-                    "1. Register an app in [Azure Portal](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade)\n"
-                    "2. Add API permissions: `ChannelMessage.Send`, `Chat.ReadWrite`, `Team.ReadBasic.All`\n"
-                    "3. Create a client secret and generate an access token\n"
-                    "4. Copy the **Access Token**\n\n"
-                    "Paste your Microsoft Graph API access token below:"
-                ),
-                "env_var": "TEAMS_ACCESS_TOKEN",
-                "vault_key": "teams.graph_token",
-            },
-            {
-                "key": "teams_team_id",
-                "prompt": (
-                    "Token accepted.\n\n"
-                    "Enter your **Team ID**.\n"
-                    "(In Teams, click the three dots next to your team > Get link to team > extract the team ID from the URL)"
-                ),
-                "env_var": "TEAMS_TEAM_ID",
-                "vault_key": None,
-            },
-        ],
-    },
-    "whatsapp": {
-        "name": "WhatsApp Business",
-        "description": "WhatsApp via Meta Cloud API",
-        "setup_type": "guided",
-        "steps": [
-            {
-                "key": "whatsapp_token",
-                "prompt": (
-                    "**WhatsApp Business Setup**\n\n"
-                    "1. Go to [Meta for Developers](https://developers.facebook.com/apps/)\n"
-                    "2. Create a Business app with WhatsApp product\n"
-                    "3. In the WhatsApp section, get your **Permanent Access Token**\n"
-                    "   (temporary tokens expire in 24 hours)\n\n"
-                    "Paste your WhatsApp Access Token below:"
-                ),
-                "env_var": "WHATSAPP_ACCESS_TOKEN",
-                "vault_key": "whatsapp.access_token",
-            },
-            {
-                "key": "whatsapp_phone_id",
-                "prompt": (
-                    "Token accepted.\n\n"
-                    "Enter your **Phone Number ID**.\n"
-                    "(Found in your WhatsApp Business settings at Meta for Developers)"
-                ),
-                "env_var": "WHATSAPP_PHONE_NUMBER_ID",
-                "vault_key": "whatsapp.phone_number_id",
-            },
-        ],
-    },
-    "email": {
-        "name": "Email (SMTP)",
-        "description": "Email via SMTP/IMAP",
-        "setup_type": "guided",
-        "steps": [
-            {
-                "key": "smtp_host",
-                "prompt": (
-                    "**Email (SMTP) Setup**\n\n"
-                    "Enter your **SMTP Host** (e.g. `smtp.gmail.com`, `smtp.office365.com`):"
-                ),
-                "env_var": "SMTP_HOST",
-                "vault_key": "email.smtp_host",
-            },
-            {
-                "key": "smtp_port",
-                "prompt": "Enter your **SMTP Port** (usually `587` for TLS or `465` for SSL):",
-                "env_var": "SMTP_PORT",
-                "vault_key": "email.smtp_port",
-            },
-            {
-                "key": "smtp_username",
-                "prompt": "Enter your **SMTP Username** (usually your email address):",
-                "env_var": "SMTP_USERNAME",
-                "vault_key": "email.smtp_username",
-            },
-            {
-                "key": "smtp_password",
-                "prompt": (
-                    "Enter your **SMTP Password** or **App Password**.\n"
-                    "(For Gmail, use an [App Password](https://myaccount.google.com/apppasswords))"
-                ),
-                "env_var": "SMTP_PASSWORD",
-                "vault_key": "email.smtp_password",
-            },
-            {
-                "key": "smtp_from",
-                "prompt": "Enter the **From Address** (your email address):",
-                "env_var": "SMTP_FROM_ADDRESS",
-                "vault_key": "email.smtp_from_address",
-            },
-        ],
-    },
-    "sms": {
-        "name": "SMS (Twilio)",
-        "description": "SMS/MMS via Twilio",
-        "setup_type": "guided",
-        "steps": [
-            {
-                "key": "twilio_sid",
-                "prompt": (
-                    "**SMS (Twilio) Setup**\n\n"
-                    "1. Sign up at [Twilio Console](https://console.twilio.com/)\n"
-                    "2. Find your **Account SID** on the dashboard\n\n"
-                    "Paste your Account SID below:"
-                ),
-                "env_var": "TWILIO_ACCOUNT_SID",
-                "vault_key": "sms.account_sid",
-            },
-            {
-                "key": "twilio_token",
-                "prompt": "Enter your **Auth Token** (found next to Account SID on the Twilio dashboard):",
-                "env_var": "TWILIO_AUTH_TOKEN",
-                "vault_key": "sms.auth_token",
-            },
-            {
-                "key": "twilio_from",
-                "prompt": "Enter your **Twilio phone number** (e.g. `+15551234567`):",
-                "env_var": "TWILIO_FROM_NUMBER",
-                "vault_key": "sms.from_number",
-            },
-        ],
-    },
-}
-
-# Default feature flags to write during FINAL_CHECKS (matches installer)
-_DEFAULT_FEATURE_FLAGS = {
-    "FEATURE_SOUL": "true",
-    "FEATURE_SKILLS": "true",
-    "FEATURE_HEALTH_MONITOR": "true",
-    "FEATURE_SCHEDULER": "true",
-    "FEATURE_AGENTIC_LOOP": "true",
-    "FEATURE_LOCAL_AGENTIC": "true",
-}
+    return _detect_persisted_provider()
 
 
 class OnboardingOrchestrator:
@@ -344,9 +39,7 @@ class OnboardingOrchestrator:
         self.state = self._determine_state()
         self._sync_snapshot()
 
-    # ------------------------------------------------------------------
     # State management
-    # ------------------------------------------------------------------
 
     def _sync_snapshot(self):
         """Sync dynamically determined state to the snapshot file."""
@@ -508,9 +201,11 @@ class OnboardingOrchestrator:
 
         return "READY"
 
-    # ------------------------------------------------------------------
+    def determine_state(self):
+        """Return the current onboarding state using the public state-machine API."""
+        return self._determine_state()
+
     # Env file helpers
-    # ------------------------------------------------------------------
 
     def _get_env_value(self, key):
         """Read a value from the durable runtime configuration sources."""
@@ -591,11 +286,11 @@ class OnboardingOrchestrator:
         try:
             from src.connectors.vault import CredentialVault
 
-            config = CredentialVault._load_config("config/vault.yaml")
+            config = CredentialVault.load_config("config/vault.yaml")
             enc = config.get("encryption", {})
             key_env_var = enc.get("key_env_var", "LANCELOT_VAULT_KEY")
             docker_secret_name = enc.get("docker_secret", "lancelot_vault_key")
-            key, _origin = CredentialVault._resolve_key_with_origin(key_env_var, docker_secret_name)
+            key, _origin = CredentialVault.resolve_key_with_origin(key_env_var, docker_secret_name)
             return bool(key)
         except Exception as exc:
             logger.warning("Onboarding failed to inspect vault-key configuration: %s", exc)
@@ -626,28 +321,26 @@ class OnboardingOrchestrator:
         if not to_write:
             return
 
+        update_process_env = os.path.abspath(self.env_file) == os.path.abspath(".env")
         try:
             with open(self.env_file, "a") as f:
                 if section_comment:
                     f.write(f"\n# {section_comment}\n")
                 for key, val in to_write.items():
                     f.write(f"{key}={val}\n")
-                    os.environ[key] = val
+                    if update_process_env:
+                        os.environ[key] = val
         except Exception as exc:
             logger.warning("Onboarding failed to write .env values: %s", exc)
 
-    # ------------------------------------------------------------------
     # Cooldown
-    # ------------------------------------------------------------------
 
     def _enter_cooldown(self, seconds: int = 300, reason: str = "Too many failures"):
         """Enter time-based cooldown (v4: replaces permanent LOCKDOWN)."""
         self.snapshot.enter_cooldown(seconds, reason)
         self.state = "COOLDOWN"
 
-    # ------------------------------------------------------------------
     # WELCOME state
-    # ------------------------------------------------------------------
 
     def _bond_identity(self, user: str) -> str:
         """Creates USER.md and bonds identity."""
@@ -661,9 +354,7 @@ class OnboardingOrchestrator:
         except Exception as e:
             return f"Error bonding identity: {e}"
 
-    # ------------------------------------------------------------------
     # FLAGSHIP_SELECTION state
-    # ------------------------------------------------------------------
 
     def _flagship_selection_prompt(self) -> str:
         """Render the provider selection menu."""
@@ -727,9 +418,7 @@ class OnboardingOrchestrator:
 
         return msg
 
-    # ------------------------------------------------------------------
     # HANDSHAKE (CREDENTIALS_CAPTURE) state
-    # ------------------------------------------------------------------
 
     def _handle_auth_options(self, text: str) -> str:
         """Handles HANDSHAKE state — user provides API key."""
@@ -807,9 +496,7 @@ class OnboardingOrchestrator:
         except Exception as e:
             return f"Error saving API Key: {e}"
 
-    # ------------------------------------------------------------------
     # Anthropic OAuth browser flow
-    # ------------------------------------------------------------------
 
     def _initiate_anthropic_oauth(self) -> str:
         """Start Anthropic OAuth PKCE flow — generate auth URL for browser."""
@@ -873,9 +560,7 @@ class OnboardingOrchestrator:
         return ("Please type **'done'** after completing browser authorization, "
                 "or **'cancel'** to use an API key instead.")
 
-    # ------------------------------------------------------------------
     # OpenAI Codex OAuth flow
-    # ------------------------------------------------------------------
 
     def _complete_openai_codex_cli_setup(self) -> str:
         """Persist provider selection when mounted Codex CLI auth is already available."""
@@ -971,105 +656,17 @@ class OnboardingOrchestrator:
                 "or **'cancel'** to choose a different provider.")
 
     def _validate_api_key_live(self, provider: str, key: str) -> dict:
-        """Live HTTP probe to validate API key. Non-blocking on network errors."""
-        import requests
-        try:
-            if provider == "gemini":
-                url = assert_url_allowed(
-                    f"https://generativelanguage.googleapis.com/v1beta/models?key={key}",
-                    component="Onboarding Gemini API key validation",
-                )
-                r = requests.get(
-                    url,
-                    timeout=10,
-                )
-                if r.ok:
-                    return {"valid": True}
-                if r.status_code in (400, 403):
-                    return {"valid": False, "error": "Invalid API key — rejected by Google"}
-                return {"valid": False, "error": f"Unexpected response (HTTP {r.status_code})"}
+        """Validate provider credentials with the shared onboarding probe."""
+        from src.ui.onboarding_provider_validation import validate_api_key_live
 
-            elif provider == "openai":
-                url = assert_url_allowed(
-                    "https://api.openai.com/v1/models",
-                    component="Onboarding OpenAI API key validation",
-                )
-                r = requests.get(
-                    url,
-                    headers={"Authorization": f"Bearer {key}"},
-                    timeout=10,
-                )
-                if r.ok:
-                    return {"valid": True}
-                if r.status_code == 401:
-                    return {"valid": False, "error": "Invalid API key — rejected by OpenAI"}
-                return {"valid": False, "error": f"Unexpected response (HTTP {r.status_code})"}
+        return validate_api_key_live(
+            provider,
+            key,
+            url_validator=assert_url_allowed,
+            network_error_type=OutboundNetworkError,
+        )
 
-            elif provider == "anthropic":
-                url = assert_url_allowed(
-                    "https://api.anthropic.com/v1/messages",
-                    component="Onboarding Anthropic API key validation",
-                )
-                r = requests.post(
-                    url,
-                    headers={
-                        "x-api-key": key,
-                        "anthropic-version": "2023-06-01",
-                        "content-type": "application/json",
-                    },
-                    json={
-                        "model": "claude-3-5-haiku-latest",
-                        "max_tokens": 1,
-                        "messages": [{"role": "user", "content": "hi"}],
-                    },
-                    timeout=10,
-                )
-                if r.status_code == 401:
-                    return {"valid": False, "error": "Invalid API key — rejected by Anthropic"}
-                return {"valid": True}
-
-            elif provider == "xai":
-                url = assert_url_allowed(
-                    "https://api.x.ai/v1/models",
-                    component="Onboarding xAI API key validation",
-                )
-                r = requests.get(
-                    url,
-                    headers={"Authorization": f"Bearer {key}"},
-                    timeout=10,
-                )
-                if r.ok:
-                    return {"valid": True}
-                if r.status_code == 401:
-                    return {"valid": False, "error": "Invalid API key — rejected by xAI"}
-                return {"valid": False, "error": f"Unexpected response (HTTP {r.status_code})"}
-
-            elif provider == "nvidia":
-                url = assert_url_allowed(
-                    "https://integrate.api.nvidia.com/v1/models",
-                    component="Onboarding NVIDIA API key validation",
-                )
-                r = requests.get(
-                    url,
-                    headers={"Authorization": f"Bearer {key}"},
-                    timeout=10,
-                )
-                if r.ok:
-                    return {"valid": True}
-                if r.status_code == 401:
-                    return {"valid": False, "error": "Invalid API key — rejected by NVIDIA"}
-                return {"valid": False, "error": f"Unexpected response (HTTP {r.status_code})"}
-
-            return {"valid": False, "error": f"Unknown provider: {provider}"}
-
-        except OutboundNetworkError as exc:
-            return {"valid": False, "error": str(exc)}
-        except Exception as e:
-            return {"valid": True, "warning": f"Could not reach {provider} API to validate: {e}"}
-
-    # ------------------------------------------------------------------
     # PROVIDER_MODE_SELECTION state: SDK vs API
-    # ------------------------------------------------------------------
 
     def _provider_mode_prompt(self) -> str:
         """Render the SDK/API mode selection menu."""
@@ -1112,9 +709,7 @@ class OnboardingOrchestrator:
             "Proceeding to next setup step..."
         )
 
-    # ------------------------------------------------------------------
     # ADC / OAuth (Gemini only)
-    # ------------------------------------------------------------------
 
     def _verify_oauth_creds(self) -> str:
         """Checks for ADC file presence and provides complete setup walkthrough."""
@@ -1196,9 +791,7 @@ class OnboardingOrchestrator:
         """Mock calibration step."""
         pass
 
-    # ------------------------------------------------------------------
     # COMMS_SELECTION: all connectors
-    # ------------------------------------------------------------------
 
     def _comms_selection_prompt(self) -> str:
         """Render the comms selection menu for supported runtime backends."""
@@ -1279,9 +872,7 @@ class OnboardingOrchestrator:
 
         return "Invalid selection.\n\n" + self._comms_selection_prompt()
 
-    # ------------------------------------------------------------------
     # Guided connector setup (generic multi-step flow)
-    # ------------------------------------------------------------------
 
     def _handle_guided_setup(self, text: str) -> str:
         """Handles guided multi-step connector credential collection."""
@@ -1356,9 +947,7 @@ class OnboardingOrchestrator:
             + self._handle_final_checks()
         )
 
-    # ------------------------------------------------------------------
     # Google Chat scan/select (existing flow)
-    # ------------------------------------------------------------------
 
     def _handle_chat_scan(self, text: str) -> str:
         """Scans for Google Chat spaces."""
@@ -1423,9 +1012,7 @@ class OnboardingOrchestrator:
         except ValueError:
             return "Please enter a number."
 
-    # ------------------------------------------------------------------
     # Telegram comms setup (existing flow)
-    # ------------------------------------------------------------------
 
     def _handle_telegram_token(self, text: str) -> str:
         token = text.strip()
@@ -1440,9 +1027,7 @@ class OnboardingOrchestrator:
         self.temp_data["telegram_chat_id"] = chat_id
         return self._initiate_handshake("telegram")
 
-    # ------------------------------------------------------------------
     # Comms verification handshake (Telegram + Google Chat)
-    # ------------------------------------------------------------------
 
     def _initiate_handshake(self, provider: str) -> str:
         """Sends verification code via provider."""
@@ -1527,9 +1112,7 @@ class OnboardingOrchestrator:
                 return "Too many failed attempts. System in cooldown for 5 minutes."
             return "Verification Failed. Code does not match. Try again."
 
-    # ------------------------------------------------------------------
     # Auth model setup
-    # ------------------------------------------------------------------
 
     def _auth_model_prompt(self) -> str:
         return (
@@ -1674,9 +1257,7 @@ class OnboardingOrchestrator:
         self.temp_data["enterprise_auth_stage"] = "issuer"
         return self._handle_auth_model_selection("oidc")
 
-    # ------------------------------------------------------------------
     # FINAL_CHECKS state
-    # ------------------------------------------------------------------
 
     def _handle_final_checks(self) -> str:
         """Auto-generate missing config, display summary, advance to READY."""
@@ -1828,9 +1409,7 @@ class OnboardingOrchestrator:
         except Exception as exc:
             logger.warning("Onboarding failed to mark onboarding complete: %s", exc)
 
-    # ------------------------------------------------------------------
     # Main state machine
-    # ------------------------------------------------------------------
 
     def process(self, user: str, text: str) -> str:
         """Main state machine processor."""

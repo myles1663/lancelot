@@ -148,7 +148,7 @@ def _agentic_generate(
     tool_receipts = []
     total_est_tokens = 0
     # Expose receipts for task experience recording
-    self._last_tool_receipts = tool_receipts
+    self.set_last_tool_receipts(tool_receipts)
 
     # Emit quest_started for tool flow streaming
     _quest_id = getattr(self, "_current_quest_id", None) or ""

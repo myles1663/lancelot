@@ -23,9 +23,11 @@ from src.observability.receipt_bridge import (
 def reset_bridge_state():
     """Reset bridge module state before each test."""
     bridge_module._enabled = False
+    bridge_module._otel_enabled = False
     bridge_module._sampling_rate = 0.1
     yield
     bridge_module._enabled = False
+    bridge_module._otel_enabled = False
     bridge_module._sampling_rate = 0.1
 
 
@@ -52,12 +54,20 @@ class TestConfigureBridge:
     def test_enables_bridge(self):
         configure_bridge(enabled=True, sampling_rate=0.5)
         assert bridge_module._enabled is True
+        assert bridge_module._otel_enabled is True
         assert bridge_module._sampling_rate == 0.5
 
     def test_disables_bridge(self):
-        bridge_module._enabled = True
+        configure_bridge(enabled=True)
+        bridge_module._otel_enabled = True
         configure_bridge(enabled=False)
         assert bridge_module._enabled is False
+        assert bridge_module._otel_enabled is False
+
+    def test_can_enable_bridge_without_span_export(self):
+        configure_bridge(enabled=True, otel_enabled=False)
+        assert bridge_module._enabled is True
+        assert bridge_module._otel_enabled is False
 
     def test_clamps_sampling_rate_high(self):
         """Sampling rate above 1.0 is clamped to 1.0."""
@@ -92,7 +102,7 @@ class TestOnReceiptWrittenDisabled:
 class TestOnReceiptWrittenEnabled:
     def test_calls_span_creation_when_enabled(self):
         """When enabled, _export_span is called."""
-        bridge_module._enabled = True
+        configure_bridge(enabled=True)
         with patch.object(bridge_module, "_export_span") as mock_export, \
              patch.object(bridge_module, "_deliver_webhooks"):
             on_receipt_written(_sample_receipt())
@@ -100,7 +110,7 @@ class TestOnReceiptWrittenEnabled:
 
     def test_calls_metrics_update(self):
         """When enabled, metrics update is attempted."""
-        bridge_module._enabled = True
+        configure_bridge(enabled=True)
         with patch.object(bridge_module, "_export_span"), \
              patch.object(bridge_module, "_deliver_webhooks"), \
              patch("src.observability.receipt_bridge.update_metrics_from_receipt",
@@ -111,15 +121,24 @@ class TestOnReceiptWrittenEnabled:
 
     def test_calls_webhook_delivery(self):
         """When enabled, webhook delivery is attempted."""
-        bridge_module._enabled = True
+        configure_bridge(enabled=True)
         with patch.object(bridge_module, "_export_span"), \
              patch.object(bridge_module, "_deliver_webhooks") as mock_wh:
             on_receipt_written(_sample_receipt())
             mock_wh.assert_called_once()
 
+    def test_webhook_delivery_runs_when_span_export_disabled(self):
+        """Webhooks and incidents still run when OTel export is intentionally off."""
+        configure_bridge(enabled=True, otel_enabled=False)
+        with patch.object(bridge_module, "_export_span") as mock_export, \
+             patch.object(bridge_module, "_deliver_webhooks") as mock_wh:
+            on_receipt_written(_sample_receipt())
+            mock_export.assert_not_called()
+            mock_wh.assert_called_once()
+
     def test_non_throwing_on_export_error(self):
         """Span export errors are swallowed — never propagated."""
-        bridge_module._enabled = True
+        configure_bridge(enabled=True)
         with patch.object(bridge_module, "_export_span",
                           side_effect=RuntimeError("boom")), \
              patch.object(bridge_module, "_deliver_webhooks"):
@@ -128,7 +147,7 @@ class TestOnReceiptWrittenEnabled:
 
     def test_non_throwing_on_webhook_error(self):
         """Webhook delivery errors are swallowed."""
-        bridge_module._enabled = True
+        configure_bridge(enabled=True)
         with patch.object(bridge_module, "_export_span"), \
              patch.object(bridge_module, "_deliver_webhooks",
                           side_effect=RuntimeError("webhook boom")):
@@ -136,7 +155,7 @@ class TestOnReceiptWrittenEnabled:
 
     def test_handles_none_receipt(self):
         """None receipt should not crash the bridge."""
-        bridge_module._enabled = True
+        configure_bridge(enabled=True)
         # _export_span will be called with None; it will raise internally
         # but on_receipt_written must swallow it
         try:
@@ -146,7 +165,7 @@ class TestOnReceiptWrittenEnabled:
 
     def test_handles_malformed_receipt(self):
         """Malformed receipt (missing keys) should not crash."""
-        bridge_module._enabled = True
+        configure_bridge(enabled=True)
         try:
             on_receipt_written({"random_key": "random_value"})
         except Exception:
@@ -154,7 +173,7 @@ class TestOnReceiptWrittenEnabled:
 
     def test_multiple_rapid_calls(self):
         """Multiple rapid calls should not crash or corrupt state."""
-        bridge_module._enabled = True
+        configure_bridge(enabled=True)
         with patch.object(bridge_module, "_export_span"), \
              patch.object(bridge_module, "_deliver_webhooks"):
             for i in range(100):

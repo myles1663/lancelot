@@ -106,8 +106,76 @@ def mock_receipt_service(tmp_path):
         )
     conn.commit()
 
+    class MockReceipt:
+        def __init__(self, row):
+            self._payload = dict(row)
+
+        def to_dict(self):
+            return dict(self._payload)
+
+    def _query_receipts(
+        *,
+        limit=100,
+        offset=0,
+        action_type=None,
+        status=None,
+        quest_id=None,
+        operator_id=None,
+        risk_tier=None,
+        since=None,
+        until=None,
+    ):
+        sql = "SELECT * FROM receipts WHERE 1=1"
+        params = []
+        for clause, value in (
+            ("action_type = ?", action_type),
+            ("status = ?", status),
+            ("quest_id = ?", quest_id),
+            ("operator_id = ?", operator_id),
+            ("timestamp >= ?", since),
+            ("timestamp <= ?", until),
+        ):
+            if value:
+                sql += f" AND {clause}"
+                params.append(value)
+        if risk_tier is not None:
+            sql += " AND tier = ?"
+            params.append(risk_tier)
+        sql += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        return [MockReceipt(row) for row in conn.execute(sql, params).fetchall()]
+
+    def _aggregate_counts(*, group_by, since=None, until=None):
+        sql = f"SELECT {group_by} as group_key, COUNT(*) as count FROM receipts WHERE 1=1"
+        params = []
+        if since:
+            sql += " AND timestamp >= ?"
+            params.append(since)
+        if until:
+            sql += " AND timestamp <= ?"
+            params.append(until)
+        sql += f" GROUP BY {group_by} ORDER BY count DESC"
+        return [
+            {"key": row["group_key"], "count": row["count"]}
+            for row in conn.execute(sql, params).fetchall()
+        ]
+
+    def _list_action_outputs(*, action_type, since=None, until=None):
+        sql = "SELECT outputs FROM receipts WHERE action_type = ?"
+        params = [action_type]
+        if since:
+            sql += " AND timestamp >= ?"
+            params.append(since)
+        if until:
+            sql += " AND timestamp <= ?"
+            params.append(until)
+        rows = conn.execute(sql, params).fetchall()
+        return [json.loads(row["outputs"]) for row in rows]
+
     svc = MagicMock()
-    svc._get_connection.return_value = conn
+    svc.list.side_effect = _query_receipts
+    svc.aggregate_counts.side_effect = _aggregate_counts
+    svc.list_action_outputs.side_effect = _list_action_outputs
     svc.get.return_value = None  # Default: not found
     return svc
 

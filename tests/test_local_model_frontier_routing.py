@@ -21,9 +21,9 @@ def _make_orchestrator():
     orch.receipt_service = MagicMock()
     orch.soul = None
     orch.context_env = SimpleNamespace(get_context_string=lambda: "CTX")
-    orch._get_thinking_config = lambda: None
-    orch._route_model = lambda prompt: "gpt-4o"
-    orch._llm_call_with_retry = lambda fn: fn()
+    orch.get_thinking_config = lambda: None
+    orch.route_model = lambda prompt: "gpt-4o"
+    orch.llm_call_with_retry = lambda fn, max_retries=3, base_delay=1.0: fn()
     return orch
 
 

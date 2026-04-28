@@ -1,8 +1,8 @@
 /**
- * UAB Service — Singleton service managing the Universal App Bridge lifecycle.
+ * UAB Service - singleton service managing the Universal App Bridge lifecycle.
  *
- * Framework-agnostic: import this module from ClaudeClaw, Lancelot,
- * or any other AI agent runtime to get desktop app control.
+ * Framework-agnostic: import this module from any host runtime that needs
+ * desktop app control.
  *
  * Production hardening modules:
  *   - Connection Manager with health monitoring & auto-reconnect

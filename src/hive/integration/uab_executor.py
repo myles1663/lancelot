@@ -1,5 +1,5 @@
 """
-HIVE UAB Executor — translates subtask descriptions into real UAB actions.
+HIVE UAB Executor for governed desktop actions.
 
 Each sub-agent's action_executor.  For every subtask action:
 1. Connect to the target app via UABProvider
@@ -28,8 +28,6 @@ from src.hive.scoped_soul import (
 
 logger = logging.getLogger(__name__)
 
-# ── LLM Prompt for UAB Step Planning ─────────────────────────────────────────
-
 _STEP_PLANNER_PROMPT = """\
 You are a desktop automation agent executing a single subtask.
 You must produce specific UAB (Universal App Bridge) commands.
@@ -51,15 +49,15 @@ You must produce specific UAB (Universal App Bridge) commands.
 - {{"method": "act", "element_id": "<id>", "action": "clear"}}
 - {{"method": "act", "element_id": "<id>", "action": "focus"}}
 - {{"method": "act", "element_id": "<id>", "action": "select"}}
-- {{"method": "keypress", "key": "<key>"}} — send keypress (Tab, Enter, etc.)
-- {{"method": "hotkey", "keys": ["ctrl", "a"]}} — send hotkey combo
-- {{"method": "maximize"}} — bring window to foreground / maximize
-- {{"method": "restore"}} — restore window
-- {{"method": "state"}} — read current window state
-- {{"method": "query", "selector": {{"type": "edit"}}}} — find specific elements
+- {{"method": "keypress", "key": "<key>"}} - send keypress (Tab, Enter, etc.)
+- {{"method": "hotkey", "keys": ["ctrl", "a"]}} - send hotkey combo
+- {{"method": "maximize"}} - bring window to foreground / maximize
+- {{"method": "restore"}} - restore window
+- {{"method": "state"}} - read current window state
+- {{"method": "query", "selector": {{"type": "edit"}}}} - find specific elements
 
 ## Rules
-- Use element IDs from the Current UI Elements list — look for elements with "type" and "click" in their actions
+- Use element IDs from the Current UI Elements list - look for elements with "type" and "click" in their actions
 - IMPORTANT: Target the specific actionable element (e.g. type=textarea, type=edit, type=textbox), NOT the parent window or container
 - For typing: first click the textarea/edit element to focus it, then use act with action "type" on that SAME element
 - For verification: use "state" to read the window state
@@ -171,7 +169,7 @@ class HiveUABExecutor:
             })
 
             if not conn_result.success:
-                # Try to continue anyway — app might already be connected
+                # Continue when possible; the app may already be connected.
                 logger.warning(
                     "UAB connect to PID %d returned success=False: %s (continuing)",
                     pid, conn_result.error_message,
@@ -208,7 +206,7 @@ class HiveUABExecutor:
                         "UAB step %d/%d failed: %s",
                         i + 1, len(uab_steps), step_result.get("error", "unknown"),
                     )
-                    # Don't abort on query/state failures — they're informational
+                    # Query/state reads are informational; command execution can still proceed.
                     if step.get("method") not in ("state", "query"):
                         break
 
@@ -251,7 +249,7 @@ class HiveUABExecutor:
     ) -> List[Dict[str, Any]]:
         """Use LLM to plan specific UAB steps from subtask description."""
         if self._llm is None:
-            # No LLM — fall back to heuristic planning
+            # Use deterministic planning when no router is available.
             return self._heuristic_plan(description, pid, app_name, elements)
 
         elements_summary = _summarize_elements(elements)

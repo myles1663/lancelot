@@ -86,7 +86,7 @@ class TestFileKeyFallback(unittest.TestCase):
                 encrypted = vault.fernet.encrypt(b"test")
                 self.assertEqual(vault.fernet.decrypt(encrypted), b"test")
 
-    def test_warning_logged_on_file_fallback(self):
+    def test_info_logged_on_file_fallback(self):
         file_key = Fernet.generate_key()
         with tempfile.TemporaryDirectory() as tmpdir:
             key_file = os.path.join(tmpdir, "vault.key")
@@ -94,11 +94,11 @@ class TestFileKeyFallback(unittest.TestCase):
                 f.write(file_key)
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("VAULT_ENCRYPTION_KEY", None)
-                with self.assertLogs("vault", level="WARNING") as captured:
+                with self.assertLogs("vault", level="INFO") as captured:
                     from vault import SecretVault
                     SecretVault(data_dir=tmpdir)
                 logged = " ".join(captured.output)
-                self.assertIn("Loading vault key from file", logged)
+                self.assertIn("Loading vault key from existing local key file", logged)
 
 
 class TestAuditLogging(unittest.TestCase):

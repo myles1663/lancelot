@@ -1,5 +1,5 @@
+"""Subsystem startup and shutdown helpers for the runtime gateway."""
 from __future__ import annotations
-
 import asyncio
 import json
 import logging
@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-
+from gateway_health import summarize_local_model_router_readiness
 # Bound from gateway.py at import time so these helpers keep the original runtime objects.
 logger = logging.getLogger("lancelot.gateway.boot_support")
 app = None
@@ -26,7 +26,6 @@ forge_dispatcher = None
 chat_poller = None
 telegram_bot = None
 scheduler_service = None
-
 def bind_gateway_globals(**kwargs):
     globals().update(kwargs)
 
@@ -49,7 +48,7 @@ def _init_memory():
         core_store=core_store,
         memory_manager=store_manager,
     )
-    main_orchestrator._memory_enabled = True
+    main_orchestrator.set_memory_enabled(True)
     main_orchestrator.context_compiler = compiler_svc
     logger.info("Structured memory initialized and wired.")
     return {"core_store": core_store, "store_manager": store_manager, "compiler": compiler_svc}
@@ -57,7 +56,7 @@ def _init_memory():
 
 def _shutdown_memory(objects):
     """Shut down structured memory subsystem."""
-    main_orchestrator._memory_enabled = False
+    main_orchestrator.set_memory_enabled(False)
     main_orchestrator.context_compiler = None
     logger.info("Structured memory shut down.")
 def _init_soul():
@@ -67,7 +66,7 @@ def _init_soul():
 
     active_soul = load_active_soul()
     if active_soul is None:
-        logger.warning("No active soul found â€” Soul subsystem starting without a soul document")
+        logger.warning("No active soul found; Soul subsystem starting without a soul document")
         main_orchestrator.soul = None
         return {"soul": None}
 
@@ -81,12 +80,12 @@ def _init_soul():
                 active_soul = merge_soul(active_soul, overlays)
                 logger.info("Soul overlays applied: %s", [o.overlay_name for o in overlays])
     except Exception as exc:
-        logger.warning("Soul overlay loading failed: %s â€” using base soul", exc)
+            logger.warning("Soul overlay loading failed: %s; using base soul", exc)
 
     main_orchestrator.soul = active_soul
     if getattr(main_orchestrator, "_risk_classifier", None) is not None:
         try:
-            main_orchestrator._risk_classifier.update_soul(active_soul)
+            main_orchestrator.refresh_soul_policy(active_soul)
         except Exception as exc:
             logger.warning("Risk classifier Soul update failed during Soul init: %s", exc)
     logger.info("Soul loaded: version=%s", active_soul.version)
@@ -101,7 +100,7 @@ def _shutdown_soul(objects):
 
 def _init_skills():
     """Initialize Skills subsystem."""
-    from skills.registry import SkillRegistry, SkillEntry, SkillOwnership
+    from skills.registry import SkillRegistry
     from skills.executor import SkillExecutor
     from skills.factory import SkillFactory
 
@@ -109,12 +108,7 @@ def _init_skills():
     for builtin_name in ("echo", "command_runner", "repo_writer", "service_runner",
                          "network_client", "telegram_send", "warroom_send", "schedule_job",
                          "health_check", "document_creator", "skill_manager"):
-        if not skill_registry.get_skill(builtin_name):
-            skill_registry._skills[builtin_name] = SkillEntry(
-                name=builtin_name, version="1.0.0",
-                enabled=True, ownership=SkillOwnership.SYSTEM,
-            )
-    skill_registry._save()
+        skill_registry.ensure_system_skill(builtin_name)
 
     executor = SkillExecutor(registry=skill_registry)
     skill_factory = SkillFactory(
@@ -160,7 +154,7 @@ def _init_scheduler():
     memory_jobs_inserted = 0
     memory_jobs_updated = 0
 
-    if getattr(main_orchestrator, "_memory_enabled", False) and main_orchestrator.context_compiler:
+    if main_orchestrator.is_memory_enabled() and main_orchestrator.context_compiler:
         try:
             from memory.jobs import (
                 MEMORY_JOB_SKILLS,
@@ -241,60 +235,6 @@ def _shutdown_scheduler(objects):
     logger.info("Scheduler shut down.")
 
 
-def _summarize_local_role_readiness(local_roles) -> dict[str, object]:
-    """Return aggregate readiness for role-specific local model endpoints."""
-    if local_roles is None:
-        return {"ready": False, "loaded": False, "status": "unavailable", "last_error": None}
-    try:
-        raw = local_roles.status()
-    except Exception as exc:
-        return {
-            "ready": False,
-            "loaded": False,
-            "status": "unavailable",
-            "last_error": str(exc),
-        }
-    roles = raw.get("roles", raw) if isinstance(raw, dict) else {}
-    enabled_roles = [
-        payload
-        for payload in (roles or {}).values()
-        if isinstance(payload, dict) and payload.get("enabled", True)
-    ]
-    if not enabled_roles:
-        return {"ready": False, "loaded": False, "status": "unavailable", "last_error": None}
-    ready = all(bool(role.get("ready")) for role in enabled_roles)
-    loaded = any(bool(role.get("loaded", role.get("ready"))) for role in enabled_roles)
-    failures = [
-        str(role.get("last_error") or role.get("status") or "not ready")
-        for role in enabled_roles
-        if not role.get("ready")
-    ]
-    verified = [
-        str(role.get("last_verified_at"))
-        for role in enabled_roles
-        if role.get("last_verified_at")
-    ]
-    checked = [
-        str(role.get("last_checked_at"))
-        for role in enabled_roles
-        if role.get("last_checked_at")
-    ]
-    smoke_times = [
-        float(role.get("last_smoke_elapsed_ms"))
-        for role in enabled_roles
-        if role.get("last_smoke_elapsed_ms") is not None
-    ]
-    return {
-        "ready": ready,
-        "loaded": loaded,
-        "status": "ok" if ready else ("degraded" if loaded else "unavailable"),
-        "last_error": "; ".join(failures) if failures else None,
-        "last_verified_at": max(verified) if verified else None,
-        "last_checked_at": max(checked) if checked else None,
-        "last_smoke_elapsed_ms": max(smoke_times) if smoke_times else None,
-    }
-
-
 def _init_health_monitor():
     """Initialize Health Monitor subsystem."""
     from health.monitor import HealthMonitor, HealthCheck
@@ -308,7 +248,7 @@ def _init_health_monitor():
                     return True
             except Exception:
                 pass
-        role_lane = _summarize_local_role_readiness(
+        role_lane = summarize_local_model_router_readiness(
             getattr(main_orchestrator, "local_model_roles", None)
         )
         return bool(role_lane.get("ready"))
@@ -316,7 +256,7 @@ def _init_health_monitor():
     def _local_llm_health_details():
         from src.core.model_usage_policy import set_local_model_availability
 
-        role_lane = _summarize_local_role_readiness(
+        role_lane = summarize_local_model_router_readiness(
             getattr(main_orchestrator, "local_model_roles", None)
         )
 
@@ -456,7 +396,7 @@ def _init_health_monitor():
         ),
         HealthCheck(
             name="onboarding_ready",
-            check_fn=lambda: onboarding_orch._determine_state() == "READY",
+                check_fn=lambda: onboarding_orch.determine_state() == "READY",
             degraded_reason="Onboarding not complete",
         ),
         HealthCheck(
@@ -511,12 +451,15 @@ def _init_bal():
     bal_config = load_bal_config()
     bal_db = BALDatabase(data_dir=bal_config.bal_data_dir)
 
-    main_orchestrator._bal_config = bal_config
-    main_orchestrator._bal_db = bal_db
+    main_orchestrator.set_bal_runtime(config=bal_config, database=bal_db)
 
     bal_client_repo = ClientRepository(bal_db)
     init_client_api(bal_client_repo)
-    main_orchestrator._bal_client_repo = bal_client_repo
+    main_orchestrator.set_bal_runtime(
+        config=bal_config,
+        database=bal_db,
+        client_repo=bal_client_repo,
+    )
     logger.info("BAL Client Manager API initialized.")
 
     emit_bal_receipt(
@@ -545,13 +488,11 @@ def _shutdown_bal(objects):
             objects["db"].close()
         except Exception as exc:
             logger.warning("BAL database shutdown failed: %s", exc)
-    main_orchestrator._bal_config = None
-    main_orchestrator._bal_db = None
-    main_orchestrator._bal_client_repo = None
+    main_orchestrator.set_bal_runtime(config=None, database=None, client_repo=None)
     logger.info("BAL shut down.")
 
 
-# â”€â”€ Tool Fabric Provider Subsystems â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Tool Fabric provider subsystems
 # These init/shutdown functions let the SubsystemManager hot-toggle
 # individual providers inside the already-running ToolFabric.
 
@@ -566,7 +507,7 @@ def _init_host_bridge():
     fabric.register_provider(provider)
     fabric.update_router_preferences()
     logger.warning(
-        "HOST BRIDGE hot-started â€” commands will be sent to host agent at %s",
+        "HOST BRIDGE hot-started; commands will be sent to host agent at %s",
         provider.config.agent_url,
     )
     return {"provider": provider}
@@ -591,7 +532,7 @@ def _init_uab():
     fabric.register_provider(provider)
     fabric.update_router_preferences()
     logger.warning(
-        "UAB BRIDGE hot-started â€” desktop app control via daemon at %s",
+        "UAB BRIDGE hot-started; desktop app control via daemon at %s",
         provider.config.daemon_url,
     )
     return {"provider": provider}
@@ -605,179 +546,30 @@ def _shutdown_uab(objects):
     fabric.update_router_preferences()
     logger.info("UAB Bridge provider unregistered.")
 
-
-# â”€â”€ HIVE Agent Mesh Subsystem â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-class _OrchestratorRouterAdapter:
-    """Adapts orchestrator's provider to the ModelRouter.route() interface.
-
-    The TaskDecomposer expects router.route(task_type, text) -> RouterResult,
-    but the orchestrator uses provider.generate() directly. This adapter bridges
-    the gap so HIVE can use the orchestrator's LLM provider for decomposition.
-    """
-
-    def __init__(self, orchestrator):
-        self._orch = orchestrator
-
-    def route(self, task_type: str, text: str, **kwargs):
-        from dataclasses import dataclass
-        from typing import Optional
-
-        @dataclass
-        class _Result:
-            output: Optional[str] = None
-
-        provider = self._orch.provider
-        if provider is None:
-            return _Result(output=None)
-
-        try:
-            # Use the deep model for decomposition (planning tasks)
-            deep_model = self._orch._get_deep_model()
-            messages = [self._orch._build_frontier_user_message(text)]
-            result = self._orch._provider_generate(
-                model=deep_model,
-                messages=messages,
-                system_instruction="You are a task decomposer. Return only valid JSON.",
-                config={"max_tokens": 4096},
-            )
-            return _Result(output=result.text if result and result.text else None)
-        except Exception as exc:
-            logger.error("HIVE router adapter LLM call failed: %s", exc)
-            # Fall back to the fast model
-            try:
-                messages = [self._orch._build_frontier_user_message(text)]
-                result = self._orch._provider_generate(
-                    model=self._orch.model_name,
-                    messages=messages,
-                    system_instruction="You are a task decomposer. Return only valid JSON.",
-                    config={"max_tokens": 4096},
-                )
-                return _Result(output=result.text if result and result.text else None)
-            except Exception:
-                return _Result(output=None)
-
-
 def _init_hive():
     """Initialize the HIVE Agent Mesh subsystem."""
-    from src.hive.config import load_hive_config
-    from src.hive.registry import AgentRegistry
-    from src.hive.receipt_manager import HiveReceiptManager
-    from src.hive.scoped_soul import ScopedSoulGenerator
-    from src.hive.lifecycle import AgentLifecycleManager
-    from src.hive.decomposer import TaskDecomposer
-    from src.hive.architect import ArchitectAgent
-    from src.hive.api import init_hive_api
-    from src.hive.integration.governance_bridge import GovernanceBridge
-    from src.hive.integration.uab_executor import HiveUABExecutor
-    from feature_flags import FEATURE_HIVE_UAB
+    from gateway_hive_support import init_hive
 
-    config = load_hive_config()
-    registry = AgentRegistry(max_concurrent_agents=config.max_concurrent_agents)
-    data_dir = os.environ.get("LANCELOT_DATA_DIR", "lancelot_data")
-    receipt_mgr = HiveReceiptManager(data_dir=data_dir)
-    soul_gen = ScopedSoulGenerator()
-    parent_soul = getattr(main_orchestrator, "soul", None)
-    governance_bridge = GovernanceBridge(
-        risk_classifier=getattr(main_orchestrator, "_risk_classifier", None),
-        trust_ledger=getattr(main_orchestrator, "trust_ledger", None),
-        decision_log=getattr(main_orchestrator, "decision_log", None),
-        mcp_sentry=sentry,
-        enforce_kill_switches=True,
+    return init_hive(
+        main_orchestrator=main_orchestrator,
+        sentry=sentry,
+        subsystem_manager=subsystem_manager,
+        logger=logger,
     )
-
-    # Bridge orchestrator's provider to the ModelRouter interface
-    router_adapter = _OrchestratorRouterAdapter(main_orchestrator)
-
-    # Create UAB action executor if UAB is enabled
-    action_executor = None
-    if FEATURE_HIVE_UAB:
-        uab_provider = _get_uab_provider()
-        if uab_provider:
-            action_executor = HiveUABExecutor(
-                uab_provider=uab_provider,
-                llm_router=router_adapter,
-                governance_bridge=governance_bridge,
-            )
-            logger.info("HIVE UAB executor wired â€” sub-agents will execute real desktop actions")
-        else:
-            logger.warning("HIVE_UAB enabled but no UABProvider found â€” sub-agents will run without UAB")
-
-    lifecycle = AgentLifecycleManager(
-        config=config,
-        registry=registry,
-        receipt_manager=receipt_mgr,
-        soul_generator=soul_gen,
-        governance_bridge=governance_bridge,
-        parent_soul=parent_soul,
-        action_executor=action_executor,
-    )
-
-    federation_entry = subsystem_manager.get("federation")
-    if federation_entry and federation_entry.running:
-        try:
-            lifecycle.update_spawn_controls(
-                spawn_gate=federation_entry.objects.get("spawn_gate"),
-                spawn_record_hook=federation_entry.objects.get("spawn_record_hook"),
-                collapse_record_hook=federation_entry.objects.get("collapse_record_hook"),
-            )
-        except Exception as exc:
-            logger.warning("Failed to wire existing federation budget governance into HIVE lifecycle: %s", exc)
-
-    decomposer = TaskDecomposer(model_router=router_adapter)
-
-    architect = ArchitectAgent(
-        config=config,
-        decomposer=decomposer,
-        lifecycle=lifecycle,
-        receipt_manager=receipt_mgr,
-    )
-
-    # Wire up API endpoints
-    init_hive_api(architect, lifecycle, registry, receipt_mgr, config, audit_logger=main_orchestrator.audit_logger)
-
-    logger.info(
-        "HIVE Agent Mesh initialized: max_agents=%d, timeout=%ds, uab_executor=%s",
-        config.max_concurrent_agents, config.default_task_timeout,
-        "active" if action_executor else "none",
-    )
-    return {
-        "config": config,
-        "registry": registry,
-        "receipt_mgr": receipt_mgr,
-        "lifecycle": lifecycle,
-        "architect": architect,
-    }
 
 
 def _get_uab_provider():
     """Get the UABProvider instance from ToolFabric if available."""
-    try:
-        from src.tools.providers.uab_bridge import UABProvider
-        # Check if we can reach the daemon
-        provider = UABProvider()
-        health = provider.health_check()
-        if health.state.value == "healthy":
-            return provider
-        logger.info("UAB provider unavailable at startup: %s", health.state.value)
-        return provider  # Return anyway â€” daemon might come up later
-    except Exception as exc:
-        logger.info("UAB provider unavailable at startup: %s", exc)
-        return None
+    from gateway_hive_support import get_uab_provider
+
+    return get_uab_provider(logger)
 
 
 def _shutdown_hive(objects):
     """Shut down the HIVE Agent Mesh subsystem."""
-    from src.hive.api import shutdown_hive_api
+    from gateway_hive_support import shutdown_hive
 
-    if objects.get("lifecycle"):
-        try:
-            objects["lifecycle"].shutdown()
-        except Exception as exc:
-            logger.warning("HIVE lifecycle shutdown failed: %s", exc)
-    shutdown_hive_api()
-    logger.info("HIVE Agent Mesh shut down.")
-
+    return shutdown_hive(objects, logger)
 
 def _resolve_peer_key(peer_registry, topology, instance_id: str):
     """Resolve a peer's public key from registry or topology.
@@ -861,7 +653,7 @@ def _init_federation():
         data_dir=data_dir,
     )
 
-    # Audit engine â€” cross-instance audit trail
+    # Audit engine: cross-instance audit trail
     audit_engine = FederationAuditEngine(
         max_entries=10000,
         persistence_path=os.path.join(fed_data_dir, "audit_log.json"),
@@ -1082,10 +874,10 @@ def _init_federation():
                 logger.warning(
                     "Failed to clear scheduler approvals during federation full stop: %s",
                     exc,
-                )
+        )
 
         try:
-            sentry._cleanup_expired()
+            sentry.cleanup_expired()
             for req_id, req in list(sentry.pending_requests.items()):
                 if req.get("status") == "PENDING" and sentry.deny_request(req_id):
                     sentry_pending_denied += 1
@@ -1496,7 +1288,7 @@ def _init_federation():
         loop = asyncio.get_running_loop()
         loop.create_task(_start_transport_layer())
     except RuntimeError:
-        # No event loop yet â€” will be started from startup_event
+        # No event loop yet; startup_event will start it.
         pass
 
     logger.info(
@@ -1551,7 +1343,7 @@ def _bootstrap_model_discovery():
     """Create ModelDiscovery + wire into Provider API when provider becomes available.
 
     Called at startup and again after OAuth hot-initializes the provider.
-    Safe to call multiple times â€” skips if provider is still None.
+    Safe to call multiple times; skips if provider is still None.
     """
     if main_orchestrator.provider is None:
         return False
@@ -1597,7 +1389,7 @@ def _bootstrap_model_discovery():
                 logger.warning("Failed to apply lane override %s=%s: %s", _lane, _model_id, _e)
 
         init_provider_api(discovery, orchestrator=main_orchestrator)
-        _bootstrap_model_router()
+        bootstrap_model_router()
         if ensure_persisted_active_provider(main_orchestrator.provider.provider_name):
             logger.info(
                 "Persisted active provider to durable config: %s",
@@ -1650,7 +1442,7 @@ def _restore_persisted_provider(persisted_provider: str, orchestrator=None) -> b
         return True
     except Exception as exc:
         logger.warning(
-            "Failed to restore persisted provider '%s': %s — keeping %s",
+            "Failed to restore persisted provider '%s': %s; keeping %s",
             persisted_provider,
             exc,
             current_provider,
@@ -1693,3 +1485,14 @@ def _bootstrap_model_router() -> bool:
     except Exception as exc:
         logger.warning("Model router bootstrap failed: %s", exc)
         return False
+
+
+init_memory, shutdown_memory, init_soul, shutdown_soul = _init_memory, _shutdown_memory, _init_soul, _shutdown_soul
+init_skills, shutdown_skills, init_scheduler, shutdown_scheduler = _init_skills, _shutdown_skills, _init_scheduler, _shutdown_scheduler
+init_health_monitor, shutdown_health_monitor, init_bal, shutdown_bal = _init_health_monitor, _shutdown_health_monitor, _init_bal, _shutdown_bal
+init_host_bridge, shutdown_host_bridge, init_uab, shutdown_uab = _init_host_bridge, _shutdown_host_bridge, _init_uab, _shutdown_uab
+init_hive, shutdown_hive, resolve_peer_key = _init_hive, _shutdown_hive, _resolve_peer_key
+init_federation, shutdown_federation = _init_federation, _shutdown_federation
+bootstrap_model_discovery = _bootstrap_model_discovery
+restore_persisted_provider = _restore_persisted_provider
+bootstrap_model_router = _bootstrap_model_router

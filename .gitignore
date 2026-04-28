@@ -77,6 +77,7 @@ docker-compose.override.yml
 *.exe
 *.msi
 *.spec
+artifacts/
 
 # Node
 node_modules/
@@ -84,6 +85,7 @@ npm-debug.log*
 
 # Test outputs
 .coverage
+coverage.xml
 htmlcov/
 
 # Demo seed script (local use only)

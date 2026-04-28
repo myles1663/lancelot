@@ -262,7 +262,7 @@ async def governance_approvals():
 
         # MCP Sentry T3 action approvals
         if _mcp_sentry:
-            _mcp_sentry._cleanup_expired()
+            _mcp_sentry.cleanup_expired()
             for req_id, req in _mcp_sentry.pending_requests.items():
                 if req.get("status") == "PENDING":
                     pending.append({

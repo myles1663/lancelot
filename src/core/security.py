@@ -6,7 +6,7 @@ import datetime
 import re
 import socket
 import threading
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, urlunparse
 
 from src.core.network_allowlist import NetworkAllowlistService
 
@@ -262,8 +262,16 @@ class NetworkInterceptor:
             host_part = parsed.hostname or ""
             if parsed.port:
                 host_part = f"{host_part}:{parsed.port}"
-            # Replace full netloc with credential-free version
-            return parsed._replace(netloc=host_part).geturl()
+            return urlunparse(
+                (
+                    parsed.scheme,
+                    host_part,
+                    parsed.path,
+                    parsed.params,
+                    parsed.query,
+                    parsed.fragment,
+                )
+            )
         return url
 
     def check_url(self, url: str) -> bool:

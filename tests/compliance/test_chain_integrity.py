@@ -33,27 +33,23 @@ def _mock_receipt_service(
     parent_count=0,
     orphan_rows=None,
 ):
-    """Build a mock ReceiptService whose _get_connection returns
-    a mock connection that yields the right query results."""
+    """Build a mock ReceiptService exposing the public audit summary API."""
     if orphan_rows is None:
         orphan_rows = []
 
     svc = MagicMock()
-    conn = MagicMock()
-    svc._get_connection.return_value = conn
-
-    # Each conn.execute call returns a cursor-like object.
-    # Order: total count, parent count, orphan query
-    count_cursor = MagicMock()
-    count_cursor.fetchone.return_value = {"cnt": total_count}
-
-    parent_cursor = MagicMock()
-    parent_cursor.fetchone.return_value = {"cnt": parent_count}
-
-    orphan_cursor = MagicMock()
-    orphan_cursor.fetchall.return_value = orphan_rows
-
-    conn.execute.side_effect = [count_cursor, parent_cursor, orphan_cursor]
+    svc.summarize_parent_chain.return_value = {
+        "total_receipts": total_count,
+        "receipts_with_parents": parent_count,
+        "missing_parent_gaps": [
+            {
+                "receipt_id": row["id"],
+                "orphaned_parent_id": row["parent_id"],
+                "receipt_timestamp": row["timestamp"],
+            }
+            for row in orphan_rows
+        ],
+    }
     return svc
 
 
@@ -210,12 +206,11 @@ class TestCheckChainIntegrity:
         svc = _mock_receipt_service(total_count=3, parent_count=2, orphan_rows=[])
         result = check_chain_integrity(svc, "2026-01-01", "2026-01-31", quest_id="q-123")
         assert result.is_intact is True
-        # Verify quest_id was included in params
-        conn = svc._get_connection()
-        for call in conn.execute.call_args_list:
-            args = call[0]
-            params = args[1]
-            assert "q-123" in params
+        svc.summarize_parent_chain.assert_called_once_with(
+            since="2026-01-01",
+            until="2026-01-31",
+            quest_id="q-123",
+        )
 
     def test_period_metadata_in_result(self):
         svc = _mock_receipt_service(total_count=5, parent_count=3, orphan_rows=[])
@@ -245,12 +240,11 @@ class TestCheckChainIntegrity:
     def test_no_quest_id_omits_quest_filter(self):
         svc = _mock_receipt_service(total_count=5, parent_count=3, orphan_rows=[])
         check_chain_integrity(svc, "2026-01-01", "2026-01-31", quest_id=None)
-        conn = svc._get_connection()
-        for call in conn.execute.call_args_list:
-            args = call[0]
-            sql = args[0]
-            params = args[1]
-            assert len(params) == 2  # only period_start, period_end
+        svc.summarize_parent_chain.assert_called_once_with(
+            since="2026-01-01",
+            until="2026-01-31",
+            quest_id=None,
+        )
 
     def test_result_to_dict_roundtrip(self):
         gap = ChainGap("r1", "p1", "missing_parent", "2026-01-10T00:00:00Z")

@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from chat_runs import ChatRunStore
+import gateway_chat_routes
 from work_ledger import WorkLedgerStore
 
 
@@ -14,11 +15,17 @@ def gateway_work_ledger(tmp_path, monkeypatch):
 
     store = WorkLedgerStore(str(tmp_path / "work_ledger.sqlite"))
     monkeypatch.setattr(gateway, "work_ledger_store", store)
+    monkeypatch.setattr(gateway_chat_routes, "work_ledger_store", store)
     monkeypatch.setattr(gateway.main_orchestrator, "work_ledger_store", store)
     try:
         yield store
     finally:
         store.close()
+
+
+def _patch_gateway_and_chat_routes(monkeypatch, gateway, name: str, value) -> None:
+    monkeypatch.setattr(gateway, name, value)
+    monkeypatch.setattr(gateway_chat_routes, name, value)
 
 
 def test_chat_run_store_records_lifecycle(tmp_path):
@@ -56,6 +63,8 @@ def test_chat_run_store_records_lifecycle(tmp_path):
         listed = store.list_recent(session_id="sess-1")
         assert [item.run_id for item in listed] == [run.run_id]
         assert store.list_recent(session_id="other") == []
+        operator_listed = store.list_recent(session_id="other", operator_id="op-1")
+        assert [item.run_id for item in operator_listed] == [run.run_id]
     finally:
         store.close()
 
@@ -580,10 +589,10 @@ def test_frontier_scrub_fallback_emits_degraded_progress():
     receipt_events = []
 
     fake_runtime = SimpleNamespace(
-        _emit_chat_progress=lambda phase, message, **metadata: progress_events.append(
+        emit_chat_progress=lambda phase, message, **metadata: progress_events.append(
             {"phase": phase, "message": message, **metadata}
         ),
-        _emit_frontier_scrub_receipt=lambda **kwargs: receipt_events.append(kwargs),
+        emit_frontier_scrub_receipt=lambda **kwargs: receipt_events.append(kwargs),
     )
     result = SimpleNamespace(
         source="local_model_error",
@@ -688,6 +697,60 @@ def test_fast_runtime_status_command_formats_health_snapshot(monkeypatch):
     assert "Uptime: 12.3s" in response
 
 
+def test_operator_work_status_command_reports_durable_state_without_current_run(
+    tmp_path,
+    monkeypatch,
+):
+    import gateway
+
+    store = WorkLedgerStore(str(tmp_path / "work_ledger.sqlite"))
+    monkeypatch.setattr(gateway, "work_ledger_store", store)
+    monkeypatch.setattr(gateway, "_emit_fast_runtime_receipt", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        gateway,
+        "scheduler_service",
+        SimpleNamespace(
+            last_scheduler_tick_at="2026-04-22T14:00:00+00:00",
+            list_jobs=lambda: [
+                SimpleNamespace(
+                    id="ticket_sentinel_sync",
+                    enabled=True,
+                    trigger_type="interval",
+                    trigger_value="300",
+                    last_run_at="2026-04-22T13:59:00+00:00",
+                    last_run_status="succeeded",
+                    last_run_error=None,
+                ),
+            ],
+        ),
+    )
+    try:
+        store.upsert_work(
+            quest_id="current-run",
+            objective="can we continue with the plan",
+            session_id="sess-1",
+            operator_id="op-1",
+            status="active",
+            phase="execution",
+            next_action="Compiling memory, receipts, and conversation context",
+        )
+
+        response = gateway._try_handle_fast_runtime_command(
+            "can we continue with the plan we made earlier? give me the current active-work status and next practical step",
+            quest_id="current-run",
+            identity=SimpleNamespace(session_id="sess-1", operator_id="op-1"),
+        )
+
+        assert response is not None
+        assert "Operator Work Status" in response
+        assert "no retained active work is currently open" in response
+        assert "Compiling memory" not in response
+        assert "Ticket Sentinel: last_status=succeeded" in response
+        assert "Write safety: read-only status check" in response
+    finally:
+        store.close()
+
+
 def test_operational_report_command_uses_concrete_read_only_checks(monkeypatch):
     import gateway
 
@@ -776,6 +839,55 @@ def test_operational_report_categorizes_expected_capability_notices(monkeypatch)
     assert notices["action_required"] == []
     assert any("Host execution provider is enabled" in notice for notice in notices["expected"])
     assert any("UAB desktop bridge is enabled" in notice for notice in notices["expected"])
+
+
+def test_operational_report_surfaces_failed_scheduler_jobs(monkeypatch):
+    import gateway
+
+    monkeypatch.setattr(
+        gateway,
+        "health_check",
+        lambda: {
+            "components": {
+                "gateway": "ok",
+                "orchestrator": "ok",
+                "local_llm": "ok",
+                "memory": "ok",
+                "sentry": "ok",
+            },
+            "local_llm": {"roles": {}},
+            "uptime_seconds": 12,
+        },
+    )
+    monkeypatch.setattr(
+        gateway,
+        "scheduler_service",
+        SimpleNamespace(
+            last_scheduler_tick_at="2026-04-22T14:00:00+00:00",
+            list_jobs=lambda: [
+                SimpleNamespace(
+                    id="ticket_sentinel_sync",
+                    enabled=True,
+                    trigger_type="interval",
+                    trigger_value="300",
+                    last_run_at="2026-04-22T13:59:00+00:00",
+                    last_run_status="failed",
+                    last_run_error="python cannot open sync_ticket_sentinel.py",
+                ),
+            ],
+        ),
+    )
+
+    response = gateway._try_handle_fast_runtime_command(
+        "Please produce a read-only operational smoke report for this Lancelot instance."
+    )
+
+    assert response is not None
+    assert "Result: degraded" in response
+    assert "ticket_sentinel_sync" in response
+    assert "last_status=failed" in response
+    assert "python cannot open sync_ticket_sentinel.py" in response
+    assert "Operator action required:" in response
 
 
 def test_operational_report_categorizes_degraded_conditions_as_action_required(monkeypatch):
@@ -1006,12 +1118,12 @@ def test_chat_async_endpoint_queues_run_without_waiting_for_result(tmp_path, mon
     async def fake_execute_async_chat_run(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(gateway, "chat_run_store", store)
-    monkeypatch.setattr(gateway, "verify_token", lambda _request: True)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "chat_run_store", store)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "verify_token", lambda _request: True)
     monkeypatch.setattr(gateway.rate_limiter, "check", lambda _ip: True)
-    monkeypatch.setattr(gateway.rate_limiter, "check", lambda _ip: True)
-    monkeypatch.setattr(gateway, "_execute_async_chat_run", fake_execute_async_chat_run)
-    monkeypatch.setattr(gateway, "_emit_chat_run_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gateway_chat_routes.rate_limiter, "check", lambda _ip: True)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "_execute_async_chat_run", fake_execute_async_chat_run)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "_emit_chat_run_event", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("src.core.runtime_pause.is_runtime_paused", lambda: False)
     monkeypatch.setattr("src.core.auth_api.resolve_authenticated_identity", lambda _request: identity)
 
@@ -1037,6 +1149,49 @@ def test_chat_async_endpoint_queues_run_without_waiting_for_result(tmp_path, mon
         store.close()
 
 
+def test_chat_runs_endpoint_lists_same_operator_across_sessions(tmp_path, monkeypatch, gateway_work_ledger):
+    import gateway
+
+    store = ChatRunStore(str(tmp_path / "runs.sqlite"))
+    identity = SimpleNamespace(
+        display_name="Myles",
+        operator_id="op-1",
+        session_id="new-session",
+    )
+
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "chat_run_store", store)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "verify_token", lambda _request: True)
+    monkeypatch.setattr("src.core.auth_api.resolve_authenticated_identity", lambda _request: identity)
+
+    try:
+        old_run = store.create(
+            request_id="req-1",
+            user="Myles",
+            channel="warroom",
+            session_id="old-session",
+            operator_id="op-1",
+            message="prior governed work",
+        )
+        other_run = store.create(
+            request_id="req-2",
+            user="Other",
+            channel="warroom",
+            session_id="other-session",
+            operator_id="op-2",
+            message="other operator work",
+        )
+
+        client = TestClient(gateway.app)
+        response = client.get("/api/chat/runs?limit=10")
+
+        assert response.status_code == 200, response.text
+        run_ids = [run["run_id"] for run in response.json()["runs"]]
+        assert old_run.run_id in run_ids
+        assert other_run.run_id not in run_ids
+    finally:
+        store.close()
+
+
 def test_chat_run_cancel_endpoint_marks_run_cancelled(tmp_path, monkeypatch, gateway_work_ledger):
     import gateway
 
@@ -1048,10 +1203,12 @@ def test_chat_run_cancel_endpoint_marks_run_cancelled(tmp_path, monkeypatch, gat
         session_id="sess-1",
     )
 
-    monkeypatch.setattr(gateway, "chat_run_store", store)
-    monkeypatch.setattr(gateway, "verify_token", lambda _request: True)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "chat_run_store", store)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "verify_token", lambda _request: True)
     monkeypatch.setattr(gateway.rate_limiter, "check", lambda _ip: True)
-    monkeypatch.setattr(
+    monkeypatch.setattr(gateway_chat_routes.rate_limiter, "check", lambda _ip: True)
+    _patch_gateway_and_chat_routes(
+        monkeypatch,
         gateway,
         "_emit_chat_run_event",
         lambda event_type, run, **_extra: events.append((event_type, run.status)),
@@ -1103,11 +1260,13 @@ def test_chat_run_retry_endpoint_queues_new_run(tmp_path, monkeypatch, gateway_w
     async def fake_execute_async_chat_run(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(gateway, "chat_run_store", store)
-    monkeypatch.setattr(gateway, "verify_token", lambda _request: True)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "chat_run_store", store)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "verify_token", lambda _request: True)
     monkeypatch.setattr(gateway.rate_limiter, "check", lambda _ip: True)
-    monkeypatch.setattr(gateway, "_execute_async_chat_run", fake_execute_async_chat_run)
-    monkeypatch.setattr(
+    monkeypatch.setattr(gateway_chat_routes.rate_limiter, "check", lambda _ip: True)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "_execute_async_chat_run", fake_execute_async_chat_run)
+    _patch_gateway_and_chat_routes(
+        monkeypatch,
         gateway,
         "_emit_chat_run_event",
         lambda event_type, run, **_extra: events.append((event_type, run.status)),
@@ -1159,11 +1318,13 @@ def test_chat_run_retry_endpoint_queues_blocked_run(tmp_path, monkeypatch, gatew
     async def fake_execute_async_chat_run(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(gateway, "chat_run_store", store)
-    monkeypatch.setattr(gateway, "verify_token", lambda _request: True)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "chat_run_store", store)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "verify_token", lambda _request: True)
     monkeypatch.setattr(gateway.rate_limiter, "check", lambda _ip: True)
-    monkeypatch.setattr(gateway, "_execute_async_chat_run", fake_execute_async_chat_run)
-    monkeypatch.setattr(
+    monkeypatch.setattr(gateway_chat_routes.rate_limiter, "check", lambda _ip: True)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "_execute_async_chat_run", fake_execute_async_chat_run)
+    _patch_gateway_and_chat_routes(
+        monkeypatch,
         gateway,
         "_emit_chat_run_event",
         lambda event_type, run, **_extra: events.append((event_type, run.status)),
@@ -1213,7 +1374,7 @@ def test_work_api_lists_gets_and_checkpoints_active_work(monkeypatch, gateway_wo
         operator_id="op-1",
         session_id="sess-1",
     )
-    monkeypatch.setattr(gateway, "verify_token", lambda _request: True)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "verify_token", lambda _request: True)
     monkeypatch.setattr("src.core.auth_api.resolve_authenticated_identity", lambda _request: identity)
 
     gateway_work_ledger.upsert_work(
@@ -1250,9 +1411,9 @@ def test_work_api_creates_quiet_phase_checkpoint_before_listing(monkeypatch, gat
         operator_id="op-1",
         session_id="sess-1",
     )
-    monkeypatch.setattr(gateway, "verify_token", lambda _request: True)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "verify_token", lambda _request: True)
     monkeypatch.setattr("src.core.auth_api.resolve_authenticated_identity", lambda _request: identity)
-    monkeypatch.setattr(gateway, "ACTIVE_WORK_QUIET_CHECKPOINT_AFTER_SECONDS", 0)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "ACTIVE_WORK_QUIET_CHECKPOINT_AFTER_SECONDS", 0)
 
     gateway_work_ledger.upsert_work(
         quest_id="quest-quiet",
@@ -1287,11 +1448,13 @@ def test_work_resume_endpoint_queues_retry_from_ledger_item(tmp_path, monkeypatc
     async def fake_execute_async_chat_run(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(gateway, "chat_run_store", store)
-    monkeypatch.setattr(gateway, "verify_token", lambda _request: True)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "chat_run_store", store)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "verify_token", lambda _request: True)
     monkeypatch.setattr(gateway.rate_limiter, "check", lambda _ip: True)
-    monkeypatch.setattr(gateway, "_execute_async_chat_run", fake_execute_async_chat_run)
-    monkeypatch.setattr(
+    monkeypatch.setattr(gateway_chat_routes.rate_limiter, "check", lambda _ip: True)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "_execute_async_chat_run", fake_execute_async_chat_run)
+    _patch_gateway_and_chat_routes(
+        monkeypatch,
         gateway,
         "_emit_chat_run_event",
         lambda event_type, run, **_extra: events.append((event_type, run.status)),
@@ -1336,7 +1499,7 @@ def test_work_ledger_sync_closes_source_when_retry_finishes(tmp_path, monkeypatc
     import gateway
 
     store = ChatRunStore(str(tmp_path / "runs.sqlite"))
-    monkeypatch.setattr(gateway, "chat_run_store", store)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "chat_run_store", store)
     try:
         blocked = store.create(
             request_id="req-1",
@@ -1390,9 +1553,10 @@ def test_work_archive_endpoint_cancels_and_hides_blocked_work(tmp_path, monkeypa
         source_system="governance",
     )
 
-    monkeypatch.setattr(gateway, "chat_run_store", store)
-    monkeypatch.setattr(gateway, "_require_request_capability", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "chat_run_store", store)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "_require_request_capability", lambda *_args, **_kwargs: None)
+    _patch_gateway_and_chat_routes(
+        monkeypatch,
         gateway,
         "_emit_chat_run_event",
         lambda event_type, run, **_extra: events.append((event_type, run.status)),
@@ -1471,7 +1635,7 @@ def test_operator_smoke_endpoint_runs_against_live_gateway(monkeypatch):
         session_id="sess-1",
     )
     monkeypatch.setattr(gateway, "_gateway_started", True)
-    monkeypatch.setattr(gateway, "_require_request_capability", lambda *_args, **_kwargs: None)
+    _patch_gateway_and_chat_routes(monkeypatch, gateway, "_require_request_capability", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("src.core.auth_api.resolve_authenticated_identity", lambda _request: identity)
     monkeypatch.setattr(
         gateway,

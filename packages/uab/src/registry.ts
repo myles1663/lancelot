@@ -1,16 +1,15 @@
 /**
- * App Registry — In-memory knowledge base with JSON profile persistence.
+ * App Registry - in-memory app profiles with JSON persistence.
  *
- * The registry is the connector's "brain" — it remembers apps across sessions
+ * The registry remembers apps across sessions
  * without needing a database. Data lives in a Map for O(1) lookups,
  * with optional JSON file persistence for cross-session survival.
  *
- * Design principles:
- *   - Zero dependencies (no SQLite, no agent frameworks)
- *   - Fast: all lookups are in-memory Map reads
- *   - Git-friendly: single JSON file with readable diffs
- *   - Scales to 1000+ apps: Map is O(1), JSON file is just a snapshot
- *   - Framework-independent: any agent can use this
+ * Design constraints:
+ *   - No database dependency
+ *   - In-memory Map reads for lookups
+ *   - Single JSON file with readable diffs
+ *   - Framework-independent caller contract
  *
  * SPDX-License-Identifier: BUSL-1.1
  * Licensor: Myles Russell Hamilton
@@ -20,10 +19,8 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import type { FrameworkType, DetectedApp, ControlMethod } from './types.js';
 
-// ─── Types ──────────────────────────────────────────────────────
-
 export interface AppProfile {
-  /** Stable key — lowercase executable name (e.g., "code.exe") */
+  /** Stable key - lowercase executable name (e.g., "code.exe") */
   executable: string;
   /** Human-readable app name (e.g., "Visual Studio Code") */
   name: string;

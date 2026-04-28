@@ -333,37 +333,18 @@ async def metrics_receipts(
 
     offset = _decode_cursor(cursor)
 
-    conn = _receipt_service._get_connection()
-    sql = "SELECT * FROM receipts WHERE 1=1"
-    params: List[Any] = []
-
-    if start:
-        sql += " AND timestamp >= ?"
-        params.append(start)
-    if end:
-        sql += " AND timestamp <= ?"
-        params.append(end)
-    if receipt_type:
-        sql += " AND action_type = ?"
-        params.append(receipt_type)
-    if quest_id:
-        sql += " AND quest_id = ?"
-        params.append(quest_id)
-    if operator_id:
-        sql += " AND operator_id = ?"
-        params.append(operator_id)
-    if risk_tier is not None:
-        sql += " AND tier = ?"
-        params.append(risk_tier)
-
-    sql += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
-    params.extend([limit + 1, offset])  # Fetch one extra to check has_more
-
-    rows = conn.execute(sql, params).fetchall()
+    rows = _receipt_service.list(
+        limit=limit + 1,
+        offset=offset,
+        action_type=receipt_type,
+        quest_id=quest_id,
+        operator_id=operator_id,
+        risk_tier=risk_tier,
+        since=start,
+        until=end,
+    )
     has_more = len(rows) > limit
-    receipts = [
-        _receipt_summary(dict(row)) for row in rows[:limit]
-    ]
+    receipts = [_receipt_summary(receipt.to_dict()) for receipt in rows[:limit]]
 
     next_cursor = _encode_cursor(offset + limit) if has_more else None
     return _envelope({"receipts": receipts, "total": len(receipts)},
@@ -402,19 +383,7 @@ async def metrics_actions(
                     "operator_id": "operator_id", "quest_id": "quest_id"}
     col = valid_groups.get(group_by, "tier")
 
-    conn = _receipt_service._get_connection()
-    sql = f"SELECT {col} as group_key, COUNT(*) as count FROM receipts WHERE 1=1"
-    params: List[Any] = []
-    if start:
-        sql += " AND timestamp >= ?"
-        params.append(start)
-    if end:
-        sql += " AND timestamp <= ?"
-        params.append(end)
-    sql += f" GROUP BY {col} ORDER BY count DESC"
-
-    rows = conn.execute(sql, params).fetchall()
-    groups = [{"key": row["group_key"], "count": row["count"]} for row in rows]
+    groups = _receipt_service.aggregate_counts(group_by=col, since=start, until=end)
 
     return _envelope({"group_by": group_by, "groups": groups, "interval": interval})
 
@@ -431,23 +400,15 @@ async def metrics_cost(
     if _receipt_service is None:
         return JSONResponse(status_code=503, content={"error": "Not initialized"})
 
-    # Cost data is in receipt outputs.cost_usd — aggregate from task_executed receipts
-    conn = _receipt_service._get_connection()
-    sql = "SELECT outputs FROM receipts WHERE action_type = 'task_executed'"
-    params: List[Any] = []
-    if start:
-        sql += " AND timestamp >= ?"
-        params.append(start)
-    if end:
-        sql += " AND timestamp <= ?"
-        params.append(end)
-
-    rows = conn.execute(sql, params).fetchall()
-
+    # Cost data is in receipt outputs.cost_usd; aggregate from task_executed receipts.
+    output_rows = _receipt_service.list_action_outputs(
+        action_type="task_executed",
+        since=start,
+        until=end,
+    )
     totals: Dict[str, float] = {}
-    for row in rows:
+    for outputs in output_rows:
         try:
-            outputs = json.loads(row["outputs"]) if isinstance(row["outputs"], str) else row["outputs"]
             cost = float(outputs.get("cost_usd", 0))
             key = str(outputs.get(group_by, "unknown"))
             totals[key] = totals.get(key, 0) + cost

@@ -138,6 +138,69 @@ class ObservabilityConfig:
         )
 
 
+def describe_otel_export_status(
+    otel: OTelConfig,
+    *,
+    initialized: bool,
+    span_export_active: bool,
+) -> Dict[str, Any]:
+    """Return operator-facing OTel export state without conflating local observability.
+
+    FEATURE_OBSERVABILITY can be healthy while OTel export is intentionally off.
+    This helper keeps that distinction explicit for startup logs and status APIs.
+    """
+    enabled = bool(getattr(otel, "enabled", False))
+    endpoint = str(getattr(otel, "endpoint", "") or "").strip()
+
+    if not enabled:
+        if endpoint:
+            message = "OTel export is disabled by config; the endpoint is retained but no spans are exported."
+        else:
+            message = "OTel export is disabled by config; governance receipts remain local."
+        return {
+            "state": "disabled_by_config",
+            "spans_exported": False,
+            "export_destination": endpoint or None,
+            "message": message,
+            "operator_action": "Enable OTel export and set an OTLP/HTTP endpoint to send spans externally.",
+        }
+
+    if not endpoint:
+        return {
+            "state": "missing_endpoint",
+            "spans_exported": False,
+            "export_destination": None,
+            "message": "OTel export is enabled but no OTLP/HTTP endpoint is configured.",
+            "operator_action": "Set the OTel endpoint to an internal collector or disable OTel export.",
+        }
+
+    if initialized and span_export_active:
+        return {
+            "state": "active",
+            "spans_exported": True,
+            "export_destination": endpoint,
+            "message": "OTel export is active; receipt spans are sent to the configured OTLP/HTTP endpoint.",
+            "operator_action": None,
+        }
+
+    if initialized:
+        return {
+            "state": "bridge_inactive",
+            "spans_exported": False,
+            "export_destination": endpoint,
+            "message": "OTel provider is initialized but receipt span export is not active.",
+            "operator_action": "Reapply the OTel configuration or restart the gateway.",
+        }
+
+    return {
+        "state": "not_initialized",
+        "spans_exported": False,
+        "export_destination": endpoint,
+        "message": "OTel export is configured but the runtime exporter is not initialized.",
+        "operator_action": "Check startup logs and collector connectivity, then restart or reapply config.",
+    }
+
+
 def load_config(config_path: str = _CONFIG_FILE) -> ObservabilityConfig:
     """Load observability config from disk. Returns defaults if not found."""
     try:

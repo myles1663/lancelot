@@ -1,66 +1,64 @@
 # Universal App Bridge (UAB)
 
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen)]() [![Version](https://img.shields.io/badge/version-1.3.0-blue)]() [![License](https://img.shields.io/badge/license-BSL%201.1-blue)]() [![Node](https://img.shields.io/badge/node-%3E%3D18-green)]() [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)]()
-
 **Framework detection and desktop app control for AI agents.**
 
 UAB identifies the best available control path for a running application, records that choice, and reuses it on subsequent sessions. The goal is explicit desktop control with predictable fallbacks, not generic screen automation.
 
-The runtime also exposes its discovery model directly. Embedding systems can inspect the registered framework hooks, framework-detection signatures, Concerto method inventory, and per-operation control plans instead of treating UAB as a black box.
+The runtime also exposes its discovery model directly. Embedding systems can inspect the registered framework hooks, framework-detection signatures, method inventory, and per-operation control plans instead of treating UAB as a black box.
 
-## One-Click Install
+## Install
 
-UAB ships as a packaged installer. Run it once and every AI agent on the machine gets native desktop control.
+UAB can run as a local library, CLI, or HTTP service. The installer sets up the daemon, browser bridge, authentication key, and optional agent integration files on the host machine.
 
 ```bash
-# GUI installer (recommended)
+# GUI installer
 cd installer && npm install && npx electron src/main.js
 
-# CLI install (for terminal users)
+# CLI install
 uab-bridge install
 ```
 
 The installer:
 - Starts UABServer as a system service (auto-starts on boot)
 - Installs the Chrome extension for browser bridge
-- Writes skill files for Claude Co-work AND Claude Code
+- Writes optional skill files for Claude Co-work and Claude Code
 - Generates an API key for authenticated access
 - Detects host network for VM accessibility
 
-Works with: Claude Co-work, Claude Code CLI, Claude Code Desktop, and any agent that can make HTTP calls.
+Agents can also use UAB directly through the CLI or HTTP JSON API.
 
 ## The Core Runtime: Framework Detection And Control Routing
 
 Most automation tools require you to know what app you're controlling and how to connect. UAB instead scans the host, identifies framework signatures, records app profiles, and selects a route from the available adapters:
 
 ```
-        ┌──────────────────────────────────────────────────────────┐
-        │       Framework Detection And Route Selection             │
-        │                                                          │
-        │  1. SCAN ─────────► DLL module scanning                  │
-        │     "What's running?"   Batch process enumeration        │
-        │                         Window title fetching            │
-        │                                   │                      │
-        │  2. IDENTIFY ─────► Framework signature matching         │
-        │     "What framework?"   electron.exe → Electron          │
-        │                         qt6core.dll  → Qt6               │
-        │                         xlcall32.dll → Office            │
-        │                         jvm.dll      → Java              │
-        │                                   │                      │
-        │  3. REGISTER ─────► Runtime map + JSON persistence       │
-        │     "Profile index"     O(1) lookup by PID or name       │
-        │                         Dual-indexed (exe + PID)         │
-        │                         Git-friendly registry.json       │
-        │                                   │                      │
-        │  4. CONNECT ──────► Plugin cascade with fallback         │
-        │     "Route order"       CDP → COM → UIA (automatic)     │
-        │                         Preferred method stored          │
-        │                                   │                      │
-        │  5. RECORD ───────► Update registry with results         │
-        │     "Reuse route"      Store preferred control method    │
-        │                         Cache element trees              │
-        │                         Track connection health          │
-        └──────────────────────────────────────────────────────────┘
+        +----------------------------------------------------------+
+        |       Framework Detection And Route Selection             |
+        |                                                          |
+        |  1. SCAN ---------> DLL module scanning                  |
+        |     "What's running?"   Batch process enumeration        |
+        |                         Window title fetching            |
+        |                                   |                      |
+        |  2. IDENTIFY -----> Framework signature matching         |
+        |     "What framework?"   electron.exe -> Electron          |
+        |                         qt6core.dll  -> Qt6               |
+        |                         xlcall32.dll -> Office            |
+        |                         jvm.dll      -> Java              |
+        |                                   |                      |
+        |  3. REGISTER -----> Runtime map + JSON persistence       |
+        |     "Profile index"     O(1) lookup by PID or name       |
+        |                         Dual-indexed (exe + PID)         |
+        |                         Git-friendly registry.json       |
+        |                                   |                      |
+        |  4. CONNECT ------> Plugin cascade with fallback         |
+        |     "Route order"       CDP -> COM -> UIA (automatic)     |
+        |                         Preferred method stored          |
+        |                                   |                      |
+        |  5. RECORD -------> Update registry with results         |
+        |     "Reuse route"      Store preferred control method    |
+        |                         Cache element trees              |
+        |                         Track connection health          |
+        +----------------------------------------------------------+
 ```
 
 ### What The Runtime Adds
@@ -83,22 +81,22 @@ import { UABConnector } from 'universal-app-bridge';
 const uab = new UABConnector();
 await uab.start();
 
-// 1. SCAN — Discover everything running
+// 1. SCAN - Discover everything running
 const apps = await uab.scan();
-// → 79 apps found, frameworks identified, profiles registered
+// -> 79 apps found, frameworks identified, profiles registered
 
-// 2. FIND — Registry-first lookup (live detection fallback)
+// 2. FIND - Registry-first lookup (live detection fallback)
 const excel = await uab.find('excel');
-// → Instant hit from registry (O(1) Map lookup)
+// -> Instant hit from registry (O(1) Map lookup)
 
-// 3. CONNECT — Route selected from the available adapters
+// 3. CONNECT - Route selected from the available adapters
 const conn = await uab.connect('excel');
-// → { pid: 5678, name: 'EXCEL', framework: 'office', method: 'office-com+uia', elementCount: 342 }
+// -> { pid: 5678, name: 'EXCEL', framework: 'office', method: 'office-com+uia', elementCount: 342 }
 
-// 4. QUERY — Search the UI tree
+// 4. QUERY - Search the UI tree
 const buttons = await uab.query(conn.pid, { type: 'button', label: 'Save' });
 
-// 5. ACT — Perform actions (permission-checked, retried, cache-aware)
+// 5. ACT - Perform actions (permission-checked, retried, cache-aware)
 await uab.act(conn.pid, buttons[0].id, 'click');
 
 // Next session: scan() can reuse registry.json instead of rediscovering everything
@@ -107,23 +105,23 @@ await uab.stop();
 
 ### As a CLI (for any AI agent)
 
-The CLI outputs pure JSON — designed for Claude, GPT, or any agent calling via bash:
+The CLI outputs pure JSON - designed for Claude, GPT, or any agent calling via bash:
 
 ```bash
 # Scan and register all running apps
 uab scan
-# → { "success": true, "apps": [...79 apps with frameworks...] }
+# -> { "success": true, "apps": [...79 apps with frameworks...] }
 
 # List known apps from registry (no scan needed)
 uab apps
-# → Instant recall from registry.json
+# -> Instant recall from registry.json
 
 # Registry-first search with live detection fallback
 uab find "notepad"
 
 # Connect with automatic method selection
 uab connect notepad
-# → { "pid": 1234, "method": "win-uia", "elementCount": 15 }
+# -> { "pid": 1234, "method": "win-uia", "elementCount": 15 }
 
 # Query and act
 uab query 1234 --type button --label "Save"
@@ -135,9 +133,9 @@ uab excel-probe
 # Build a reproducible Excel workbook benchmark artifact plus proof manifest
 uab excel-benchmark --rows 2000 --output data/uab-benchmarks/demo.xlsx --manifest data/uab-benchmarks/demo.benchmark.json
 
-# Registry persists between sessions — next time reuses saved discovery state
+# Registry persists between sessions - next time reuses saved discovery state
 uab profiles
-# → Shows all known apps with framework info and preferred methods
+# -> Shows all known apps with framework info and preferred methods
 ```
 
 ### As an HTTP Server (for remote / server-side agents)
@@ -170,7 +168,7 @@ curl -X POST http://localhost:3100/open -d '{"target":"notepad"}'
 curl -X POST http://localhost:3100/focus -d '{"pid":1234}'
 curl -X POST http://localhost:3100/describe -d '{"pid":1234}'
 
-# P6 — OS raw input injection for spatial gestures
+# P6 - OS raw input injection for spatial gestures
 curl -X POST http://localhost:3100/drag -d '{"pid":1234,"path":[{"x":100,"y":200},{"x":300,"y":200}],"button":"left"}'
 curl -X POST http://localhost:3100/scroll -d '{"pid":1234,"x":500,"y":400,"amount":3}'
 
@@ -200,101 +198,101 @@ UAB automatically detects its runtime context and tunes behavior accordingly:
 ```bash
 # Check what UAB detected:
 uab env
-# → { "environment": { "mode": "desktop", "hasDesktop": true, ... }, "defaults": { ... } }
+# -> { "environment": { "mode": "desktop", "hasDesktop": true, ... }, "defaults": { ... } }
 ```
 
-**One codebase with environment defaults** — UAB selects runtime defaults from the detected host context.
+**One codebase with environment defaults** - UAB selects runtime defaults from the detected host context.
 
 ## Architecture
 
 ```
 Agent Runtime (Claude / GPT / Any AI Agent)
-         │
+         |
     Library API  or  CLI (JSON)  or  HTTP Server (REST)
-         │
-┌────────┴───────────────────────────────────────────────────┐
-│              Universal App Bridge (UAB)                      │
-│                                                             │
-│  ┌─────────────┐  ┌────────────┐  ┌─────────────────────┐  │
-│  │ Framework    │  │  App       │  │   UAB Connector     │  │
-│  │  Detector    │  │  Registry  │  │   (Public API)      │  │
-│  │             │  │  (Brain)   │  │                     │  │
-│  │ DLL scan    │  │ Map + JSON │  │ scan() find()       │  │
-│  │ Batch enum  │  │ O(1) lookup│  │ connect() query()   │  │
-│  │ Signatures  │  │ Persist    │  │ act() state()       │  │
-│  └──────┬──────┘  └─────┬──────┘  └──────────┬──────────┘  │
-│         │               │                     │             │
-│         └───────────────┼─────────────────────┘             │
-│                         │                                   │
-│  ┌──────────────────────┴────────────────────────────────┐  │
-│  │                  Plugin Manager                        │  │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ │  │
-│  │  │Chrome Ext│ │ Browser  │ │ Electron │ │  Office  │ │  │
-│  │  │  (WS)    │ │  (CDP)   │ │  (CDP)   │ │(COM+UIA) │ │  │
-│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ │  │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ │  │
-│  │  │   Qt     │ │   GTK    │ │  Java    │ │ Flutter  │ │  │
-│  │  │  (UIA)   │ │  (UIA)   │ │(JAB→UIA) │ │  (UIA)   │ │  │
-│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ │  │
-│  │  ┌──────────┐ ┌──────────┐                              │  │
-│  │  │ Win-UIA  │ │  Vision  │                              │  │
-│  │  │ (A11y)   │ │(AI last  │                              │  │
-│  │  │          │ │ resort)  │                              │  │
-│  │  └──────────┘ └──────────┘                              │  │
-│  └───────────────────────────────────────────────────────┘  │
-│                                                             │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐   │
-│  │  Cache   │ │Permission│ │  Retry   │ │ Chain Engine │   │
-│  │ (3-tier) │ │ (Audit)  │ │(Backoff) │ │ (Workflows)  │   │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────────┘   │
-│                                                             │
-│  ┌──────────────────┐  ┌────────────────────────────────┐   │
-│  │ Control Router   │  │  Connection Manager            │   │
-│  │ (Cascade+Fallback│  │  (Health+Reconnect+Cleanup)    │   │
-│  └──────────────────┘  └────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-         │
+         |
++--------+---------------------------------------------------+
+|              Universal App Bridge (UAB)                      |
+|                                                             |
+|  +-------------+  +------------+  +---------------------+  |
+|  | Framework    |  |  App       |  |   UAB Connector     |  |
+|  |  Detector    |  |  Registry  |  |   (Public API)      |  |
+|  |             |  |  (Brain)   |  |                     |  |
+|  | DLL scan    |  | Map + JSON |  | scan() find()       |  |
+|  | Batch enum  |  | O(1) lookup|  | connect() query()   |  |
+|  | Signatures  |  | Persist    |  | act() state()       |  |
+|  +------+------+  +-----+------+  +----------+----------+  |
+|         |               |                     |             |
+|         +---------------+---------------------+             |
+|                         |                                   |
+|  +----------------------+--------------------------------+  |
+|  |                  Plugin Manager                        |  |
+|  |  +----------+ +----------+ +----------+ +----------+ |  |
+|  |  |Chrome Ext| | Browser  | | Electron | |  Office  | |  |
+|  |  |  (WS)    | |  (CDP)   | |  (CDP)   | |(COM+UIA) | |  |
+|  |  +----------+ +----------+ +----------+ +----------+ |  |
+|  |  +----------+ +----------+ +----------+ +----------+ |  |
+|  |  |   Qt     | |   GTK    | |  Java    | | Flutter  | |  |
+|  |  |  (UIA)   | |  (UIA)   | |(JAB->UIA) | |  (UIA)   | |  |
+|  |  +----------+ +----------+ +----------+ +----------+ |  |
+|  |  +----------+ +----------+                              |  |
+|  |  | Win-UIA  | |  Vision  |                              |  |
+|  |  | (A11y)   | |(AI last  |                              |  |
+|  |  |          | | resort)  |                              |  |
+|  |  +----------+ +----------+                              |  |
+|  +-------------------------------------------------------+  |
+|                                                             |
+|  +----------+ +----------+ +----------+ +--------------+   |
+|  |  Cache   | |Permission| |  Retry   | | Chain Engine |   |
+|  | (3-tier) | | (Audit)  | |(Backoff) | | (Workflows)  |   |
+|  +----------+ +----------+ +----------+ +--------------+   |
+|                                                             |
+|  +------------------+  +--------------------------------+   |
+|  | Control Router   |  |  Connection Manager            |   |
+|  | (Cascade+Fallback|  |  (Health+Reconnect+Cleanup)    |   |
+|  +------------------+  +--------------------------------+   |
++-------------------------------------------------------------+
+         |
     Operating System (CDP, UIA, COM, PowerShell, WMI)
-         │
+         |
     Desktop Applications
 ```
 
 ### The Cascade Pattern
 
-UAB picks a control method for each operation automatically. The standalone runtime exposes this through a Concerto inventory plus a runtime planner that scores every available method against the current operation. The method inventory records speed, outcome quality, control precision, and cost descriptors, and the planner combines those with action-specific role/control preferences, method boosts, and live penalties to rank the active connection path and fallbacks.
+UAB picks a control method for each operation automatically. The standalone runtime exposes this through a method inventory plus a runtime planner that scores every available method against the current operation. The method inventory records speed, outcome quality, control precision, and cost descriptors, and the planner combines those with action-specific role/control preferences, method boosts, and live penalties to rank the active connection path and fallbacks.
 
 The important runtime detail is that `/plan` is not just a thin wrapper over static metadata. `UABConnector.planOperation()` now injects live route order, the active connected method, environment mode, Session 0 bridge requirements, direct-API availability, vision availability, and connection-health signals before scoring each method. The returned plan includes a `runtimeEvidence` array explaining which live facts changed the ranking:
 
 ```
 Priority 1: Direct API / MCP endpoint (when the app exposes one)
-Priority 2: Chrome Extension Bridge (browsers — no relaunch needed)
-Priority 3: Browser CDP (browsers — with debug flag)
+Priority 2: Chrome Extension Bridge (browsers - no relaunch needed)
+Priority 3: Browser CDP (browsers - with debug flag)
 Priority 4: Framework Hook (Electron CDP, Office COM, Qt/GTK/Java/Flutter hook wrappers)
-Priority 5: Windows UI Automation (win-uia fallback — any windowed app)
-Priority 6: Keyboard Native (shortcuts, hotkeys, text input — fastest for commands)
-Priority 7: OS Raw Input Injection (drag, scroll, gestures — SendInput/CGEventPost/xdotool)
-     Vision Analysis: Screenshot + AI (reading state, verifying results — the agent's eyes)
+Priority 5: Windows UI Automation (win-uia fallback - any windowed app)
+Priority 6: Keyboard Native (shortcuts, hotkeys, text input - fastest for commands)
+Priority 7: OS Raw Input Injection (drag, scroll, gestures - SendInput/CGEventPost/xdotool)
+     Vision Analysis: Screenshot + AI (reading state, verifying results - the agent's eyes)
 ```
 
-The cascade isn't "pick one method per app" — it's "pick the right method for each operation." A single Blender sculpting session uses keyboard for commands (Ctrl+Tab, Ctrl+4), drag for brush strokes, scroll for zooming, and screenshots for verification. Five methods in one workflow. That's the concerto.
+The cascade is operation-specific, not application-specific. A single Blender sculpting session can use keyboard shortcuts for commands, drag events for brush strokes, scroll events for zooming, and screenshots for verification.
 
-> **P6 — OS Raw Input Injection** injects mouse drag, scroll, and gesture events directly into the OS input stream via `SendInput()`. Any application receives these exactly as if a human moved the mouse. This enables sculpting in Blender, painting in Photoshop, drawing in any canvas app — operations that require continuous held-button mouse movement.
+> **P6 - OS Raw Input Injection** injects mouse drag, scroll, and gesture events directly into the OS input stream via `SendInput()`. Any application receives these exactly as if a human moved the mouse. This enables sculpting in Blender, painting in Photoshop, drawing in any canvas app - operations that require continuous held-button mouse movement.
 
 ## Framework Detection Deep Dive
 
 The standalone runtime now exposes this contract directly:
-- `hookInventory()` / `GET /info.frameworkHooks` — all registered framework hooks
-- `signatureInventory()` / `GET /info.frameworkSignatures` — framework detection signatures
-- `concertoInventory()` / `GET /info.concertoMethods` — operation-level method inventory
-- `planOperation()` / `POST /plan` — per-operation Concerto planning with live runtime evidence plus optional caller overrides for weights, preferred role/control, and method penalties
+- `hookInventory()` / `GET /info.frameworkHooks` - all registered framework hooks
+- `signatureInventory()` / `GET /info.frameworkSignatures` - framework detection signatures
+- `concertoInventory()` / `GET /info.concertoMethods` - operation-level method inventory
+- `planOperation()` / `POST /plan` - per-operation control-method planning with live runtime evidence plus optional caller overrides for weights, preferred role/control, and method penalties
 
 ### Phase 1: Detection
 
-UAB scans the system using **three batched PowerShell calls** (not per-process — batched for speed):
+UAB scans the system using **three batched PowerShell calls** (not per-process - batched for speed):
 
-1. **WMI Process Enumeration** — Get all running processes with PIDs, names, paths, command lines
-2. **Batch DLL Module Scan** — One PowerShell call scans loaded modules for ALL processes (batches of 50)
-3. **Batch Window Title Scan** — One P/Invoke call via `EnumWindows` gets all visible window titles
+1. **WMI Process Enumeration** - Get all running processes with PIDs, names, paths, command lines
+2. **Batch DLL Module Scan** - One PowerShell call scans loaded modules for ALL processes (batches of 50)
+3. **Batch Window Title Scan** - One P/Invoke call via `EnumWindows` gets all visible window titles
 
 **Result:** Batched full-system scans stay interactive without per-process PowerShell startup overhead, but actual timing and controllable-app counts vary significantly by host, process mix, and PowerShell responsiveness. Use `uab scan` on the target machine for the real measurement.
 
@@ -321,7 +319,7 @@ Plus **fast-path detection** for browsers (Chrome, Edge, Brave) and Office apps 
 
 ### Phase 3: Registry & Persistence
 
-Every detected app is registered in the **App Registry** — UAB's brain:
+Every detected app is registered in the **App Registry** - UAB's brain:
 
 ```typescript
 // What the registry stores per app
@@ -340,16 +338,16 @@ interface AppProfile {
 ```
 
 The registry uses **dual-indexed Maps** for O(1) lookups:
-- `Map<executable, AppProfile>` — lookup by executable name
-- `Map<pid, executable>` — lookup by PID → executable → profile
+- `Map<executable, AppProfile>` - lookup by executable name
+- `Map<pid, executable>` - lookup by PID -> executable -> profile
 
-**JSON persistence:** The entire registry is saved to `data/uab-profiles/registry.json` — a single, git-friendly file with readable diffs. No database required.
+**JSON persistence:** The entire registry is saved to `data/uab-profiles/registry.json` - a single, git-friendly file with readable diffs. No database required.
 
 ### Phase 4: Registry-First Lookup
 
 When you call `find("excel")`, UAB doesn't scan the system again. It:
 
-1. **Checks the registry first** — O(1) Map lookup, case-insensitive substring match
+1. **Checks the registry first** - O(1) Map lookup, case-insensitive substring match
 2. **Returns the registry hit without rescanning**
 3. **Only falls back to live detection** if not in registry
 
@@ -377,7 +375,7 @@ The source tree currently contains **11 adapter directories** under `src/plugins
 | Runtime Route | Available In | Plugin | Method | Apps Covered |
 |---------------|--------------|--------|--------|--------------|
 | **Direct API apps** | Connector | DirectApiPlugin | `direct-api` | Apps that expose a local control endpoint |
-| **Chrome/Edge/Brave** | Connector (optional) | ChromeExtPlugin | `chrome-extension` | Any Chromium browser — tabs, cookies, DOM, storage, JS exec |
+| **Chrome/Edge/Brave** | Connector (optional) | ChromeExtPlugin | `chrome-extension` | Any Chromium browser - tabs, cookies, DOM, storage, JS exec |
 | **Chrome/Edge/Brave** | Connector + Service | BrowserPlugin | `browser-cdp` | Same browsers, requires `--remote-debugging-port` |
 | **Electron** | Connector + Service | ElectronPlugin | `electron-cdp` | VS Code, Slack, Discord, Notion, Obsidian, Spotify, Teams |
 | **MS Office** | Connector + Service | OfficePlugin | `office-com+uia` | Word, Excel, PowerPoint, Outlook |
@@ -392,23 +390,23 @@ The source tree currently contains **11 adapter directories** under `src/plugins
 
 Every framework plugin maps its native UI tree into the same types:
 
-### `uab.scan()` — Discover & Register
+### `uab.scan()` - Discover & Register
 
 ```typescript
 const apps = await uab.scan();
 // Apps are detected, frameworks identified, and profiles registered
-// Registry persists to disk — subsequent sessions start from cached profiles
+// Registry persists to disk - subsequent sessions start from cached profiles
 ```
 
-### `uab.find(name)` — Registry-First Lookup
+### `uab.find(name)` - Registry-First Lookup
 
 ```typescript
 const results = await uab.find('slack');
-// 1. Checks registry first → returns if found without a fresh scan
-// 2. Falls back to live detection → registers result
+// 1. Checks registry first -> returns if found without a fresh scan
+// 2. Falls back to live detection -> registers result
 ```
 
-### `uab.connect(target)` — Auto-Connect
+### `uab.connect(target)` - Auto-Connect
 
 ```typescript
 // By name (searches registry, then live-detects)
@@ -420,26 +418,26 @@ const conn = await uab.connect(1234);
 // Returns: { pid, name, framework, method, elementCount }
 ```
 
-### `uab.enumerate(pid)` — List UI Elements
+### `uab.enumerate(pid)` - List UI Elements
 
 ```typescript
 const tree = await uab.enumerate(pid);
-// Cached for 5 seconds — repeated calls avoid a fresh lookup
+// Cached for 5 seconds - repeated calls avoid a fresh lookup
 ```
 
-### `uab.query(pid, selector)` — Search Elements
+### `uab.query(pid, selector)` - Search Elements
 
 ```typescript
 const btns = await uab.query(pid, { type: 'button', label: 'Save' });
 // Cached for 3 seconds, auto-invalidated after mutating actions
 ```
 
-### `uab.act(pid, elementId, action, params?)` — Perform Actions
+### `uab.act(pid, elementId, action, params?)` - Perform Actions
 
 ```typescript
 await uab.act(pid, 'btn_1', 'click');
 await uab.act(pid, 'input_3', 'type', { text: 'Hello' });
-// Permission-checked → retried on transient failure → cache invalidated
+// Permission-checked -> retried on transient failure -> cache invalidated
 ```
 
 ## Production Hardening
@@ -447,19 +445,19 @@ await uab.act(pid, 'input_3', 'type', { text: 'Hello' });
 ### Three-Tier Cache
 
 ```
-┌──────────────────────────────────────────┐
-│              Element Cache               │
-│                                          │
-│  Tree Cache    │  5s TTL per PID         │
-│  Query Cache   │  3s TTL, 50 max/PID    │
-│  State Cache   │  2s TTL per PID         │
-│                                          │
-│  Auto-invalidation on mutating actions:  │
-│  click, type, keypress, navigate, etc.   │
-│                                          │
-│  Safe (no invalidation):                 │
-│  focus, hover, scroll, screenshot, etc.  │
-└──────────────────────────────────────────┘
++------------------------------------------+
+|              Element Cache               |
+|                                          |
+|  Tree Cache    |  5s TTL per PID         |
+|  Query Cache   |  3s TTL, 50 max/PID    |
+|  State Cache   |  2s TTL per PID         |
+|                                          |
+|  Auto-invalidation on mutating actions:  |
+|  click, type, keypress, navigate, etc.   |
+|                                          |
+|  Safe (no invalidation):                 |
+|  focus, hover, scroll, screenshot, etc.  |
++------------------------------------------+
 ```
 
 ### Permission & Safety Model
@@ -472,7 +470,7 @@ await uab.act(pid, 'input_3', 'type', { text: 'Hello' });
 ### Health Monitoring
 
 - 30-second health check intervals
-- Auto-reconnect with exponential backoff (1s → 2s → 4s → 8s)
+- Auto-reconnect with exponential backoff (1s -> 2s -> 4s -> 8s)
 - Stale connection cleanup after 5 minutes of failure
 - Event callbacks for connection state changes
 
@@ -503,22 +501,22 @@ const result = await chainExecutor.execute(chain);
 
 ## Chrome Extension Bridge
 
-UAB includes a Chrome Extension (Manifest V3) that connects to your running browser via WebSocket — **no browser relaunch required**.
+UAB includes a Chrome Extension (Manifest V3) that connects to your running browser via WebSocket - **no browser relaunch required**.
 
 ```
-┌────────────────────┐    WebSocket     ┌────────────────────┐
-│   UAB Service      │◄───(port 8787)──►│  Chrome Extension  │
-│   (Node.js)        │    JSON protocol │  (Manifest V3)     │
-└────────────────────┘                  └────────────────────┘
++--------------------+    WebSocket     +--------------------+
+|   UAB Service      |<---(port 8787)-->|  Chrome Extension  |
+|   (Node.js)        |    JSON protocol |  (Manifest V3)     |
++--------------------+                  +--------------------+
 ```
 
-**Full browser control:** Tabs, cookies, localStorage, sessionStorage, navigation, JavaScript execution, screenshots — all without relaunching the browser.
+**Browser operations:** Tabs, cookies, localStorage, sessionStorage, navigation, JavaScript execution, and screenshots can be routed through the extension bridge without relaunching the browser.
 
 ## Co-work Bridge
 
-UAB works seamlessly with Claude Co-work. The installer writes skill files directly into Co-work's plugin directory. Co-work reaches UABServer through Chrome's localhost access — no port forwarding, no configuration.
+UAB can be used from Claude Co-work through installer-written skill files. Co-work reaches UABServer through Chrome's localhost access, so it does not require VM port forwarding for the default local setup.
 
-The Chrome extension acts as a relay: Co-work → Chrome extension → localhost:3100 → UABServer → desktop apps.
+The Chrome extension acts as a relay: Co-work -> Chrome extension -> localhost:3100 -> UABServer -> desktop apps.
 
 ### Recursive Application Bridge
 
@@ -526,50 +524,50 @@ UAB stores successful control paths and can reuse them on later runs.
 
 The **Flow Library** (`data/flow-library/`) stores pre-built interaction sequences for every app UAB has successfully controlled. Each flow captures the exact steps, input method, and known quirks discovered through real-world testing:
 
-- **ChatGPT**: 1 Tab → type → Enter
-- **Grok**: 2 Tabs → keystroke activate → clipboard paste → Enter
+- **ChatGPT**: 1 Tab -> type -> Enter
+- **Grok**: 2 Tabs -> keystroke activate -> clipboard paste -> Enter
 - **Excel**: COM API methods (no UI automation needed)
 - **Notepad**: Direct SendKeys type
 
-When an agent encounters a new app, it checks `GET /flow/{appname}`. If a flow exists, the agent follows it mechanically — zero exploration, zero guessing. If no flow exists, UAB provides a framework-based default, and the agent saves the working sequence via `POST /flow` after success.
+When an agent encounters a new app, it checks `GET /flow/{appname}`. If a flow exists, the agent replays the recorded sequence. If no flow exists, UAB provides a framework-based default, and the agent can save the working sequence via `POST /flow` after success.
 
-This creates a reusable execution loop: **Attempt → Verify → Store → Reuse.** The flow library keeps successful paths as explicit records that any connected agent can replay.
+This creates a reusable execution loop: **Attempt -> Verify -> Store -> Reuse.** The flow library keeps successful paths as explicit records that any connected agent can replay.
 
-### X-ray Vision for Agents
+### Structured UI Inspection
 
-UAB gives AI agents the same visual understanding of applications that humans have — but in data form.
+UAB exposes application structure as data so callers can inspect named controls before choosing an action path.
 
-`POST /deep-query` scans the entire UI tree of any application and returns every named element — buttons, inputs, links, menus, text — with their types, supported actions, and screen positions. One call reveals everything a human can see.
+`POST /deep-query` scans the UI tree exposed by the active control route and returns named elements - buttons, inputs, links, menus, text - with their types, supported actions, and screen positions where available.
 
-`POST /invoke` acts on any element by name. Find "Copy" → click it. Find "New chat" → click it. No Tab navigation, no coordinate guessing, no screenshots needed.
+`POST /invoke` acts on an element by name through the route planner. This avoids tab-order automation or coordinate clicks when the accessibility tree exposes a stable control.
 
 ```bash
-# See everything in ChatGPT
+# Inspect ChatGPT controls
 curl -X POST localhost:3100/deep-query -H "X-API-Key: KEY" -d '{"pid":28968}'
-# → 123 elements: buttons, links, inputs, conversations, model selector...
+# -> 123 elements: buttons, links, inputs, conversations, model selector...
 
-# Click any button by name
+# Invoke a named button
 curl -X POST localhost:3100/invoke -H "X-API-Key: KEY" -d '{"pid":28968, "name":"Copy", "occurrence":"last"}'
-# → Invokes the last Copy button, returns clipboard text
+# -> Invokes the last Copy button, returns clipboard text
 ```
 
-### Anti-Screenshot SDK (v1.2)
+### Structured Inspection SDK
 
-UAB v1.2 eliminates the need for screenshots in most desktop automation tasks.
+UAB prefers structured inspection before screenshots. Vision remains available as a fallback when framework hooks and accessibility APIs cannot expose enough state.
 
-**Spatial Maps** organize UI elements into rows and columns — the agent sees the app layout as structured data instead of pixels. One call replaces a screenshot + vision API analysis.
+**Spatial Maps** organize UI elements into rows and columns so callers can reason over layout as structured data.
 
-**Composite Engine** combines UIA tree + bounding rects + text reading in speed-priority order. Vision becomes a last resort, not the primary method.
+**Composite Engine** combines UIA tree, bounding rects, and text reading in speed-priority order. Vision is the fallback path, not the primary method.
 
 **MCP Server** exposes native desktop-control tools (`desktop_scan`, `desktop_spatial_map`, action-chain tools, etc.) with stable names. MCP-compatible agents receive them through the standard tool handshake.
 
-**Atomic Chains** execute multi-step action sequences in a single PowerShell session — no focus stealing between steps. Solves the menu timing problem.
+**Atomic Chains** execute multi-step action sequences in a single PowerShell session to reduce focus churn between steps.
 
-**Invoke fallback cascade** tries 6 methods to click any element: InvokePattern → SetFocus → ValuePattern → ExpandCollapse → coordinate click → parent invoke.
+**Invoke fallback cascade** tries 6 methods to click any element: InvokePattern -> SetFocus -> ValuePattern -> ExpandCollapse -> coordinate click -> parent invoke.
 
 ## MCP Setup
 
-UAB exposes 17 native desktop control tools via the [Model Context Protocol](https://modelcontextprotocol.io). Any MCP-compatible agent gets direct access to `desktop_scan`, `desktop_spatial_map`, `desktop_invoke`, `desktop_flow`, and more — no skill files or HTTP calls needed.
+UAB exposes 17 native desktop control tools via the [Model Context Protocol](https://modelcontextprotocol.io). Any MCP-compatible agent gets direct access to `desktop_scan`, `desktop_spatial_map`, `desktop_invoke`, `desktop_flow`, and more - no skill files or HTTP calls needed.
 
 **The UAB installer configures MCP automatically for Claude Desktop and Claude Code.** For other agents, follow the instructions below.
 
@@ -639,7 +637,7 @@ Any agent that supports MCP stdio transport can connect:
 | `desktop_scan` | Discover all running GUI applications |
 | `desktop_connect` | Connect to an app by name or PID |
 | `desktop_spatial_map` | Full UI layout as structured rows/columns (RawViewWalker) |
-| `desktop_deep_query` | X-ray: find ALL elements including inner Electron web content |
+| `desktop_deep_query` | Find exposed elements, including inner Electron web content when the route supports it |
 | `desktop_invoke` | Directly activate a named element through the route planner |
 | `desktop_flow` | Read cached interaction flow for specific apps |
 | `desktop_chain` | Atomic multi-step action sequence (no focus loss) |
@@ -662,7 +660,7 @@ UAB works even when running in Session 0 (SSH, Windows Services). It automatical
 | Document | What's Inside |
 |----------|--------------|
 | [**ARCHITECTURE.md**](ARCHITECTURE.md) | Framework detection pipeline, cascade routing, plugin architecture, data flow |
-| [**GETTING_STARTED.md**](GETTING_STARTED.md) | Install → scan → discover → connect → control walkthrough |
+| [**GETTING_STARTED.md**](GETTING_STARTED.md) | Install -> scan -> discover -> connect -> control walkthrough |
 | [**API_REFERENCE.md**](API_REFERENCE.md) | Every method, parameter, and return type for UABConnector & AppRegistry |
 | [**SUPPORTED_APPLICATIONS.md**](SUPPORTED_APPLICATIONS.md) | Tested apps with specific operations and benchmarks |
 | [**SECURITY.md**](SECURITY.md) | Trust boundaries, permission model, audit trail |
@@ -684,18 +682,16 @@ UAB works even when running in Session 0 (SSH, Windows Services). It automatical
 | Apps detected | **79+** on typical Windows desktop |
 | Registry lookup | **O(1)** via dual-indexed Maps |
 
-## Why UAB Matters
+## Design Rationale
 
-The person who solves reliable, universal app control for agents unlocks the entire "AI operating system" vision without needing anyone's permission. No waiting for app developers to build APIs. No begging SaaS companies for MCP servers. No fragile pixel-scraping.
+Desktop applications expose different control surfaces: COM for Office, CDP for browsers and Electron, UI Automation for native Windows applications, and screenshots only when structured routes fail. UAB keeps those routes explicit and records which one worked for each application.
 
-**Framework detection plus route planning is the key.** Any agent can scan a system, identify what is running, and control it through explicit adapters. The registry persists profiles across sessions so later runs can skip rediscovery.
-
-Hook into the framework, own the interface.
+Framework detection plus route planning lets a caller scan a system, identify what is running, and choose an adapter based on runtime evidence. The registry persists profiles across sessions so later runs can skip rediscovery when the host state has not changed.
 
 ## Requirements
 
 - **Node.js** >= 18.0.0
-- **Windows** (primary platform — UIA, COM, PowerShell)
+- **Windows** (primary platform - UIA, COM, PowerShell)
 - Linux/macOS support via framework-specific plugins
 
 ## Environment Variables

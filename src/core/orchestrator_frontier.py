@@ -39,7 +39,7 @@ def emit_frontier_scrub_receipt(
         return
 
     try:
-        policy = runtime._current_model_usage_status()["frontier_scrub_mode"]
+        policy = runtime.current_model_usage_status()["frontier_scrub_mode"]
         status = ReceiptStatus.FAILURE if action_name == "pii_scrub_blocked" else ReceiptStatus.SUCCESS
         scrub_pipeline = list(scrub_stages)
         if not scrub_pipeline:
@@ -116,7 +116,7 @@ def record_frontier_scrub_result(
     if result.source == "policy_disabled":
         return
     if result.fallback_used:
-        runtime._emit_chat_progress(
+        runtime.emit_chat_progress(
             "frontier_scrub",
             "Local scrub fallback active; using deterministic redaction path",
             severity="warning",
@@ -124,7 +124,7 @@ def record_frontier_scrub_result(
             degraded_reason=result.reason or "deterministic local scrub fallback used",
             source=result.source,
         )
-        runtime._emit_frontier_scrub_receipt(
+        runtime.emit_frontier_scrub_receipt(
             action_name="pii_scrub_fallback",
             source=result.source,
             path=path,
@@ -141,7 +141,7 @@ def record_frontier_scrub_result(
         )
         return
     if result.detected_categories:
-        runtime._emit_frontier_scrub_receipt(
+        runtime.emit_frontier_scrub_receipt(
             action_name="pii_scrub_applied",
             source=result.source,
             path=path,
@@ -174,11 +174,11 @@ def get_frontier_scrubber(runtime: Any) -> LocalPIIScrubber:
 
 def redact_for_frontier(runtime: Any, text: str) -> str:
     """Scrub sensitive text locally before it reaches a frontier provider."""
-    scrubber = runtime._get_frontier_scrubber()
+    scrubber = runtime.get_frontier_scrubber()
     try:
         result = scrubber.scrub_text(text)
     except PIIScrubError as exc:
-        runtime._emit_chat_progress(
+        runtime.emit_chat_progress(
             "frontier_scrub",
             "Frontier payload blocked by local scrub policy",
             severity="error",
@@ -186,7 +186,7 @@ def redact_for_frontier(runtime: Any, text: str) -> str:
             degraded_reason=str(exc),
             source="required_policy_block",
         )
-        runtime._emit_frontier_scrub_receipt(
+        runtime.emit_frontier_scrub_receipt(
             action_name="pii_scrub_blocked",
             source="required_policy_block",
             path="root",
@@ -199,7 +199,7 @@ def redact_for_frontier(runtime: Any, text: str) -> str:
         )
         raise
 
-    runtime._record_frontier_scrub_result(
+    runtime.record_frontier_scrub_result(
         result,
         path="root",
         input_length=len(text) if isinstance(text, str) else 0,
@@ -209,11 +209,11 @@ def redact_for_frontier(runtime: Any, text: str) -> str:
 
 def scrub_frontier_payload(runtime: Any, payload: Any) -> Any:
     """Recursively scrub provider-native payloads where text content is present."""
-    scrubber = runtime._get_frontier_scrubber()
+    scrubber = runtime.get_frontier_scrubber()
     try:
         scrubbed, audit_events = scrubber.scrub_payload_with_audit(payload)
     except PIIScrubPayloadError as exc:
-        runtime._emit_chat_progress(
+        runtime.emit_chat_progress(
             "frontier_scrub",
             "Frontier payload blocked by local scrub policy",
             severity="error",
@@ -221,7 +221,7 @@ def scrub_frontier_payload(runtime: Any, payload: Any) -> Any:
             degraded_reason=exc.reason,
             source="required_policy_block",
         )
-        runtime._emit_frontier_scrub_receipt(
+        runtime.emit_frontier_scrub_receipt(
             action_name="pii_scrub_blocked",
             source="required_policy_block",
             path=exc.path,
@@ -234,7 +234,7 @@ def scrub_frontier_payload(runtime: Any, payload: Any) -> Any:
         )
         raise
     except PIIScrubError as exc:
-        runtime._emit_chat_progress(
+        runtime.emit_chat_progress(
             "frontier_scrub",
             "Frontier payload blocked by local scrub policy",
             severity="error",
@@ -242,7 +242,7 @@ def scrub_frontier_payload(runtime: Any, payload: Any) -> Any:
             degraded_reason=str(exc),
             source="required_policy_block",
         )
-        runtime._emit_frontier_scrub_receipt(
+        runtime.emit_frontier_scrub_receipt(
             action_name="pii_scrub_blocked",
             source="required_policy_block",
             path="root",
@@ -252,7 +252,7 @@ def scrub_frontier_payload(runtime: Any, payload: Any) -> Any:
         raise
 
     for event in audit_events:
-        runtime._record_frontier_scrub_result(
+        runtime.record_frontier_scrub_result(
             event,
             path=event.path,
             input_length=event.input_length,
@@ -266,11 +266,11 @@ def build_frontier_user_message(
     images: list | None = None,
 ) -> Any:
     """Build a frontier-bound user message after local redaction."""
-    runtime._emit_chat_progress(
+    runtime.emit_chat_progress(
         "frontier_scrub",
         "Scrubbing outbound user/context payload locally",
     )
-    return runtime.provider.build_user_message(runtime._redact_for_frontier(text), images=images)
+    return runtime.provider.build_user_message(runtime.redact_for_frontier(text), images=images)
 
 
 def build_frontier_tool_response_message(
@@ -278,13 +278,13 @@ def build_frontier_tool_response_message(
     tool_results: list[tuple[str, str, str]],
 ) -> Any:
     """Build a frontier-bound tool response message after local redaction."""
-    runtime._emit_chat_progress(
+    runtime.emit_chat_progress(
         "frontier_scrub",
         "Scrubbing tool results before frontier model handoff",
     )
     scrubbed_results = []
     for call_id, fn_name, result_str in tool_results:
-        scrubbed_results.append((call_id, fn_name, runtime._redact_for_frontier(str(result_str))))
+        scrubbed_results.append((call_id, fn_name, runtime.redact_for_frontier(str(result_str))))
     return runtime.provider.build_tool_response_message(scrubbed_results)
 
 
@@ -297,12 +297,12 @@ def provider_generate(
     config: Optional[dict] = None,
 ) -> Any:
     """Frontier provider wrapper that enforces local scrubbing before generation."""
-    runtime._emit_chat_progress(
+    runtime.emit_chat_progress(
         "frontier_scrub",
         "Validating provider payload against local scrub policy",
     )
-    scrubbed_messages = runtime._scrub_frontier_payload(messages)
-    runtime._emit_chat_progress(
+    scrubbed_messages = runtime.scrub_frontier_payload(messages)
+    runtime.emit_chat_progress(
         "provider_call",
         "Calling governed frontier model",
         model=model,
@@ -327,12 +327,12 @@ def provider_generate_with_tools(
     config: Optional[dict] = None,
 ) -> Any:
     """Frontier provider wrapper for tool calls with local scrubbing."""
-    runtime._emit_chat_progress(
+    runtime.emit_chat_progress(
         "frontier_scrub",
         "Validating tool-capable provider payload against local scrub policy",
     )
-    scrubbed_messages = runtime._scrub_frontier_payload(messages)
-    runtime._emit_chat_progress(
+    scrubbed_messages = runtime.scrub_frontier_payload(messages)
+    runtime.emit_chat_progress(
         "provider_call",
         "Calling governed frontier model with tools",
         model=model,

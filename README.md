@@ -65,6 +65,7 @@ The diagram shows the system boundary clearly: governance sits in front of execu
 
 Key guarantees are backed by contract tests you can run directly:
 
+- Public release verification: `python scripts/verify-public-release.py`
 - Receipt immutability and integrity-chain validation: [tests/test_receipts.py](tests/test_receipts.py)
 - HIVE scoped execution and boundary enforcement: [tests/hive/test_runtime.py](tests/hive/test_runtime.py)
 - Kill switch propagation and fail-closed behavior: [tests/test_kill_switch_contract.py](tests/test_kill_switch_contract.py)
@@ -94,8 +95,8 @@ pytest \
   tests/test_chat_runs.py::test_chat_run_cancel_endpoint_marks_run_cancelled \
   tests/test_chat_runs.py::test_chat_run_retry_endpoint_queues_new_run \
   tests/test_chat_runs.py::test_chat_run_retry_endpoint_queues_blocked_run \
-  tests/test_gateway_control_routes.py \
-  tests/test_gateway_live_routes.py \
+  tests/test_control_plane.py \
+  tests/test_control_plane_auth_hardening.py \
   tests/test_token_url_hardening.py::test_live_websocket_rejects_query_param_tokens \
   tests/test_orchestrator_approval.py \
   tests/test_orchestrator_context.py \

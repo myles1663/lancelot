@@ -1,12 +1,9 @@
-"""
-Librarian - Intelligent File Clerk
--------------------------------------
-High-concurrency, AI-driven file organization service.
+"""Local file intake watcher for Lancelot memory.
 
-Feature Set:
-1. **Thread-Safe Ingestion**: Uses asyncio.Queue to decouple Watchdog threads from processing.
-2. **AI Classification**: Inspects file content via Gemini to tag Intent (Financial, Technical, etc.).
-3. **Safety Protocol**: Implements '24h Trash' rule - deletions are soft-moves to .trash with metadata.
+The librarian keeps runtime files out of the way, stages newly-created local
+files for operator review, and provides a 24-hour trash path. It deliberately
+does not call external models; local file organization should not create data
+egress or provider-key requirements.
 """
 
 import os
@@ -18,9 +15,7 @@ import logging
 from datetime import datetime, timedelta
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-from google import genai
 
-# Configure Logging
 logger = logging.getLogger("lancelot.librarian")
 
 class TrashService:
@@ -50,10 +45,10 @@ class TrashService:
             with open(dest_path + ".metadata", "w") as f:
                 json.dump(meta, f)
                 
-            logger.info(f"Soft deleted: {filename} -> {trash_name}")
+            logger.info("Soft deleted local data file: %s -> %s", filename, trash_name)
             return True
         except Exception as e:
-            logger.error(f"Failed to soft delete {filename}: {e}")
+            logger.error("Failed to soft delete local data file %s: %s", filename, e)
             return False
 
     def cleanup(self):
@@ -68,14 +63,13 @@ class TrashService:
                     
                     expires = datetime.fromisoformat(meta["expires_at"])
                     if now > expires:
-                        # Delete file and metadata
                         target_file = meta_path.replace(".metadata", "")
                         if os.path.exists(target_file):
                             os.remove(target_file)
                         os.remove(meta_path)
-                        logger.info(f"Cleanup: Removed expired {target_file}")
+                        logger.info("Removed expired trash item: %s", target_file)
                 except Exception as e:
-                    logger.error(f"Cleanup error for {f}: {e}")
+                    logger.error("Trash cleanup failed for metadata file %s: %s", f, e)
 
 
 class LibrarianHandler(FileSystemEventHandler):
@@ -94,26 +88,6 @@ class LibrarianV2:
         self.queue = asyncio.Queue()
         self.trash_svc = TrashService(data_dir)
         self.observer = Observer()
-        self.client = None
-        self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-        
-        # Classification Categories
-        self.categories = {
-            "Financial": ["invoices", "receipts", "billing"],
-            "Technical": ["logs", "code", "configs"],
-            "Personal": ["photos", "letters"],
-            "Data": ["csv", "json", "datasets"]
-        }
-        
-        self._init_gemini()
-
-    def _init_gemini(self):
-        api_key = os.getenv("GEMINI_API_KEY")
-        if api_key:
-            self.client = genai.Client(api_key=api_key)
-            logger.info("Librarian AI: Online")
-        else:
-            logger.warning("Librarian AI: Offline (No Key)")
 
     def start(self):
         """Starts the filesystem watcher."""
@@ -144,7 +118,7 @@ class LibrarianV2:
                 if os.path.exists(file_path):
                     await self._organize_file(file_path)
             except Exception as e:
-                logger.error(f"Processing error: {e}")
+                logger.error("Librarian processing failed for %s: %s", file_path, e)
             finally:
                 self.queue.task_done()
 
@@ -166,29 +140,11 @@ class LibrarianV2:
         if filename in self.PROTECTED_FILES:
             return
 
-        logger.info(f"Analyzing: {filename}")
-        
-        category = "Unsorted"
-        summary = "No analysis performed."
-        
-        # AI Classification
-        if self.client:
-            try:
-                with open(file_path, "r", errors='ignore') as f:
-                    content = f.read(1500)
-                
-                # Offload to thread to avoid blocking loop
-                loop = asyncio.get_running_loop()
-                response = await loop.run_in_executor(None, self._query_gemini, content)
-                
-                parsed = self._parse_ai_decision(response)
-                category = parsed.get("category", "Unsorted")
-                summary = parsed.get("summary", "")
-                
-            except Exception as e:
-                logger.warning(f"AI Check failed: {e}")
+        logger.info("Filing local data file for operator review: %s", filename)
 
-        # Move to Category Folder
+        category = "Unsorted"
+        summary = "Model classification disabled; queued for operator review."
+
         target_dir = os.path.join(self.data_dir, category)
         if not os.path.exists(target_dir):
             os.makedirs(target_dir)
@@ -202,40 +158,12 @@ class LibrarianV2:
 
         try:
             shutil.move(file_path, dest_path)
-            logger.info(f"Filed: {filename} -> {category}/")
-            
-            # Log to Memory
+            logger.info("Filed local data file: %s -> %s/", filename, category)
+
             self._log_filing(filename, category, summary)
-            
+
         except Exception as e:
-            logger.error(f"Refiling failed: {e}")
-
-    def _query_gemini(self, content):
-        """Sync wrapper for Gemini call."""
-        prompt = (
-            f"Classify this file content into one tag: [Financial, Technical, Personal, Data, Other]. "
-            f"Also verify if it should be deleted (Trash). "
-            f"Format: Tag: <Tag> | Action: <Keep/Delete> | Summary: <1 sent>\n\n"
-            f"Content:\n{content}"
-        )
-        resp = self.client.models.generate_content(
-            model=self.model_name,
-            contents=prompt
-        )
-        return resp.text
-
-    def _parse_ai_decision(self, text):
-        """Parses LLM output."""
-        # Simple heuristic parsing
-        lower = text.lower()
-        category = "Other"
-        
-        if "financial" in lower: category = "Financial"
-        elif "technical" in lower: category = "Technical"
-        elif "personal" in lower: category = "Personal"
-        elif "data" in lower: category = "Data"
-        
-        return {"category": category, "summary": text}
+            logger.error("Failed to file local data file %s into %s: %s", filename, category, e)
 
     def _log_filing(self, filename, category, summary):
         log_path = os.path.join(self.data_dir, "librarian.log")

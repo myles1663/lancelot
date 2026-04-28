@@ -58,6 +58,7 @@ class JobResponse(BaseModel):
     description: str
     last_run_at: Optional[str] = None
     last_run_status: Optional[str] = None
+    last_run_error: Optional[str] = None
     run_count: int
     registered_at: str
 
@@ -136,6 +137,7 @@ def list_jobs():
                 description=r.description,
                 last_run_at=r.last_run_at,
                 last_run_status=r.last_run_status,
+                last_run_error=r.last_run_error,
                 run_count=r.run_count,
                 registered_at=r.registered_at,
             )
@@ -177,6 +179,7 @@ def get_job(job_id: str):
         description=record.description,
         last_run_at=record.last_run_at,
         last_run_status=record.last_run_status,
+        last_run_error=record.last_run_error,
         run_count=record.run_count,
         registered_at=record.registered_at,
     )

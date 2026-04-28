@@ -217,6 +217,10 @@ class MCPSentry:
         if expired:
             self._save_pending_requests()
 
+    def cleanup_expired(self):
+        """Remove expired approval entries from the public Sentry API."""
+        self._cleanup_expired()
+
     def _check_rate_limit(self, tool_name: str) -> bool:
         """Returns True if rate limit is exceeded for the given tool."""
         now = time.time()

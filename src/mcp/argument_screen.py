@@ -180,7 +180,7 @@ class MCPArgumentScreener:
                 categories_hit.add("size")
 
         # Flatten arguments to string values for pattern screening
-        flat_values = self._flatten_values(arguments)
+        flat_values = self.flatten_values(arguments)
 
         for key, value in flat_values:
             # Platform InputSanitizer (banned phrases, homoglyphs)
@@ -310,7 +310,7 @@ class MCPArgumentScreener:
         return violations
 
     @staticmethod
-    def _flatten_values(
+    def flatten_values(
         arguments: Dict[str, Any], prefix: str = ""
     ) -> List[tuple]:
         """Recursively flatten argument dict to (key, string_value) pairs."""
@@ -321,7 +321,7 @@ class MCPArgumentScreener:
                 pairs.append((full_key, value))
             elif isinstance(value, dict):
                 pairs.extend(
-                    MCPArgumentScreener._flatten_values(value, full_key)
+                    MCPArgumentScreener.flatten_values(value, full_key)
                 )
             elif isinstance(value, list):
                 for i, item in enumerate(value):
@@ -329,11 +329,13 @@ class MCPArgumentScreener:
                         pairs.append((f"{full_key}[{i}]", item))
                     elif isinstance(item, dict):
                         pairs.extend(
-                            MCPArgumentScreener._flatten_values(
+                            MCPArgumentScreener.flatten_values(
                                 item, f"{full_key}[{i}]"
                             )
                         )
         return pairs
+
+    _flatten_values = flatten_values
 
     @staticmethod
     def _check_url_ssrf(key: str, value: str) -> Optional[str]:

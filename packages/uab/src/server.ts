@@ -1,12 +1,12 @@
 /**
- * UAB HTTP Server — Server-side endpoint for remote UAB access.
+ * UAB HTTP Server - server-side endpoint for remote UAB access.
  *
  * Wraps UABConnector in a lightweight HTTP server so agents running
  * on a different machine (or in a container) can control desktop apps
  * on the host via REST calls.
  *
  * Architecture:
- *   - Uses Node's built-in `http` module (ZERO dependencies)
+ *   - Uses Node's built-in `http` module
  *   - Each request gets its own context (stateless by default)
  *   - Shared UABConnector instance with connection pooling
  *   - JSON request/response only

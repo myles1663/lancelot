@@ -1,12 +1,3 @@
-# Lancelot — A Governed Autonomous System
-# Copyright (c) 2026 Myles Russell Hamilton
-# Licensed under BUSL-1.1. See LICENSE for details.
-# Patent Pending: US Provisional Application #63/982,183
-#
-# This module bridges to the Universal App Bridge (UAB) daemon.
-# UAB itself is licensed under the Business Source License 1.1 (BSL 1.1) —
-# see packages/uab/LICENSE.
-
 """
 Bridge Lancelot's tool fabric to the Universal App Bridge daemon.
 
@@ -41,11 +32,6 @@ from src.tools.contracts import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-# =============================================================================
-# Risk Classification for UAB Actions
-# =============================================================================
 
 _ACTION_RISK_MANIFEST_PATH = (
     Path(__file__).resolve().parents[3]
@@ -119,26 +105,17 @@ def classify_action_risk(action: str, app_name: str = "") -> RiskLevel:
 
     return RiskLevel.LOW
 
-
-# =============================================================================
-# Configuration
-# =============================================================================
-
-
 @dataclass
 class UABConfig:
     """Configuration for the UAB provider."""
 
-    # Daemon connection — UAB runs on the host, we reach it via Host Bridge
     daemon_url: str = ""
     connect_timeout_s: int = 5
     read_timeout_s: int = 30
 
-    # JSON-RPC settings
     rpc_version: str = "2.0"
     next_id: int = 1
 
-    # Output limits
     max_elements: int = 5000
     max_element_depth: int = 20
 
@@ -148,15 +125,9 @@ class UABConfig:
                 "UAB_DAEMON_URL", "http://host.docker.internal:7900"
             )
 
-
-# =============================================================================
-# UABProvider
-# =============================================================================
-
-
 class UABProvider(BaseProvider):
     """
-    Universal App Bridge provider — framework-level desktop app control.
+    Universal App Bridge provider for framework-level desktop app control.
 
     Communicates with the UAB daemon via JSON-RPC 2.0 over TCP to detect,
     connect, enumerate, query, and act on desktop applications.
@@ -216,10 +187,6 @@ class UABProvider(BaseProvider):
             "connections": normalized_connections,
         }
 
-    # =========================================================================
-    # JSON-RPC Communication
-    # =========================================================================
-
     def _rpc_call(
         self,
         method: str,
@@ -273,10 +240,6 @@ class UABProvider(BaseProvider):
                 f"UAB daemon returned invalid JSON: {str(e)[:100]}"
             ) from e
 
-    # =========================================================================
-    # Health Check
-    # =========================================================================
-
     def health_check(self) -> ProviderHealth:
         """Check if the UAB daemon is reachable and operational."""
         try:
@@ -316,6 +279,17 @@ class UABProvider(BaseProvider):
                 },
             )
 
+    def summarize_health(self, health: Optional[ProviderHealth] = None) -> Dict[str, Any]:
+        """Return the provider status fields used by gateway startup wiring."""
+        snapshot = health or self.health_check()
+        metadata = getattr(snapshot, "metadata", {}) or {}
+        state = getattr(getattr(snapshot, "state", None), "value", "unknown")
+        return {
+            "state": state,
+            "daemon_url": metadata.get("daemon_url") or self.config.daemon_url,
+            "error": getattr(snapshot, "error_message", None),
+        }
+
     def get_daemon_status(self) -> Dict[str, Any]:
         """Return normalized daemon status metadata."""
         try:
@@ -325,10 +299,6 @@ class UABProvider(BaseProvider):
         except Exception as e:
             logger.warning("UAB status query failed: %s", e)
             return self._normalize_status(None)
-
-    # =========================================================================
-    # AppControl Capability
-    # =========================================================================
 
     def detect(self) -> List[DetectedApp]:
         """Detect controllable desktop applications on the host."""
@@ -490,10 +460,6 @@ class UABProvider(BaseProvider):
             logger.warning("UAB state failed for PID %d: %s", pid, e)
             return AppState(pid=pid)
 
-    # =========================================================================
-    # v0.5.0: Disconnect
-    # =========================================================================
-
     def disconnect(self, pid: int) -> bool:
         """Disconnect from a connected application."""
         try:
@@ -503,10 +469,6 @@ class UABProvider(BaseProvider):
         except Exception as e:
             logger.warning("UAB disconnect failed for PID %d: %s", pid, e)
             return False
-
-    # =========================================================================
-    # v0.5.0: Keyboard Input
-    # =========================================================================
 
     def keypress(self, pid: int, key: str) -> AppActionResult:
         """Send a single keypress to a connected app."""
@@ -547,10 +509,6 @@ class UABProvider(BaseProvider):
             return AppActionResult(success=False, action="hotkey",
                                    error_message=str(e)[:200],
                                    duration_ms=int((time.time() - start_time) * 1000))
-
-    # =========================================================================
-    # v0.5.0: Window Management
-    # =========================================================================
 
     def _window_action(self, method: str, pid: int, **extra) -> AppActionResult:
         """Internal helper for window management RPC calls."""
@@ -597,10 +555,6 @@ class UABProvider(BaseProvider):
         """Resize a window to (width, height)."""
         return self._window_action("resizeWindow", pid, width=width, height=height)
 
-    # =========================================================================
-    # v0.5.0: Screenshot
-    # =========================================================================
-
     def screenshot(self, pid: int, output_path: Optional[str] = None) -> AppActionResult:
         """Capture a screenshot of a connected app's window."""
         start_time = time.time()
@@ -624,10 +578,6 @@ class UABProvider(BaseProvider):
                                    error_message=str(e)[:200],
                                    duration_ms=int((time.time() - start_time) * 1000))
 
-    # =========================================================================
-    # v0.5.0: Action Chains
-    # =========================================================================
-
     def execute_chain(self, chain_definition: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a multi-step action chain. Returns ChainResult dict."""
         try:
@@ -636,10 +586,6 @@ class UABProvider(BaseProvider):
         except Exception as e:
             logger.warning("UAB chain execution failed: %s", e)
             return {"success": False, "error": str(e)[:200]}
-
-    # =========================================================================
-    # v0.5.0: Office Operations (via act() with specialized action types)
-    # =========================================================================
 
     def read_document(self, pid: int) -> AppActionResult:
         """Read document content from Word/document app."""
@@ -689,15 +635,11 @@ class UABProvider(BaseProvider):
         return self.act(pid, "", "composeEmail", params)
 
     def send_email(self, pid: int, to: str, subject: str, body: str, cc: str = "") -> AppActionResult:
-        """Compose and send an email (HIGH risk — irreversible)."""
+        """Compose and send an email (HIGH risk; irreversible)."""
         params: Dict[str, Any] = {"to": to, "subject": subject, "body": body}
         if cc:
             params["cc"] = cc
         return self.act(pid, "", "sendEmail", params)
-
-    # =========================================================================
-    # v0.5.0: Diagnostics
-    # =========================================================================
 
     def get_health_summary(self) -> List[Dict[str, Any]]:
         """Get connection health summary from UAB daemon."""
@@ -726,15 +668,11 @@ class UABProvider(BaseProvider):
             logger.warning("UAB audit log failed: %s", e)
             return []
 
-    # =========================================================================
-    # v0.6.0: Spatial Map / Composite Engine
-    # =========================================================================
-
     def spatial_map(self, pid: int, format: str = "detailed") -> Dict[str, Any]:
         """Get a spatial map of an app's UI (rows, grid, text content).
 
-        This replaces screenshots for most use cases — structured data
-        is faster and more accurate for AI to process.
+        Structured data is preferred over screenshots when the route can expose
+        enough UI state.
 
         Args:
             pid: Process ID of connected app.
@@ -886,10 +824,6 @@ class UABProvider(BaseProvider):
             logger.warning("UAB smartInvoke failed: %s", e)
             return {"success": False, "error": str(e)[:200]}
 
-    # =========================================================================
-    # v0.6.0: Browser Operations
-    # =========================================================================
-
     def navigate(self, pid: int, url: str) -> AppActionResult:
         """Navigate browser to a URL."""
         return self.act(pid, "", "navigate", {"url": url})
@@ -935,10 +869,6 @@ class UABProvider(BaseProvider):
     def set_local_storage(self, pid: int, key: str, value: str) -> AppActionResult:
         """Set a localStorage value in the browser."""
         return self.act(pid, "", "setLocalStorage", {"storageKey": key, "storageValue": value})
-
-    # =========================================================================
-    # Helpers
-    # =========================================================================
 
     def _parse_element(self, data: Dict[str, Any], depth: int = 0) -> UIElement:
         """Parse a raw UAB element dict into a UIElement, with depth limit."""

@@ -1,15 +1,13 @@
-"""
-Structured Memory Store — Core block persistence and management.
-
-This module provides the CoreBlockStore for persisting and managing
-core memory blocks (persona, human, mission, operating_rules, workspace_state).
-"""
+"""Persistent storage for structured core memory blocks."""
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
+import time
+from uuid import uuid4
 from datetime import datetime
 from pathlib import Path
 from threading import RLock
@@ -26,6 +24,9 @@ from .schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+_ATOMIC_REPLACE_ATTEMPTS = 4
+_ATOMIC_REPLACE_RETRY_BASE_SECONDS = 0.05
 
 
 def estimate_tokens(text: str) -> int:
@@ -181,14 +182,44 @@ class CoreBlockStore:
             },
         }
 
-        # Write to temp file first, then rename (atomic on most systems)
-        temp_file = self.blocks_file.with_suffix(".tmp")
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, default=str)
+        temp_file = self.blocks_file.with_name(
+            f"{self.blocks_file.name}.{os.getpid()}.{uuid4().hex}.tmp"
+        )
+        try:
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, default=str)
+                f.flush()
+                os.fsync(f.fileno())
 
-        # Atomic rename
-        temp_file.replace(self.blocks_file)
+            self._replace_blocks_file(temp_file)
+        finally:
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except OSError as exc:
+                    logger.warning("Failed to remove stale memory temp file %s: %s", temp_file, exc)
         logger.debug("Saved core blocks to %s", self.blocks_file)
+
+    def _replace_blocks_file(self, temp_file: Path) -> None:
+        """Atomically publish a new core block file."""
+        delay = _ATOMIC_REPLACE_RETRY_BASE_SECONDS
+        for attempt in range(1, _ATOMIC_REPLACE_ATTEMPTS + 1):
+            try:
+                temp_file.replace(self.blocks_file)
+                return
+            except PermissionError:
+                if attempt == _ATOMIC_REPLACE_ATTEMPTS:
+                    raise
+                logger.debug(
+                    "Core block file replace was temporarily denied; retrying",
+                    extra={
+                        "target": str(self.blocks_file),
+                        "attempt": attempt,
+                        "max_attempts": _ATOMIC_REPLACE_ATTEMPTS,
+                    },
+                )
+                time.sleep(delay)
+                delay *= 2
 
     def get_block(self, block_type: CoreBlockType) -> Optional[CoreBlock]:
         """
@@ -417,7 +448,7 @@ class CoreBlockStore:
             data_resolved = self.data_dir.resolve()
             if not str(resolved).startswith(str(data_resolved)):
                 logger.error(
-                    "SECURITY: bootstrap_from_user_file blocked — "
+                    "SECURITY: bootstrap_from_user_file blocked - "
                     "path outside data directory: %s", user_file_path
                 )
                 return None

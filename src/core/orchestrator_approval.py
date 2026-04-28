@@ -139,7 +139,7 @@ def handle_approval(runtime: Any, session_id: str = "") -> str:
         operator_name=operator_name,
     )
 
-    return runtime._handle_proceed("proceed", session_id=session_id)
+    return runtime.handle_proceed("proceed", session_id=session_id)
 
 
 def _highest_risk(steps: list[Any]) -> str:

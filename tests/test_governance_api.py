@@ -72,6 +72,9 @@ class _FakeSentry:
     def _cleanup_expired(self):
         self.cleaned = True
 
+    def cleanup_expired(self):
+        self._cleanup_expired()
+
     def approve_request(self, approval_id):
         self.approved.append(approval_id)
         return approval_id in self.pending_requests

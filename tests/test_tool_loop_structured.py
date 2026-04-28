@@ -38,9 +38,9 @@ def _runtime_returning_structured(text="Verified response"):
         )
 
     runtime = SimpleNamespace(
-        _build_frontier_user_message=lambda prompt: {"role": "user", "content": prompt},
-        _provider_generate=provider_generate,
-        _route_model=lambda prompt: "model-for-" + prompt,
+        build_frontier_user_message=lambda prompt: {"role": "user", "content": prompt},
+        provider_generate=provider_generate,
+        route_model=lambda prompt: "model-for-" + prompt,
     )
     return runtime, captured
 
@@ -97,9 +97,9 @@ def test_summarize_interrupted_tool_run_includes_error_context():
 
 def test_summarize_max_iterations_returns_none_when_structured_parse_fails():
     runtime = SimpleNamespace(
-        _build_frontier_user_message=lambda prompt: {"role": "user", "content": prompt},
-        _provider_generate=lambda **kwargs: SimpleNamespace(text="not json"),
-        _route_model=lambda prompt: "model",
+        build_frontier_user_message=lambda prompt: {"role": "user", "content": prompt},
+        provider_generate=lambda **kwargs: SimpleNamespace(text="not json"),
+        route_model=lambda prompt: "model",
     )
 
     assert summarize_max_iterations(

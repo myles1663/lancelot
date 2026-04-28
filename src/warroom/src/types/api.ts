@@ -838,6 +838,10 @@ export interface UpdateStatusResponse {
   released_at: string | null
   checked_at: number | null
   check_error: string | null
+  check_error_kind: 'network_unreachable' | 'blocked_by_policy' | 'manifest_http_error' | 'manifest_parse_error' | 'unexpected_error' | null
+  check_state: 'unchecked' | 'up_to_date' | 'update_available' | 'offline' | 'failed'
+  next_check_after: number | null
+  operator_message?: string | null
   show_banner: boolean
 }
 

@@ -168,7 +168,7 @@ class JobExecutor:
         self._job_locks: Dict[str, threading.Lock] = {}
         self._job_locks_guard = threading.Lock()
         self._approval_state_lock = threading.Lock()
-        self._approvals_file = Path(self._scheduler._data_dir) / "scheduler_approvals.json"
+        self._approvals_file = self._scheduler.data_dir / "scheduler_approvals.json"
         # F-008: Pending approval tracking
         self._pending_approvals: Dict[str, Dict[str, Any]] = {}
         self._granted_approvals: Dict[str, str] = {}  # job_id -> ISO timestamp
@@ -525,8 +525,7 @@ class JobExecutor:
 
             duration_ms = (time.monotonic() - start) * 1000
 
-            # Update scheduler record
-            self._scheduler.run_now(job_id)
+            self._scheduler.record_job_result(job_id, "succeeded")
 
             receipt = self._emit_receipt(
                 "scheduled_job_run",
@@ -547,6 +546,14 @@ class JobExecutor:
 
         except Exception as exc:
             duration_ms = (time.monotonic() - start) * 1000
+            try:
+                self._scheduler.record_job_result(job_id, "failed", error=str(exc))
+            except Exception as record_exc:
+                logger.warning(
+                    "Failed to persist scheduler failure for job %s: %s",
+                    job_id,
+                    record_exc,
+                )
             receipt = self._emit_receipt(
                 "scheduled_job_failed",
                 job_id=job_id,

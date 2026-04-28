@@ -1,9 +1,9 @@
 """
-HIVE Sub-Agent Runtime — execution loop per agent.
+HIVE Sub-Agent Runtime - execution loop per agent.
 
 Uses threading.Event for pause/resume and a collapse flag for shutdown.
-Between each action: check pause → validate soul → governance check →
-execute → emit receipt → check exit conditions.
+Between each action: check pause, validate soul, check governance,
+execute, emit receipt, and check exit conditions.
 """
 
 from __future__ import annotations
@@ -109,7 +109,7 @@ class SubAgentRuntime:
     def is_collapse_requested(self) -> bool:
         return self._collapse_requested
 
-    # ── Control Signals ──────────────────────────────────────────────
+    # Control signals
 
     def pause(self, reason: str = "") -> None:
         """Signal the agent to pause after the current action."""
@@ -152,7 +152,7 @@ class SubAgentRuntime:
             self.agent_id, reason.value, message,
         )
 
-    # ── Execution Loop ───────────────────────────────────────────────
+    # Execution loop
 
     def run(self, actions: List[Dict[str, Any]]) -> TaskResult:
         """Execute the agent's action sequence.
@@ -170,16 +170,13 @@ class SubAgentRuntime:
 
         try:
             for i, action in enumerate(actions):
-                # 1. Check collapse request
                 if self._collapse_requested:
                     break
 
-                # 2. Check pause (blocks until resumed or collapsed)
                 self._wait_for_unpause()
                 if self._collapse_requested:
                     break
 
-                # 3. Check timeout
                 elapsed_s = time.monotonic() - self._start_time
                 if elapsed_s > task_spec.timeout_seconds:
                     self.request_collapse(
@@ -188,7 +185,6 @@ class SubAgentRuntime:
                     )
                     break
 
-                # 4. Check max actions
                 action_count = self._registry.increment_action_count(self.agent_id)
                 if action_count > task_spec.max_actions:
                     self.request_collapse(
@@ -197,7 +193,6 @@ class SubAgentRuntime:
                     )
                     break
 
-                # 5. Scoped Soul boundary check
                 try:
                     self._validate_scoped_action(action)
                 except ScopedSoulViolationError as exc:
@@ -217,7 +212,6 @@ class SubAgentRuntime:
                     self.request_collapse(CollapseReason.SOUL_VIOLATION, error_msg)
                     break
 
-                # 6. Governance check
                 if self._governance:
                     capability = action.get("capability", action.get("action", "unknown"))
                     gov_result = self._governance.validate_action(
@@ -245,7 +239,6 @@ class SubAgentRuntime:
                                     agent_id=self.agent_id,
                                     context=action,
                                 )
-                            # Pause for operator approval
                             pause_reason = f"Governance requires approval: {capability}"
                             if approval_request_id:
                                 pause_reason += f" (request_id={approval_request_id})"
@@ -260,7 +253,6 @@ class SubAgentRuntime:
                             )
                             break
 
-                # 7. Execute action
                 action_result = None
                 if self._action_executor:
                     action_name = str(action.get("action", "unknown"))
@@ -309,7 +301,6 @@ class SubAgentRuntime:
                         self.request_collapse(CollapseReason.ERROR, error_msg)
                         break
 
-                # 8. Emit receipt
                 receipt_id = self._receipts.record_agent_action(
                     agent_id=self.agent_id,
                     action_name=action.get("action", "unknown"),
@@ -335,7 +326,6 @@ class SubAgentRuntime:
 
         elapsed_ms = int((time.monotonic() - self._start_time) * 1000)
 
-        # Determine success
         success = (
             error_msg is None
             and (
@@ -370,7 +360,7 @@ class SubAgentRuntime:
                 timeout = float(self._task_spec.timeout_seconds)
 
         if not self._pause_event.wait(timeout=timeout):
-            # Timeout while paused — collapse
+            # Timeout while paused: collapse.
             self.request_collapse(
                 CollapseReason.TIMEOUT,
                 "Timeout while paused",

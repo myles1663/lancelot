@@ -506,14 +506,21 @@ class WorkLedgerStore:
         self,
         *,
         session_id: str = "",
+        operator_id: str = "",
         include_terminal: bool = False,
         limit: int = 25,
     ) -> list[WorkItem]:
         conditions: list[str] = []
         params: list[Any] = []
-        if session_id:
+        if session_id and operator_id:
+            conditions.append("(session_id = ? OR operator_id = ?)")
+            params.extend([session_id, operator_id])
+        elif session_id:
             conditions.append("session_id = ?")
             params.append(session_id)
+        elif operator_id:
+            conditions.append("operator_id = ?")
+            params.append(operator_id)
         if not include_terminal:
             conditions.append("status NOT IN ('completed', 'failed', 'cancelled')")
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
@@ -792,12 +799,14 @@ class WorkLedgerStore:
         max_quiet_seconds: int,
         reason: str = "quiet_phase",
         session_id: str = "",
+        operator_id: str = "",
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         now_ts = datetime.now(timezone.utc).timestamp()
         created: list[dict[str, Any]] = []
         for item in self.list_work(
             session_id=session_id,
+            operator_id=operator_id,
             include_terminal=False,
             limit=limit,
         ):
@@ -820,6 +829,7 @@ class WorkLedgerStore:
         *,
         quest_id: str = "",
         session_id: str = "",
+        operator_id: str = "",
         max_items: int = 3,
         max_events: int = 8,
     ) -> str:
@@ -828,8 +838,13 @@ class WorkLedgerStore:
             item = self.get_work(quest_id)
             if item:
                 items.append(item)
-        if not items and session_id:
-            items = self.list_work(session_id=session_id, include_terminal=False, limit=max_items)
+        if not items and (session_id or operator_id):
+            items = self.list_work(
+                session_id=session_id,
+                operator_id=operator_id,
+                include_terminal=False,
+                limit=max_items,
+            )
         if not items:
             return ""
 

@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from src.tools.contracts import (
     # Enums
     RiskLevel,
+    RISK_TERMINOLOGY,
     ProviderState,
     Capability,
     UIBuilderMode,
@@ -65,6 +66,12 @@ class TestEnums:
         assert RiskLevel.LOW.value == "low"
         assert RiskLevel.MEDIUM.value == "medium"
         assert RiskLevel.HIGH.value == "high"
+
+    def test_risk_terminology_maps_tool_fabric_to_uab_and_governance(self):
+        """Risk terminology has one explicit cross-layer mapping."""
+        assert RISK_TERMINOLOGY[RiskLevel.LOW]["uab"] == "safe"
+        assert RISK_TERMINOLOGY[RiskLevel.MEDIUM]["governance"] == "T1/T2"
+        assert RISK_TERMINOLOGY[RiskLevel.HIGH]["uab"] == "destructive"
 
     def test_provider_state_values(self):
         """ProviderState has correct string values."""

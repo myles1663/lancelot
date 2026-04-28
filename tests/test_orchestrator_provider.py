@@ -13,6 +13,60 @@ from orchestrator_provider import (
 )
 
 
+def _attach_provider_runtime_methods(runtime):
+    runtime._deep_model_validation_cache = getattr(runtime, "_deep_model_validation_cache", {})
+
+    def set_provider_runtime(provider, *, provider_name, provider_mode):
+        runtime.provider = provider
+        runtime._provider_name = provider_name
+        runtime._provider_mode = provider_mode
+
+    def set_provider_lane_configuration(
+        *,
+        fast_model=None,
+        deep_model=None,
+        cache_model=None,
+        deep_thinking_config=None,
+    ):
+        if fast_model:
+            runtime.model_name = fast_model
+        if deep_model:
+            runtime._deep_model_name = deep_model
+        if cache_model:
+            runtime._cache_model = cache_model
+        if deep_thinking_config is not None:
+            runtime._deep_thinking_config = deep_thinking_config
+
+    def invalidate_deep_model_validation_cache():
+        runtime._deep_model_validation_cache.clear()
+        for attr in list(vars(runtime)):
+            if attr.startswith("_deep_model_valid_"):
+                delattr(runtime, attr)
+
+    def set_model_lane(lane, model_id):
+        if lane == "fast":
+            runtime.model_name = model_id
+        elif lane == "deep":
+            runtime._deep_model_name = model_id
+            invalidate_deep_model_validation_cache()
+        elif lane == "cache":
+            runtime._cache_model = model_id
+            runtime._cache = None
+        else:
+            raise ValueError(f"Unknown lane: {lane}")
+
+    runtime.set_provider_runtime = set_provider_runtime
+    runtime.provider_stop_event = lambda: getattr(runtime, "_stop_event", None)
+    runtime.set_provider_lane_configuration = set_provider_lane_configuration
+    runtime.invalidate_deep_model_validation_cache = invalidate_deep_model_validation_cache
+    runtime.clear_context_cache = lambda: setattr(runtime, "_cache", None)
+    runtime.set_model_lane = set_model_lane
+    runtime.deep_model_name = lambda: getattr(runtime, "_deep_model_name", "")
+    runtime.cached_deep_model_validation = lambda model_id: runtime._deep_model_validation_cache.get(model_id)
+    runtime.record_deep_model_validation = lambda model_id, valid: runtime._deep_model_validation_cache.__setitem__(model_id, bool(valid))
+    return runtime
+
+
 def test_switch_provider_applies_profile_and_invalidates_runtime_caches(monkeypatch):
     provider = SimpleNamespace(provider_name="openai")
     created = []
@@ -32,16 +86,16 @@ def test_switch_provider_applies_profile_and_invalidates_runtime_caches(monkeypa
                 cache=SimpleNamespace(model="gpt-cache"),
             )
 
-    runtime = SimpleNamespace(
+    runtime = _attach_provider_runtime_methods(SimpleNamespace(
         provider=None,
         model_name="old-fast",
         _cache=object(),
         _stop_event=object(),
         _deep_model_valid_old=True,
-        _get_anthropic_oauth_token=lambda: "",
-        _get_openai_codex_oauth_token=lambda: "",
-        _has_openai_codex_cli_auth=lambda: False,
-    )
+        get_anthropic_oauth_token=lambda: "",
+        get_openai_codex_oauth_token=lambda: "",
+        has_openai_codex_cli_auth=lambda: False,
+    ))
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("LANCELOT_PROVIDER_MODE", "sdk")
@@ -68,11 +122,11 @@ def test_switch_provider_applies_profile_and_invalidates_runtime_caches(monkeypa
 
 
 def test_switch_provider_requires_a_configured_credential(monkeypatch):
-    runtime = SimpleNamespace(
-        _get_anthropic_oauth_token=lambda: "",
-        _get_openai_codex_oauth_token=lambda: "",
-        _has_openai_codex_cli_auth=lambda: False,
-    )
+    runtime = _attach_provider_runtime_methods(SimpleNamespace(
+        get_anthropic_oauth_token=lambda: "",
+        get_openai_codex_oauth_token=lambda: "",
+        has_openai_codex_cli_auth=lambda: False,
+    ))
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -81,13 +135,13 @@ def test_switch_provider_requires_a_configured_credential(monkeypatch):
 
 
 def test_set_lane_model_updates_lanes_and_clears_deep_validation_cache():
-    runtime = SimpleNamespace(
+    runtime = _attach_provider_runtime_methods(SimpleNamespace(
         model_name="fast-old",
         _deep_model_name="deep-old",
         _cache_model="cache-old",
         _cache=object(),
         _deep_model_valid_deep_old=True,
-    )
+    ))
 
     set_lane_model(runtime, "fast", "fast-new")
     set_lane_model(runtime, "deep", "deep-new")
@@ -103,11 +157,11 @@ def test_set_lane_model_updates_lanes_and_clears_deep_validation_cache():
 def test_get_deep_model_validates_once_then_uses_cached_result():
     provider = MagicMock()
     provider.validate_model.return_value = True
-    runtime = SimpleNamespace(
+    runtime = _attach_provider_runtime_methods(SimpleNamespace(
         model_name="fast-model",
         _deep_model_name="deep-model",
         provider=provider,
-    )
+    ))
 
     assert get_deep_model(runtime) == "deep-model"
     assert get_deep_model(runtime) == "deep-model"
@@ -115,10 +169,10 @@ def test_get_deep_model_validates_once_then_uses_cached_result():
 
 
 def test_route_model_uses_fast_for_trivial_and_deep_for_complex_requests():
-    runtime = SimpleNamespace(
+    runtime = _attach_provider_runtime_methods(SimpleNamespace(
         model_name="fast-model",
-        _get_deep_model=lambda: "deep-model",
-    )
+        get_deep_model=lambda: "deep-model",
+    ))
 
     assert route_model(runtime, "status") == "fast-model"
     assert route_model(runtime, "help me think through the best approach") == "deep-model"

@@ -82,6 +82,11 @@ class TelegramBot:
     def _get(self, url: str, *, component: str, **kwargs):
         return requests.get(self._guard_url(url, component), **kwargs)
 
+    def attach_actioncard_runtime(self, *, resolver=None, store=None) -> None:
+        """Attach ActionCard collaborators supplied by gateway startup."""
+        self._action_card_resolver = resolver
+        self._action_card_store = store
+
     @classmethod
     def _load_offset(cls) -> int:
         """Load persisted offset from disk."""
@@ -149,7 +154,7 @@ class TelegramBot:
         logger.info("TelegramBot: Polling stopped.")
 
     @staticmethod
-    def _display_width(text: str) -> int:
+    def display_width(text: str) -> int:
         """Calculate the visual display width of a string in monospace font.
 
         Emojis and wide CJK characters occupy 2 columns in monospace.
@@ -197,12 +202,12 @@ class TelegramBot:
     @staticmethod
     def _pad_to_width(text: str, target_width: int) -> str:
         """Pad a string with spaces to reach a target display width."""
-        current = TelegramBot._display_width(text)
+        current = TelegramBot.display_width(text)
         pad = max(0, target_width - current)
         return text + " " * pad
 
     @staticmethod
-    def _strip_emoji(text: str) -> str:
+    def strip_emoji(text: str) -> str:
         """Strip emoji characters from text, keeping ASCII and basic symbols.
 
         Used to remove emojis from monospace table cells since Telegram renders
@@ -233,7 +238,7 @@ class TelegramBot:
         return cleaned.strip()
 
     @staticmethod
-    def _is_separator_row(line: str) -> bool:
+    def is_separator_row(line: str) -> bool:
         """Check if a line is a markdown table separator (|---|---|)."""
         stripped = line.strip()
         if not stripped.startswith("|") or not stripped.endswith("|"):
@@ -242,10 +247,10 @@ class TelegramBot:
         return inner == ""
 
     # Max monospace line width for Telegram mobile
-    _MAX_TABLE_WIDTH = 45
+    MAX_TABLE_WIDTH = 45
 
     @staticmethod
-    def _table_to_monospace(text: str) -> str:
+    def table_to_monospace(text: str) -> str:
         """Convert markdown tables to monospace code blocks for Telegram.
 
         Uses ``` pre ``` blocks so columns stay aligned on mobile.
@@ -258,14 +263,14 @@ class TelegramBot:
         i = 0
         while i < len(lines):
             line = lines[i]
-            if re.match(r"^\s*\|.+\|\s*$", line) and not TelegramBot._is_separator_row(line):
+            if re.match(r"^\s*\|.+\|\s*$", line) and not TelegramBot.is_separator_row(line):
                 # Parse header cells — strip emoji + bold for clean monospace
                 raw_headers = [c.strip().replace("**", "") for c in line.strip().strip("|").split("|")]
                 raw_headers = [h for h in raw_headers if h]
-                headers = [TelegramBot._strip_emoji(h) for h in raw_headers]
+                headers = [TelegramBot.strip_emoji(h) for h in raw_headers]
 
                 # Skip separator row
-                if i + 1 < len(lines) and TelegramBot._is_separator_row(lines[i + 1]):
+                if i + 1 < len(lines) and TelegramBot.is_separator_row(lines[i + 1]):
                     i += 2
                 else:
                     i += 1
@@ -273,11 +278,11 @@ class TelegramBot:
                 # Collect all data rows — strip emoji from cells
                 all_rows = [headers]
                 while i < len(lines) and re.match(r"^\s*\|.+\|\s*$", lines[i]):
-                    if TelegramBot._is_separator_row(lines[i]):
+                    if TelegramBot.is_separator_row(lines[i]):
                         i += 1
                         continue
                     raw_cells = [c.strip().replace("**", "") for c in lines[i].strip().strip("|").split("|")]
-                    cells = [TelegramBot._strip_emoji(c) for c in raw_cells]
+                    cells = [TelegramBot.strip_emoji(c) for c in raw_cells]
                     while len(cells) < len(headers):
                         cells.append("")
                     all_rows.append(cells[:len(headers)])
@@ -300,8 +305,8 @@ class TelegramBot:
                     col_widths.append(max(dw, min(hw, dw + 3)))
 
                 # Fit within max width: truncate wide columns, drop if needed
-                max_w = TelegramBot._MAX_TABLE_WIDTH
-                col_widths, n_cols = TelegramBot._fit_columns(col_widths, max_w)
+                max_w = TelegramBot.MAX_TABLE_WIDTH
+                col_widths, n_cols = TelegramBot.fit_columns(col_widths, max_w)
 
                 # Truncate all rows to selected columns
                 all_rows = [row[:n_cols] for row in all_rows]
@@ -327,7 +332,7 @@ class TelegramBot:
         return "\n".join(result)
 
     @staticmethod
-    def _fit_columns(col_widths: list, max_total: int) -> tuple:
+    def fit_columns(col_widths: list, max_total: int) -> tuple:
         """Fit columns within max_total width. Returns (adjusted_widths, n_cols).
 
         Strategy: include columns left-to-right. If total exceeds max,
@@ -365,7 +370,7 @@ class TelegramBot:
         return [max_total], 1
 
     @staticmethod
-    def _sanitize_for_telegram(text: str) -> str:
+    def sanitize_text(text: str) -> str:
         """Convert GitHub-flavored Markdown to Telegram Markdown v1 and strip
         internal tool scaffolding.
 
@@ -444,7 +449,7 @@ class TelegramBot:
         text = re.sub(r"^\S*\?oc=\d+\)?\s*$", "", text, flags=re.MULTILINE)
 
         # --- Table conversion (before other markdown transforms) ---
-        text = TelegramBot._table_to_monospace(text)
+        text = TelegramBot.table_to_monospace(text)
 
         # --- Markdown → Telegram conversion ---
         # Step 1: Convert headers FIRST (strip inner ** to avoid nested stars)
@@ -487,11 +492,11 @@ class TelegramBot:
         text = text.strip()
 
         # --- Convert Markdown v1 → HTML for reliable Telegram rendering ---
-        text = TelegramBot._markdown_to_html(text)
+        text = TelegramBot.markdown_to_html(text)
         return text
 
     @staticmethod
-    def _markdown_to_html(text: str) -> str:
+    def markdown_to_html(text: str) -> str:
         """Convert Telegram Markdown v1 to HTML for more reliable rendering.
 
         HTML parse_mode is far more reliable than Markdown v1:
@@ -530,7 +535,12 @@ class TelegramBot:
         return "".join(html_parts)
 
     @staticmethod
-    def _chunk_by_lines(text: str, max_size: int = 4000) -> list:
+    def sanitize_for_telegram(text: str) -> str:
+        """Public sanitizer used by gateway and standalone Telegram skills."""
+        return TelegramBot.sanitize_text(text)
+
+    @staticmethod
+    def chunk_by_lines(text: str, max_size: int = 4000) -> list:
         """Split text into chunks at line boundaries.
 
         Avoids breaking markdown links mid-URL which causes orphaned
@@ -560,6 +570,16 @@ class TelegramBot:
             chunks.append("\n".join(current_lines))
 
         return chunks if chunks else [text]
+
+    _display_width = display_width
+    _strip_emoji = strip_emoji
+    _is_separator_row = is_separator_row
+    _MAX_TABLE_WIDTH = MAX_TABLE_WIDTH
+    _table_to_monospace = table_to_monospace
+    _fit_columns = fit_columns
+    _sanitize_for_telegram = sanitize_text
+    _markdown_to_html = markdown_to_html
+    _chunk_by_lines = chunk_by_lines
 
     def send_message_with_keyboard(self, text: str, keyboard: dict = None, chat_id: str = None):
         """Send message with optional InlineKeyboardMarkup. Returns message_id or None.
@@ -725,7 +745,7 @@ class TelegramBot:
 
         # Telegram limit is 4096 chars per message; chunk if needed
         # Split at line boundaries to avoid breaking markdown links mid-URL
-        chunks = TelegramBot._chunk_by_lines(text, max_size=4000)
+        chunks = TelegramBot.chunk_by_lines(text, max_size=4000)
         total_chunks = len(chunks)
         failed_chunks = []
         self._write_outbound_debug_artifacts(text, target, total_chunks)
@@ -983,13 +1003,28 @@ class TelegramBot:
         try:
             response = self.orchestrator.chat(text, channel="telegram")
             if response:
+                delivery_check = getattr(
+                    self.orchestrator,
+                    "was_telegram_delivery_handled",
+                    None,
+                )
+                delivery_result = delivery_check() if callable(delivery_check) else False
+                delivery_handled = (
+                    delivery_result is True
+                )
                 # Skip sending if telegram_send already delivered this response
-                if not getattr(self.orchestrator, '_telegram_already_sent', False):
-                    response = self._sanitize_for_telegram(response)
+                if not delivery_handled:
+                    response = self.sanitize_for_telegram(response)
                     self.send_message(response, sender_chat_id)
                 else:
                     logger.info("TelegramBot: Response already sent via telegram_send — skipping duplicate")
-                self.orchestrator._telegram_already_sent = False  # Reset for next message
+                delivery_clear = getattr(
+                    self.orchestrator,
+                    "clear_telegram_delivery_handled",
+                    None,
+                )
+                if callable(delivery_clear):
+                    delivery_clear()
             # Only ack after successful processing
             self._offset = update_id + 1
         except Exception as e:
@@ -1059,7 +1094,7 @@ class TelegramBot:
                 return
 
             # Step 4: TTS — synthesize response as voice
-            response = self._sanitize_for_telegram(response)
+            response = self.sanitize_text(response)
             sent = False
             if self.voice_processor.available:
                 try:
@@ -1109,7 +1144,7 @@ class TelegramBot:
 
             response = self.orchestrator.chat(caption, attachments=[attachment], channel="telegram")
             if response:
-                response = self._sanitize_for_telegram(response)
+                response = self.sanitize_text(response)
                 self.send_message(response, chat_id)
 
         except Exception as e:
@@ -1146,7 +1181,7 @@ class TelegramBot:
 
             response = self.orchestrator.chat(caption, attachments=[attachment], channel="telegram")
             if response:
-                response = self._sanitize_for_telegram(response)
+                response = self.sanitize_text(response)
                 self.send_message(response, chat_id)
 
         except Exception as e:
@@ -1294,6 +1329,10 @@ class TelegramBot:
         else:
             logger.warning("TelegramBot: Failed to send ActionCard %s", card_id[:8])
 
+    async def handle_actioncard_event(self, event):
+        """Public EventBus handler for ActionCard presentation events."""
+        await self._on_actioncard_event(event)
+
     async def _on_actioncard_resolved_event(self, event):
         """Handle actioncard_resolved events — edit message if resolved from another channel.
 
@@ -1327,6 +1366,10 @@ class TelegramBot:
             resolution_text,
             keyboard={"inline_keyboard": []},
         )
+
+    async def handle_actioncard_resolved_event(self, event):
+        """Public EventBus handler for ActionCard resolution events."""
+        await self._on_actioncard_resolved_event(event)
 
         logger.info(
             "TelegramBot: ActionCard cross-channel update: message=%s resolved via %s",

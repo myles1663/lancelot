@@ -56,7 +56,7 @@ def init_governance(runtime: Any) -> None:
                     config=trust_config,
                     data_dir=runtime.data_dir,
                 )
-                runtime._seed_trust_records()
+                runtime.seed_trust_records()
                 _gov_logger.info("TrustLedger initialized")
         except Exception as exc:
             _gov_logger.error("TrustLedger init failed: %s", exc)
@@ -83,30 +83,48 @@ def init_governance(runtime: Any) -> None:
 
     try:
         gov_config = load_governance_config()
-        runtime._risk_classifier = RiskClassifier(gov_config.risk_classification)
+        risk_classifier = RiskClassifier(gov_config.risk_classification)
+        async_queue = None
+        rollback_manager = None
+        template_registry = None
+        runtime.set_governance_runtime(risk_classifier=risk_classifier)
         _gov_logger.info("vNext4: RiskClassifier initialized")
 
         if _ff.FEATURE_ASYNC_VERIFICATION:
-            runtime._async_queue = AsyncVerificationQueue(
-                verify_fn=runtime._verify_async_job,
+            async_queue = AsyncVerificationQueue(
+                verify_fn=runtime.verify_async_job,
                 config=gov_config.async_verification,
             )
             workspace = os.getenv("LANCELOT_WORKSPACE", "/home/lancelot/workspace")
-            runtime._rollback_manager = RollbackManager(workspace=workspace)
+            rollback_manager = RollbackManager(workspace=workspace)
+            runtime.set_governance_runtime(
+                risk_classifier=risk_classifier,
+                async_queue=async_queue,
+                rollback_manager=rollback_manager,
+                template_registry=template_registry,
+            )
             _gov_logger.info("vNext4: AsyncVerificationQueue + RollbackManager initialized")
 
         if _ff.FEATURE_INTENT_TEMPLATES:
-            runtime._template_registry = IntentTemplateRegistry(
+            template_registry = IntentTemplateRegistry(
                 config=gov_config.intent_templates,
                 data_dir=os.path.join(runtime.data_dir, "governance"),
+            )
+            runtime.set_governance_runtime(
+                risk_classifier=risk_classifier,
+                async_queue=async_queue,
+                rollback_manager=rollback_manager,
+                template_registry=template_registry,
             )
             _gov_logger.info("vNext4: IntentTemplateRegistry initialized")
     except Exception as exc:
         _gov_logger.error("vNext4 governance init failed: %s", exc)
-        runtime._risk_classifier = None
-        runtime._async_queue = None
-        runtime._rollback_manager = None
-        runtime._template_registry = None
+        runtime.set_governance_runtime(
+            risk_classifier=None,
+            async_queue=None,
+            rollback_manager=None,
+            template_registry=None,
+        )
 
 
 def seed_trust_records(runtime: Any) -> None:

@@ -24,8 +24,9 @@ def test_llm_call_with_retry_uses_exponential_backoff(monkeypatch):
     attempts = {"count": 0}
     runtime = SimpleNamespace(
         _stop_event=None,
-        _is_retryable_error=lambda exc: is_retryable_error(exc),
+        is_retryable_error=lambda exc: is_retryable_error(exc),
     )
+    runtime.provider_stop_event = lambda: runtime._stop_event
     monkeypatch.setattr(
         orchestrator_generation,
         "wait_before_provider_retry",
@@ -47,8 +48,9 @@ def test_llm_call_with_retry_does_not_retry_non_transient_errors(monkeypatch):
     waits = []
     runtime = SimpleNamespace(
         _stop_event=None,
-        _is_retryable_error=lambda exc: is_retryable_error(exc),
+        is_retryable_error=lambda exc: is_retryable_error(exc),
     )
+    runtime.provider_stop_event = lambda: runtime._stop_event
     monkeypatch.setattr(
         orchestrator_generation,
         "wait_before_provider_retry",
@@ -66,18 +68,18 @@ def test_text_only_generate_builds_frontier_safe_provider_call():
     runtime = SimpleNamespace(
         provider=object(),
         context_env=SimpleNamespace(get_context_string=lambda: "CTX"),
-        _build_system_instruction=lambda: "system",
-        _build_frontier_user_message=lambda text, images=None: {"role": "user", "content": text, "images": images},
-        _route_model=lambda prompt: "gpt-test",
-        _get_thinking_config=lambda: {"thinking_level": "low"},
-        _llm_call_with_retry=lambda fn: fn(),
+        build_system_instruction=lambda: "system",
+        build_frontier_user_message=lambda text, images=None: {"role": "user", "content": text, "images": images},
+        route_model=lambda prompt: "gpt-test",
+        get_thinking_config=lambda: {"thinking_level": "low"},
+        llm_call_with_retry=lambda fn: fn(),
     )
 
     def provider_generate(**kwargs):
         provider_calls.append(kwargs)
         return SimpleNamespace(text="ok")
 
-    runtime._provider_generate = provider_generate
+    runtime.provider_generate = provider_generate
 
     result = text_only_generate(runtime, "answer this", image_parts=["img"])
 
@@ -102,8 +104,8 @@ def test_get_thinking_config_reads_environment(monkeypatch):
 
 def test_should_use_deep_reasoning_routes_complex_requests():
     runtime = SimpleNamespace(
-        _is_continuation=lambda _message: False,
-        _needs_research=lambda _message: False,
+        is_continuation=lambda _message: False,
+        needs_research=lambda _message: False,
     )
 
     assert should_use_deep_reasoning(runtime, "ok") is False
@@ -113,8 +115,8 @@ def test_should_use_deep_reasoning_routes_complex_requests():
 
 def test_should_use_deep_reasoning_skips_continuations():
     runtime = SimpleNamespace(
-        _is_continuation=lambda _message: True,
-        _needs_research=lambda _message: True,
+        is_continuation=lambda _message: True,
+        needs_research=lambda _message: True,
     )
 
     assert should_use_deep_reasoning(runtime, "Continue with the plan we already discussed in detail") is False

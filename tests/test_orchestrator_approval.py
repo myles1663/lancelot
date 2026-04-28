@@ -155,7 +155,7 @@ def test_handle_approval_mints_token_with_operator_identity_then_proceeds():
         task_store=TaskStore(),
         warroom_state=WarRoomState(),
     )
-    runtime._handle_proceed = lambda message, session_id="": proceeded.append((message, session_id)) or "executed"
+    runtime.handle_proceed = lambda message, session_id="": proceeded.append((message, session_id)) or "executed"
 
     result = handle_approval(runtime, session_id="session-1")
 

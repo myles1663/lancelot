@@ -64,6 +64,10 @@ class ConnectorRegistry:
         """Rate limit configuration from config."""
         return self._config.get("rate_limits", {})
 
+    def connector_configurations(self) -> Dict[str, Any]:
+        """Return connector-specific configuration keyed by connector id."""
+        return dict(self._config.get("connectors", {}))
+
     def register(self, connector: ConnectorBase) -> ConnectorEntry:
         """Register a connector. Validates manifest and checks feature flag.
 

@@ -5,7 +5,7 @@ Verifies the 3 Core Pillars of the Production Forge Upgrade.
 
 Tests:
 1. Antigravity: Browser Launch, Navigation, Visual Receipt.
-2. Librarian: File Creation, AI Sorting, Trash Rule.
+2. Librarian: File Creation, Deterministic Staging, Trash Rule.
 3. Security Bridge: MFA Blocking and Release.
 """
 
@@ -57,7 +57,7 @@ async def _test_librarian():
     lib.start() # Starts observer and consumer task
     print("2.1 Librarian Started")
 
-    # Test 1: Financial File
+    # Test 1: File intake
     invoice_path = os.path.join(DATA_DIR, "invoice_123.txt")
     with open(invoice_path, "w") as f:
         f.write("Billing Invoice #123. Total: $500.00 DUE NOW.")
@@ -67,20 +67,20 @@ async def _test_librarian():
     await asyncio.sleep(2)
 
     # Check if moved
-    fin_dir = os.path.join(DATA_DIR, "Financial")
+    unsorted_dir = os.path.join(DATA_DIR, "Unsorted")
     trash_dir = os.path.join(DATA_DIR, ".trash")
 
-    if os.path.exists(os.path.join(fin_dir, "invoice_123.txt")):
-        print("2.3 Sorting Success: Moved to [Financial]")
+    if os.path.exists(os.path.join(unsorted_dir, "invoice_123.txt")):
+        print("2.3 Staging Success: Moved to [Unsorted]")
     else:
-        print("2.3 Sorting Failed: File not found in Financial")
+        print("2.3 Staging Failed: File not found in Unsorted")
 
     # Test 2: Trash Rule
     # Mock hard delete by moving to trash via API (simulating code calling safe_delete,
     # though Librarian mainly organizes. The TrashService is part of it.)
     # Let's test TrashService directly as "Safety Test"
 
-    dummy_path = os.path.join(fin_dir, "invoice_123.txt")
+    dummy_path = os.path.join(unsorted_dir, "invoice_123.txt")
     if os.path.exists(dummy_path):
         success = lib.trash_svc.soft_delete(dummy_path, "Test Deletion")
         if success and os.path.exists(os.path.join(trash_dir, f"invoice_123.txt_{int(time.time())}")):

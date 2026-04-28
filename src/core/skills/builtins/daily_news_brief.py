@@ -455,7 +455,7 @@ def execute(context: Any, inputs: Dict[str, Any]) -> Dict[str, Any]:
                 "articles_found": len(unique),
             }
 
-    send_result = telegram_send._send_text(message, chat_id_override)
+    send_result = telegram_send.send_text(message, chat_id_override)
 
     # 7. Return stats
     sources_in_report = {a["source"] for a in articles}

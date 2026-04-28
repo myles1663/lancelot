@@ -51,6 +51,10 @@ class ContextEnvironment:
         self._load_chat_summaries()
         self._load_history()
 
+    def set_current_quest_id(self, quest_id: Optional[str]) -> None:
+        """Attach future context receipts to the active chat quest."""
+        self._current_quest_id = quest_id
+
     def _ensure_bootstrap_files(self):
         """Seed canonical runtime text files from tracked templates when missing."""
         for filename in BOOTSTRAP_DATA_FILES:

@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from src.core import api_auth, auth_api
 from src.core.operator_identity import OperatorIdentity
+from src.observability.config import WebhookEndpoint
 
 
 def _insert_session(token: str, capabilities: set[str]) -> None:
@@ -67,6 +68,74 @@ def test_otel_status_surfaces_runtime_degradation(monkeypatch):
     assert "Receipt bridge status unavailable" in body["degraded_reasons"]
     assert any("otel exploded" in err for err in body["runtime_errors"])
     assert any("bridge exploded" in err for err in body["runtime_errors"])
+
+
+def test_otel_status_reports_disabled_export_as_operator_state(monkeypatch):
+    client, module = _build_client()
+
+    config = module.ObservabilityConfig()
+    monkeypatch.setattr(module, "load_config", lambda: config)
+    monkeypatch.setattr(module, "_get_otel_initialized_status", lambda: (False, None))
+    monkeypatch.setattr(module, "_get_bridge_enabled_status", lambda: (False, None))
+    monkeypatch.setattr(module, "_get_span_export_enabled_status", lambda: (False, None))
+
+    response = client.get("/api/observability/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["runtime_degraded"] is False
+    assert body["otel"]["state"] == "disabled_by_config"
+    assert body["otel"]["spans_exported"] is False
+    assert body["otel"]["export_destination"] is None
+
+
+def test_otel_status_flags_enabled_export_without_endpoint(monkeypatch):
+    client, module = _build_client()
+
+    config = module.ObservabilityConfig()
+    config.otel.enabled = True
+    monkeypatch.setattr(module, "load_config", lambda: config)
+    monkeypatch.setattr(module, "_get_otel_initialized_status", lambda: (False, None))
+    monkeypatch.setattr(module, "_get_bridge_enabled_status", lambda: (False, None))
+    monkeypatch.setattr(module, "_get_span_export_enabled_status", lambda: (False, None))
+
+    response = client.get("/api/observability/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["runtime_degraded"] is True
+    assert body["otel"]["state"] == "missing_endpoint"
+    assert "OTLP/HTTP endpoint" in body["otel"]["message"]
+
+
+def test_configure_bridge_keeps_webhook_receipts_active_without_otel(monkeypatch):
+    client, module = _build_client()
+
+    config = module.ObservabilityConfig()
+    config.webhooks.enabled = True
+    config.webhooks.endpoints = [WebhookEndpoint(id="ops", url="https://hooks.example.test")]
+    calls = []
+    monkeypatch.setattr(module, "load_config", lambda: config)
+    monkeypatch.setattr(module, "save_config", lambda updated: None)
+    monkeypatch.setattr(module, "_emit_governance_receipt_safe", lambda request, cfg: ([], []))
+    monkeypatch.setattr(module, "_get_incident_response_flag", lambda: False)
+
+    def configure_bridge(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(
+        "src.observability.receipt_bridge.configure_bridge",
+        configure_bridge,
+    )
+    monkeypatch.setattr(
+        "src.observability.otel_provider.is_initialized",
+        lambda: False,
+    )
+
+    response = client.patch("/api/observability/config/otel", json={"enabled": False})
+
+    assert response.status_code == 200
+    assert calls == [{"enabled": True, "otel_enabled": False, "sampling_rate": 0.1}]
 
 
 def test_update_otel_config_surfaces_receipt_and_bridge_failures(monkeypatch):

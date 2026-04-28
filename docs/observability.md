@@ -14,7 +14,7 @@ The observability layer **translates** existing governance data — it does not 
 | **Webhooks** | Real-time event push to SIEM, PagerDuty, Slack | HTTPS + HMAC-SHA256 |
 | **Metrics API** | Read-only HTTP API for custom dashboards | REST + cursor pagination |
 
-All three are gated behind `FEATURE_OBSERVABILITY` (default: false) with individual enable/disable toggles per mechanism.
+All three are gated behind `FEATURE_OBSERVABILITY` (default: false) with individual enable/disable toggles per mechanism. Enabling the feature flag does not automatically send data outside the instance. OTel export remains off until an OTLP/HTTP endpoint is explicitly configured; local receipts, the Metrics API, webhooks, and incident triggers can still operate without external span export.
 
 ---
 
@@ -66,6 +66,18 @@ Configured via War Room at `/api/observability/config/otel`:
 - **Export interval**: 1–60 seconds (default: 5s)
 - **Sampling rate**: T0/T1 percentage (default: 10%)
 - **Resource attributes**: `deployment_id`, `lancelot_version`, etc.
+
+Production deployments should send spans to an internal OpenTelemetry Collector first, usually on the same Docker network, Kubernetes namespace, VPC, or private network segment as Lancelot. The collector should own vendor-specific export to Datadog, Grafana Cloud, Honeycomb, Splunk, New Relic, Dynatrace, or another backend. Pointing Lancelot directly at an external vendor endpoint works technically, but it gives operators fewer controls for buffering, retry, filtering, tenant routing, and credential rotation.
+
+OTel startup/status states are intentionally explicit:
+
+| State | Meaning | Operator action |
+|-------|---------|-----------------|
+| `disabled_by_config` | Expected default. No spans leave Lancelot; governance receipts remain local. | Enable OTel and set an endpoint only when external trace export is required. |
+| `missing_endpoint` | OTel export is enabled but has nowhere to send spans. | Set an OTLP/HTTP endpoint or disable OTel export. |
+| `not_initialized` | Endpoint is configured, but the runtime exporter did not initialize. | Check startup logs, collector reachability, and credentials. |
+| `bridge_inactive` | OTel SDK is initialized, but receipt span export is not active. | Reapply config or restart the gateway. |
+| `active` | Receipt spans are exported to the configured endpoint. | Monitor collector delivery health. |
 
 Config mutations now surface live runtime application gaps explicitly. When governance receipting or receipt-bridge hot-apply fails, the API returns:
 

@@ -17,6 +17,7 @@ import shutil
 import sys
 import time
 import zipfile
+from os import _exit as terminate_process_immediately
 from pathlib import Path
 from typing import Optional
 
@@ -192,7 +193,7 @@ async def system_info():
 
 @router.post("/restart")
 async def restart_container(request: Request, body: ConfirmRequest):
-    """Graceful restart — os._exit(0) so Docker restarts the container."""
+    """Graceful restart by terminating the container process with exit code 0."""
     try:
         if not body.confirm:
             return _safe_error(400, "Confirmation required: {\"confirm\": true}")
@@ -213,7 +214,7 @@ async def restart_container(request: Request, body: ConfirmRequest):
 
         # Schedule exit after response is sent
         import threading
-        threading.Timer(0.5, lambda: os._exit(0)).start()
+        threading.Timer(0.5, lambda: terminate_process_immediately(0)).start()
 
         return {
             "status": "restarting",
@@ -229,7 +230,7 @@ async def restart_container(request: Request, body: ConfirmRequest):
 
 @router.post("/shutdown")
 async def shutdown_container(request: Request, body: ConfirmRequest):
-    """Graceful shutdown — os._exit(1) so Docker does NOT restart."""
+    """Graceful shutdown by terminating the container process with exit code 1."""
     try:
         if not body.confirm:
             return _safe_error(400, "Confirmation required: {\"confirm\": true}")
@@ -248,7 +249,7 @@ async def shutdown_container(request: Request, body: ConfirmRequest):
             runtime_errors.append(str(exc))
 
         import threading
-        threading.Timer(0.5, lambda: os._exit(1)).start()
+        threading.Timer(0.5, lambda: terminate_process_immediately(1)).start()
 
         return {
             "status": "shutting_down",
@@ -312,14 +313,12 @@ async def list_vault_keys():
         if _connector_vault is None:
             return {"keys": [], "message": "Vault not initialised"}
 
-        keys = _connector_vault.list_keys()
         entries = []
-        for key in keys:
-            entry = _connector_vault._entries.get(key)
+        for entry in _connector_vault.list_entry_metadata():
             entries.append({
-                "key": key,
-                "type": entry.type if entry else "unknown",
-                "created_at": entry.created_at if entry else "",
+                "key": entry["key"],
+                "type": entry["type"],
+                "created_at": entry["created_at"],
             })
 
         return {"keys": entries, "total": len(entries)}
@@ -335,16 +334,15 @@ async def list_vault_masked():
         if _connector_vault is None:
             return {"keys": [], "message": "Vault not initialised"}
 
-        keys = _connector_vault.list_keys()
         entries = []
-        for key in keys:
-            entry = _connector_vault._entries.get(key)
+        for entry in _connector_vault.list_entry_metadata():
+            key = entry["key"]
             raw_val = _connector_vault.retrieve(key) if _connector_vault else None
             masked = _mask_value(raw_val) if raw_val else "••••"
             entries.append({
                 "key": key,
-                "type": entry.type if entry else "unknown",
-                "created_at": entry.created_at if entry else "",
+                "type": entry["type"],
+                "created_at": entry["created_at"],
                 "masked_value": masked,
             })
 
@@ -405,7 +403,7 @@ async def reset_connector_vault(request: Request, body: VaultResetRequest):
 
         import threading
 
-        threading.Timer(0.5, lambda: os._exit(0)).start()
+        threading.Timer(0.5, lambda: terminate_process_immediately(0)).start()
 
         return {
             "status": "resetting",
@@ -437,12 +435,9 @@ async def clear_receipts(request: Request, body: ConfirmRequest):
         if _receipt_service is None:
             return _safe_error(400, "Receipt service not initialised")
 
-        if hasattr(_receipt_service, 'clear'):
-            _receipt_service.clear()
-        elif hasattr(_receipt_service, '_receipts'):
-            _receipt_service._receipts.clear()
-            if hasattr(_receipt_service, '_save'):
-                _receipt_service._save()
+        if not hasattr(_receipt_service, 'clear'):
+            return _safe_error(501, "Receipt service does not support operator clearing")
+        _receipt_service.clear()
 
         _audit("SETUP_RECEIPTS_CLEAR", "All receipts cleared via War Room", request=request)
         return {"status": "cleared", "message": "All receipts have been cleared"}

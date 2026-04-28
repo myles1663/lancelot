@@ -1,17 +1,4 @@
-"""
-Canonical local PII scrubbing boundary for frontier-bound payloads.
-
-This module centralizes the local redaction lane so the capability exists as a
-standalone subsystem instead of orchestrator-only helper logic.
-
-Public API:
-    normalize_frontier_pii_text(text) -> str
-    detect_frontier_pii_categories(text) -> set[str]
-    validate_frontier_redaction(original, redacted) -> tuple[bool, str]
-    LocalPIIScrubber.scrub_text(text) -> PIIScrubResult
-    LocalPIIScrubber.scrub_payload(payload) -> Any
-    LocalPIIScrubber.status() -> dict
-"""
+"""Local PII scrubbing boundary for frontier-bound payloads."""
 
 from __future__ import annotations
 

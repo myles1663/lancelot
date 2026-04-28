@@ -1,21 +1,16 @@
 /**
- * UABConnector — Framework-independent desktop app control.
+ * UABConnector - framework-independent desktop app control.
  *
- * This is the public API that ANY agent framework can use:
- *   - Claude Code (via Bash → CLI)
- *   - Codex CLI (via Bash → CLI)
- *   - Custom agents (import as library)
- *   - MD-only agents (via CLI JSON output)
- *   - Kai Telegram bot (via service mode)
+ * Public API surfaces:
+ *   - Library import for TypeScript callers
+ *   - CLI commands with JSON output
+ *   - HTTP service mode through UABServer
  *
- * NOTE: Synced from UAB standalone repo. ClaudeClaw references renamed to Kai.
- *
- * Design principles:
- *   - ZERO dependencies on any agent framework (no Grammy, no SQLite)
- *   - Instantiable (not singleton) — each consumer gets its own instance
- *   - In-memory registry for fast lookups, JSON profiles for persistence
+ * Design constraints:
+ *   - No dependency on a specific agent framework
+ *   - Instantiable rather than singleton-bound
+ *   - In-memory registry for lookups, JSON profiles for persistence
  *   - Returns plain JSON-serializable objects
- *   - Scales to 1000+ apps (Map lookups, lazy scanning)
  *
  * @example
  * ```ts
@@ -484,7 +479,7 @@ export class UABConnector {
     return result;
   }
 
-  /** P6 raw input injection — drag along a waypoint path. */
+  /** P6 raw input injection - drag along a waypoint path. */
   async drag(pid: number, path: Array<{ x: number; y: number }>, stepDelay = 10, button: 'left' | 'middle' | 'right' = 'left'): Promise<ActionResult> {
     this.ensureConnected(pid);
     const plan = this.planForPid(pid, 'drag');
@@ -495,7 +490,7 @@ export class UABConnector {
     return dragPath(pid, path, stepDelay, button);
   }
 
-  /** P6 raw input injection — scroll at absolute coordinates. */
+  /** P6 raw input injection - scroll at absolute coordinates. */
   async scroll(pid: number, x: number, y: number, amount: number): Promise<ActionResult> {
     this.ensureConnected(pid);
     const plan = this.planForPid(pid, 'scroll');
@@ -681,7 +676,7 @@ export class UABConnector {
   private _composite: CompositeEngine | null = null;
 
   /**
-   * Build a spatial map of the app — bounding rects organized into rows/columns.
+   * Build a spatial map of the app - bounding rects organized into rows/columns.
    * This is FASTER than screenshots and gives AI structured positional data.
    */
   async spatialMap(pid: number, options?: CompositeOptions): Promise<CompositeResult> {
@@ -887,7 +882,7 @@ if ($pathArr.Count -gt 0) {
 } elseif ($parentFilter) {
   $matches = Get-ByParent $win $parentFilter $nameFilter
 } else {
-  # Simple name search — exact first, then partial match
+  # Simple name search - exact first, then partial match
   $nameCond = New-Object System.Windows.Automation.PropertyCondition(
     [System.Windows.Automation.AutomationElement]::NameProperty, '$nameFilter'
   )
@@ -1231,7 +1226,7 @@ $sw.Stop()
    *   5. ExpandCollapsePattern
    *   6. TogglePattern
    *
-   * This is the "it just works" method — if the element is visible, we WILL activate it.
+   * Last-resort activation path for visible controls after structured methods fail.
    */
   async smartInvoke(pid: number, name: string, options?: { parent?: string; type?: string; occurrence?: 'first' | 'last' | number }): Promise<SmartResolveResult> {
     this.ensureStarted();

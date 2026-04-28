@@ -29,7 +29,7 @@ def test_record_tool_governance_event_uses_normalized_scope_and_tier():
         def __init__(self):
             self.events = []
 
-        def _record_governance_event(self, capability, scope, tier, success):
+        def record_governance_event(self, capability, scope, tier, success):
             self.events.append((capability, scope, tier, success))
 
     runtime = Runtime()
@@ -49,7 +49,7 @@ def test_record_tool_governance_event_uses_normalized_scope_and_tier():
 
 def test_record_tool_governance_event_does_not_fail_tool_execution(caplog):
     class Runtime:
-        def _record_governance_event(self, capability, scope, tier, success):
+        def record_governance_event(self, capability, scope, tier, success):
             raise RuntimeError("ledger unavailable")
 
     with caplog.at_level(logging.WARNING, logger="src.core.orchestrator"):

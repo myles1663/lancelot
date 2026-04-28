@@ -60,16 +60,16 @@ All notable changes to Universal App Bridge will be documented in this file.
 - Improved PowerShell JSON sanitization for emojis and special characters
 - MCP server auto-sets working directory to UAB repo root
 
-## v1.1.0 — X-ray Vision
+## v1.1.0 - Deep Query And Invoke
 
 ### Added
-- **`/deep-query` endpoint** — Scans entire UIA tree via FindAll, returns ALL named elements with types, actions (InvokePattern, ValuePattern, etc.), and bounding rectangles. Supports name and type filtering.
-- **`/invoke` endpoint** — Finds elements by name, selects by occurrence (first/last/index), and invokes directly via UIA InvokePattern. Returns clipboard text if the action copies. No Tab navigation or coordinates needed.
-- **Flow Library v2** — Grok flow updated with landmark-based navigation, sidebar state handling, clipboard clear step
-- **`FocusedElement` tracking** — Can query which element currently has keyboard focus via UIA
+- **`/deep-query` endpoint** - Scans the UIA tree via FindAll and returns named elements with types, actions (InvokePattern, ValuePattern, etc.), and bounding rectangles. Supports name and type filtering.
+- **`/invoke` endpoint** - Finds elements by name, selects by occurrence (first/last/index), and invokes directly via UIA InvokePattern. Returns clipboard text if the action copies.
+- **Flow Library v2** - Grok flow updated with landmark-based navigation, sidebar state handling, clipboard clear step
+- **`FocusedElement` tracking** - Can query which element currently has keyboard focus via UIA
 
 ### Fixed
-- Deep element discovery — elements hidden from shallow enumerate (like Grok's Copy/Regenerate buttons) are now found by FindAll searching the entire descendant tree
+- Deep element discovery - elements hidden from shallow enumerate (like Grok's Copy/Regenerate buttons) are now found by FindAll searching the descendant tree
 
 ## [1.0.0] - 2026-03-21
 

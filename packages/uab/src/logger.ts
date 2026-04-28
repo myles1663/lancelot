@@ -1,8 +1,8 @@
 /**
- * UAB Logger — Self-contained structured logger for the Universal App Bridge.
+ * UAB Logger - self-contained structured logger for the Universal App Bridge.
  *
- * This is a lightweight logger that works standalone without any
- * dependency on ClaudeClaw's logger infrastructure.
+ * This is a lightweight logger that works standalone without any dependency
+ * on a host agent runtime.
  * Writes to console only by default; file logging can be enabled
  * by setting UAB_LOG_FILE environment variable.
  */

@@ -451,6 +451,32 @@ class TestCoreBlockStore:
         assert block is not None
         assert block.content == "Complete the project"
 
+    def test_store_retries_transient_atomic_replace_denial(self, tmp_data_dir, monkeypatch):
+        """Test transient Windows file locks are retried during persistence."""
+        store = CoreBlockStore(data_dir=tmp_data_dir)
+        store.initialize()
+
+        original_replace = Path.replace
+        attempts = {"denied": 0}
+
+        def flaky_replace(path: Path, target: Path):
+            if path.name.startswith("core_blocks.json.") and attempts["denied"] == 0:
+                attempts["denied"] += 1
+                raise PermissionError("transient file lock")
+            return original_replace(path, target)
+
+        monkeypatch.setattr(Path, "replace", flaky_replace)
+
+        store.set_block(
+            block_type=CoreBlockType.human,
+            content="User prefers dark mode",
+            updated_by="owner",
+            provenance=[],
+        )
+
+        assert attempts["denied"] == 1
+        assert store.get_block(CoreBlockType.human).content == "User prefers dark mode"
+
     def test_store_budget_enforcement(self, tmp_data_dir):
         """Test that store enforces token budgets."""
         store = CoreBlockStore(data_dir=tmp_data_dir)

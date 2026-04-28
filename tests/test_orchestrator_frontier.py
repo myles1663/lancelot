@@ -11,7 +11,7 @@ from orchestrator_frontier import (
 def test_emit_frontier_scrub_receipt_persists_auditable_pipeline_metadata():
     runtime = SimpleNamespace(
         receipt_service=MagicMock(),
-        _current_model_usage_status=lambda: {"frontier_scrub_mode": "required"},
+        current_model_usage_status=lambda: {"frontier_scrub_mode": "required"},
         _current_quest_id="quest-1",
         _current_channel="api",
         _current_operator_id="operator-1",
@@ -47,10 +47,10 @@ def test_record_frontier_scrub_result_emits_degraded_progress_for_fallback():
     progress_events = []
     receipt_events = []
     runtime = SimpleNamespace(
-        _emit_chat_progress=lambda phase, message, **metadata: progress_events.append(
+        emit_chat_progress=lambda phase, message, **metadata: progress_events.append(
             {"phase": phase, "message": message, **metadata}
         ),
-        _emit_frontier_scrub_receipt=lambda **kwargs: receipt_events.append(kwargs),
+        emit_frontier_scrub_receipt=lambda **kwargs: receipt_events.append(kwargs),
     )
     result = SimpleNamespace(
         source="deterministic_local",
@@ -79,10 +79,10 @@ def test_provider_generate_scrubs_messages_before_frontier_call():
     provider.generate.return_value = "ok"
     runtime = SimpleNamespace(
         provider=provider,
-        _emit_chat_progress=lambda phase, message, **metadata: progress_events.append(
+        emit_chat_progress=lambda phase, message, **metadata: progress_events.append(
             {"phase": phase, "message": message, **metadata}
         ),
-        _scrub_frontier_payload=lambda messages: [{"role": "user", "content": "Contact [EMAIL]"}],
+        scrub_frontier_payload=lambda messages: [{"role": "user", "content": "Contact [EMAIL]"}],
     )
 
     result = provider_generate(

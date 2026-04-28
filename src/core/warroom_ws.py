@@ -35,10 +35,15 @@ class ConnectionManager:
 
     async def connect(self, websocket: WebSocket) -> None:
         await websocket.accept()
+        await self.register_accepted(websocket)
+
+    async def register_accepted(self, websocket: WebSocket) -> int:
+        """Track a WebSocket that was already accepted by the auth handshake."""
         async with self._lock:
             self._connections.append(websocket)
         count = len(self._connections)
         logger.info("War Room WS connected (%d active)", count)
+        return count
 
     async def disconnect(self, websocket: WebSocket) -> None:
         async with self._lock:
@@ -163,9 +168,7 @@ async def warroom_websocket(websocket: WebSocket) -> None:
     await websocket.send_text(json.dumps({"type": "auth_ok"}))
 
     # --- Authenticated: register and handle messages ---
-    async with connection_manager._lock:
-        connection_manager._connections.append(websocket)
-    count = len(connection_manager._connections)
+    count = await connection_manager.register_accepted(websocket)
     logger.info("War Room WS authenticated and connected (%d active)", count)
 
     try:

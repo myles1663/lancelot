@@ -20,6 +20,11 @@ from dataclasses import dataclass, field, asdict, replace
 from enum import Enum
 from contextlib import contextmanager
 
+try:
+    from .receipt_queries import ReceiptQueryMixin
+except ImportError:  # pragma: no cover - legacy top-level import path
+    from receipt_queries import ReceiptQueryMixin
+
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +47,6 @@ class ActionType(str, Enum):
     VERIFICATION = "verification"
     USER_INTERACTION = "user_interaction"
     SYSTEM = "system"
-    # Execution authority and task graph
     TOKEN_MINTED = "token_minted"
     TOKEN_REVOKED = "token_revoked"
     TOKEN_EXPIRED = "token_expired"
@@ -52,77 +56,55 @@ class ActionType(str, Enum):
     STEP_FAILED = "step_failed"
     VERIFY_PASSED = "verify_passed"
     VERIFY_FAILED = "verify_failed"
-    # Voice notes
     VOICE_STT = "voice_stt"
     VOICE_TTS = "voice_tts"
-    # Business Automation Layer (BAL)
     BAL_CLIENT_EVENT = "bal_client_event"
     BAL_INTAKE_EVENT = "bal_intake_event"
     BAL_REPURPOSE_EVENT = "bal_repurpose_event"
     BAL_DELIVERY_EVENT = "bal_delivery_event"
     BAL_BILLING_EVENT = "bal_billing_event"
-    # Tool flow streaming and ActionCards
     TOOL_FLOW_EVENT = "tool_flow_event"
     ACTION_CARD_PRESENTED = "action_card_presented"
     ACTION_CARD_RESOLVED = "action_card_resolved"
-    # HIVE Agent Mesh
     HIVE_TASK_EVENT = "hive_task_event"
     HIVE_AGENT_EVENT = "hive_agent_event"
     HIVE_INTERVENTION_EVENT = "hive_intervention_event"
-    # Federation
     FEDERATION_HEARTBEAT_EVENT = "federation_heartbeat_event"
     FEDERATION_IDENTITY_EVENT = "federation_identity_event"
     FEDERATION_TOPOLOGY_EVENT = "federation_topology_event"
     FEDERATION_HANDOFF_EVENT = "federation_handoff_event"
     FEDERATION_SOUL_EVENT = "federation_soul_event"
     FEDERATION_BUDGET_EVENT = "federation_budget_event"
-    # MCP (Model Context Protocol) — governed tool proxy
     MCP_TOOL_CALL = "mcp_tool_call"
     MCP_TOOL_BLOCKED = "mcp_tool_blocked"
-    # Operator Identity — governance lifecycle receipts
-    # Kill switches
     KILL_SWITCH_ISSUED = "kill_switch_issued"
     KILL_SWITCH_LIFTED = "kill_switch_lifted"
-    # T3 approvals
     T3_APPROVED = "t3_approved"
     T3_REJECTED = "t3_rejected"
-    # Soul governance
     SOUL_UPDATED = "soul_updated"
     SOUL_VERSION_PINNED = "soul_version_pinned"
-    # Agent lifecycle
     AGENT_DEPLOYED = "agent_deployed"
     AGENT_STOPPED = "agent_stopped"
-    # Credentials
     CREDENTIAL_REGISTERED = "credential_registered"
     CREDENTIAL_REVOKED = "credential_revoked"
-    # MCP server management
     MCP_SERVER_REGISTERED = "mcp_server_registered"
     MCP_SERVER_REVOKED = "mcp_server_revoked"
     MCP_T3_APPROVED = "mcp_t3_approved"
     MCP_T3_REJECTED = "mcp_t3_rejected"
-    # Connectors
     CONNECTOR_ENABLED = "connector_enabled"
     CONNECTOR_DISABLED = "connector_disabled"
-    # Network allowlist
     ALLOWLIST_MODIFIED = "allowlist_modified"
-    # Scheduler CRUD
     SCHEDULER_TASK_CREATED = "scheduler_task_created"
     SCHEDULER_TASK_DELETED = "scheduler_task_deleted"
     SCHEDULER_TASK_TRIGGERED = "scheduler_task_triggered"
-    # Tool store
     TOOL_ENABLED = "tool_enabled"
     TOOL_DISABLED = "tool_disabled"
-    # APL rule decisions
     APL_RULE_APPROVED = "apl_rule_approved"
     APL_RULE_REJECTED = "apl_rule_rejected"
-    # Governance write errors
     GOVERNANCE_WRITE_ERROR = "governance_write_error"
-    # Compliance export
     COMPLIANCE_EXPORT_GENERATED = "compliance_export_generated"
-    # Observability
     WEBHOOK_DELIVERY_FAILED = "webhook_delivery_failed"
     METRICS_API_QUERY = "metrics_api_query"
-    # A2A Protocol — Agent-to-Agent interoperability
     A2A_TASK_RECEIVED = "a2a_task_received"
     A2A_INBOUND_BLOCKED = "a2a_inbound_blocked"
     A2A_TASK_EXECUTING = "a2a_task_executing"
@@ -140,7 +122,6 @@ class ActionType(str, Enum):
     A2A_AGENT_REGISTERED = "a2a_agent_registered"
     A2A_AGENT_CARD_UPDATED = "a2a_agent_card_updated"
     A2A_AGENT_CARD_FETCHED = "a2a_agent_card_fetched"
-    # Time-Travel Debugging
     QUEST_FORKED = "quest_forked"
     QUEST_REPLAYED = "quest_replayed"
     TIME_TRAVEL_INSPECT = "time_travel_inspect"
@@ -148,9 +129,7 @@ class ActionType(str, Enum):
     T3_FORK_APPROVED = "t3_fork_approved"
     T3_FORK_REJECTED = "t3_fork_rejected"
     FORK_SOUL_REJECTED = "fork_soul_rejected"
-    # Soul Template Library
     SOUL_TEMPLATE_APPLIED = "soul_template_applied"
-    # Incident Response Playbooks
     INCIDENT_OPENED = "incident_opened"
     INCIDENT_PAGED = "incident_paged"
     INCIDENT_ACKNOWLEDGED = "incident_acknowledged"
@@ -204,7 +183,6 @@ class Receipt:
     quest_id: Optional[str] = None
     error_message: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
-    # Operator Identity — who initiated this action (None = automated)
     operator_id: Optional[str] = None
     session_id: Optional[str] = None
     integrity_prev_hash: Optional[str] = None
@@ -265,7 +243,7 @@ class Receipt:
         )
 
 
-class ReceiptService:
+class ReceiptService(ReceiptQueryMixin):
     """
     SQLite-backed immutable receipt storage service.
     
@@ -766,7 +744,7 @@ class ReceiptService:
 
         This receipt does NOT require OperatorIdentity (it may be written
         when identity is unavailable). It is never blocked by identity
-        enforcement — that would create a circular dependency.
+        enforcement; that would create a circular dependency.
         """
         try:
             error_receipt = Receipt(
@@ -876,60 +854,56 @@ class ReceiptService:
             return self._row_to_receipt(row)
         return None
 
-    def list(
+    def summarize_parent_chain(
         self,
-        limit: int = 100,
-        offset: int = 0,
-        action_type: Optional[str] = None,
-        status: Optional[str] = None,
+        *,
+        since: str,
+        until: str,
         quest_id: Optional[str] = None,
-        since: Optional[str] = None,
-        until: Optional[str] = None
-    ) -> List[Receipt]:
-        """
-        List receipts with optional filtering.
-        
-        Args:
-            limit: Maximum number of receipts to return
-            offset: Number of receipts to skip
-            action_type: Filter by action type
-            status: Filter by status
-            quest_id: Filter by quest ID
-            since: Filter receipts after this ISO timestamp
-            until: Filter receipts before this ISO timestamp
-            
-        Returns:
-            List of matching receipts
-        """
-        query = "SELECT * FROM receipts WHERE 1=1"
-        params: List[Any] = []
-        
-        if action_type:
-            query += " AND action_type = ?"
-            params.append(action_type)
-        
-        if status:
-            query += " AND status = ?"
-            params.append(status)
-        
+    ) -> Dict[str, Any]:
+        """Return parent-chain counts and missing-parent gaps for an audit period."""
+        base_where = "WHERE timestamp >= ? AND timestamp <= ?"
+        params: List[Any] = [since, until]
         if quest_id:
-            query += " AND quest_id = ?"
+            base_where += " AND quest_id = ?"
             params.append(quest_id)
-        
-        if since:
-            query += " AND timestamp >= ?"
-            params.append(since)
-        
-        if until:
-            query += " AND timestamp <= ?"
-            params.append(until)
-        
-        query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
-        
+
         conn = self._get_connection()
-        cursor = conn.execute(query, params)
-        return [self._row_to_receipt(row) for row in cursor.fetchall()]
+        total_row = conn.execute(
+            f"SELECT COUNT(*) as cnt FROM receipts {base_where}",
+            params,
+        ).fetchone()
+        parent_row = conn.execute(
+            f"""SELECT COUNT(*) as cnt FROM receipts
+                {base_where} AND parent_id IS NOT NULL AND parent_id != ''""",
+            params,
+        ).fetchone()
+        gap_rows = conn.execute(
+            f"""
+            SELECT r.id, r.parent_id, r.timestamp
+            FROM receipts r
+            {base_where}
+              AND r.parent_id IS NOT NULL
+              AND r.parent_id != ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM receipts p WHERE p.id = r.parent_id
+              )
+            ORDER BY r.timestamp ASC
+            """,
+            params,
+        ).fetchall()
+        return {
+            "total_receipts": int(total_row["cnt"] if total_row else 0),
+            "receipts_with_parents": int(parent_row["cnt"] if parent_row else 0),
+            "missing_parent_gaps": [
+                {
+                    "receipt_id": row["id"],
+                    "orphaned_parent_id": row["parent_id"],
+                    "receipt_timestamp": row["timestamp"],
+                }
+                for row in gap_rows
+            ],
+        }
 
     def search(
         self,
@@ -999,6 +973,13 @@ class ReceiptService:
             (quest_id,)
         )
         return [self._row_to_receipt(row) for row in cursor.fetchall()]
+
+    def clear(self) -> None:
+        """Clear receipts for an explicit operator-requested setup reset."""
+        with self._lock:
+            with self._transaction() as conn:
+                conn.execute("DELETE FROM receipt_staging")
+                conn.execute("DELETE FROM receipts")
 
     def get_children(self, parent_id: str) -> List[Receipt]:
         """

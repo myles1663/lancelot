@@ -279,7 +279,7 @@ class CrusaderAdapter:
         return f"Complete.\n{cleaned}" if cleaned else "Complete."
 
     @staticmethod
-    def _normalize_for_check(message: str) -> str:
+    def normalize_for_check(message: str) -> str:
         """Normalizes a message for security checking."""
         for zw in ("\u200b", "\u200c", "\u200d", "\ufeff"):
             message = message.replace(zw, "")
@@ -288,7 +288,7 @@ class CrusaderAdapter:
         return message.lower()
 
     @staticmethod
-    def _has_chaining_chars(text: str) -> bool:
+    def has_chaining_chars(text: str) -> bool:
         """Returns True if text contains any command chaining characters."""
         for chars in COMMAND_CHAINING_CHARS:
             if chars in text:
@@ -298,9 +298,9 @@ class CrusaderAdapter:
     @staticmethod
     def check_auto_pause(message: str) -> bool:
         """Returns True if the message contains an auto-pause pattern or command chaining."""
-        normalized = CrusaderAdapter._normalize_for_check(message)
+        normalized = CrusaderAdapter.normalize_for_check(message)
 
-        if CrusaderAdapter._has_chaining_chars(normalized):
+        if CrusaderAdapter.has_chaining_chars(normalized):
             return True
 
         for pattern in CRUSADER_PAUSE_PATTERNS:
@@ -313,7 +313,7 @@ class CrusaderAdapter:
         """Returns True if the message starts with an allowed command prefix."""
         msg_lower = message.strip().lower()
 
-        if CrusaderAdapter._has_chaining_chars(msg_lower):
+        if CrusaderAdapter.has_chaining_chars(msg_lower):
             return False
 
         for prefix in CRUSADER_ALLOWLIST:

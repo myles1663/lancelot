@@ -281,15 +281,15 @@ class ConnectionResult:
 
 ## Risk Classification
 
-Every UAB action is classified into one of three risk levels. The classification determines governance requirements.
+Every UAB action is classified into one of three risk levels. The classification determines governance requirements. The shared cross-layer vocabulary is defined in [Risk Terminology](risk-terminology.md).
 
 ### Risk Levels
 
-| Level | Actions | Governance |
-|-------|---------|------------|
-| **LOW** | `detect`, `enumerate`, `query`, `state`, `screenshot`, all read operations (`readDocument`, `readCell`, `readRange`, `getSheets`, `readFormula`, `readSlides`, `readSlideText`, `readEmails`), browser reads (`getCookies`, `getLocalStorage`, `getSessionStorage`, `getTabs`) | Autonomous — no approval needed |
-| **MEDIUM** | `click`, `doubleclick`, `rightclick`, `type`, `clear`, `select`, `scroll`, `focus`, `hover`, `expand`, `collapse`, `check`, `uncheck`, `toggle`, `keypress`, `hotkey`, `contextmenu`, `writeCell`, `writeRange`, `composeEmail`, `navigate`, `goBack`, `goForward`, `reload`, `switchTab`, `newTab`, `setCookie`, `setLocalStorage`, `setSessionStorage`, `executeScript` | May require governance approval |
-| **HIGH** | `close`, `invoke`, `minimize`, `maximize`, `restore`, `move`, `resize`, `sendEmail`, `deleteCookie`, `clearCookies`, `deleteLocalStorage`, `clearLocalStorage`, `deleteSessionStorage`, `clearSessionStorage`, `closeTab` | Always requires approval |
+| UAB level | Tool Fabric term | Governance tier | Actions | Governance |
+|-----------|------------------|-----------------|---------|------------|
+| **safe** | low | T0/T1 | `detect`, `enumerate`, `query`, `state`, `screenshot`, all read operations (`readDocument`, `readCell`, `readRange`, `getSheets`, `readFormula`, `readSlides`, `readSlideText`, `readEmails`), browser reads (`getCookies`, `getLocalStorage`, `getSessionStorage`, `getTabs`) | Autonomous unless policy escalates the target |
+| **moderate** | medium | T1/T2 | `click`, `doubleclick`, `rightclick`, `type`, `clear`, `select`, `scroll`, `focus`, `hover`, `expand`, `collapse`, `check`, `uncheck`, `toggle`, `keypress`, `hotkey`, `contextmenu`, `writeCell`, `writeRange`, `composeEmail`, `navigate`, `goBack`, `goForward`, `reload`, `switchTab`, `newTab`, `setCookie`, `setLocalStorage`, `setSessionStorage`, `executeScript` | May require approval depending on scope and active policy |
+| **destructive** | high | T3 | `close`, `invoke`, `minimize`, `maximize`, `restore`, `move`, `resize`, `sendEmail`, `deleteCookie`, `clearCookies`, `deleteLocalStorage`, `clearLocalStorage`, `deleteSessionStorage`, `clearSessionStorage`, `closeTab` | Requires approval |
 
 ### Sensitive App Auto-Escalation
 
@@ -297,11 +297,11 @@ When the target application matches a sensitive pattern, risk levels are automat
 
 | App Pattern | Read-Only Actions | Mutating Actions |
 |-------------|-------------------|------------------|
-| Password managers (`1password`, `bitwarden`, `keepass`, `lastpass`) | LOW → MEDIUM | MEDIUM → HIGH |
-| Banking (`bank`, `chase`, `wells fargo`, `capital one`) | LOW → MEDIUM | MEDIUM → HIGH |
-| Financial (`venmo`, `paypal`, `stripe`) | LOW → MEDIUM | MEDIUM → HIGH |
-| Email clients (`outlook`, `thunderbird`, `gmail`) | LOW → MEDIUM | MEDIUM → HIGH |
-| Shells (`terminal`, `powershell`, `cmd`) | LOW → MEDIUM | MEDIUM → HIGH |
+| Password managers (`1password`, `bitwarden`, `keepass`, `lastpass`) | safe -> moderate | moderate -> destructive |
+| Banking (`bank`, `chase`, `wells fargo`, `capital one`) | safe -> moderate | moderate -> destructive |
+| Financial (`venmo`, `paypal`, `stripe`) | safe -> moderate | moderate -> destructive |
+| Email clients (`outlook`, `thunderbird`, `gmail`) | safe -> moderate | moderate -> destructive |
+| Shells (`terminal`, `powershell`, `cmd`) | safe -> moderate | moderate -> destructive |
 
 ---
 
@@ -705,11 +705,9 @@ The panel polls every 5 seconds for live status updates.
 
 The Spatial Map (`packages/uab/src/spatial.ts`) converts flat `UIElement[]` with bounding rects into a spatial index that enables fast positional queries, row/column detection, and compact text-based maps for AI consumption.
 
-**This is UAB's core speed advantage over vision-only approaches:**
-- Data is faster than screenshots for AI to process
-- Bounding rects are free from UIA (no extra API calls)
-- The spatial map eliminates the need for screenshots in most cases
-- Vision becomes complementary, not primary
+The spatial map lets callers inspect layout as structured data before using
+screenshots. Bounding rectangles come from UIA when available, so vision can
+remain a fallback path instead of the default route.
 
 ### Key Types
 

@@ -89,7 +89,7 @@ def _emit_operator_notice_once(code: str, template: str, *args: Any) -> None:
         return
     emitted.add(code)
     detail = template % args if args else template
-    _OPERATOR_NOTICE_LOGGER.warning(
+    _OPERATOR_NOTICE_LOGGER.info(
         "operator_notice category=capability_enabled code=%s message=%s",
         code,
         detail,

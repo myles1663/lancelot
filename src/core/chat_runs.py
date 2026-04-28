@@ -350,12 +350,18 @@ class ChatRunStore:
         row = conn.execute("SELECT * FROM chat_runs WHERE run_id = ?", (run_id,)).fetchone()
         return self._row_to_run(row) if row else None
 
-    def list_recent(self, *, limit: int = 25, session_id: str = "") -> list[ChatRun]:
+    def list_recent(self, *, limit: int = 25, session_id: str = "", operator_id: str = "") -> list[ChatRun]:
         query = "SELECT * FROM chat_runs"
         params: list[object] = []
-        if session_id:
+        if session_id and operator_id:
+            query += " WHERE session_id = ? OR operator_id = ?"
+            params.extend([session_id, operator_id])
+        elif session_id:
             query += " WHERE session_id = ?"
             params.append(session_id)
+        elif operator_id:
+            query += " WHERE operator_id = ?"
+            params.append(operator_id)
         query += " ORDER BY created_at DESC LIMIT ?"
         params.append(limit)
         conn = self._get_connection()

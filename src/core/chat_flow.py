@@ -265,6 +265,7 @@ def _active_work_context_block(self) -> str:
         return store.render_context_block(
             quest_id=getattr(self, "_current_quest_id", "") or "",
             session_id=getattr(self, "_current_session_id", "") or "",
+            operator_id=getattr(self, "_current_operator_id", "") or "",
             max_items=3,
             max_events=8,
         )
@@ -302,12 +303,16 @@ def chat(
     self._current_session_id = session_id or ""
     self._current_operator_id = operator_id or ""
     self._current_operator_name = operator_name or ""
-    self._telegram_already_sent = False  # Reset duplicate-send guard
+    self.clear_telegram_delivery_handled()
     # Quest ID — groups all receipts from a single chat() invocation
     import uuid as _uuid
     self._current_quest_id = quest_id or str(_uuid.uuid4())
     if hasattr(self, 'context_env') and self.context_env:
-        self.context_env._current_quest_id = self._current_quest_id
+        set_quest_id = getattr(self.context_env, "set_current_quest_id", None)
+        if callable(set_quest_id):
+            set_quest_id(self._current_quest_id)
+        else:
+            setattr(self.context_env, "_current_quest_id", self._current_quest_id)
     start_time = __import__("time").time()
     _emit_progress(self, ChatPhase.PREFLIGHT.value, "Running governance preflight checks")
 

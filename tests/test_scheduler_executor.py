@@ -327,6 +327,9 @@ class TestSkillFailure:
         assert result.executed is True
         assert result.success is False
         assert result.receipt["event"] == "scheduled_job_failed"
+        job = service.get_job("test_job")
+        assert job.last_run_status == "failed"
+        assert "skill error" in job.last_run_error
 
     def test_missing_skill_executor_fails_closed(self, service, runtime_pause_state):
         executor = JobExecutor(service, None, [_ready_gate()])
@@ -368,6 +371,9 @@ class TestSkillFailure:
         assert result.success is False
         assert result.receipt["event"] == "scheduled_job_failed"
         assert "return_code=2" in result.error
+        job = service.get_job("test_job")
+        assert job.last_run_status == "failed"
+        assert "return_code=2" in job.last_run_error
 
 
 # ===================================================================

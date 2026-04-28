@@ -441,6 +441,13 @@ A notification banner appears at the top of every War Room page when a new versi
 - Version manifest URL: `LANCELOT_VERSION_URL` environment variable (default: `https://api.projectlancelot.dev/v1/version`)
 - The `VERSION` file at the repo root is the single source of truth for the running version
 
+The update checker is informational and does not affect `/health/ready`. If the
+instance cannot reach the manifest service, `/api/updates/status` reports
+`check_state: "offline"`, `check_error_kind: "network_unreachable"`, and
+`next_check_after` for the scheduled retry. Expected DNS or offline failures are
+kept out of normal startup logs; policy blocks, invalid manifests, and server
+errors still log as warnings because they require operator attention.
+
 ---
 
 ## Keyboard Shortcuts

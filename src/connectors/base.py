@@ -144,6 +144,11 @@ class ConnectorBase(ABC):
         """Update connector status."""
         self._status = status
 
+    def attach_vault(self, vault: Any) -> None:
+        """Attach a credential vault to connectors that use vault-backed validation."""
+        if getattr(self, "_vault", None) is None:
+            setattr(self, "_vault", vault)
+
     @abstractmethod
     def get_operations(self) -> list:
         """Return the list of ConnectorOperations this connector supports."""

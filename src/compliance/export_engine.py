@@ -136,14 +136,7 @@ def resolve_period(
             f"No receipts found in period {period_start} to {period_end}"
         )
 
-    # Get total count
-    conn = receipt_service._get_connection()
-    cursor = conn.execute(
-        "SELECT COUNT(*) as cnt FROM receipts "
-        "WHERE timestamp >= ? AND timestamp <= ?",
-        (period_start, period_end),
-    )
-    return cursor.fetchone()["cnt"]
+    return receipt_service.count(since=period_start, until=period_end)
 
 
 # ── Receipt Fetch ─────────────────────────────────────────────────────
@@ -158,18 +151,11 @@ def fetch_receipts(
 
     Returns receipts ordered by timestamp ascending (chronological).
     """
-    conn = receipt_service._get_connection()
-    sql = (
-        "SELECT * FROM receipts WHERE timestamp >= ? AND timestamp <= ?"
+    return receipt_service.list_chronological(
+        since=period_start,
+        until=period_end,
+        quest_id=quest_id,
     )
-    params: List[Any] = [period_start, period_end]
-    if quest_id:
-        sql += " AND quest_id = ?"
-        params.append(quest_id)
-    sql += " ORDER BY timestamp ASC"
-
-    cursor = conn.execute(sql, params)
-    return [receipt_service._row_to_receipt(row) for row in cursor.fetchall()]
 
 
 # ── Export Storage ────────────────────────────────────────────────────

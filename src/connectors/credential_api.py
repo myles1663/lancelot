@@ -242,9 +242,8 @@ def validate_credentials(connector_id: str):
     if missing:
         return ValidateCredentialResponse(valid=False, missing=missing)
 
-    # Inject vault into connector if not already set, so validate_credentials() works
-    if hasattr(entry.connector, "_vault") and entry.connector._vault is None:
-        entry.connector._vault = _vault
+    # Inject vault into connector if not already set, so validate_credentials() works.
+    entry.connector.attach_vault(_vault)
 
     # Try connector's own validation
     try:

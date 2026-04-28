@@ -174,7 +174,7 @@ class CredentialVault:
     """
 
     def __init__(self, config_path: str = "config/vault.yaml") -> None:
-        self._config = self._load_config(config_path)
+        self._config = self.load_config(config_path)
         self._entries: Dict[str, VaultEntry] = {}
         self._config_path = config_path
 
@@ -197,7 +197,7 @@ class CredentialVault:
         key_env_var = enc.get("key_env_var", "LANCELOT_VAULT_KEY")
         docker_secret_name = enc.get("docker_secret", "lancelot_vault_key")
 
-        key_str, self._key_origin = self._resolve_key_with_origin(key_env_var, docker_secret_name)
+        key_str, self._key_origin = self.resolve_key_with_origin(key_env_var, docker_secret_name)
         self._key_source: str = "unknown"
         self._key_id: Optional[str] = self._fingerprint_key_material(key_str) if key_str else None
         self._last_error: Optional[str] = None
@@ -239,12 +239,14 @@ class CredentialVault:
         self._sync_metadata()
 
     @staticmethod
-    def _load_config(config_path: str) -> Dict[str, Any]:
+    def load_config(config_path: str) -> Dict[str, Any]:
         path = Path(config_path)
         if path.exists():
             with open(path, "r", encoding="utf-8") as f:
                 return yaml.safe_load(f) or {}
         return {}
+
+    _load_config = load_config
 
     @staticmethod
     def _resolve_storage_paths(config: Dict[str, Any]) -> tuple[Path, Path, Path, Path]:
@@ -256,13 +258,15 @@ class CredentialVault:
         return storage_path, backup_path, metadata_path, reset_backups_path
 
     @staticmethod
-    def _resolve_key(env_var: str, docker_secret_name: str) -> str:
-        key, _origin = CredentialVault._resolve_key_with_origin(env_var, docker_secret_name)
+    def resolve_key(env_var: str, docker_secret_name: str) -> str:
+        key, _origin = CredentialVault.resolve_key_with_origin(env_var, docker_secret_name)
         return key
 
+    _resolve_key = resolve_key
+
     @staticmethod
-    def _resolve_key_with_origin(env_var: str, docker_secret_name: str) -> tuple[str, str]:
-        """Resolve encryption key: Docker secret → env var.
+    def resolve_key_with_origin(env_var: str, docker_secret_name: str) -> tuple[str, str]:
+        """Resolve encryption key from Docker secret first, then env var.
 
         Docker secrets are mounted at /run/secrets/<name> by the Docker
         runtime. Reading from file avoids /proc/PID/environ exposure.
@@ -284,6 +288,8 @@ class CredentialVault:
             return key, "environment"
 
         return "", "unconfigured"
+
+    _resolve_key_with_origin = resolve_key_with_origin
 
     @staticmethod
     def _fingerprint_key_material(key_material: str) -> str:
@@ -376,12 +382,12 @@ class CredentialVault:
         last_error: str | None = None,
     ) -> VaultHealthSnapshot:
         """Inspect vault state without decrypting any stored credentials."""
-        config = cls._load_config(config_path)
+        config = cls.load_config(config_path)
         storage_path, backup_path, metadata_path, reset_backups_path = cls._resolve_storage_paths(config)
         enc = config.get("encryption", {})
         key_env_var = enc.get("key_env_var", "LANCELOT_VAULT_KEY")
         docker_secret_name = enc.get("docker_secret", "lancelot_vault_key")
-        key_str, key_origin = cls._resolve_key_with_origin(key_env_var, docker_secret_name)
+        key_str, key_origin = cls.resolve_key_with_origin(key_env_var, docker_secret_name)
         key_configured = bool(key_str)
         key_source = "unknown"
         key_id = None
@@ -449,7 +455,7 @@ class CredentialVault:
     @classmethod
     def reset_storage(cls, config_path: str = "config/vault.yaml") -> Dict[str, Any]:
         """Archive the current vault artifacts so a clean vault can be re-created."""
-        config = cls._load_config(config_path)
+        config = cls.load_config(config_path)
         storage_path, backup_path, metadata_path, reset_backups_path = cls._resolve_storage_paths(config)
         salt_path = storage_path.parent / _PBKDF2_SALT_FILE
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -596,6 +602,18 @@ class CredentialVault:
     def list_keys(self) -> List[str]:
         """Return all credential keys (not values)."""
         return list(self._entries.keys())
+
+    def list_entry_metadata(self) -> List[Dict[str, str]]:
+        """Return non-secret metadata for stored credentials."""
+        return [
+            {
+                "key": key,
+                "type": entry.type,
+                "created_at": entry.created_at,
+                "updated_at": entry.updated_at,
+            }
+            for key, entry in self._entries.items()
+        ]
 
     @property
     def access_policy(self) -> VaultAccessPolicy:

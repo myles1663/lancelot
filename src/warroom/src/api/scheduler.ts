@@ -21,6 +21,7 @@ export interface SchedulerJob {
   description: string
   last_run_at: string | null
   last_run_status: string | null
+  last_run_error: string | null
   run_count: number
   registered_at: string
 }

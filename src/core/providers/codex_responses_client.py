@@ -224,7 +224,7 @@ class OpenAICodexResponsesProviderClient(ProviderClient):
                 converted.append(message)
                 continue
             role = str(message.get("role", "user") or "user")
-            content = OpenAICodexResponsesProviderClient._flatten_content(message.get("content"))
+            content = OpenAICodexResponsesProviderClient.flatten_content(message.get("content"))
             if role == "assistant":
                 converted.append({
                     "role": "assistant",
@@ -238,7 +238,7 @@ class OpenAICodexResponsesProviderClient(ProviderClient):
         return converted
 
     @staticmethod
-    def _flatten_content(content: Any) -> str:
+    def flatten_content(content: Any) -> str:
         if isinstance(content, str):
             return content
         if isinstance(content, list):
@@ -257,6 +257,8 @@ class OpenAICodexResponsesProviderClient(ProviderClient):
         if content is None:
             return ""
         return str(content)
+
+    _flatten_content = flatten_content
 
     @staticmethod
     def _to_responses_tools(tools: list) -> list[dict[str, Any]]:

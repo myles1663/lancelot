@@ -1133,21 +1133,21 @@ The flow library is UAB's procedural memory system. It transforms trial-and-erro
 
 ---
 
-### X-ray Vision (Deep Query + Invoke)
+### Deep Query And Invoke
 
 Standard UI enumeration only traverses a few levels of the accessibility tree. Many interactive elements — especially inside Electron web content — are deeper in the tree and invisible to shallow traversal.
 
-`/deep-query` uses UIA `FindAll` with `TrueCondition` to search the ENTIRE descendant tree. This reveals every element the application exposes through accessibility, regardless of depth. For ChatGPT, this surfaces 123 elements including sidebar conversations, model selector, input field, and action buttons. For Grok, this surfaces Copy/Regenerate/Read Aloud buttons that are invisible to standard enumerate.
+`/deep-query` uses UIA `FindAll` with `TrueCondition` to search the descendant tree. This returns elements the application exposes through accessibility, regardless of depth. For ChatGPT, this surfaces sidebar conversations, model selector, input field, and action buttons. For Grok, this surfaces Copy/Regenerate/Read Aloud buttons that are invisible to standard enumerate.
 
 `/invoke` uses UIA `InvokePattern` to programmatically activate any element — the equivalent of a mouse click but without requiring window focus or screen coordinates. Combined with FindAll name search and occurrence selection (first/last), this enables precise, named-element interaction.
 
-This is "programmatic visual equivalence through accessibility tree introspection" — the agent perceives applications at the same semantic level as a human user, through the application's own self-description of its interface.
+This path depends on the target application's accessibility tree. If the application does not expose enough semantic controls, UAB falls back to lower-level routes.
 
 ---
 
-## Anti-Screenshot SDK Architecture
+## Structured Inspection Architecture
 
-The Anti-Screenshot SDK inverts the traditional computer-use approach. Instead of screenshot → vision → coordinates → click, it uses:
+The structured inspection path avoids screenshot-first automation when framework hooks and accessibility APIs expose enough state. The flow is:
 
 1. **UIA Tree** (direct) — element IDs, types, states, structure
 2. **Bounding Rects** (direct) — spatial positions, sizes → spatial map

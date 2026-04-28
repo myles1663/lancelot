@@ -1,4 +1,6 @@
-# Lancelot — A Governed Autonomous System
+"""Runtime orchestrator facade for model routing, governance, and tool execution."""
+
+# Lancelot - A Governed Autonomous System
 # Copyright (c) 2026 Myles Russell Hamilton
 # Licensed under BUSL-1.1. See LICENSE for details.
 # Patent Pending: US Provisional Application #63/982,183
@@ -9,7 +11,6 @@ import subprocess
 import shlex
 import uuid
 from enum import Enum
-from pathlib import Path
 from typing import Any, Optional
 from providers.base import ProviderClient, GenerateResult, ToolCall
 from providers.tool_schema import NormalizedToolDeclaration
@@ -136,6 +137,7 @@ from src.core.frontier_scrubber import (
     normalize_frontier_pii_text as _normalize_frontier_pii_text_fn,
     validate_frontier_redaction as _validate_frontier_redaction_fn,
 )
+from src.core.orchestrator_execution_init import init_execution_authority as _init_execution_authority_impl
 
 # Governance imports (conditional)
 import logging as _logging
@@ -167,37 +169,17 @@ class ChatAttachment:
     mime_type: str
     data: bytes
 
-# Execution authority and tasking imports
+# Action-language gate imports
 try:
-    from response.assembler import ResponseAssembler, AssembledResponse
     from action_language_gate import check_action_language
-    from tasking.schema import RunStatus, TaskGraph, TaskRun, TaskStep
-    from tasking.store import TaskStore
-    from tasking.compiler import PlanCompiler
-    from tasking.runner import TaskRunner
-    from execution_authority.schema import ExecutionToken, TokenStatus
-    from execution_authority.store import ExecutionTokenStore
-    from execution_authority.minter import PermissionMinter
+    from tasking.schema import TaskGraph
 except ImportError:
     try:
-        from src.core.response.assembler import ResponseAssembler, AssembledResponse
         from src.core.action_language_gate import check_action_language
-        from src.core.tasking.schema import RunStatus, TaskGraph, TaskRun, TaskStep
-        from src.core.tasking.store import TaskStore
-        from src.core.tasking.compiler import PlanCompiler
-        from src.core.tasking.runner import TaskRunner
-        from src.core.execution_authority.schema import ExecutionToken, TokenStatus
-        from src.core.execution_authority.store import ExecutionTokenStore
-        from src.core.execution_authority.minter import PermissionMinter
+        from src.core.tasking.schema import TaskGraph
     except ImportError as e:
-        _gov_logger.warning("Execution authority imports unavailable: %s", e)
-        ResponseAssembler = None
+        _gov_logger.warning("Action-language gate imports unavailable: %s", e)
         check_action_language = None
-        TaskStore = None
-        PlanCompiler = None
-        TaskRunner = None
-        ExecutionTokenStore = None
-        PermissionMinter = None
 
 class RuntimeState(Enum):
     ACTIVE = "active"
@@ -219,6 +201,7 @@ class LancelotOrchestrator:
         self._cache = None
         self._cache_ttl = int(os.getenv("GEMINI_CACHE_TTL", "3600"))
         self._cache_model = os.getenv("GEMINI_CACHE_MODEL", "gemini-2.5-flash")
+        self._deep_model_validation_cache: dict[str, bool] = {}
 
         # Security Modules
         self.sanitizer = InputSanitizer()
@@ -295,11 +278,153 @@ class LancelotOrchestrator:
         verification = self.verifier.verify_step(goal, str(output))
         return verification.success
 
+    def set_memory_enabled(self, enabled: bool) -> None:
+        self._memory_enabled = bool(enabled)
+
+    def is_memory_enabled(self) -> bool:
+        return bool(self._memory_enabled)
+
+    def refresh_soul_policy(self, active_soul) -> None:
+        self.soul = active_soul
+        risk_classifier = getattr(self, "_risk_classifier", None)
+        if risk_classifier is not None:
+            risk_classifier.update_soul(active_soul)
+
+    def attach_connector_registry(self, registry) -> None:
+        self._connector_registry = registry
+
+    def set_bal_runtime(self, *, config=None, database=None, client_repo=None) -> None:
+        self._bal_config = config
+        self._bal_db = database
+        self._bal_client_repo = client_repo
+
+    @property
+    def active_provider_name(self) -> str:
+        return getattr(self, "_provider_name", "")
+
+    def set_provider_runtime(self, provider, *, provider_name: str, provider_mode: str) -> None:
+        self.provider = provider
+        self._provider_name = provider_name
+        self._provider_mode = provider_mode
+
+    def provider_stop_event(self):
+        return getattr(self, "_stop_event", None)
+
+    def set_provider_lane_configuration(
+        self,
+        *,
+        fast_model: str | None = None,
+        deep_model: str | None = None,
+        cache_model: str | None = None,
+        deep_thinking_config=None,
+    ) -> None:
+        if fast_model:
+            self.model_name = fast_model
+        if deep_model:
+            self._deep_model_name = deep_model
+        if cache_model:
+            self._cache_model = cache_model
+        if deep_thinking_config is not None:
+            self._deep_thinking_config = deep_thinking_config
+
+    def set_model_lane(self, lane: str, model_id: str) -> None:
+        if lane == "fast":
+            self.model_name = model_id
+        elif lane == "deep":
+            self._deep_model_name = model_id
+            self.invalidate_deep_model_validation_cache()
+        elif lane == "cache":
+            self._cache_model = model_id
+            self.clear_context_cache()
+        else:
+            raise ValueError(f"Unknown lane: {lane}")
+
+    def deep_model_name(self) -> str:
+        return getattr(self, "_deep_model_name", "")
+
+    def cached_deep_model_validation(self, model_id: str) -> bool | None:
+        return self._deep_model_validation_cache.get(model_id)
+
+    def record_deep_model_validation(self, model_id: str, valid: bool) -> None:
+        self._deep_model_validation_cache[model_id] = bool(valid)
+
+    def invalidate_deep_model_validation_cache(self) -> None:
+        self._deep_model_validation_cache.clear()
+        for attr in list(vars(self)):
+            if attr.startswith("_deep_model_valid_"):
+                delattr(self, attr)
+
+    def clear_context_cache(self) -> None:
+        self._cache = None
+
+    def set_context_cache(self, cache) -> None:
+        self._cache = cache
+
+    def context_cache_name(self) -> str | None:
+        return getattr(self._cache, "name", None)
+
+    def context_cache_model(self) -> str:
+        return self._cache_model
+
+    def context_cache_ttl_seconds(self) -> int:
+        return self._cache_ttl
+
+    def create_context_cache(
+        self,
+        *,
+        contents: str,
+        system_instruction: str,
+        display_name: str,
+    ):
+        if not self.provider:
+            raise RuntimeError("Context cache cannot be created before provider initialization")
+        return self.provider.create_context_cache(
+            model=self.context_cache_model(),
+            contents=contents,
+            system_instruction=system_instruction,
+            ttl_s=self.context_cache_ttl_seconds(),
+            display_name=display_name,
+        )
+
+    def set_last_tool_receipts(self, receipts: list[dict[str, Any]]) -> None:
+        self._last_tool_receipts = receipts
+
+    def set_last_plan_artifact(self, artifact) -> None:
+        self._last_plan_artifact = artifact
+
+    def verify_async_job(self, job) -> bool:
+        return self._verify_async_job(job)
+
+    def set_governance_runtime(
+        self,
+        *,
+        risk_classifier=None,
+        async_queue=None,
+        rollback_manager=None,
+        template_registry=None,
+    ) -> None:
+        self._risk_classifier = risk_classifier
+        self._async_queue = async_queue
+        self._rollback_manager = rollback_manager
+        self._template_registry = template_registry
+
     def _current_model_usage_status(self) -> dict:
         """Return the persisted local-model usage policy + runtime status."""
         from src.core.model_usage_policy import get_model_usage_status
 
         return get_model_usage_status()
+
+    def current_model_usage_status(self) -> dict:
+        return self._current_model_usage_status()
+
+    def mark_telegram_delivery_handled(self) -> None:
+        self._telegram_already_sent = True
+
+    def was_telegram_delivery_handled(self) -> bool:
+        return bool(getattr(self, "_telegram_already_sent", False))
+
+    def clear_telegram_delivery_handled(self) -> None:
+        self._telegram_already_sent = False
 
     def _emit_chat_progress(self, phase: str, message: str, **metadata: Any) -> None:
         """Publish bounded chat progress for War Room without exposing payloads."""
@@ -323,8 +448,14 @@ class LancelotOrchestrator:
         })
         event_bus.publish_sync(Event(type="chat.progress", payload=payload))
 
+    def emit_chat_progress(self, phase: str, message: str, **metadata: Any) -> None:
+        return self._emit_chat_progress(phase, message, **metadata)
+
     def _emit_frontier_scrub_receipt(self, **kwargs) -> None:
         return _emit_frontier_scrub_receipt_impl(self, **kwargs)
+
+    def emit_frontier_scrub_receipt(self, **kwargs) -> None:
+        return self._emit_frontier_scrub_receipt(**kwargs)
 
     def _record_frontier_scrub_result(self, result, *, path: str, input_length: int) -> None:
         return _record_frontier_scrub_result_impl(
@@ -334,23 +465,48 @@ class LancelotOrchestrator:
             input_length=input_length,
         )
 
+    def record_frontier_scrub_result(self, result, *, path: str, input_length: int) -> None:
+        return self._record_frontier_scrub_result(
+            result,
+            path=path,
+            input_length=input_length,
+        )
+
     def _get_frontier_scrubber(self) -> LocalPIIScrubber:
         return _get_frontier_scrubber_impl(self)
+
+    def get_frontier_scrubber(self) -> LocalPIIScrubber:
+        return self._get_frontier_scrubber()
 
     def _redact_for_frontier(self, text: str) -> str:
         return _redact_for_frontier_impl(self, text)
 
+    def redact_for_frontier(self, text: str) -> str:
+        return self._redact_for_frontier(text)
+
     def _scrub_frontier_payload(self, payload: Any) -> Any:
         return _scrub_frontier_payload_impl(self, payload)
 
+    def scrub_frontier_payload(self, payload: Any) -> Any:
+        return self._scrub_frontier_payload(payload)
+
     def _build_frontier_user_message(self, text: str, images: list | None = None) -> Any:
         return _build_frontier_user_message_impl(self, text, images=images)
+
+    def build_frontier_user_message(self, text: str, images: list | None = None) -> Any:
+        return self._build_frontier_user_message(text, images=images)
 
     def _build_frontier_tool_response_message(
         self,
         tool_results: list[tuple[str, str, str]],
     ) -> Any:
         return _build_frontier_tool_response_message_impl(self, tool_results)
+
+    def build_frontier_tool_response_message(
+        self,
+        tool_results: list[tuple[str, str, str]],
+    ) -> Any:
+        return self._build_frontier_tool_response_message(tool_results)
 
     def _provider_generate(
         self,
@@ -362,6 +518,21 @@ class LancelotOrchestrator:
     ):
         return _provider_generate_impl(
             self,
+            model=model,
+            messages=messages,
+            system_instruction=system_instruction,
+            config=config,
+        )
+
+    def provider_generate(
+        self,
+        *,
+        model: str,
+        messages: list,
+        system_instruction: str = "",
+        config: Optional[dict] = None,
+    ):
+        return self._provider_generate(
             model=model,
             messages=messages,
             system_instruction=system_instruction,
@@ -388,81 +559,45 @@ class LancelotOrchestrator:
             config=config,
         )
 
+    def provider_generate_with_tools(
+        self,
+        *,
+        model: str,
+        messages: list,
+        system_instruction: str,
+        tools: list,
+        tool_config: Optional[dict] = None,
+        config: Optional[dict] = None,
+    ):
+        return self._provider_generate_with_tools(
+            model=model,
+            messages=messages,
+            system_instruction=system_instruction,
+            tools=tools,
+            tool_config=tool_config,
+            config=config,
+        )
+
     def _init_governance(self):
         return _init_governance_impl(self)
 
     def _seed_trust_records(self):
         return _seed_trust_records_impl(self)
 
+    def seed_trust_records(self):
+        return self._seed_trust_records()
+
     def _init_fix_pack_v1(self):
-        """Initialize execution authority, tasking, and response assembler."""
-        self.task_store = None
-        self.token_store = None
-        self.minter = None
-        self.plan_compiler = None
-        self.task_runner = None
-        self.assembler = None
-        self._last_plan_artifact = None
-
-        try:
-            if TaskStore is None:
-                _gov_logger.info("Execution authority imports not available; skipping init.")
-                return
-
-            from feature_flags import (
-                FEATURE_EXECUTION_TOKENS,
-                FEATURE_TASK_GRAPH_EXECUTION,
-                FEATURE_RESPONSE_ASSEMBLER,
-            )
-
-            db_dir = Path(self.data_dir)
-
-            if FEATURE_TASK_GRAPH_EXECUTION:
-                self.task_store = TaskStore(db_dir / "tasks.db")
-                self.plan_compiler = PlanCompiler()
-                _gov_logger.info("TaskStore + PlanCompiler initialized.")
-
-            if FEATURE_EXECUTION_TOKENS:
-                self.token_store = ExecutionTokenStore(db_dir / "tokens.db")
-                self.minter = PermissionMinter(
-                    store=self.token_store,
-                    receipt_service=self.receipt_service,
-                )
-                _gov_logger.info(
-                    "ExecutionTokenStore + PermissionMinter initialized."
-                )
-
-            if FEATURE_TASK_GRAPH_EXECUTION and self.task_store:
-                self.task_runner = TaskRunner(
-                    task_store=self.task_store,
-                    token_store=self.token_store,
-                    minter=self.minter,
-                    receipt_service=self.receipt_service,
-                    skill_executor=self.skill_executor,
-                    verifier=self.verifier,
-                    connector_runtime=getattr(self, "connector_runtime", None),
-                )
-                _gov_logger.info("TaskRunner initialized.")
-
-            if FEATURE_RESPONSE_ASSEMBLER:
-                _gov_logger.info("FEATURE_RESPONSE_ASSEMBLER flag active.")
-
-        except Exception as e:
-            _gov_logger.warning("Execution authority init error (non-fatal): %s", e)
-
-        # Always initialize assembler; output hygiene is mandatory.
-        try:
-            self.assembler = ResponseAssembler()
-            _gov_logger.info("ResponseAssembler initialized (always-on).")
-        except Exception as e:
-            _gov_logger.warning("ResponseAssembler init failed (non-fatal): %s", e)
-            self.assembler = None
+        return _init_execution_authority_impl(self, _gov_logger)
 
     def _is_proceed_message(self, message: str) -> bool:
         return _is_proceed_message_impl(self, message)
 
     def _handle_proceed(self, user_message: str, session_id: str = "") -> str:
         return _handle_proceed_impl(self, user_message, session_id=session_id)
+
+    def handle_proceed(self, user_message: str, session_id: str = "") -> str:
+        return self._handle_proceed(user_message, session_id=session_id)
 
     def _request_permission(self, graph: TaskGraph) -> str:
         return _request_permission_impl(self, graph)
@@ -567,9 +702,9 @@ class LancelotOrchestrator:
                     step_label = s.inputs.get("description", s.type)
                     break
             if sr.success:
-                results_text.append(f"- {step_label}: SUCCESS — {sr.outputs}")
+                results_text.append(f"- {step_label}: SUCCESS - {sr.outputs}")
             else:
-                results_text.append(f"- {step_label}: FAILED — {sr.error}")
+                results_text.append(f"- {step_label}: FAILED - {sr.error}")
 
         results_block = "\n".join(results_text)
 
@@ -607,17 +742,30 @@ class LancelotOrchestrator:
     def _init_provider(self):
         return _init_provider_impl(self)
 
+    def initialize_provider(self):
+        """Initialize or refresh the active provider through the public runtime API."""
+        return self._init_provider()
+
     def switch_provider(self, provider_name: str) -> str:
         return _switch_provider_impl(self, provider_name)
 
     def _get_anthropic_oauth_token(self) -> str:
         return _get_anthropic_oauth_token_impl()
 
+    def get_anthropic_oauth_token(self) -> str:
+        return self._get_anthropic_oauth_token()
+
     def _get_openai_codex_oauth_token(self) -> str:
         return _get_openai_codex_oauth_token_impl()
 
+    def get_openai_codex_oauth_token(self) -> str:
+        return self._get_openai_codex_oauth_token()
+
     def _has_openai_codex_cli_auth(self) -> bool:
         return _has_openai_codex_cli_auth_impl()
+
+    def has_openai_codex_cli_auth(self) -> bool:
+        return self._has_openai_codex_cli_auth()
 
     def set_lane_model(self, lane: str, model_id: str) -> None:
         return _set_lane_model_impl(self, lane, model_id)
@@ -625,13 +773,16 @@ class LancelotOrchestrator:
     def _build_system_instruction(self, crusader_mode=False):
         return _build_system_instruction_impl(self, crusader_mode=crusader_mode)
 
+    def build_system_instruction(self, crusader_mode=False):
+        return self._build_system_instruction(crusader_mode=crusader_mode)
+
     def _build_execution_instruction(self) -> str:
         return _build_execution_instruction_impl(self)
 
     def _build_self_awareness(self) -> str:
         return _build_self_awareness_impl()
 
-    # ── Agentic Loop (Provider Function Calling) ───────────────────────
+    # Agentic loop (provider function calling)
 
     def _build_tool_declarations(self):
         return _build_tool_declarations_impl(self)
@@ -644,6 +795,9 @@ class LancelotOrchestrator:
             channel=getattr(self, "_current_channel", "api"),
         )
 
+    def classify_tool_call_safety(self, skill_name: str, inputs: dict) -> str:
+        return self._classify_tool_call_safety(skill_name, inputs)
+
     # ------------------------------------------------------------------
     # Local agentic routing
     # ------------------------------------------------------------------
@@ -651,11 +805,17 @@ class LancelotOrchestrator:
     def _build_openai_tool_declarations(self):
         return _build_openai_tool_declarations_impl(self)
 
+    def build_openai_tool_declarations(self):
+        return self._build_openai_tool_declarations()
+
     def _is_simple_for_local(self, prompt: str) -> bool:
         return _is_simple_for_local_impl(self, prompt)
 
     def _needs_research(self, prompt: str) -> bool:
         return _needs_research_impl(prompt)
+
+    def needs_research(self, prompt: str) -> bool:
+        return self._needs_research(prompt)
 
     def _wants_action(self, prompt: str) -> bool:
         return _wants_action_impl(prompt)
@@ -684,6 +844,9 @@ class LancelotOrchestrator:
     def _is_continuation(self, message: str) -> bool:
         return _is_continuation_impl(message)
 
+    def is_continuation(self, message: str) -> bool:
+        return self._is_continuation(message)
+
     def _verify_intent_with_llm(self, user_message: str, keyword_intent: "IntentType") -> "IntentType":
         return _verify_intent_with_llm_impl(self, user_message, keyword_intent)
 
@@ -703,12 +866,21 @@ class LancelotOrchestrator:
         )
 
     @staticmethod
-    def _is_retryable_error(exc: Exception) -> bool:
+    def is_retryable_error(exc: Exception) -> bool:
         return _is_retryable_error_impl(exc)
+
+    _is_retryable_error = is_retryable_error
 
     def _llm_call_with_retry(self, call_fn, max_retries=3, base_delay=1.0):
         return _llm_call_with_retry_impl(
             self,
+            call_fn,
+            max_retries=max_retries,
+            base_delay=base_delay,
+        )
+
+    def llm_call_with_retry(self, call_fn, max_retries=3, base_delay=1.0):
+        return self._llm_call_with_retry(
             call_fn,
             max_retries=max_retries,
             base_delay=base_delay,
@@ -735,9 +907,32 @@ class LancelotOrchestrator:
             skip_structured_reformat=skip_structured_reformat,
         )
 
+    def agentic_generate(
+        self,
+        prompt: str,
+        system_instruction: str = None,
+        allow_writes: bool = False,
+        context_str: str = None,
+        force_tool_use: bool = False,
+        image_parts: list = None,
+        skip_structured_reformat: bool = False,
+    ) -> str:
+        return self._agentic_generate(
+            prompt,
+            system_instruction=system_instruction,
+            allow_writes=allow_writes,
+            context_str=context_str,
+            force_tool_use=force_tool_use,
+            image_parts=image_parts,
+            skip_structured_reformat=skip_structured_reformat,
+        )
+
     def _format_tool_receipts(self, receipts: list, error: str = "", note: str = "") -> str:
         """Format tool receipts via the shared response helper."""
         return _format_tool_receipts_fn(receipts, error, note)
+
+    def format_tool_receipts(self, receipts: list, error: str = "", note: str = "") -> str:
+        return self._format_tool_receipts(receipts, error=error, note=note)
 
     def _text_only_generate(
         self,
@@ -754,10 +949,13 @@ class LancelotOrchestrator:
             image_parts=image_parts,
         )
 
-    # ── End Agentic Loop ─────────────────────────────────────────────
+    # End agentic loop
 
     def _get_thinking_config(self):
         return _get_thinking_config_impl()
+
+    def get_thinking_config(self):
+        return self._get_thinking_config()
 
     # Deep reasoning lane
 
@@ -839,13 +1037,22 @@ class LancelotOrchestrator:
     def _get_trust_summary(self, skill_name: str, inputs: dict) -> str:
         return _get_trust_summary_impl(self, skill_name, inputs)
 
+    def get_trust_summary(self, skill_name: str, inputs: dict) -> str:
+        return self._get_trust_summary(skill_name, inputs)
+
     def _suggest_alternatives(self, skill_name: str, inputs: dict) -> list:
         return _suggest_alternatives_impl(skill_name, inputs)
 
-    # ── End Autonomy Loop v2 ─────────────────────────────────────────
+    def suggest_alternatives(self, skill_name: str, inputs: dict) -> list:
+        return self._suggest_alternatives(skill_name, inputs)
+
+    # End autonomy loop v2
 
     def _init_context_cache(self):
         return _init_context_cache_impl(self)
+
+    def initialize_context_cache(self):
+        return self._init_context_cache()
 
     def _validate_command(self, command: str) -> tuple:
         """Validates a command against whitelist and blacklist.
@@ -941,6 +1148,9 @@ class LancelotOrchestrator:
         """Validate rule content via the shared safety helper."""
         return _validate_rule_content_fn(content)
 
+    def validate_rule_content(self, content: str) -> tuple:
+        return self._validate_rule_content(content)
+
     def _log_rule_candidate(self, content: str):
         return _log_rule_candidate_impl(self, content)
 
@@ -966,6 +1176,9 @@ class LancelotOrchestrator:
     def _auto_create_document(self, content: str, title: str = "Research Report") -> str:
         return _auto_create_document_impl(self, content, title=title)
 
+    def auto_create_document(self, content: str, title: str = "Research Report") -> str:
+        return self._auto_create_document(content, title=title)
+
     @staticmethod
     def _append_download_links(response: str, doc_paths: list) -> str:
         return _append_download_links_impl(response, doc_paths)
@@ -985,7 +1198,7 @@ class LancelotOrchestrator:
         if not plan:
             return "Failed to generate plan."
             
-        # Format plan for display — human-readable only, no tool/param internals
+        # Format plan for display: human-readable only, no tool/param internals.
         output = [f"Plan for: {plan.goal}"]
         for step in plan.steps:
             output.append(f"{step.id}. {step.description}")
@@ -1033,7 +1246,7 @@ class LancelotOrchestrator:
         Override in tests or inject an approval_fn for custom behavior.
         Production: creates a pending approval in the MCP Sentry queue
         visible from the War Room Governance Dashboard.  Returns False
-        so the plan pauses — the Commander can approve via the War Room
+        so the plan pauses; the Commander can approve via the War Room
         and re-issue the command.
         """
         if hasattr(self, '_approval_fn') and self._approval_fn is not None:
@@ -1056,7 +1269,7 @@ class LancelotOrchestrator:
                     _gov_logger.info("T3 action pre-approved by sentry: %s", capability)
                     return True
                 _gov_logger.warning(
-                    "T3 action requires approval: %s (request_id=%s) — visible in War Room",
+                    "T3 action requires approval: %s (request_id=%s); visible in War Room",
                     capability, perm.get("request_id", "?"),
                 )
                 return False
@@ -1070,6 +1283,9 @@ class LancelotOrchestrator:
     def _record_governance_event(self, capability: str, scope: str, tier, success: bool):
         return _record_governance_event_impl(self, capability, scope, tier, success)
 
+    def record_governance_event(self, capability: str, scope: str, tier, success: bool):
+        return self._record_governance_event(capability, scope, tier, success)
+
     def _get_deep_model(self) -> str:
         """Return the deep/reasoning model name with graceful fallback.
 
@@ -1079,6 +1295,9 @@ class LancelotOrchestrator:
         """
         return _get_deep_model_impl(self)
 
+    def get_deep_model(self) -> str:
+        return self._get_deep_model()
+
     def _route_model(self, user_message: str) -> str:
         """Smart model routing: selects the best model for the task.
 
@@ -1087,6 +1306,9 @@ class LancelotOrchestrator:
         'feels dumb' on hard questions while staying cost-efficient on simple ones.
         """
         return _route_model_impl(self, user_message)
+
+    def route_model(self, user_message: str) -> str:
+        return self._route_model(user_message)
 
     def chat(
         self,
@@ -1154,8 +1376,8 @@ class LancelotOrchestrator:
 
         Three-tier enforcement:
         1. Strip planner leakage markers (DRAFT:, PLANNER:, etc.)
-        2. Check for structural fake work proposals — replace entire response
-        3. Check individual forbidden phrases — replace if >= 2, strip if 1
+        2. Check for structural fake work proposals; replace entire response
+        3. Check individual forbidden phrases; replace if >= 2, strip if 1
 
         When agentic loop has tool receipts, research/execution
         phrases are allowed because they describe real tool-backed work.
@@ -1190,7 +1412,7 @@ class LancelotOrchestrator:
             if fake_work_reason:
                 return self._generate_honest_replacement(cleaned, fake_work_reason)
 
-        # Tier 2b: Action Language Gate — block execution claims
+        # Tier 2b: Action Language Gate; block execution claims
         #   without a real TaskRun + receipt
         if check_action_language is not None:
             active_run = None
@@ -1210,7 +1432,7 @@ class LancelotOrchestrator:
             violations, has_tool_receipts=has_tool_receipts
         )
         if violations:
-            # 2+ violations = systemic stalling — replace entire response
+            # 2+ violations means systemic stalling; replace entire response.
             if len(violations) >= 2:
                 return self._generate_honest_replacement(
                     cleaned,

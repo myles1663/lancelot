@@ -249,6 +249,26 @@ class GeminiProviderClient(ProviderClient):
         except Exception:
             return False
 
+    def create_context_cache(
+        self,
+        *,
+        model: str,
+        contents: str,
+        system_instruction: str,
+        ttl_s: int,
+        display_name: str,
+    ) -> Any:
+        """Create a Gemini cached-content object for stable runtime context."""
+        return self._client.caches.create(
+            model=model,
+            config=types.CreateCachedContentConfig(
+                contents=[contents],
+                system_instruction=system_instruction,
+                ttl=f"{ttl_s}s",
+                display_name=display_name,
+            ),
+        )
+
     # ------------------------------------------------------------------
     # Retry logic (preserved from orchestrator)
     # ------------------------------------------------------------------

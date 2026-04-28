@@ -42,7 +42,15 @@ from typing import (
 
 
 class RiskLevel(str, Enum):
-    """Risk classification for tool operations."""
+    """Tool Fabric risk classification.
+
+    Governance policy remains authoritative for execution. These labels map to
+    the shared vocabulary in docs/risk-terminology.md:
+
+    - LOW: UAB safe; governance T0/T1 depending action mutability
+    - MEDIUM: UAB moderate; governance T1/T2 depending scope
+    - HIGH: UAB destructive; governance T3 unless narrowed by policy
+    """
     LOW = "low"          # read/list/status, safe scaffolding
     MEDIUM = "medium"    # apply patches, install deps in container, run tests
     HIGH = "high"        # network enabled, deploy, delete operations, creds
@@ -72,6 +80,25 @@ _RISK_ORDER = {
     RiskLevel.LOW: 0,
     RiskLevel.MEDIUM: 1,
     RiskLevel.HIGH: 2,
+}
+
+
+RISK_TERMINOLOGY = {
+    RiskLevel.LOW: {
+        "uab": "safe",
+        "governance": "T0/T1",
+        "description": "inspection or reversible local work",
+    },
+    RiskLevel.MEDIUM: {
+        "uab": "moderate",
+        "governance": "T1/T2",
+        "description": "mutating work with bounded rollback or verification",
+    },
+    RiskLevel.HIGH: {
+        "uab": "destructive",
+        "governance": "T3",
+        "description": "irreversible, external, credential, or destructive work",
+    },
 }
 
 

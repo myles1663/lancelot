@@ -377,7 +377,8 @@ def _bind_oauth_routes(monkeypatch, routes):
     orchestrator = types.SimpleNamespace(
         provider=None,
         _provider_name="gemini",
-        _init_provider=lambda: setattr(orchestrator, "provider", object()),
+        active_provider_name="gemini",
+        initialize_provider=lambda: setattr(orchestrator, "provider", object()),
     )
 
     routes.bind_gateway_globals(
@@ -1092,6 +1093,12 @@ async def test_setup_api_recovery_endpoints_and_filesystem_paths(tmp_path, monke
 
         def list_keys(self):
             return list(self._entries.keys())
+
+        def list_entry_metadata(self):
+            return [
+                {"key": key, "type": entry.type, "created_at": entry.created_at}
+                for key, entry in self._entries.items()
+            ]
 
         def retrieve(self, key):
             return "abcd1234wxyz"

@@ -51,6 +51,7 @@ def test_init_context_cache_disables_cache_for_non_gemini_provider():
         provider=SimpleNamespace(provider_name="openai"),
         _cache=object(),
     )
+    runtime.clear_context_cache = lambda: setattr(runtime, "_cache", None)
 
     init_context_cache(runtime)
 
@@ -83,8 +84,8 @@ def test_update_rules_writes_signed_valid_rule_and_refreshes_cache(tmp_path):
         data_dir=str(tmp_path),
         rules_context="existing",
     )
-    runtime._validate_rule_content = lambda content: (True, "")
-    runtime._init_context_cache = lambda: cache_refreshes.append("refreshed")
+    runtime.validate_rule_content = lambda content: (True, "")
+    runtime.initialize_context_cache = lambda: cache_refreshes.append("refreshed")
     (tmp_path / "RULES.md").write_text("existing", encoding="utf-8")
 
     update_rules(runtime, "- Safe rule")
@@ -108,8 +109,8 @@ def test_update_rules_rejects_invalid_rule_without_writing(tmp_path):
         data_dir=str(tmp_path),
         rules_context="existing",
     )
-    runtime._validate_rule_content = lambda content: (False, "dangerous")
-    runtime._init_context_cache = lambda: (_ for _ in ()).throw(AssertionError("cache should not refresh"))
+    runtime.validate_rule_content = lambda content: (False, "dangerous")
+    runtime.initialize_context_cache = lambda: (_ for _ in ()).throw(AssertionError("cache should not refresh"))
     rules_path = tmp_path / "RULES.md"
     rules_path.write_text("existing", encoding="utf-8")
 

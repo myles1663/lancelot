@@ -119,8 +119,7 @@ def register_connector_with_vault_access(registry, vault, connector_id: str, con
     if connector is None:
         return None
 
-    if hasattr(connector, "_vault") and connector._vault is None:
-        connector._vault = vault
+    connector.attach_vault(vault)
 
     registry.register(connector)
     if vault is not None:

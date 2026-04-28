@@ -126,8 +126,7 @@ def mock_flagship():
     client = MagicMock(spec=FlagshipClient)
     client.complete.return_value = "flagship response"
     client.is_configured.return_value = True
-    client._profile = MagicMock()
-    client._get_lane_config.side_effect = lambda lane: (
+    client.get_lane_config.side_effect = lambda lane: (
         LaneConfig(model="gemini-2.0-flash", max_tokens=4096, temperature=0.3)
         if lane == "fast"
         else LaneConfig(model="gemini-2.0-pro", max_tokens=8192, temperature=0.7)
@@ -187,29 +186,29 @@ class TestFlagshipLaneConfig:
 
     def test_fast_lane(self, gemini_profile):
         c = FlagshipClient("gemini", gemini_profile)
-        lc = c._get_lane_config("fast")
+        lc = c.get_lane_config("fast")
         assert lc.model == "gemini-2.0-flash"
 
     def test_deep_lane(self, gemini_profile):
         c = FlagshipClient("gemini", gemini_profile)
-        lc = c._get_lane_config("deep")
+        lc = c.get_lane_config("deep")
         assert lc.model == "gemini-2.0-pro"
 
     def test_cache_lane(self, gemini_profile):
         c = FlagshipClient("gemini", gemini_profile)
-        lc = c._get_lane_config("cache")
+        lc = c.get_lane_config("cache")
         assert lc.model == "gemini-2.0-flash"
         assert lc.max_tokens == 2048
 
     def test_no_cache_raises(self, openai_profile):
         c = FlagshipClient("openai", openai_profile)
         with pytest.raises(FlagshipError, match="no cache lane"):
-            c._get_lane_config("cache")
+            c.get_lane_config("cache")
 
     def test_unknown_lane_raises(self, gemini_profile):
         c = FlagshipClient("gemini", gemini_profile)
         with pytest.raises(FlagshipError, match="Unknown lane"):
-            c._get_lane_config("turbo")
+            c.get_lane_config("turbo")
 
 
 # ===================================================================
@@ -413,8 +412,7 @@ class TestEscalationByFailure:
 
     def test_fast_failure_retries_on_deep(self, registry, mock_local):
         flagship = MagicMock(spec=FlagshipClient)
-        flagship._profile = MagicMock()
-        flagship._get_lane_config.side_effect = lambda lane: (
+        flagship.get_lane_config.side_effect = lambda lane: (
             LaneConfig(model="fast-model", max_tokens=4096, temperature=0.3)
             if lane == "fast"
             else LaneConfig(model="deep-model", max_tokens=8192, temperature=0.7)
@@ -437,8 +435,7 @@ class TestEscalationByFailure:
 
     def test_both_lanes_fail(self, registry, mock_local):
         flagship = MagicMock(spec=FlagshipClient)
-        flagship._profile = MagicMock()
-        flagship._get_lane_config.return_value = LaneConfig(
+        flagship.get_lane_config.return_value = LaneConfig(
             model="m", max_tokens=1, temperature=0.1
         )
         flagship.complete.side_effect = FlagshipError("all lanes down")
@@ -456,8 +453,7 @@ class TestEscalationByFailure:
 
     def test_deep_failure_does_not_retry(self, registry, mock_local):
         flagship = MagicMock(spec=FlagshipClient)
-        flagship._profile = MagicMock()
-        flagship._get_lane_config.return_value = LaneConfig(
+        flagship.get_lane_config.return_value = LaneConfig(
             model="m", max_tokens=1, temperature=0.1
         )
         flagship.complete.side_effect = FlagshipError("deep failed")
@@ -551,8 +547,7 @@ class TestFlagshipReceipts:
 
     def test_failed_flagship_receipt(self, registry, mock_local):
         flagship = MagicMock(spec=FlagshipClient)
-        flagship._profile = MagicMock()
-        flagship._get_lane_config.return_value = LaneConfig(
+        flagship.get_lane_config.return_value = LaneConfig(
             model="m", max_tokens=1, temperature=0.1
         )
         flagship.complete.side_effect = FlagshipError("all down")

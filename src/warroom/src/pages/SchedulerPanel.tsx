@@ -52,6 +52,11 @@ function jobStatusLabel(status: string | null): string {
   return status.charAt(0).toUpperCase() + status.slice(1)
 }
 
+function formatJobError(error: string | null): string {
+  if (!error) return ''
+  return error.length > 220 ? `${error.slice(0, 217)}...` : error
+}
+
 // ── Component ───────────────────────────────────────────────────
 
 export function SchedulerPanel() {
@@ -346,6 +351,15 @@ export function SchedulerPanel() {
                           <span className="text-xs font-mono text-text-primary">{job.run_count}</span>
                         </div>
                       </div>
+
+                      {job.last_run_status === 'failed' && job.last_run_error && (
+                        <div className="rounded border border-state-error/30 bg-state-error/10 px-3 py-2">
+                          <div className="text-[10px] text-state-error uppercase tracking-wider mb-1">Last Failure</div>
+                          <div className="text-xs font-mono text-state-error break-words">
+                            {formatJobError(job.last_run_error)}
+                          </div>
+                        </div>
+                      )}
 
                       {/* Registered at */}
                       <div className="flex items-center gap-2">

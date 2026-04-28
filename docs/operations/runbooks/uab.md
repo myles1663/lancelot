@@ -15,6 +15,9 @@ curl http://localhost:7900 \
 
 # From the Lancelot API
 curl http://localhost:8000/api/flags/uab-status
+
+# From the general health endpoint
+curl http://localhost:8000/health
 ```
 
 Expected response when healthy:
@@ -39,6 +42,13 @@ curl http://localhost:8000/api/flags/uab-apps
 Returns connected applications with PID, name, framework, and connection method.
 
 The live status payload now also includes `transport` and `standalone_features`. `transport: "json-rpc-compat"` means the host daemon is fronting the standalone UAB core while preserving the legacy JSON-RPC surface that Lancelot already governs.
+
+When `FEATURE_TOOLS_UAB=true`, the general `/health` response also includes a
+`components.uab_bridge` entry. `ok` means the daemon was reachable during the
+Tool Fabric health probe. `offline` means UAB is enabled but the host daemon
+could not be reached; core `/health/ready` can still be ready because desktop
+control is an optional provider, but operators should not start desktop-control
+workflows until the daemon is healthy.
 
 ## Starting the Daemon
 

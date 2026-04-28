@@ -71,7 +71,7 @@ def collect_additional_approval_requests(
         if _tool_input_error(skill_name, inputs):
             continue
         try:
-            if runtime._classify_tool_call_safety(skill_name, inputs) != "escalate":
+            if runtime.classify_tool_call_safety(skill_name, inputs) != "escalate":
                 continue
             perm = sentry.check_permission(skill_name, inputs)
         except Exception as exc:
@@ -385,7 +385,7 @@ def _sentry_blocks_tool_call(
     inputs: dict[str, Any],
     allow_writes: bool,
 ) -> tuple[bool, str | None]:
-    if runtime._classify_tool_call_safety(skill_name, inputs) != "escalate":
+    if runtime.classify_tool_call_safety(skill_name, inputs) != "escalate":
         return False, None
 
     if hasattr(runtime, "sentry") and runtime.sentry is not None:
@@ -416,8 +416,8 @@ def _blocked_tool_response_data(
             action_detail=str(inputs)[:200],
             blocked_reason="Requires Commander approval" if not allow_writes else "Escalated by security classification",
             permission_state="PENDING" if sentry_req_id else "DENIED",
-            trust_record_summary=runtime._get_trust_summary(skill_name, inputs),
-            alternatives=runtime._suggest_alternatives(skill_name, inputs),
+            trust_record_summary=runtime.get_trust_summary(skill_name, inputs),
+            alternatives=runtime.suggest_alternatives(skill_name, inputs),
             resolution_hint="Commander can approve in War Room > Governance Dashboard",
             request_id=sentry_req_id or "",
         )

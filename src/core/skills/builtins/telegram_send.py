@@ -69,7 +69,7 @@ def execute(context, inputs: Dict[str, Any]) -> Dict[str, Any]:
         return _send_file(file_path, caption or message, chat_id_override)
 
     # --- Text message ---
-    return _send_text(message, chat_id_override)
+    return send_text(message, chat_id_override)
 
 
 def _send_file(file_path: str, caption: str, chat_id_override: str = None) -> Dict[str, Any]:
@@ -138,12 +138,12 @@ def _send_file(file_path: str, caption: str, chat_id_override: str = None) -> Di
         return {"status": "error", "error": str(e)}
 
 
-def _send_text(message: str, chat_id_override: str = None) -> Dict[str, Any]:
+def send_text(message: str, chat_id_override: str = None) -> Dict[str, Any]:
     """Send a text message via Telegram."""
     # Apply Telegram sanitization (table conversion, JSON stripping, markdown fixes)
     try:
         from integrations.telegram_bot import TelegramBot
-        message = TelegramBot._sanitize_for_telegram(message)
+        message = TelegramBot.sanitize_for_telegram(message)
     except ImportError as exc:
         logger.debug("telegram_send: TelegramBot sanitizer unavailable: %s", exc)
 
@@ -154,8 +154,12 @@ def _send_text(message: str, chat_id_override: str = None) -> Dict[str, Any]:
             target_chat = chat_id_override or gateway.telegram_bot.chat_id
             gateway.telegram_bot.send_message(message, chat_id=target_chat)
             # Flag that we already sent via telegram_send (prevents duplicate in telegram_bot)
-            if hasattr(gateway, 'main_orchestrator') and gateway.main_orchestrator:
-                gateway.main_orchestrator._telegram_already_sent = True
+            if (
+                hasattr(gateway, 'main_orchestrator')
+                and gateway.main_orchestrator
+                and hasattr(gateway.main_orchestrator, "mark_telegram_delivery_handled")
+            ):
+                gateway.main_orchestrator.mark_telegram_delivery_handled()
             return {
                 "status": "sent",
                 "type": "message",
@@ -204,3 +208,6 @@ def _send_text(message: str, chat_id_override: str = None) -> Dict[str, Any]:
         }
     except Exception as e:
         return {"status": "error", "error": str(e)}
+
+
+_send_text = send_text

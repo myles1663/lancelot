@@ -139,6 +139,14 @@ class RiskClassifier:
         """Return sorted list of all capabilities with configured default tiers."""
         return sorted(self._defaults.keys())
 
+    def set_default_tier(self, capability: str, tier: RiskTier) -> None:
+        """Register or update the default risk tier for a capability."""
+        self._defaults[capability] = tier
+
+    def get_default_tier(self, capability: str, default: RiskTier) -> RiskTier:
+        """Return a configured capability tier, or the supplied fail-closed default."""
+        return self._defaults.get(capability, default)
+
     def update_soul(self, soul) -> None:
         """Re-parse soul escalation rules after a Soul amendment."""
         self._soul = soul

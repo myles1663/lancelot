@@ -3,21 +3,16 @@
  *
  * Converts flat UIElement[] with bounding rects into a spatial index
  * that enables fast positional queries, row/column detection, and
- * generates compact text-based maps for AI consumption.
+ * generates compact text-based maps for callers.
  *
- * This is the CORE of UAB's speed advantage over vision-only approaches:
- * - Data > screenshots (AI processes structured data faster than images)
- * - Bounding rects are FREE from UIA (no extra API calls)
- * - Spatial map eliminates the need for screenshots in most cases
- * - Vision becomes complementary, not primary
+ * Structured UI data is preferred over screenshots when the active route can
+ * expose enough state. Vision remains available as a fallback path.
  *
  * SPDX-License-Identifier: BUSL-1.1
  * Licensor: Myles Russell Hamilton
  */
 
 import type { UIElement, Bounds, ElementType } from './types.js';
-
-// ─── Types ─────────────────────────────────────────────────────
 
 export interface SpatialElement {
   id: string;

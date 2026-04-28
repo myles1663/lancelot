@@ -19,6 +19,7 @@ def _make_mock_provider(provider_name="gemini"):
     mock_provider.provider_name = provider_name
     mock_provider._client = MagicMock()
     mock_provider._client.caches.create.side_effect = Exception("cache not available")
+    mock_provider.create_context_cache.side_effect = Exception("cache not available")
     mock_result = MagicMock()
     mock_result.text = "Test response"
     mock_result.tool_calls = []
@@ -221,17 +222,14 @@ class TestSDKMigration(unittest.TestCase):
         self.assertIsNotNone(model_arg)
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
-    @patch("librarian.genai.Client")
-    def test_librarian_uses_new_sdk(self, mock_client_cls):
-        """Librarian should create genai.Client like orchestrator."""
-        mock_client_cls.return_value = MagicMock()
-        from librarian import Librarian
+    def test_librarian_does_not_bootstrap_gemini_client(self):
+        """Librarian should not send local file intake through Gemini."""
         import importlib
         import librarian as lib_mod
         importlib.reload(lib_mod)
         lib = lib_mod.Librarian()
-        mock_client_cls.assert_called_with(api_key="test-key")
-        self.assertIsNotNone(lib.client)
+        self.assertFalse(hasattr(lib_mod, "genai"))
+        self.assertFalse(hasattr(lib, "client"))
 
 
 # ---------------------------------------------------------------------------
@@ -299,9 +297,9 @@ class TestContextCaching(unittest.TestCase):
         mock_cache = MagicMock()
         mock_cache.name = "caches/test-cache-id"
         mock_provider = _make_mock_provider()
-        # Override: cache creation succeeds
-        mock_provider._client.caches.create.side_effect = None
-        mock_provider._client.caches.create.return_value = mock_cache
+        # Override: cache creation succeeds through the provider cache API.
+        mock_provider.create_context_cache.side_effect = None
+        mock_provider.create_context_cache.return_value = mock_cache
 
         import importlib
         import orchestrator as orch_mod
@@ -340,8 +338,8 @@ class TestContextCaching(unittest.TestCase):
         mock_cache = MagicMock()
         mock_cache.name = "caches/test-cache-id"
         mock_provider = _make_mock_provider()
-        mock_provider._client.caches.create.side_effect = None
-        mock_provider._client.caches.create.return_value = mock_cache
+        mock_provider.create_context_cache.side_effect = None
+        mock_provider.create_context_cache.return_value = mock_cache
 
         orch = _build_orchestrator(mock_provider)
         orch._cache = mock_cache  # Simulate cache being set
@@ -355,8 +353,8 @@ class TestContextCaching(unittest.TestCase):
         mock_cache = MagicMock()
         mock_cache.name = "caches/original"
         mock_provider = _make_mock_provider()
-        mock_provider._client.caches.create.side_effect = None
-        mock_provider._client.caches.create.return_value = mock_cache
+        mock_provider.create_context_cache.side_effect = None
+        mock_provider.create_context_cache.return_value = mock_cache
 
         import importlib
         import orchestrator as orch_mod
@@ -368,13 +366,13 @@ class TestContextCaching(unittest.TestCase):
             orch._init_context_cache()
 
         # Initial cache creation = 1 call
-        initial_calls = mock_provider._client.caches.create.call_count
+        initial_calls = mock_provider.create_context_cache.call_count
 
         # Update rules should trigger cache recreation
         orch._update_rules("A valid short rule")
 
         # Should have been called again for cache invalidation
-        self.assertGreater(mock_provider._client.caches.create.call_count, initial_calls)
+        self.assertGreater(mock_provider.create_context_cache.call_count, initial_calls)
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key", "GEMINI_CACHE_TTL": "7200"})
     def test_cache_ttl_configurable(self):

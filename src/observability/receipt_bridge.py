@@ -3,15 +3,15 @@
 # Licensed under BUSL-1.1. See LICENSE for details.
 
 """
-Receipt Bridge — hooks into the receipt write path to export OTel spans
-and update OTel metrics.
+Receipt Bridge — hooks into the receipt write path for OTel spans,
+OTel metrics, webhooks, and incident triggers.
 
 This module provides the `on_receipt_written()` callback that is called
 by ReceiptService.create() after a receipt is persisted. It:
 
 1. Checks sampling rules (T2/T3 always, T0/T1 sampled, governance always)
-2. Creates an OTel span from the receipt data
-3. Updates the 12 OTel metric instruments
+2. Creates an OTel span from the receipt data when OTel export is active
+3. Updates the 12 OTel metric instruments when OTel export is active
 
 Design constraint: this callback MUST NOT raise exceptions or block
 the receipt write path. All errors are logged and swallowed.
@@ -29,21 +29,30 @@ logger = logging.getLogger("lancelot.observability.receipt_bridge")
 # Module-level config
 _sampling_rate: float = 0.1  # T0/T1 sampling rate
 _enabled: bool = False
+_otel_enabled: bool = False
 
 
-def configure_bridge(enabled: bool, sampling_rate: float = 0.1) -> None:
+def configure_bridge(
+    enabled: bool,
+    sampling_rate: float = 0.1,
+    *,
+    otel_enabled: bool | None = None,
+) -> None:
     """Configure the receipt bridge.
 
     Args:
-        enabled: Whether OTel export is active
+        enabled: Whether the receipt bridge should process receipts at all
         sampling_rate: T0/T1 span sampling rate (0.0-1.0)
+        otel_enabled: Whether OTel span and metric export should run. When
+            omitted, follows enabled for backward compatibility.
     """
-    global _enabled, _sampling_rate
+    global _enabled, _otel_enabled, _sampling_rate
     _enabled = enabled
+    _otel_enabled = enabled if otel_enabled is None else bool(enabled and otel_enabled)
     _sampling_rate = max(0.0, min(1.0, sampling_rate))
     logger.info(
-        "Receipt bridge configured: enabled=%s, sampling_rate=%.2f",
-        enabled, _sampling_rate,
+        "Receipt bridge configured: enabled=%s, otel_enabled=%s, sampling_rate=%.2f",
+        _enabled, _otel_enabled, _sampling_rate,
     )
 
 
@@ -59,16 +68,17 @@ def on_receipt_written(receipt_dict: Dict[str, Any]) -> None:
     if not _enabled:
         return
 
-    try:
-        _export_span(receipt_dict)
-    except Exception as exc:
-        logger.debug("Span export failed (non-blocking): %s", exc)
+    if _otel_enabled:
+        try:
+            _export_span(receipt_dict)
+        except Exception as exc:
+            logger.debug("Span export failed (non-blocking): %s", exc)
 
-    try:
-        from src.observability.metrics import update_metrics_from_receipt
-        update_metrics_from_receipt(receipt_dict)
-    except Exception as exc:
-        logger.debug("Metrics update failed (non-blocking): %s", exc)
+        try:
+            from src.observability.metrics import update_metrics_from_receipt
+            update_metrics_from_receipt(receipt_dict)
+        except Exception as exc:
+            logger.debug("Metrics update failed (non-blocking): %s", exc)
 
     try:
         _deliver_webhooks(receipt_dict)

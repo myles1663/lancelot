@@ -26,7 +26,7 @@ def force_synthesis(
             raw_msg = {key: value for key, value in raw_msg.items() if key in ("role", "content")}
         messages.append(raw_msg)
 
-        synthesis_msg = runtime._build_frontier_user_message(
+        synthesis_msg = runtime.build_frontier_user_message(
             "IMPORTANT: You just described what you would do instead of actually doing it. "
             "Now produce the COMPLETE, DETAILED report. This is your FINAL response - "
             "the user will see exactly this text.\n\n"
@@ -41,12 +41,12 @@ def force_synthesis(
         )
         messages.append(synthesis_msg)
 
-        thinking_config = runtime._get_thinking_config()
+        thinking_config = runtime.get_thinking_config()
         synthesis_config = {"max_tokens": _SYNTHESIS_MAX_TOKENS}
         if thinking_config:
             synthesis_config["thinking"] = thinking_config
 
-        deep_model = runtime._get_deep_model()
+        deep_model = runtime.get_deep_model()
         _logger.debug(
             "forced_synthesis_started",
             extra={
@@ -55,8 +55,8 @@ def force_synthesis(
                 "prompt_length": len(prompt or ""),
             },
         )
-        result = runtime._llm_call_with_retry(
-            lambda: runtime._provider_generate(
+        result = runtime.llm_call_with_retry(
+            lambda: runtime.provider_generate(
                 model=deep_model,
                 messages=messages,
                 system_instruction=system_instruction,
@@ -93,7 +93,7 @@ def deliver_war_room_artifacts(runtime: Any, artifacts: list) -> list:
             if artifact_type == "RESEARCH_REPORT":
                 full_text = content.get("full_text", "")
                 if full_text and content.get("auto_document"):
-                    doc_path = runtime._auto_create_document(full_text)
+                    doc_path = runtime.auto_create_document(full_text)
                     if doc_path:
                         content["document_path"] = doc_path
                         created_docs.append(doc_path)

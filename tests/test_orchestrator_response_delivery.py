@@ -18,11 +18,11 @@ def test_force_synthesis_uses_deep_model_and_fresh_output_budget():
         return SimpleNamespace(text="complete report")
 
     runtime = SimpleNamespace(
-        _build_frontier_user_message=lambda text: {"role": "user", "content": text},
-        _get_thinking_config=lambda: {"thinking_level": "low"},
-        _get_deep_model=lambda: "deep-model",
-        _llm_call_with_retry=lambda fn: fn(),
-        _provider_generate=provider_generate,
+        build_frontier_user_message=lambda text: {"role": "user", "content": text},
+        get_thinking_config=lambda: {"thinking_level": "low"},
+        get_deep_model=lambda: "deep-model",
+        llm_call_with_retry=lambda fn: fn(),
+        provider_generate=provider_generate,
     )
 
     result = force_synthesis(
@@ -65,7 +65,7 @@ def test_deliver_war_room_artifacts_publishes_and_adds_auto_document(monkeypatch
         session_id="session-1",
         created_at="2026-04-25T12:00:00Z",
     )
-    runtime = SimpleNamespace(_auto_create_document=lambda content: "/workspace/report.pdf")
+    runtime = SimpleNamespace(auto_create_document=lambda content: "/workspace/report.pdf")
 
     created_docs = deliver_war_room_artifacts(runtime, [artifact])
 

@@ -36,11 +36,12 @@ The development process followed a specification-first methodology:
 3. Claude Code generated all source code, tests, and configuration
 4. The test suite validates correctness across all subsystems
 
-The original specifications and blueprints are preserved in `docs/internal/` as
-architectural reference and methodology documentation.
+The original specifications and blueprints are preserved in the private
+development repository as architectural reference and methodology documentation.
 
-This approach demonstrates that the core value of Lancelot lies in its architectural
-design and governance philosophy — not in any particular code implementation.
+The repository should be evaluated as architect-directed AI-assisted software:
+the implementation is generated, while the architecture, specifications, test
+expectations, and review decisions are maintained by the project owner.
 
 ## Proof Points
 

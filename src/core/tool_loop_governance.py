@@ -34,7 +34,7 @@ def record_tool_governance_event(
     try:
         tier = governance_tier_for_tool(skill_name)
         scope = governance_scope_from_inputs(inputs)
-        runtime._record_governance_event(skill_name, scope, tier, success)
+        runtime.record_governance_event(skill_name, scope, tier, success)
     except Exception as exc:
         _logger.warning(
             "Failed to record governance event for %s agentic tool %s: %s",
