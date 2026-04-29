@@ -81,12 +81,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/myles1663/UAB"
+    "url": "git+https://github.com/myles1663/lancelot.git",
+    "directory": "packages/uab"
   },
   "bugs": {
-    "url": "https://github.com/myles1663/UAB/issues"
+    "url": "https://github.com/myles1663/lancelot/issues"
   },
-  "homepage": "https://github.com/myles1663/UAB#readme",
+  "homepage": "https://github.com/myles1663/lancelot/tree/master/packages/uab#readme",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
     "ws": "^8.19.0"
