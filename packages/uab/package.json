@@ -1,7 +1,8 @@
 {
   "name": "universal-app-bridge",
   "version": "1.3.0",
-  "description": "Framework detection and desktop app control for AI agents. Desktop + server dual-mode with vision fallback. Hook into Chrome, Electron, Qt, GTK, WPF, Flutter, Java, and Office apps with a unified API.",
+  "private": true,
+  "description": "Lancelot's internal framework detection and desktop app control runtime. Desktop + server dual-mode with vision fallback. Hook into Chrome, Electron, Qt, GTK, WPF, Flutter, Java, and Office apps with a unified API.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -46,7 +47,7 @@
     "build": "node scripts/build.js",
     "daemon": "node dist/daemon.js",
     "test": "npm run build && node --test tests/*.test.mjs && node tests/daemon.test.js",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "node scripts/refuse-publish.js"
   },
   "devDependencies": {
     "@types/node": "^25.3.3",
