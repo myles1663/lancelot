@@ -1,0 +1,100 @@
+# ==========================================================
+# local-llm-prism-cuda - GPU-backed Prism llama.cpp runtime
+# ==========================================================
+# Production Bonsai runtime for hosts where local inference must stay inside
+# Docker. The image builds the pinned PrismML llama.cpp fork against a CUDA
+# devel image so ggml-cuda is available at runtime.
+#
+# Use with:
+#   BONSAI_LLM_DOCKERFILE=Dockerfile.prism.cuda
+#   PRISM_CUDA_BASE_IMAGE=nvidia/cuda:12.3.2-devel-ubuntu22.04
+#   PRISM_CUDA_ARCHITECTURES=61
+# ==========================================================
+
+ARG PRISM_CUDA_BASE_IMAGE=nvidia/cuda:12.3.2-devel-ubuntu22.04
+FROM ${PRISM_CUDA_BASE_IMAGE}
+
+ARG PRISM_LLAMA_CPP_REPO=https://github.com/PrismML-Eng/llama.cpp.git
+ARG PRISM_LLAMA_CPP_REF=d104cf1b639a909ddea521d61f7cb023c6e41f57
+ARG PRISM_CMAKE_ARGS=-DGGML_CUDA=ON
+ARG PRISM_CUDA_ARCHITECTURES=
+ARG PRISM_BUILD_JOBS=2
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LOCAL_LLM_ENGINE=prism_llama_server
+ENV LOCAL_LLM_SERVER_BIN=/usr/local/bin/llama-server
+ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs
+ENV GGML_BACKEND_PATH=/usr/local/lib
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    ca-certificates \
+    curl \
+    git \
+    build-essential \
+    cmake \
+    ninja-build \
+    libgomp1 \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
+
+RUN git clone --depth 1 --branch master "$PRISM_LLAMA_CPP_REPO" /tmp/llama.cpp \
+    && cd /tmp/llama.cpp \
+    && git fetch --depth 1 origin "$PRISM_LLAMA_CPP_REF" \
+    && git checkout "$PRISM_LLAMA_CPP_REF" \
+    && if [ -n "$PRISM_CUDA_ARCHITECTURES" ]; then \
+        CUDA_ARCH_ARGS="-DCMAKE_CUDA_ARCHITECTURES=$PRISM_CUDA_ARCHITECTURES"; \
+       else \
+        CUDA_ARCH_ARGS=""; \
+       fi \
+    && cmake -S . -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DLLAMA_BUILD_EXAMPLES=ON \
+        -DLLAMA_BUILD_SERVER=ON \
+        -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath-link,/usr/local/cuda/lib64/stubs" \
+        $CUDA_ARCH_ARGS \
+        $PRISM_CMAKE_ARGS \
+    && cmake --build build --target llama-server -j "$PRISM_BUILD_JOBS" \
+    && install -m 0755 build/bin/llama-server /usr/local/bin/llama-server \
+    && find build -name "lib*.so*" -exec cp -P {} /usr/local/lib/ \; \
+    && ldconfig \
+    && test -x /usr/local/bin/llama-server \
+    && rm -rf /tmp/llama.cpp
+
+RUN groupadd -r llm && useradd -r -g llm -m -d /home/llm -s /bin/bash llm
+
+WORKDIR /home/llm/app
+
+COPY requirements-llm.txt .
+RUN pip install --no-cache-dir -r requirements-llm.txt
+
+COPY __init__.py .
+COPY lockfile.py .
+COPY smoke_test.py .
+COPY fetch_model.py .
+COPY server.py .
+COPY models.lock.yaml .
+COPY prompts/ ./prompts/
+
+RUN mkdir -p /home/llm/models && chown -R llm:llm /home/llm
+
+USER llm
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+EXPOSE 8080
+
+CMD ["python3", "server.py"]

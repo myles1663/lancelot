@@ -1,0 +1,5 @@
+# Development / test extras on top of the runtime requirements
+-r requirements.txt
+pytest>=9.0.3
+pytest-cov
+pytest-timeout

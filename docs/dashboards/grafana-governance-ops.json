@@ -1,0 +1,133 @@
+{
+  "__meta": {
+    "name": "Lancelot Governance Operations",
+    "version": "1.0.0",
+    "description": "Primary governance operations dashboard for NOC/ops teams. All panels update from OTel metrics.",
+    "datasource": "Prometheus (OTel metrics)",
+    "compatible_with": "Grafana 10.x+"
+  },
+  "dashboard": {
+    "title": "Lancelot — Governance Operations",
+    "uid": "lancelot-gov-ops",
+    "tags": ["lancelot", "governance", "operations"],
+    "timezone": "browser",
+    "refresh": "10s",
+    "time": { "from": "now-6h", "to": "now" },
+    "panels": [
+      {
+        "title": "Active Kill Switches",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+        "targets": [{ "expr": "lancelot_kill_switches_active", "legendFormat": "Kill Switches" }],
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                { "color": "green", "value": 0 },
+                { "color": "red", "value": 1 }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Pending T3 Approvals",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+        "targets": [{ "expr": "lancelot_t3_approvals_pending", "legendFormat": "Pending" }],
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                { "color": "green", "value": 0 },
+                { "color": "yellow", "value": 1 },
+                { "color": "red", "value": 5 }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Spend Rate (USD/hr)",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+        "targets": [{ "expr": "lancelot_cost_usd_rate", "legendFormat": "USD/hr" }]
+      },
+      {
+        "title": "Active HIVE Agents",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+        "targets": [{ "expr": "lancelot_hive_active_agents", "legendFormat": "Agents" }]
+      },
+      {
+        "title": "Action Volume by Risk Tier",
+        "type": "barchart",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+        "targets": [
+          { "expr": "sum by (risk_tier) (rate(lancelot_actions_total[5m]))", "legendFormat": "{{risk_tier}}" }
+        ]
+      },
+      {
+        "title": "Blocked Actions",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+        "targets": [
+          { "expr": "sum by (block_reason) (rate(lancelot_actions_blocked[5m]))", "legendFormat": "{{block_reason}}" }
+        ]
+      },
+      {
+        "title": "T3 Approval Response Time",
+        "type": "histogram",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+        "targets": [
+          { "expr": "histogram_quantile(0.95, rate(lancelot_t3_approvals_response_time_ms_bucket[15m]))", "legendFormat": "p95" },
+          { "expr": "histogram_quantile(0.50, rate(lancelot_t3_approvals_response_time_ms_bucket[15m]))", "legendFormat": "p50" }
+        ]
+      },
+      {
+        "title": "Cost Tracking",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+        "targets": [
+          { "expr": "lancelot_cost_usd_total", "legendFormat": "Total USD" },
+          { "expr": "lancelot_cost_usd_rate", "legendFormat": "Rate USD/hr" }
+        ]
+      },
+      {
+        "title": "MCP Tool Call Volume",
+        "type": "barchart",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+        "targets": [
+          { "expr": "sum by (server_id, status) (rate(lancelot_mcp_tool_calls[5m]))", "legendFormat": "{{server_id}} ({{status}})" }
+        ]
+      },
+      {
+        "title": "Trust Ledger Distribution",
+        "type": "gauge",
+        "gridPos": { "h": 8, "w": 6, "x": 12, "y": 20 },
+        "targets": [
+          { "expr": "lancelot_trust_ledger_tier_distribution", "legendFormat": "{{tier}}" }
+        ]
+      },
+      {
+        "title": "Receipt Chain Lag (ms)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 6, "x": 18, "y": 20 },
+        "targets": [
+          { "expr": "lancelot_receipts_chain_lag_ms", "legendFormat": "Chain Lag" }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                { "color": "green", "value": 0 },
+                { "color": "yellow", "value": 200 },
+                { "color": "red", "value": 500 }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

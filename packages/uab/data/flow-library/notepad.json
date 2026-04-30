@@ -1,0 +1,23 @@
+{
+  "skill_name": "notepad_edit_flow",
+  "app_name": "Notepad",
+  "executable": "notepad.exe",
+  "app_framework": "Win32",
+  "target_flow": "Type and edit text in Windows Notepad",
+  "input_method": "direct_type",
+  "focus_method": "focus_endpoint",
+  "read_method": "copy",
+  "navigation_plan": [
+    {"step": 1, "action": "connect", "params": {"target": "notepad"}, "note": "Returns pid"},
+    {"step": 2, "action": "focus", "params": {"pid": "{pid}"}, "note": "Bring to front"},
+    {"step": 3, "action": "type", "params": {"pid": "{pid}", "elementId": "", "action": "type", "params": {"text": "{message}"}}, "note": "Direct SendKeys works — native Win32 text control"},
+    {"step": 4, "action": "screenshot_confirm", "params": {"pid": "{pid}"}, "note": "Verify text appeared"}
+  ],
+  "known_issues": [
+    "Windows 11 Notepad is a UWP app — may have different PID behavior than classic notepad.exe",
+    "Multiple Notepad instances can run — specify by PID if needed"
+  ],
+  "risk_tier": "T1",
+  "version": "1.0",
+  "last_verified": "2026-03-21"
+}

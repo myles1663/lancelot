@@ -1,0 +1,65 @@
+# ==========================================================
+# local-llm-prism - Prism llama.cpp runtime for Bonsai GGUF profiles
+# ==========================================================
+# This image preserves the Lancelot FastAPI wrapper contract while serving
+# Prism Bonsai weights through the PrismML llama.cpp fork. It is opt-in via
+# compose profiles or LOCAL_LLM_DOCKERFILE=Dockerfile.prism.
+# ==========================================================
+
+FROM python:3.11-slim
+
+ARG PRISM_RELEASE_TAG=prism-b8846-d104cf1
+ARG PRISM_RELEASE_ASSET=llama-prism-b8846-d104cf1-bin-ubuntu-x64.tar.gz
+ARG PRISM_RELEASE_SHA256=80bb9a820bb61389dc9f34c976f00afc33018d199b8ae81dd1afeaad2044ec87
+ARG PRISM_RELEASE_URL=https://github.com/PrismML-Eng/llama.cpp/releases/download/${PRISM_RELEASE_TAG}/${PRISM_RELEASE_ASSET}
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LOCAL_LLM_ENGINE=prism_llama_server
+ENV LOCAL_LLM_SERVER_BIN=/opt/prism/llama-server
+ENV LD_LIBRARY_PATH=/opt/prism:/usr/local/lib
+ENV GGML_BACKEND_PATH=/opt/prism
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    tar \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL "$PRISM_RELEASE_URL" -o /tmp/prism.tar.gz \
+    && echo "$PRISM_RELEASE_SHA256  /tmp/prism.tar.gz" | sha256sum -c - \
+    && mkdir -p /opt/prism \
+    && tar -xzf /tmp/prism.tar.gz -C /opt/prism --strip-components=1 \
+    && ln -s /opt/prism/llama-server /usr/local/bin/llama-server \
+    && cp /opt/prism/lib*.so* /usr/local/lib/ \
+    && ldconfig \
+    && /opt/prism/llama-server --help >/dev/null \
+    && rm -f /tmp/prism.tar.gz
+
+RUN groupadd -r llm && useradd -r -g llm -m -d /home/llm -s /bin/bash llm
+
+WORKDIR /home/llm/app
+
+COPY requirements-llm.txt .
+RUN pip install --no-cache-dir -r requirements-llm.txt
+
+COPY __init__.py .
+COPY lockfile.py .
+COPY smoke_test.py .
+COPY fetch_model.py .
+COPY server.py .
+COPY models.lock.yaml .
+COPY prompts/ ./prompts/
+
+RUN mkdir -p /home/llm/models && chown -R llm:llm /home/llm
+
+USER llm
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+EXPOSE 8080
+
+CMD ["python", "server.py"]

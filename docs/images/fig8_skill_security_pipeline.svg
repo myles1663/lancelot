@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 450" font-family="Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#555"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#c0392b"/>
+    </marker>
+  </defs>
+
+  <text x="550" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="#1a1a2e">Figure 8: Six-Stage Skill Security Pipeline</text>
+  <text x="550" y="50" text-anchor="middle" font-size="11" fill="#666">Every third-party skill passes through six mandatory security stages before execution</text>
+
+  <!-- Input: New Skill -->
+  <rect x="20" y="105" width="110" height="50" rx="25" fill="#1a1a2e" stroke="#333" stroke-width="2"/>
+  <text x="75" y="125" text-anchor="middle" font-size="10" font-weight="bold" fill="#4ade80">NEW</text>
+  <text x="75" y="140" text-anchor="middle" font-size="10" font-weight="bold" fill="#4ade80">SKILL</text>
+
+  <path d="M130 130 L158 130" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 1: Manifest -->
+  <rect x="160" y="85" width="130" height="90" rx="6" fill="#e8dff5" stroke="#6a4fa5" stroke-width="2"/>
+  <rect x="160" y="85" width="130" height="25" rx="6" fill="#6a4fa5"/>
+  <text x="225" y="102" text-anchor="middle" font-size="10" font-weight="bold" fill="white">1. MANIFEST</text>
+  <text x="225" y="127" text-anchor="middle" font-size="9" fill="#444">Declare:</text>
+  <text x="225" y="141" text-anchor="middle" font-size="9" fill="#444">Capabilities</text>
+  <text x="225" y="155" text-anchor="middle" font-size="9" fill="#444">Domains</text>
+  <text x="225" y="169" text-anchor="middle" font-size="9" fill="#444">Permissions</text>
+
+  <path d="M290 130 L318 130" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 2: Static Analysis -->
+  <rect x="320" y="85" width="130" height="90" rx="6" fill="#e8dff5" stroke="#6a4fa5" stroke-width="2"/>
+  <rect x="320" y="85" width="130" height="25" rx="6" fill="#6a4fa5"/>
+  <text x="385" y="102" text-anchor="middle" font-size="10" font-weight="bold" fill="white">2. STATIC</text>
+  <text x="385" y="127" text-anchor="middle" font-size="9" fill="#444">AST-based</text>
+  <text x="385" y="141" text-anchor="middle" font-size="9" fill="#444">code scanning</text>
+  <text x="385" y="155" text-anchor="middle" font-size="9" fill="#444">Dangerous pattern</text>
+  <text x="385" y="169" text-anchor="middle" font-size="9" fill="#444">detection</text>
+
+  <path d="M450 130 L478 130" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 3: Sandbox -->
+  <rect x="480" y="85" width="130" height="90" rx="6" fill="#e8dff5" stroke="#6a4fa5" stroke-width="2"/>
+  <rect x="480" y="85" width="130" height="25" rx="6" fill="#6a4fa5"/>
+  <text x="545" y="102" text-anchor="middle" font-size="10" font-weight="bold" fill="white">3. SANDBOX</text>
+  <text x="545" y="127" text-anchor="middle" font-size="9" fill="#444">Isolated execution</text>
+  <text x="545" y="141" text-anchor="middle" font-size="9" fill="#444">Resource monitoring</text>
+  <text x="545" y="155" text-anchor="middle" font-size="9" fill="#444">Behavior vs.</text>
+  <text x="545" y="169" text-anchor="middle" font-size="9" fill="#444">manifest check</text>
+
+  <path d="M610 130 L638 130" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 4: Enforce -->
+  <rect x="640" y="85" width="130" height="90" rx="6" fill="#e8dff5" stroke="#6a4fa5" stroke-width="2"/>
+  <rect x="640" y="85" width="130" height="25" rx="6" fill="#6a4fa5"/>
+  <text x="705" y="102" text-anchor="middle" font-size="10" font-weight="bold" fill="white">4. ENFORCE</text>
+  <text x="705" y="127" text-anchor="middle" font-size="9" fill="#444">Runtime capability</text>
+  <text x="705" y="141" text-anchor="middle" font-size="9" fill="#444">enforcement</text>
+  <text x="705" y="155" text-anchor="middle" font-size="9" fill="#444">Block undeclared</text>
+  <text x="705" y="169" text-anchor="middle" font-size="9" fill="#444">actions</text>
+
+  <path d="M770 130 L798 130" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 5: Approve -->
+  <rect x="800" y="85" width="130" height="90" rx="6" fill="#fff8f0" stroke="#c4762b" stroke-width="2"/>
+  <rect x="800" y="85" width="130" height="25" rx="6" fill="#c4762b"/>
+  <text x="865" y="102" text-anchor="middle" font-size="10" font-weight="bold" fill="white">5. APPROVE</text>
+  <text x="865" y="127" text-anchor="middle" font-size="9" fill="#444">⚠ Owner reviews</text>
+  <text x="865" y="141" text-anchor="middle" font-size="9" fill="#444">full pipeline report</text>
+  <text x="865" y="155" text-anchor="middle" font-size="9" fill="#444">Human sign-off</text>
+  <text x="865" y="169" text-anchor="middle" font-size="9" fill="#444">required</text>
+
+  <path d="M930 130 L958 130" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 6: Install -->
+  <rect x="960" y="85" width="120" height="90" rx="6" fill="#d4edda" stroke="#2d8a4e" stroke-width="2"/>
+  <rect x="960" y="85" width="120" height="25" rx="6" fill="#2d8a4e"/>
+  <text x="1020" y="102" text-anchor="middle" font-size="10" font-weight="bold" fill="white">6. INSTALL</text>
+  <text x="1020" y="127" text-anchor="middle" font-size="9" fill="#444">Installed with</text>
+  <text x="1020" y="141" text-anchor="middle" font-size="9" fill="#444">ongoing runtime</text>
+  <text x="1020" y="155" text-anchor="middle" font-size="9" fill="#444">monitoring</text>
+  <text x="1020" y="169" text-anchor="middle" font-size="9" fill="#2d8a4e" font-weight="bold">✓ Active</text>
+
+  <!-- BLOCK arrows (each stage can block) -->
+  <path d="M225 175 L225 230" stroke="#c0392b" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+  <path d="M385 175 L385 230" stroke="#c0392b" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+  <path d="M545 175 L545 230" stroke="#c0392b" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+  <path d="M705 175 L705 230" stroke="#c0392b" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+  <path d="M865 175 L865 230" stroke="#c0392b" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+
+  <!-- Blocked row -->
+  <rect x="160" y="233" width="130" height="30" rx="4" fill="#f8d7da" stroke="#c0392b" stroke-width="1"/>
+  <text x="225" y="252" text-anchor="middle" font-size="9" font-weight="bold" fill="#721c24">❌ BLOCKED</text>
+
+  <rect x="320" y="233" width="130" height="30" rx="4" fill="#f8d7da" stroke="#c0392b" stroke-width="1"/>
+  <text x="385" y="252" text-anchor="middle" font-size="9" font-weight="bold" fill="#721c24">❌ BLOCKED</text>
+
+  <rect x="480" y="233" width="130" height="30" rx="4" fill="#f8d7da" stroke="#c0392b" stroke-width="1"/>
+  <text x="545" y="252" text-anchor="middle" font-size="9" font-weight="bold" fill="#721c24">❌ BLOCKED</text>
+
+  <rect x="640" y="233" width="130" height="30" rx="4" fill="#f8d7da" stroke="#c0392b" stroke-width="1"/>
+  <text x="705" y="252" text-anchor="middle" font-size="9" font-weight="bold" fill="#721c24">❌ BLOCKED</text>
+
+  <rect x="800" y="233" width="130" height="30" rx="4" fill="#f8d7da" stroke="#c0392b" stroke-width="1"/>
+  <text x="865" y="252" text-anchor="middle" font-size="9" font-weight="bold" fill="#721c24">❌ REJECTED</text>
+
+  <!-- Runtime enforcement box -->
+  <rect x="160" y="300" width="920" height="65" rx="6" fill="#fff0f0" stroke="#c0392b" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="620" y="322" text-anchor="middle" font-size="11" font-weight="bold" fill="#c0392b">RUNTIME: Skills Never Access Network Directly</text>
+  <text x="620" y="342" text-anchor="middle" font-size="10" fill="#444">Skills submit action requests → Tool Fabric → Policy Engine → Governed Connector Proxy</text>
+  <text x="620" y="358" text-anchor="middle" font-size="10" fill="#444">Undeclared domain access blocked at THREE separate layers (sandbox, capability enforce, network allowlist)</text>
+
+  <!-- Source tiers -->
+  <rect x="160" y="385" width="280" height="50" rx="6" fill="#f8f8f8" stroke="#888" stroke-width="1"/>
+  <text x="300" y="405" text-anchor="middle" font-size="10" font-weight="bold" fill="#333">Skill Source Tiers</text>
+  <text x="300" y="425" text-anchor="middle" font-size="9" fill="#444">First-Party (audited) | Community (reputation) | User-Built (pipeline required)</text>
+</svg>

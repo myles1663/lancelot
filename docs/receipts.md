@@ -1,0 +1,379 @@
+# Receipts
+
+Lancelot's ground truth — every action produces a durable, auditable record. If there's no receipt, it didn't happen.
+
+---
+
+## What Generates Receipts
+
+Every discrete action in the system emits a receipt:
+
+| Source | Examples |
+|--------|----------|
+| **LLM calls** | Every model invocation — local or cloud, every lane |
+| **Tool executions** | Shell commands, file operations, git operations, network requests |
+| **Memory edits** | Commits, rollbacks, quarantine promotions, block updates |
+| **Scheduler runs** | Job executions, failures, skips, gating decisions |
+| **Verification steps** | Verifier pass/fail for each plan step |
+| **Governance decisions** | Policy evaluations, approval grants/denials, risk tier assignments |
+| **Health transitions** | State changes: healthy → degraded → recovered |
+| **Soul operations** | Amendment proposals, approvals, activations |
+| **Skill operations** | Install, enable, disable, uninstall, execution |
+| **Trust changes** | Graduation proposals, trust score updates, revocations |
+| **APL events** | Pattern detection, rule proposals, auto-approvals |
+| **MCP operations** | Tool invocations, blocks (with block gate), receipt write failures |
+| **Federation events** | Handoffs, Soul pushes, kill commands, divergence, contradictions, cost thresholds |
+| **Hive events** | Task lifecycle, agent state transitions, interventions |
+| **UAB actions** | App control receipts with risk classification, session summaries |
+| **ActionCard events** | Card presentation and resolution (cross-channel) |
+| **Compliance exports** | Export generation with format, period, chain integrity, output hash |
+
+---
+
+## What's in a Receipt
+
+Every receipt follows a consistent schema:
+
+```json
+{
+  "id": "receipt_abc123",
+  "timestamp": "2026-02-14T10:30:00Z",
+  "action_type": "tool_exec",
+  "action_name": "fs.write",
+  "inputs": {
+    "path": "/workspace/output.md",
+    "content_length": 1234
+  },
+  "outputs": {
+    "status": "success",
+    "bytes_written": 1234
+  },
+  "status": "success",
+  "duration_ms": 45,
+  "token_count": 0,
+  "cognition_tier": "DETERMINISTIC",
+  "parent_id": "receipt_parent456",
+  "quest_id": "quest_789",
+  "error_message": null,
+  "metadata": {
+    "risk_tier": "T1",
+    "policy_decision": "APPROVED",
+    "snapshot_id": "snap_001"
+  },
+  "operator_id": "a1b2c3d4-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "session_id": "sess_abc123"
+}
+```
+
+### Field Reference
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique identifier (UUID) |
+| `timestamp` | datetime | When the action occurred |
+| `action_type` | string | Category: `llm_call`, `tool_exec`, `file_op`, `memory_edit`, `scheduler_run`, `verification`, `governance`, `health_transition`, `soul_op`, `skill_op`, `mcp_tool_call`, `mcp_tool_blocked`, `hive_task_event`, `hive_agent_event`, `hive_intervention_event`, `tool_flow_event`, `action_card_presented`, `action_card_resolved`, `kill_switch_issued`, `kill_switch_lifted`, `t3_approved`, `t3_rejected`, `soul_updated`, `soul_version_pinned`, `agent_deployed`, `agent_stopped`, `credential_registered`, `credential_revoked`, `mcp_server_registered`, `mcp_server_revoked`, `mcp_t3_approved`, `mcp_t3_rejected`, `connector_enabled`, `connector_disabled`, `allowlist_modified`, `scheduler_task_created`, `scheduler_task_deleted`, `tool_enabled`, `tool_disabled`, `apl_rule_approved`, `apl_rule_rejected`, `governance_write_error` |
+| `action_name` | string | Specific action: model name, tool capability, job name |
+| `inputs` | object | Sanitized request data (secrets redacted, PII stripped) |
+| `outputs` | object | Sanitized response data |
+| `status` | string | `success` or `failure` |
+| `duration_ms` | number | Execution time in milliseconds |
+| `token_count` | number | Tokens consumed (0 for non-LLM actions) |
+| `cognition_tier` | string | Processing complexity level |
+| `parent_id` | string | ID of the parent receipt (for chain linking) |
+| `quest_id` | string | ID of the originating goal/quest |
+| `error_message` | string | Error details (on failure only) |
+| `metadata` | object | Action-specific additional data |
+| `operator_id` | string | Stable UUID of the human operator (null = automated). Derived via UUID5(namespace, username). |
+| `session_id` | string | Ephemeral UUID of the War Room session (empty for API-key or automated). |
+
+### Cognition Tiers
+
+Receipts are tagged with a cognition tier indicating the level of processing involved:
+
+| Tier | Value | Description |
+|------|-------|-------------|
+| **DETERMINISTIC** | 0 | No LLM involved — file operations, health checks, policy cache lookups |
+| **CLASSIFICATION** | 1 | Simple routing decisions — intent classification, risk tier assignment |
+| **PLANNING** | 2 | Multi-step planning and decomposition |
+| **SYNTHESIS** | 3 | Complex generation, high-risk reasoning |
+
+### Input/Output Sanitization
+
+Receipt inputs and outputs are sanitized before persistence:
+
+- **Secrets** are redacted (API keys, tokens, passwords replaced with `[REDACTED]`)
+- **PII** is stripped according to the configured frontier scrub policy. In `required` or `preferred` mode, Lancelot uses the local redaction lane before frontier egress when local scrubbing is available; `preferred` mode may fall back to direct frontier egress and now writes an immutable `pii_scrub_fallback` receipt instead of only surfacing that state in runtime status. Structured PII that is scrubbed locally emits `pii_scrub_applied`, and required-mode blocks emit `pii_scrub_blocked`, so the privacy boundary is auditable in the receipt log rather than only inferred from configuration. Scrub receipts include the applied pipeline stages, such as deterministic pre-scrub, local region finding, local segment verification, local model verification, deterministic fallback, and deterministic residual validation.
+- **Large payloads** are truncated with size noted
+- **Binary content** is replaced with type and size metadata
+
+This means receipts are safe to review, export, and share without exposing sensitive data.
+
+---
+
+## Parent-Child Linking
+
+Receipts form a tree structure through `parent_id` and `quest_id` fields. This enables complete decision chain reconstruction.
+
+### Example: A Governed Tool Execution
+
+```
+receipt_001  (action_type: governance, action_name: risk_classify)
+  → Classified fs.write as T1
+  │
+  ├─ receipt_002  (action_type: governance, action_name: policy_check)
+  │   → Policy cache: APPROVED
+  │
+  ├─ receipt_003  (action_type: tool_exec, action_name: fs.write)
+  │   → File written to /workspace/output.md
+  │
+  └─ receipt_004  (action_type: verification, action_name: async_verify)
+      → Verification: PASS
+```
+
+### Example: A Multi-Step Plan
+
+```
+receipt_plan_001  (action_type: llm_call, action_name: planner)
+  → Generated 4-step plan
+  │
+  ├─ receipt_step_001  (action_type: llm_call, parent_id: plan_001)
+  │   → Step 1 executed (flagship_fast)
+  │   └─ receipt_ver_001  (action_type: verification)
+  │       → PASS
+  │
+  ├─ receipt_step_002  (parent_id: plan_001)
+  │   → Step 2 executed
+  │   └─ receipt_ver_002  → PASS
+  │
+  ├─ receipt_step_003  (parent_id: plan_001)
+  │   → Step 3 executed
+  │   └─ receipt_ver_003  → FAIL (retry)
+  │   └─ receipt_step_003_retry  (parent_id: plan_001)
+  │       → Step 3 retried
+  │       └─ receipt_ver_003b  → PASS
+  │
+  └─ receipt_step_004  (parent_id: plan_001)
+      → Step 4 executed
+      └─ receipt_ver_004  → PASS
+```
+
+By following `parent_id` links, you can reconstruct the complete causal chain from any receipt back to the originating request.
+
+---
+
+## Integrity Chain
+
+Finalized receipts in the SQLite audit log now carry two integrity fields:
+
+- `integrity_prev_hash` — the SHA-256 hash of the previous finalized receipt in insertion order
+- `integrity_hash` — the SHA-256 hash of this receipt's canonical payload plus `integrity_prev_hash`
+
+This gives the finalized receipt log a tamper-evident chain. If a stored receipt body is edited after the fact, chain verification will fail.
+
+Finalized receipts also carry:
+
+- `integrity_key_id` — the active receipt-signing key identifier
+- `integrity_signature` — an HMAC-SHA256 signature over the finalized receipt hash
+
+By default, `ReceiptService` provisions and persists a local signing key alongside the receipt database on first boot, so new finalized receipts are always signed without requiring extra operator setup. Operators can still override that key with `LANCELOT_RECEIPT_HMAC_KEY` and `LANCELOT_RECEIPT_HMAC_KEY_ID` when they need externally managed signing material.
+
+This means the finalized chain is not just hash-linked. It is a keyed cryptographic verification path without changing receipt IDs or parent/quest lineage.
+
+`ReceiptService.validate_integrity_chain()` walks the finalized receipt log and reports:
+
+- missing integrity fields
+- previous-hash mismatches
+- recomputed-hash mismatches
+- missing integrity signatures when signing is enabled
+- integrity signature mismatches
+
+The receipt chain is separate from `parent_id` / `quest_id` lineage:
+
+- `parent_id` proves causal relationship between actions
+- `integrity_*` proves the finalized receipt body itself has not been modified without detection
+
+---
+
+## Batch Receipts
+
+For high-volume T0 and T1 actions, receipts are batched together and flushed as a single JSON artifact.
+
+**When batches flush:**
+- When the buffer reaches the configured size (default: 20)
+- Before any T2 or T3 action (tier boundary enforcement)
+- On task completion
+
+**Batch receipt format:**
+```json
+{
+  "batch_id": "batch_abc123",
+  "created_at": "2026-04-18T12:00:00Z",
+  "entries": [
+    {
+      "input_hash": "abc123...",
+      "output_hash": "def456..."
+    }
+  ],
+  "summary": {
+    "total_actions": 20,
+    "succeeded": 20,
+    "failed": 0,
+    "highest_risk_tier": 1
+  }
+}
+```
+
+Each batch entry records SHA-256 hashes of the serialized inputs and outputs. Batch receipts reduce I/O overhead and preserve integrity metadata for the entries they contain, but they are not currently described by their own signed or hash-chained batch manifest.
+
+---
+
+## Finding and Reading Receipts
+
+### War Room
+
+The **Receipts** panel in the War Room provides:
+
+- **Recent receipts** — chronological list of all recent actions
+- **Search** — filter by action type, status, time range, quest ID
+- **Drill-down** — click any receipt to see full details
+- **Chain view** — follow parent-child links to see the complete action trace
+- **Governance trace** — for any receipt, see the risk tier, policy decision, and approval status
+
+### API
+
+```
+GET /router/decisions         → Recent routing decisions (which lane, which model, why)
+GET /router/stats             → Aggregate routing statistics
+```
+
+Receipts are persisted in the SQLite audit store at `lancelot_data/receipts/receipts.db`.
+
+Finalized receipts live in the immutable `receipts` table. Pending work is held in an internal staging table until it resolves to `success` or `failure`, at which point the finalized receipt is written into the immutable log. Event-style receipts that do not have a pending execution window are finalized at creation time and land in the immutable log immediately.
+
+### Tracing a Complete Action
+
+To trace a complete action from request through execution:
+
+1. Find the initial receipt (the user's request or scheduler trigger)
+2. Follow `quest_id` to find all receipts in that quest
+3. Follow `parent_id` links to see the causal chain
+4. Look at `metadata` for governance details (risk tier, policy decisions, approvals)
+
+---
+
+## Receipt Retention
+
+Finalized receipts are append-only — they cannot be modified or deleted at runtime. They accumulate in `lancelot_data/receipts/receipts.db` over time.
+
+**Storage considerations:**
+- Each receipt is a few hundred bytes to a few KB
+- A typical day of active use generates hundreds to low thousands of receipts
+- Monitor `lancelot_data/receipts/` disk usage as part of regular maintenance
+
+**Archival:** Receipts can be safely backed up or exported to external storage. The live system does not support destructive retention cleanup from the immutable receipt log — archival should be done by copying or exporting the database, not deleting rows in place.
+
+---
+
+## Key Guarantee
+
+The receipt system provides one fundamental guarantee:
+
+> **If there's no receipt, it didn't happen.**
+
+Every code path that performs an action emits a receipt. Missing receipts indicate a system issue (crash, bug) rather than a silent action. This makes receipts the authoritative record of what Lancelot did, when, why, and whether it succeeded.
+
+---
+
+## UAB Receipts (AppControlReceipt)
+
+The Universal Application Bridge emits specialized receipts for desktop app control actions.
+
+### AppControlReceipt Schema
+
+Each UAB action produces an `AppControlReceipt` with:
+
+| Field Group | Fields | Description |
+|------------|--------|-------------|
+| **Identity** | `receipt_id`, `timestamp`, `session_id`, `parent_receipt_id` | Unique identification and chain linking |
+| **App context** | `app_name`, `app_pid`, `app_framework`, `window_title`, `connection_method` | Target application details |
+| **Classification** | `action_type`, `mutating`, `risk_level` | Action category (detect/connect/enumerate/query/act/state) and risk (LOW/MEDIUM/HIGH) |
+| **Element** | `element_id`, `element_type`, `element_label`, `element_path` | Targeted UI element |
+| **Action** | `action_performed`, `action_params` | Specific action (click, type, etc.) and parameters |
+| **State** | `pre_state`, `post_state`, `state_changed` | Before/after snapshots for verification |
+| **Chain** | `chain_id`, `chain_name`, `step_index`, `total_steps` | Multi-step workflow context |
+| **Governance** | `governance_gate`, `approval_id` | Autonomous or required_approval |
+| **Result** | `success`, `error_message`, `duration_ms` | Outcome |
+
+### AppSessionEntry Schema
+
+Per-app session summaries track aggregate activity:
+
+| Field | Description |
+|-------|-------------|
+| `session_id` | Unique session identifier |
+| `app_name`, `app_pid`, `app_framework` | Target app identity |
+| `connected_at`, `disconnected_at` | Session duration |
+| `total_actions`, `mutating_actions`, `read_only_actions` | Action counts |
+| `action_summary` | Action type → count breakdown |
+| `elements_touched` | Unique element IDs interacted with |
+| `max_risk_level` | Highest risk level encountered |
+| `receipt_ids` | Links to individual action receipts |
+
+### UAB Receipt Storage
+
+```
+data/receipts/uab/
+├── {receipt_id}.json          # Individual action receipts
+└── sessions/
+    └── {session_id}.json      # Per-app session summaries
+```
+
+---
+
+## Hive Receipts
+
+The Hive Agent Mesh emits three categories of receipts for sub-agent lifecycle tracking.
+
+### HIVE_TASK_EVENT
+
+Task lifecycle receipts — emitted by the ArchitectAgent:
+
+| Event | When |
+|-------|------|
+| `task_received` | Goal submitted for decomposition |
+| `decomposition` | Subtasks created by TaskDecomposer |
+| `task_completed` | All agents finished |
+| `task_failed` | Decomposition or execution failed |
+| `replan` | MODIFY intervention triggered replan |
+
+### HIVE_AGENT_EVENT
+
+Agent lifecycle receipts — emitted per sub-agent:
+
+| Event | When |
+|-------|------|
+| `agent_spawned` | Agent registered and Soul generated |
+| `state_transition` | Agent state changed (with from/to states) |
+| `action_executed` | Agent performed an action |
+| `agent_paused` | Agent paused (with reason) |
+| `agent_resumed` | Agent resumed |
+| `agent_collapsed` | Agent terminated (with collapse reason) |
+
+### HIVE_INTERVENTION_EVENT
+
+Operator control receipts:
+
+| Event | When |
+|-------|------|
+| `intervention:pause` | Operator paused an agent |
+| `intervention:resume` | Operator resumed an agent |
+| `intervention:kill` | Operator killed an agent |
+| `intervention:modify` | Operator killed + triggered replan |
+| `intervention:kill_all` | Operator emergency kill-all |
+
+### Hive Receipt Hierarchy
+
+All Hive receipts are linked via:
+- **quest_id** — groups all receipts for a single high-level task
+- **parent_id** — links child receipts to parents (e.g., agent spawn links to decomposition receipt)
+- **metadata** — contains `hive_subsystem`, `hive_agent_id`, and intervention details

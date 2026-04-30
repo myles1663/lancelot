@@ -1,0 +1,160 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-contracts:
+    name: Python governance contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install contract test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            pytest pytest-asyncio pytest-timeout \
+            pydantic PyYAML \
+            fastapi httpx python-multipart \
+            requests cryptography bcrypt PyJWT authlib \
+            opentelemetry-api opentelemetry-sdk \
+            watchdog playwright google-genai \
+            google-api-python-client google-auth-httplib2 google-auth-oauthlib
+
+      - name: Prepare runtime data directories
+        run: |
+          sudo mkdir -p /home/lancelot/data /home/lancelot/workspace
+          sudo chown -R "$USER:$USER" /home/lancelot
+
+      - name: Run core governance proof tests
+        run: |
+          python -m pytest \
+            tests/test_receipts.py \
+            tests/hive/test_runtime.py \
+            tests/test_kill_switch_contract.py \
+            tests/test_feature_f1_f8.py::TestHealthCheckEnhanced \
+            tests/test_feature_f1_f8.py::TestReadinessEndpoint \
+            tests/test_gateway_health.py \
+            tests/observability/test_api.py \
+            tests/observability/test_receipt_bridge.py \
+            tests/observability/test_otel_provider.py \
+            tests/test_chat_runs.py::test_local_model_health_summary_accepts_ready_role_lane \
+            tests/test_chat_runs.py::test_fast_runtime_status_command_formats_health_snapshot \
+            tests/test_chat_runs.py::test_chat_run_status_classifier_identifies_operator_blocking \
+            tests/test_chat_runs.py::test_execute_async_chat_run_marks_completion_and_emits_events \
+            tests/test_chat_runs.py::test_execute_async_chat_run_does_not_overwrite_operator_cancel \
+            tests/test_chat_runs.py::test_execute_async_chat_run_keeps_fast_runtime_commands_outside_worker_slot \
+            tests/test_chat_runs.py::test_chat_progress_event_updates_async_run \
+            tests/test_chat_runs.py::test_chat_progress_event_preserves_degraded_disclosure \
+            tests/test_chat_runs.py::test_chat_run_payload_includes_receipt_proof_from_retry_lineage \
+            tests/test_chat_runs.py::test_chat_run_payload_omits_receipt_proof_for_active_runs \
+            tests/test_chat_runs.py::test_chat_async_endpoint_queues_run_without_waiting_for_result \
+            tests/test_chat_runs.py::test_chat_run_cancel_endpoint_marks_run_cancelled \
+            tests/test_chat_runs.py::test_chat_run_retry_endpoint_queues_new_run \
+            tests/test_chat_runs.py::test_chat_run_retry_endpoint_queues_blocked_run \
+            tests/test_boot_environment.py \
+            tests/test_subsystem_runtime_contract.py \
+            tests/test_update_checker.py \
+            tests/test_flagship_update_network_guardrails.py \
+            tests/test_token_url_hardening.py::test_live_websocket_rejects_query_param_tokens \
+            tests/test_orchestrator_approval.py \
+            tests/test_orchestrator_context.py \
+            tests/test_orchestrator_frontier.py \
+            tests/test_orchestrator_generation.py \
+            tests/test_orchestrator_governance.py \
+            tests/test_orchestrator_identity.py \
+            tests/test_orchestrator_provider.py \
+            tests/test_orchestrator_routing.py \
+            tests/test_orchestrator_response_delivery.py \
+            tests/test_tool_loop_approval.py \
+            tests/test_tool_loop_receipts.py \
+            tests/test_tool_loop_frontier.py \
+            tests/test_tool_loop_governance.py \
+            tests/test_tool_loop_completion.py \
+            tests/test_tool_loop_results.py \
+            tests/test_tool_loop_structured.py \
+            tests/test_tool_loop_local.py \
+            tests/test_composition_coverage.py::test_boot_composition_root_wires_optional_success_paths \
+            tests/test_composition_coverage.py::test_agentic_generate_blocks_escalated_tool_without_write_permission \
+            tests/test_composition_coverage.py::test_agentic_generate_groups_multiple_escalated_tool_calls \
+            tests/test_composition_coverage.py::test_agentic_generate_rejects_missing_tool_inputs_before_approval
+
+  uab:
+    name: UAB build and tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/uab
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: packages/uab/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run UAB tests
+        run: npm test
+
+  warroom:
+    name: War Room typecheck and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/warroom
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: src/warroom/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run type-check
+
+      - name: Build
+        run: npm run build
+
+  compose:
+    name: Docker Compose config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate compose configuration
+        run: |
+          cp .env.example .env
+          docker compose config --quiet

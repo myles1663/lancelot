@@ -1,0 +1,89 @@
+version: '2.0'
+settings:
+  max_concurrent_requests: 10
+  default_timeout_seconds: 30
+  retry_max_attempts: 3
+  retry_backoff_seconds: 1
+rate_limits:
+  default:
+    max_requests_per_minute: 60
+    burst_limit: 10
+  per_connector:
+    slack:
+      max_requests_per_minute: 50
+      burst_limit: 5
+    email:
+      max_requests_per_minute: 30
+      burst_limit: 5
+    stripe:
+      max_requests_per_minute: 25
+      burst_limit: 3
+    teams:
+      max_requests_per_minute: 60
+      burst_limit: 10
+    discord:
+      max_requests_per_minute: 50
+      burst_limit: 5
+    whatsapp:
+      max_requests_per_minute: 80
+      burst_limit: 10
+    telegram:
+      max_requests_per_minute: 30
+      burst_limit: 5
+    sms:
+      max_requests_per_minute: 30
+      burst_limit: 5
+    x:
+      max_requests_per_minute: 15
+      burst_limit: 3
+connectors:
+  email:
+    enabled: false
+    backend: smtp
+    settings:
+      max_results_per_query: 50
+  slack:
+    enabled: false
+    settings:
+      default_channel: ''
+      max_messages_per_read: 100
+  calendar:
+    enabled: false
+    backend: google
+    settings:
+      max_events_per_query: 50
+  generic_rest:
+    enabled: false
+    settings:
+      max_endpoints: 10
+  teams:
+    enabled: false
+    settings:
+      default_team_id: ''
+      max_messages_per_read: 100
+  discord:
+    enabled: false
+    settings:
+      max_messages_per_read: 100
+      api_version: '10'
+  whatsapp:
+    enabled: false
+    settings:
+      phone_number_id: ''
+      api_version: v21.0
+  telegram:
+    enabled: true
+    settings:
+      chat_id: ''
+  sms:
+    enabled: false
+    backend: twilio
+    settings:
+      from_number: ''
+      messaging_service_sid: ''
+  x:
+    enabled: false
+    settings: {}
+  shared_workspace:
+    enabled: true
+    settings: {}

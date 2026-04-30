@@ -1,0 +1,137 @@
+# ==========================================================
+# Local Utility Model Lockfile
+# ==========================================================
+# Pinned model metadata. Weights are not bundled in the repo.
+# Operators download the selected profile into local_models/weights.
+# ==========================================================
+
+model:
+  name: "qwen3-8b"
+  display_name: "Qwen3 8B"
+  version: "3.0"
+  quantization: "Q4_K_M"
+  format: "gguf"
+  filename: "Qwen3-8B-Q4_K_M.gguf"
+  size_mb: 5028
+  checksum:
+    algorithm: "sha256"
+    hash: "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785"
+  sources:
+    - url: "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/7c41481f57cb95916b40956ab2f0b139b296d974/Qwen3-8B-Q4_K_M.gguf"
+      provider: "huggingface"
+  license:
+    model: "Apache-2.0"
+    runtime: "MIT"
+
+runtime:
+  engine: "llama_cpp_python"
+  context_length: 4096
+  threads: 4
+  gpu_layers: 0
+
+default_profile: "qwen3-8b"
+
+profiles:
+  qwen3-8b:
+    name: "qwen3-8b"
+    display_name: "Qwen3 8B"
+    version: "3.0"
+    quantization: "Q4_K_M"
+    format: "gguf"
+    filename: "Qwen3-8B-Q4_K_M.gguf"
+    size_mb: 5028
+    checksum:
+      algorithm: "sha256"
+      hash: "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785"
+    sources:
+      - url: "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/7c41481f57cb95916b40956ab2f0b139b296d974/Qwen3-8B-Q4_K_M.gguf"
+        provider: "huggingface"
+    license:
+      model: "Apache-2.0"
+      runtime: "MIT"
+    runtime:
+      engine: "llama_cpp_python"
+      context_length: 4096
+      threads: 4
+      gpu_layers: 0
+
+  bonsai-1.7b:
+    name: "bonsai-1.7b"
+    display_name: "Bonsai 1.7B"
+    version: "2026-04-18"
+    quantization: "Q1_0"
+    format: "gguf"
+    filename: "Bonsai-1.7B-Q1_0.gguf"
+    size_mb: 248
+    checksum:
+      algorithm: "sha256"
+      hash: "3d7c6c90dd98717a203adb22d5eacd2581850e40aa5327e144b97766cae5f7e3"
+    sources:
+      - url: "https://huggingface.co/prism-ml/Bonsai-1.7B-gguf/resolve/210a9e99f79cb184909d49595906526eb2b3dd9a/Bonsai-1.7B-Q1_0.gguf"
+        provider: "huggingface"
+    license:
+      model: "Apache-2.0"
+      runtime: "MIT"
+    runtime:
+      engine: "prism_llama_server"
+      context_length: 32768
+      threads: 4
+      gpu_layers: 99
+    notes:
+      - "Official Prism GGUF is the 1-bit 1.7B release; Prism's ternary 1.7B release is not published as an official GGUF profile here yet."
+
+  bonsai-8b:
+    name: "bonsai-8b"
+    display_name: "Bonsai 8B"
+    version: "2026-04-18"
+    quantization: "Q1_0"
+    format: "gguf"
+    filename: "Bonsai-8B-Q1_0.gguf"
+    size_mb: 1159
+    checksum:
+      algorithm: "sha256"
+      hash: "284a335aa3fb2ced3b1b01fcb40b08aa783e3b70832767f0dd2e3fdfa134bd54"
+    sources:
+      - url: "https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/48516770dd04643643e9f9019a2a349cf26c5dbd/Bonsai-8B-Q1_0.gguf"
+        provider: "huggingface"
+    license:
+      model: "Apache-2.0"
+      runtime: "MIT"
+    runtime:
+      engine: "prism_llama_server"
+      context_length: 8192
+      threads: 4
+      gpu_layers: 99
+
+  ternary-bonsai-8b:
+    name: "ternary-bonsai-8b"
+    display_name: "Ternary Bonsai 8B"
+    version: "2026-04-20"
+    quantization: "Q2_0"
+    format: "gguf"
+    filename: "Ternary-Bonsai-8B-Q2_0.gguf"
+    size_mb: 2182
+    checksum:
+      algorithm: "sha256"
+      hash: "3c8d70470a5d97e5a2b9410ddd899cb740116591462626c60cb2fead6448f60b"
+    sources:
+      - url: "https://huggingface.co/prism-ml/Ternary-Bonsai-8B-gguf/resolve/080e3f3aa1ba02d17afd5bcb1e84ae99ea42852c/Ternary-Bonsai-8B-Q2_0.gguf"
+        provider: "huggingface"
+    license:
+      model: "Apache-2.0"
+      runtime: "MIT"
+    runtime:
+      engine: "prism_llama_server"
+      context_length: 8192
+      threads: 4
+      gpu_layers: 99
+    notes:
+      - "Requires the PrismML llama.cpp fork until Q2_0 support is available in the default llama.cpp runtime."
+
+prompts:
+  - classify_intent
+  - extract_json
+  - summarize_internal
+  - redact
+  - rag_rewrite
+  - verify_intent

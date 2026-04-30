@@ -1,0 +1,30 @@
+# =========================
+# Router Configuration Example
+# =========================
+# This file configures how requests are routed to agents
+
+router:
+  # Default routing behavior
+  default_agent: orchestrator
+  
+  # Rule-based routing
+  rules:
+    # Direct to Crusader for autonomous execution
+    - pattern: "execute|deploy|automate"
+      agent: crusader
+      confidence_threshold: 0.8
+    
+    # Direct to Planner for planning tasks
+    - pattern: "plan|schedule|organize"
+      agent: planner
+      confidence_threshold: 0.7
+    
+    # Direct to Librarian for file operations
+    - pattern: "find|search|organize files"
+      agent: librarian
+      confidence_threshold: 0.7
+
+  # Fallback behavior
+  fallback:
+    agent: orchestrator
+    log_unrouted: true

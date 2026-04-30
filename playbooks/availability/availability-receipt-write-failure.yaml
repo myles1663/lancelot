@@ -1,0 +1,155 @@
+_playbook_metadata:
+  name: availability-receipt-write-failure
+  display_name: "Availability — Receipt Write Failure"
+  description: "Receipt write has failed. Governance is DEGRADED. All agent activity must stop immediately — an agent operating without receipt generation is ungoverned."
+  category: AVAILABILITY_INCIDENT
+  severity_default: HIGH
+  industry: general
+  version: "1.0"
+  author: Lancelot
+  tags: [availability, receipts, governance, data-volume, degraded]
+
+trigger:
+  receipt_types: [GOVERNANCE_WRITE_ERROR]
+  conditions: []
+  severity: HIGH
+
+paging:
+  CRITICAL:
+    - channel: pagerduty
+      endpoint_ref: vault://pagerduty-webhook
+      escalation_minutes: 5
+  HIGH:
+    - channel: slack
+      endpoint_ref: vault://slack-incident-channel
+      escalation_minutes: 15
+  MEDIUM:
+    - channel: slack
+      endpoint_ref: vault://slack-ops-channel
+      escalation_minutes: 60
+
+steps:
+  - step: 1
+    title: "Stop ALL agent activity immediately"
+    description: >
+      Receipt write failure means the governance layer is DEGRADED. Any agent
+      action taken without a corresponding receipt is ungoverned and unauditable.
+      Stop all running agents immediately. Do not attempt to investigate the
+      cause while agents are still running — every action they take without
+      receipts widens the governance gap.
+    action_type: MANUAL
+    sla_minutes: 2
+    decision_points:
+      - condition: "If all agents stop successfully"
+        action: "Proceed to Step 2 to diagnose the write failure."
+      - condition: "If any agent fails to stop"
+        action: "Escalate to CRITICAL. Force container restart if necessary to ensure no ungoverned actions continue."
+    actions: []
+
+  - step: 2
+    title: "Check data volume health"
+    description: >
+      The receipt store writes to the lancelot_data volume mounted at
+      /home/lancelot/data. Check disk space, filesystem integrity, and
+      mount status. Run a basic write test to the volume to confirm whether
+      the issue is volume-level or application-level. Check Docker volume
+      inspect output for anomalies.
+    action_type: MANUAL
+    sla_minutes: 5
+    decision_points:
+      - condition: "If data volume is full"
+        action: "Free space by archiving old data or expanding the volume. Proceed to Step 3."
+      - condition: "If data volume is healthy but writes still fail"
+        action: "Proceed to Step 3 — the issue is application-level."
+      - condition: "If data volume is unmounted or corrupted"
+        action: "Escalate to CRITICAL. Do not attempt repair without backup verification."
+    actions: []
+
+  - step: 3
+    title: "Check receipt store database integrity"
+    description: >
+      If the data volume is healthy, the issue may be in the receipt store
+      database itself. Check for locked tables, corrupted indexes, or
+      connection pool exhaustion. Review the application logs for the
+      specific error message that triggered the GOVERNANCE_WRITE_ERROR
+      receipt (the error receipt itself may have been written to stderr
+      or a fallback log if the primary store was unavailable).
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "If database lock or connection pool issue"
+        action: "Clear locks, restart the database connection, and proceed to Step 4."
+      - condition: "If database corruption detected"
+        action: "Do not attempt online repair. Proceed to Step 5 for backup assessment."
+    actions: []
+
+  - step: 4
+    title: "Attempt a controlled receipt write test"
+    description: >
+      With agents still stopped, attempt to write a test receipt to the
+      store. This should be a governance receipt with action_type
+      SYSTEM_TEST. If the write succeeds, the immediate issue is resolved
+      but root cause must still be documented. If it fails, the underlying
+      problem persists.
+    action_type: MANUAL
+    sla_minutes: 5
+    decision_points:
+      - condition: "If test write succeeds"
+        action: "Proceed to Step 6 to validate with consecutive writes."
+      - condition: "If test write fails"
+        action: "Return to Step 2 and Step 3 with deeper investigation. Consider container restart."
+    actions: []
+
+  - step: 5
+    title: "Assess backup and recovery options"
+    description: >
+      If data corruption is suspected, check the most recent backup of the
+      receipt store. Determine the recovery point objective — how much
+      receipt history would be lost in a restore. Do NOT restore without
+      operator approval, as this may destroy evidence needed for compliance.
+      Document the gap in receipt coverage (time range where receipts may
+      be missing or unreliable).
+    action_type: MANUAL
+    sla_minutes: 15
+    decision_points:
+      - condition: "If backup is recent and restore is approved by operator"
+        action: "Restore from backup and proceed to Step 6."
+      - condition: "If no viable backup exists"
+        action: "Escalate to CRITICAL and engage infrastructure team. This is a data loss event."
+    actions: []
+
+  - step: 6
+    title: "Validate with 10 consecutive successful receipt writes"
+    description: >
+      Before restoring any agent activity, confirm that the receipt store
+      is fully healthy. Write 10 consecutive test receipts and verify each
+      one is readable. Do NOT proceed until all 10 succeed. Any failure
+      resets the count. This is the minimum threshold for confidence that
+      governance is restored.
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "If all 10 writes succeed"
+        action: "Proceed to Step 7 to restore operations."
+      - condition: "If any write fails"
+        action: "Reset the count and return to diagnostics. Do not restore agent activity."
+    actions: []
+
+  - step: 7
+    title: "Restore agent activity and close incident"
+    description: >
+      With 10 consecutive successful receipt writes confirmed, begin
+      restoring agent activity one agent at a time. Monitor each agent's
+      first receipt write to confirm end-to-end governance is functioning.
+      Document the incident including: total downtime, root cause, receipt
+      gap window (time range where governance was degraded), and any data
+      loss. This incident must be included in the next compliance export
+      as a governance availability event.
+    action_type: MANUAL
+    sla_minutes: 15
+    decision_points:
+      - condition: "If all agents resume with successful receipt writes"
+        action: "Close incident. Monitor receipt write latency for 24 hours."
+      - condition: "If any agent fails to generate receipts after restart"
+        action: "Stop that agent and investigate individually. Do not allow ungoverned operation."
+    actions: []

@@ -1,0 +1,70 @@
+{
+  "__meta": {
+    "name": "Lancelot Security Operations",
+    "version": "1.0.0",
+    "description": "Security operations dashboard focused on threat signals, blocked actions, and governance anomalies.",
+    "datasource": "Prometheus (OTel metrics)",
+    "compatible_with": "Grafana 10.x+"
+  },
+  "dashboard": {
+    "title": "Lancelot — Security Operations",
+    "uid": "lancelot-sec-ops",
+    "tags": ["lancelot", "security", "soc"],
+    "timezone": "browser",
+    "refresh": "10s",
+    "time": { "from": "now-24h", "to": "now" },
+    "panels": [
+      {
+        "title": "Injection Detection Rate",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+        "targets": [
+          { "expr": "rate(lancelot_actions_blocked{block_reason=\"INJECTION_DETECTED\"}[5m])", "legendFormat": "Injection Rate" }
+        ],
+        "alert": {
+          "name": "Injection Detection Spike",
+          "conditions": [{ "evaluator": { "type": "gt", "params": [0.1] } }]
+        }
+      },
+      {
+        "title": "Allowlist Violations",
+        "type": "table",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+        "targets": [
+          { "expr": "lancelot_actions_blocked{block_reason=\"ALLOWLIST_BLOCKED\"}", "legendFormat": "{{instance}}" }
+        ]
+      },
+      {
+        "title": "Kill Switch Audit",
+        "type": "table",
+        "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+        "targets": [
+          { "expr": "lancelot_kill_switches_active", "legendFormat": "Active Switches" }
+        ],
+        "description": "All kill switch events with operator identity, duration, and associated quest_id"
+      },
+      {
+        "title": "Governance Write Errors",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+        "targets": [
+          { "expr": "lancelot_receipts_chain_lag_ms", "legendFormat": "Chain Lag (ms)" }
+        ]
+      },
+      {
+        "title": "MCP Blocked Calls by Server",
+        "type": "barchart",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+        "targets": [
+          { "expr": "sum by (server_id) (rate(lancelot_mcp_tool_calls{status=\"blocked\"}[5m]))", "legendFormat": "{{server_id}}" }
+        ]
+      },
+      {
+        "title": "Credential Events",
+        "type": "logs",
+        "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+        "description": "CREDENTIAL_REGISTERED and CREDENTIAL_REVOKED events from webhook feed"
+      }
+    ]
+  }
+}

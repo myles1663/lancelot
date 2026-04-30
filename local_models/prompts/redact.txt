@@ -1,0 +1,6 @@
+Redact all personally identifiable information (PII) from the following text.
+Replace each PII item with its type in brackets: [NAME], [EMAIL], [PHONE], [ADDRESS], [SSN], [CREDIT_CARD], [DATE_OF_BIRTH].
+
+Text: {input}
+
+Redacted text:

@@ -1,0 +1,131 @@
+_playbook_metadata:
+  name: governance-breach-soul-violation
+  display_name: "Soul Constraint Violation Response"
+  description: "Response protocol when a Soul constraint violation is detected — either a FORK_SOUL_REJECTED event or a pattern of SOUL_DENIED rejections exceeding threshold. Determines whether the violation stems from misconfiguration or genuine out-of-scope agent behavior, and drives remediation."
+  category: GOVERNANCE_BREACH
+  severity_default: HIGH
+  industry: general
+  version: "1.0"
+  author: Lancelot
+  tags: [governance, soul, violation, containment, crusader-mode]
+
+trigger:
+  receipt_types: [fork_soul_rejected, action_denied]
+  conditions:
+    - field: reason
+      operator: eq
+      value: SOUL_DENIED
+    - field: count
+      operator: gt
+      value: 3
+      window_minutes: 60
+  severity: HIGH
+
+paging:
+  CRITICAL:
+    - channel: pagerduty
+      endpoint_ref: vault://pagerduty-webhook
+      escalation_minutes: 5
+  HIGH:
+    - channel: slack
+      endpoint_ref: vault://slack-incident-channel
+      escalation_minutes: 15
+
+steps:
+  - step: 1
+    title: "Identify the violated Soul constraint"
+    description: "Pull the triggering receipt and extract the constraint_id, constraint_text, and the agent action that was denied. Cross-reference the constraint against the active Soul document to confirm it is a current, valid constraint and not a stale reference. Record the quest_id, agent_id, and timestamp."
+    action_type: MANUAL
+    sla_minutes: 5
+    decision_points:
+      - condition: "Single FORK_SOUL_REJECTED receipt triggered the playbook"
+        action: "Proceed to step 2 — examine the fork attempt"
+      - condition: "SOUL_DENIED threshold exceeded (pattern of denials)"
+        action: "Skip to step 3 — pull the full denial pattern"
+
+  - step: 2
+    title: "Examine the rejected Soul fork"
+    description: "Review the fork request payload. Identify what modifications were proposed to the Soul and which agent or operator initiated the fork. Check fork_permissions in the active Soul to determine whether the requester had any fork authority. Pull the 10 receipts preceding the fork attempt to understand the context that led to the request."
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "Fork was requested by an authorized operator but violated a non-forkable constraint"
+        action: "Proceed to step 4 — determine if constraint is misconfigured"
+      - condition: "Fork was requested by an agent without fork authority"
+        action: "Proceed to step 5 — assess agent behavior pattern"
+      - condition: "Fork was requested by an external A2A caller"
+        action: "Escalate to CRITICAL. Proceed to step 5 and flag for security review."
+
+  - step: 3
+    title: "Pull and analyze the SOUL_DENIED pattern"
+    description: "Query all receipts with reason SOUL_DENIED in the rolling window that triggered the alert. Group by quest_id and agent_id. Identify which specific constraint(s) are being repeatedly violated and whether the denials come from a single quest or are spread across multiple quests. Record the denial frequency and any acceleration in rate."
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "All denials are from a single quest and a single constraint"
+        action: "Proceed to step 4 — likely misconfiguration or a stuck workflow"
+      - condition: "Denials span multiple quests but share the same constraint"
+        action: "Proceed to step 4 — the constraint itself may need review"
+      - condition: "Denials span multiple constraints and multiple quests"
+        action: "Proceed to step 5 — agent may be systematically operating out of scope"
+
+  - step: 4
+    title: "Determine if the Soul constraint is misconfigured"
+    description: "Review the violated constraint in the context of the agent's intended operational scope. Compare the constraint text against the quest objective and the actions being attempted. Check if recent Soul amendments changed this constraint. Consult the operator or Soul author if available to confirm the constraint's intent."
+    action_type: MANUAL
+    sla_minutes: 15
+    decision_points:
+      - condition: "Constraint is correctly configured — agent actions are genuinely out of scope"
+        action: "Proceed to step 5 — assess agent behavior"
+      - condition: "Constraint is too restrictive or ambiguous for the intended workflow"
+        action: "Skip to step 7 — propose Soul amendment"
+      - condition: "Constraint was recently changed and the change introduced the conflict"
+        action: "Document the regression. Skip to step 7 — propose rollback or amendment."
+
+  - step: 5
+    title: "Assess agent behavior and repetition"
+    description: "Determine whether the agent is repeatedly attempting the denied action or has adapted its behavior after the first denial. Pull the agent's full receipt trail for the last 60 minutes. Check if the agent is in Crusader Mode. If the agent is retrying the same denied action more than 3 times, this indicates a control loop failure."
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "Agent attempted the denied action once and stopped"
+        action: "Proceed to step 6 — verify containment, no further escalation needed"
+      - condition: "Agent is repeatedly retrying the denied action (3+ attempts)"
+        action: "Immediately consider Crusader Mode deactivation. Proceed to step 6."
+      - condition: "Agent is in Crusader Mode and the violations are increasing in frequency"
+        action: "Deactivate Crusader Mode now. Issue kill switch if deactivation fails. Proceed to step 6."
+
+  - step: 6
+    title: "Verify containment and deactivate Crusader Mode if needed"
+    description: "Confirm that the agent is no longer attempting the denied actions. If Crusader Mode deactivation was ordered in step 5, verify it took effect by checking for a crusader_mode_deactivated receipt. Monitor for 5 minutes to confirm no new SOUL_DENIED receipts are generated by this agent. If the agent has been fully stopped, verify dependent quests are in a safe state."
+    action_type: VERIFY
+    sla_minutes: 10
+    decision_points:
+      - condition: "Agent is contained, no new violations detected"
+        action: "Proceed to step 7 — root cause and remediation"
+      - condition: "Agent continues to generate violations despite deactivation"
+        action: "Activate kill switch for the agent. Escalate to CRITICAL. Proceed to step 7."
+
+  - step: 7
+    title: "Root cause analysis and Soul amendment proposal"
+    description: "Document the root cause: was this a genuine out-of-scope agent action, a Soul misconfiguration, a Crusader Mode control loop failure, or an external influence? If the constraint needs adjustment, draft a Soul amendment proposal specifying the exact constraint_id, proposed new text, and justification. All amendments must go through the governed Soul amendment pipeline to generate receipts."
+    action_type: MANUAL
+    sla_minutes: 30
+    decision_points:
+      - condition: "Root cause is Soul misconfiguration — amendment needed"
+        action: "Submit Soul amendment through governed pipeline. Proceed to step 8."
+      - condition: "Root cause is agent behavior — no Soul change needed"
+        action: "Document the behavioral finding. Proceed to step 8."
+      - condition: "Root cause is unclear"
+        action: "Flag for extended investigation. Proceed to step 8 with status PENDING."
+
+  - step: 8
+    title: "Close incident"
+    description: "Verify all remediation actions are complete and receipted. If a Soul amendment was submitted, confirm it was applied and link the amendment receipt to this incident. If Crusader Mode was deactivated, document whether it should be re-enabled and under what conditions. Write the root_cause summary. For HIGH/CRITICAL incidents, root_cause is required."
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "Root cause documented, all remediations complete and receipted"
+        action: "Close incident"
+      - condition: "Soul amendment pending approval or remediation incomplete"
+        action: "Return to step 7. Set follow-up timer for amendment approval."

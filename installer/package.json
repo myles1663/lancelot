@@ -1,0 +1,43 @@
+{
+  "name": "create-lancelot",
+  "version": "1.1.10",
+  "description": "Install and configure Lancelot — your AI-powered autonomous agent",
+  "type": "module",
+  "bin": {
+    "create-lancelot": "bin/create-lancelot.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "keywords": [
+    "lancelot",
+    "ai",
+    "agent",
+    "docker",
+    "installer",
+    "cli",
+    "autonomous"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/myles1663/lancelot.git",
+    "directory": "installer"
+  },
+  "author": "myles1663",
+  "license": "BUSL-1.1",
+  "dependencies": {
+    "@inquirer/prompts": "^7.0.0",
+    "chalk": "^5.3.0",
+    "commander": "^12.0.0",
+    "execa": "^9.0.0",
+    "ora": "^8.0.0"
+  }
+}

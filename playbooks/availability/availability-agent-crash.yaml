@@ -1,0 +1,157 @@
+_playbook_metadata:
+  name: availability-agent-crash
+  display_name: "Availability — Agent Crash (No Stop Receipt)"
+  description: "An agent has stopped unexpectedly without an operator-initiated AGENT_STOPPED receipt. This is a governance gap — any agent termination without a receipt must be investigated as a potential integrity issue."
+  category: AVAILABILITY_INCIDENT
+  severity_default: HIGH
+  industry: general
+  version: "1.0"
+  author: Lancelot
+  tags: [availability, crash, agent, governance-gap, receipts, orchestrator]
+
+trigger:
+  receipt_types: [AGENT_CRASH_DETECTED]
+  conditions:
+    - field: has_agent_stopped_receipt
+      operator: eq
+      value: false
+  severity: HIGH
+
+paging:
+  CRITICAL:
+    - channel: pagerduty
+      endpoint_ref: vault://pagerduty-webhook
+      escalation_minutes: 5
+  HIGH:
+    - channel: slack
+      endpoint_ref: vault://slack-incident-channel
+      escalation_minutes: 15
+  MEDIUM:
+    - channel: slack
+      endpoint_ref: vault://slack-ops-channel
+      escalation_minutes: 60
+
+steps:
+  - step: 1
+    title: "Check orchestrator health"
+    description: >
+      Before investigating the crashed agent, verify the orchestrator itself
+      is healthy. If the orchestrator is down, all agents may be affected
+      and this is an infrastructure-wide incident, not an isolated crash.
+      Check orchestrator process status, memory usage, and recent logs for
+      errors or OOM kills.
+    action_type: MANUAL
+    sla_minutes: 3
+    decision_points:
+      - condition: "If orchestrator is healthy"
+        action: "Proceed to Step 2 — the crash is isolated to the agent."
+      - condition: "If orchestrator is unhealthy or down"
+        action: "Escalate to CRITICAL. This is an infrastructure incident. All agents may be affected."
+    actions: []
+
+  - step: 2
+    title: "Determine if crash is isolated or infrastructure-wide"
+    description: >
+      Check the status of all other running agents. If multiple agents
+      crashed at approximately the same time, this is likely an
+      infrastructure issue (resource exhaustion, Docker daemon problem,
+      network partition). If only one agent crashed, the issue is likely
+      agent-specific (bad input, unhandled exception, resource limit).
+    action_type: MANUAL
+    sla_minutes: 5
+    decision_points:
+      - condition: "If only one agent crashed"
+        action: "Proceed to Step 3 — investigate the specific agent."
+      - condition: "If multiple agents crashed"
+        action: "Escalate to CRITICAL. Check Docker daemon, host resources, and network connectivity."
+    actions: []
+
+  - step: 3
+    title: "Pull agent logs and identify the crash cause"
+    description: >
+      Retrieve the full log output for the crashed agent. Look for
+      unhandled exceptions, stack traces, out-of-memory errors, or
+      segmentation faults. Check the last successful receipt the agent
+      generated to understand what it was doing when it crashed. Note
+      the exact timestamp of the last log entry and the last receipt.
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "If a clear exception or error is found"
+        action: "Document the error and proceed to Step 4."
+      - condition: "If logs end abruptly with no error"
+        action: "Check for OOM kill in dmesg or Docker events. This may be a resource exhaustion crash."
+    actions: []
+
+  - step: 4
+    title: "Check for kill switch activation without AGENT_STOPPED receipt"
+    description: >
+      Review the kill switch audit log. If a kill switch was activated
+      that should have stopped this agent, check whether the kill switch
+      handler generated an AGENT_STOPPED receipt. If the kill switch fired
+      but no receipt was generated, this is a defect in the kill switch
+      handler — the agent was stopped but governance has no record of it.
+      This is a governance gap that must be filed as a bug.
+    action_type: MANUAL
+    sla_minutes: 5
+    decision_points:
+      - condition: "If kill switch was activated and receipt is missing"
+        action: "File a governance defect. The kill switch handler must always generate a receipt."
+      - condition: "If no kill switch was involved"
+        action: "The crash was organic. Proceed to Step 5."
+    actions: []
+
+  - step: 5
+    title: "Assess the governance gap"
+    description: >
+      A crash without an AGENT_STOPPED receipt means there is a window
+      where the agent may have taken actions that are not recorded in the
+      receipt ledger. Determine the gap window: from the last successful
+      receipt to the crash timestamp. Review any external side effects
+      the agent may have caused during this window (API calls, file
+      writes, messages sent). Document all unreceipted actions.
+    action_type: MANUAL
+    sla_minutes: 15
+    decision_points:
+      - condition: "If unreceipted actions are found"
+        action: "Create retroactive receipts manually and flag them as RECONSTRUCTED. Proceed to Step 6."
+      - condition: "If no unreceipted actions are found"
+        action: "Document the clean gap and proceed to Step 6."
+    actions: []
+
+  - step: 6
+    title: "Restart agent only after root cause is identified"
+    description: >
+      Do NOT restart the agent until the root cause is understood. A blind
+      restart may trigger the same crash, compounding the governance gap.
+      If the cause was a bad input, remove or quarantine the input. If the
+      cause was resource exhaustion, increase limits. If the cause was a
+      code defect, apply the fix first. Restart the agent and verify that
+      an AGENT_STARTED receipt is generated.
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "If AGENT_STARTED receipt is generated on restart"
+        action: "Proceed to Step 7 for monitoring."
+      - condition: "If agent crashes again on restart"
+        action: "Escalate to CRITICAL. Do not attempt further restarts until the defect is fixed."
+    actions: []
+
+  - step: 7
+    title: "Monitor and close incident"
+    description: >
+      Monitor the restarted agent for 30 minutes. Verify that receipts
+      are being generated for all actions. Document the incident including:
+      root cause, governance gap window, any reconstructed receipts, and
+      corrective actions taken. A crash without a receipt is a governance
+      gap — this incident must be referenced in the next compliance review
+      and the gap window must be noted in any compliance export covering
+      the affected time period.
+    action_type: MANUAL
+    sla_minutes: 30
+    decision_points:
+      - condition: "If agent runs stable for 30 minutes with consistent receipts"
+        action: "Close incident. Schedule a follow-up review in 48 hours."
+      - condition: "If any anomalies appear during monitoring"
+        action: "Keep incident open and extend monitoring to 4 hours."
+    actions: []

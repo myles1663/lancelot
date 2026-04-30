@@ -1,0 +1,104 @@
+# =========================
+# Project Lancelot .gitignore
+# =========================
+
+# Environment & Secrets
+.env
+*.env
+.env.*
+!.env.example
+.claude/
+.codex_smoketest.txt
+secrets/
+*.key
+*.pem
+*.p12
+credentials.json
+**/application_default_credentials.json
+oauth_client*.json
+service-account*.json
+
+# Runtime Data
+lancelot_data/
+data/
+logs/
+*.log
+tmp/
+temp/
+test_data/
+!packages/uab/data/
+!packages/uab/data/chrome-extension/
+!packages/uab/data/chrome-extension/**
+!packages/uab/data/flow-library/
+!packages/uab/data/flow-library/**
+!packages/uab/data/extension-id.txt
+!packages/uab/data/uab-bridge.crx
+packages/uab/data/uab-extension.pem
+packages/uab/data/uab-profiles/
+packages/uab/data/screenshots/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Model Weights (downloaded at runtime, not committed)
+local_models/weights/
+local_models/*.gguf
+local_models/*.bin
+local_models/*.safetensors
+local_models/*.pt
+
+# Docker
+*.tar
+docker-compose.override.yml
+
+# Build artifacts
+*.exe
+*.msi
+*.spec
+artifacts/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Test outputs
+.coverage
+coverage.xml
+htmlcov/
+
+# Demo seed script (local use only)
+scripts/seed-demo.*
+
+# Local-only applications and experiments
+/local/
+
+# Local federation topology (use tracked example instead)
+config/federation_topology.json
+!config/federation_topology.example.json
+
+# War Room React SPA
+src/warroom/node_modules/
+src/warroom/dist/
+src/warroom/tsconfig.tsbuildinfo

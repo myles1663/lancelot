@@ -1,0 +1,64 @@
+_playbook_metadata:
+  name: regulated-governance-breach
+  display_name: "Kill Switch Response — Regulated Industry"
+  description: "Regulated industry extension of the kill switch activation response. Adds mandatory security officer notification, written root cause analysis requirements, and board notification for CRITICAL incidents."
+  category: GOVERNANCE_BREACH
+  severity_default: HIGH
+  industry: regulated
+  version: "1.0"
+  author: Lancelot
+  tags: [variant, regulated, governance, kill-switch, compliance, board-notification]
+
+extends: governance-breach-kill-switch
+
+variant_steps:
+  - step: 100
+    insert_after: 4
+    title: "Notify named security officer"
+    description: "Notify the organization's named security officer within 2 hours of detection for all SECURITY_EVENT incidents regardless of severity level. This is a regulatory requirement for regulated industries and applies to HIGH, CRITICAL, and any incident that was escalated from a lower severity. Provide the incident summary including the kill switch that fired, the triggering event, current severity, and any escalation history. Record the notification timestamp and acknowledgment as a receipt in the incident timeline."
+    action_type: MANUAL
+    sla_minutes: 120
+    decision_points:
+      - condition: "If security officer acknowledges within 2 hours"
+        action: "Record acknowledgment receipt and proceed with standard playbook flow."
+      - condition: "If security officer does not respond within 2 hours"
+        action: "Escalate to the deputy security officer or compliance officer. Document the failed notification attempt. Regulatory timelines do not pause for non-response."
+    actions:
+      - notify: named-security-officer
+      - create_receipt: security_officer_notification
+
+  - step: 101
+    insert_after: 7
+    title: "Initiate written root cause analysis"
+    description: "For all HIGH and CRITICAL severity incidents, a formal written root cause analysis (RCA) document is required within 10 business days of incident close. The RCA must include: incident timeline with timestamps, triggering event and root cause determination, blast radius assessment, remediation actions taken with receipt references, process or configuration changes implemented, and recommendations to prevent recurrence. Assign the RCA to a named author and set the 10-business-day deadline. The RCA must be reviewed by the security officer before filing."
+    action_type: MANUAL
+    sla_minutes: 15
+    decision_points:
+      - condition: "If incident severity is HIGH or CRITICAL"
+        action: "Assign RCA author and set deadline. RCA is mandatory and must be filed with compliance records."
+      - condition: "If incident was resolved at MEDIUM or lower severity and was never escalated"
+        action: "Written RCA is recommended but not required. Document the decision to skip and proceed."
+    actions:
+      - assign_rca:
+          deadline_business_days: 10
+          reviewer: named-security-officer
+
+  - step: 102
+    insert_after: 9
+    title: "Generate board notification memo for CRITICAL incidents"
+    description: "If the incident reached CRITICAL severity at any point during its lifecycle, generate a board notification memo within 48 hours of incident close. Use the board notification template from the evidence package. The memo must summarize: what happened, what data or systems were affected, what was done to contain and remediate, and what changes are being made to prevent recurrence. The memo must be reviewed by the security officer and legal counsel before distribution to the board. For incidents that were escalated to CRITICAL but later downgraded, the board memo is still required — the escalation itself triggers the notification obligation."
+    action_type: MANUAL
+    sla_minutes: 30
+    decision_points:
+      - condition: "If incident reached CRITICAL severity at any point"
+        action: "Generate board memo using template. Route for security officer and legal review. Deliver to board within 48 hours of close."
+      - condition: "If incident never reached CRITICAL severity"
+        action: "No board notification required. Document the determination and close the variant steps."
+    actions:
+      - generate_memo:
+          template: board_notification
+          deadline_hours: 48
+      - route_for_review:
+          reviewers: [named-security-officer, legal-counsel]
+
+paging: {}

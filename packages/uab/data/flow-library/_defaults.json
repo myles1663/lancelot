@@ -1,0 +1,78 @@
+{
+  "description": "Default flow templates by framework type. Used when no app-specific flow exists.",
+  "frameworks": {
+    "Electron": {
+      "input_method": "click_then_clipboard_paste",
+      "focus_method": "focus_endpoint",
+      "read_method": "copy_then_screenshot_fallback",
+      "default_plan": [
+        {"step": 1, "action": "connect", "note": "Connect by name or PID"},
+        {"step": 2, "action": "focus", "note": "Bring to front"},
+        {"step": 3, "action": "get_state", "note": "Get window bounds"},
+        {"step": 4, "action": "click_input", "method": "coordinate_click", "position": {"x_percent": 0.5, "y_offset_from_bottom": 40}, "note": "Click bottom-center for input field"},
+        {"step": 5, "action": "set_clipboard", "note": "Set clipboard via interactive PowerShell"},
+        {"step": 6, "action": "hotkey", "params": {"keys": ["ctrl", "v"]}, "note": "Paste"},
+        {"step": 7, "action": "screenshot_confirm", "timeout_ms": 500},
+        {"step": 8, "action": "keypress", "params": {"key": "Enter"}, "note": "Send/confirm"},
+        {"step": 9, "action": "wait", "duration_ms": 5000},
+        {"step": 10, "action": "screenshot", "note": "Capture result"}
+      ],
+      "rationale": "Electron apps have shallow UIA trees. Tab behavior varies per app. Clipboard paste is the most reliable universal method. SendKeys may strip spaces in some Electron apps."
+    },
+    "Win32": {
+      "input_method": "direct_type",
+      "focus_method": "focus_endpoint",
+      "read_method": "copy",
+      "default_plan": [
+        {"step": 1, "action": "connect"},
+        {"step": 2, "action": "focus"},
+        {"step": 3, "action": "enumerate", "note": "Win32 apps have rich UIA trees"},
+        {"step": 4, "action": "query", "note": "Find the target element by type/label"},
+        {"step": 5, "action": "act", "params": {"action": "click"}, "note": "Click the element"},
+        {"step": 6, "action": "type", "note": "Direct SendKeys works on Win32 controls"},
+        {"step": 7, "action": "screenshot_confirm"}
+      ],
+      "rationale": "Native Win32 apps expose full UIA element trees. Direct interaction via element IDs is reliable."
+    },
+    "Office": {
+      "input_method": "com_api",
+      "focus_method": "focus_endpoint",
+      "read_method": "com_api",
+      "default_plan": [
+        {"step": 1, "action": "connect"},
+        {"step": 2, "action": "act", "note": "Use Office-specific COM actions (readRange, writeRange, getSheets, etc.)"}
+      ],
+      "rationale": "Office apps have deep COM automation support. Use the built-in Office actions instead of UI automation."
+    },
+    "Qt": {
+      "input_method": "direct_type",
+      "focus_method": "focus_endpoint",
+      "read_method": "copy",
+      "default_plan": [
+        {"step": 1, "action": "connect"},
+        {"step": 2, "action": "focus"},
+        {"step": 3, "action": "enumerate"},
+        {"step": 4, "action": "query", "note": "Qt apps expose UIA elements"},
+        {"step": 5, "action": "act"},
+        {"step": 6, "action": "screenshot_confirm"}
+      ],
+      "rationale": "Qt apps have good UIA support. Element-based interaction works reliably."
+    },
+    "unknown": {
+      "input_method": "click_then_clipboard_paste",
+      "focus_method": "focus_endpoint",
+      "read_method": "screenshot",
+      "default_plan": [
+        {"step": 1, "action": "connect"},
+        {"step": 2, "action": "focus"},
+        {"step": 3, "action": "screenshot", "note": "See what we are working with"},
+        {"step": 4, "action": "enumerate", "note": "Check UIA tree depth"},
+        {"step": 5, "action": "click_input", "method": "coordinate_click", "note": "Best guess for input location"},
+        {"step": 6, "action": "set_clipboard"},
+        {"step": 7, "action": "hotkey", "params": {"keys": ["ctrl", "v"]}},
+        {"step": 8, "action": "screenshot_confirm"}
+      ],
+      "rationale": "Unknown framework — use the safest universal approach. Clipboard paste works with nearly everything."
+    }
+  }
+}

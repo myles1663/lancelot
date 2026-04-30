@@ -1,0 +1,28 @@
+{
+  "skill_name": "slack_chat_flow",
+  "app_name": "Slack",
+  "executable": "slack.exe",
+  "app_framework": "Electron",
+  "target_flow": "Send and read messages in Slack desktop app",
+  "input_method": "tab_then_type",
+  "focus_method": "focus_endpoint",
+  "read_method": "copy",
+  "navigation_plan": [
+    {"step": 1, "action": "connect", "params": {"target": "slack"}, "note": "Returns pid"},
+    {"step": 2, "action": "focus", "params": {"pid": "{pid}"}, "note": "Bring to front"},
+    {"step": 3, "action": "keypress", "params": {"pid": "{pid}", "key": "Tab"}, "note": "One Tab to focus message input"},
+    {"step": 4, "action": "type", "params": {"pid": "{pid}", "elementId": "", "action": "type", "params": {"text": "{message}"}}, "note": "Type message"},
+    {"step": 5, "action": "screenshot_confirm", "params": {"pid": "{pid}"}, "timeout_ms": 500},
+    {"step": 6, "action": "keypress", "params": {"pid": "{pid}", "key": "Enter"}, "note": "Send message"},
+    {"step": 7, "action": "wait", "duration_ms": 2000},
+    {"step": 8, "action": "read_response", "method": "copy_first", "note": "Try /copy first — returns full text including scrolled content. If empty, fall back to screenshot."}
+  ],
+  "known_issues": [
+    "Slack has many Electron sub-processes — UAB picks the one with window title",
+    "Channel switching: use Ctrl+K to open quick switcher, type channel name, Enter",
+    "Thread replies may need additional Tab presses to reach reply input"
+  ],
+  "risk_tier": "T1",
+  "version": "1.0",
+  "last_verified": "2026-03-21"
+}

@@ -1,0 +1,48 @@
+name: Security Concern
+description: Report a security issue or suggest hardening
+labels: ["security", "triage", "priority/high"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For critical vulnerabilities (active exploits, credential exposure, Soul bypass), please email security@projectlancelot.com instead of filing a public issue.
+
+        For general security concerns, hardening suggestions, or non-critical findings, this template is appropriate.
+  - type: dropdown
+    id: category
+    attributes:
+      label: Security Category
+      options:
+        - Prompt injection / Soul bypass attempt
+        - Credential exposure risk
+        - Network allowlist bypass
+        - Skill sandbox escape
+        - Memory corruption / unauthorized access
+        - Connector proxy bypass
+        - Kill switch / feature flag circumvention
+        - PII leakage to frontier model
+        - Audit trail gap (missing receipts)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: "What is the concern? How could it be exploited?"
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Potential impact
+      description: "What could an attacker achieve? What governance controls does it bypass?"
+    validations:
+      required: false
+  - type: textarea
+    id: mitigation
+    attributes:
+      label: Suggested mitigation
+      description: "If you have ideas on how to fix or harden against this"
+    validations:
+      required: false

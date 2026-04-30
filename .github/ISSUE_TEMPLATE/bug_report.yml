@@ -1,0 +1,79 @@
+name: Bug Report
+description: Something isn't working as expected
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please fill out the sections below so we can reproduce and fix it.
+  - type: input
+    id: version
+    attributes:
+      label: Lancelot Version
+      description: "Output of `docker exec lancelot cat /app/VERSION` or commit hash"
+      placeholder: "e.g., 0.9.1 or abc1234"
+    validations:
+      required: true
+  - type: dropdown
+    id: subsystem
+    attributes:
+      label: Affected Subsystem
+      description: Which subsystem does this bug affect?
+      options:
+        - Soul / Constitutional Governance
+        - Risk-Tiered Pipeline (T0-T3)
+        - Trust Ledger
+        - Memory
+        - Tool Fabric
+        - Governed Connectors / Credential Vault
+        - Skill Security Pipeline
+        - Approval Pattern Learning
+        - Receipts / Audit Trail
+        - Scheduler
+        - War Room Dashboard
+        - Installer (create-lancelot)
+        - Kill Switches / Feature Flags
+        - Other / Unknown
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Clear description of the bug
+      placeholder: "Describe what you expected vs. what actually happened"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to trigger the bug
+      placeholder: |
+        1. Start Lancelot with default config
+        2. Navigate to War Room > Trust Ledger
+        3. Click graduation proposal
+        4. Observe error...
+    validations:
+      required: true
+  - type: textarea
+    id: receipts
+    attributes:
+      label: Relevant receipts or logs
+      description: "Paste any receipt JSON, error logs, or War Room screenshots"
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: "OS, Docker version, GPU, provider, browser (if War Room issue)"
+      placeholder: |
+        OS: Ubuntu 22.04
+        Docker: 24.0.5
+        GPU: None (CPU mode)
+        Provider: Anthropic
+        Browser: Chrome 120
+    validations:
+      required: false

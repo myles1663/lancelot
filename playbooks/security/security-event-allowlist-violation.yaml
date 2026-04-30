@@ -1,0 +1,138 @@
+_playbook_metadata:
+  name: security-event-allowlist-violation
+  display_name: "Allowlist Violation — Blocked Endpoint Access"
+  description: "Responds to repeated attempts to reach endpoints or agents not on the Network Allowlist. Distinguishes between Soul misconfiguration and genuine unauthorized access attempts, and applies appropriate containment."
+  category: SECURITY_EVENT
+  severity_default: HIGH
+  industry: general
+  version: "1.0"
+  author: Lancelot
+  tags: [allowlist, blocklist, network, a2a, mcp, unauthorized-access, security]
+
+trigger:
+  receipt_types: [A2A_OUTBOUND_BLOCKED, MCP_TOOL_BLOCKED]
+  conditions:
+    - field: reason
+      operator: eq
+      value: BLOCKED_ALLOWLIST
+    - field: block_count_1h
+      operator: gte
+      value: 5
+  severity: HIGH
+
+paging:
+  CRITICAL:
+    - channel: pagerduty
+      endpoint_ref: vault://pagerduty-webhook
+      escalation_minutes: 5
+  HIGH:
+    - channel: slack
+      endpoint_ref: vault://slack-incident-channel
+      escalation_minutes: 15
+
+steps:
+  - step: 1
+    title: "Identify the blocked endpoint and requesting agent"
+    description: "Extract the target endpoint URI or MCP server that was blocked, the agent or quest that initiated the request, the Soul configuration governing the agent, and the total number of blocked attempts in the current window. Determine the rate of violations to assess urgency."
+    action_type: AUTOMATED
+    sla_minutes: 3
+    decision_points:
+      - condition: "If block rate exceeds 20 attempts per hour"
+        action: "Escalate severity to CRITICAL. This rate suggests automated probing rather than misconfiguration."
+      - condition: "If block rate is below 20 attempts per hour"
+        action: "Maintain HIGH severity. Proceed with standard investigation."
+    actions:
+      - extract_field: blocked_endpoint
+      - extract_field: requesting_agent_id
+      - extract_field: soul_id
+      - extract_field: block_count_1h
+
+  - step: 2
+    title: "Determine if this is a Soul misconfiguration"
+    description: "Review the Soul spec governing the requesting agent. Check whether the blocked endpoint was recently removed from the allowlist, whether a new Soul version was deployed without updating network permissions, or whether the agent is attempting to reach a legitimate service that was never added to the allowlist."
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "If endpoint was recently removed from the allowlist"
+        action: "Check the removal reason. If removed intentionally, the Soul needs updating. If removed accidentally, restore the allowlist entry and document."
+      - condition: "If Soul was recently updated and the endpoint was never listed"
+        action: "This is a configuration gap. Add the endpoint to the allowlist if it is a legitimate service, then update the Soul spec."
+      - condition: "If the agent should not be contacting this endpoint under any circumstance"
+        action: "This is unauthorized access. Proceed to Step 3."
+    actions: []
+
+  - step: 3
+    title: "Check if the endpoint is a known threat"
+    description: "Cross-reference the blocked endpoint against known malicious domains, IPs, and threat intelligence feeds. Check if the endpoint has appeared in previous security incidents or is flagged in any blocklist databases."
+    action_type: AUTOMATED
+    sla_minutes: 5
+    decision_points:
+      - condition: "If endpoint matches known threat intelligence"
+        action: "Escalate to CRITICAL immediately. The requesting agent may be compromised. Proceed to Step 4 with threat containment priority."
+      - condition: "If endpoint is unknown but not in threat feeds"
+        action: "Proceed to Step 4 for quest receipt analysis to understand intent."
+      - condition: "If endpoint is a legitimate service not yet allowlisted"
+        action: "This is a misconfiguration. Skip to Step 6 for remediation."
+    actions:
+      - query_threat_intel: "{{ blocked_endpoint }}"
+
+  - step: 4
+    title: "Analyze quest receipts for context"
+    description: "Pull all quest receipts from the requesting agent for the past 24 hours. Determine what quest or task chain led to the blocked endpoint request. Check whether the agent was instructed to reach this endpoint by a user prompt, an upstream agent in the Hive mesh, or by its own autonomous planning."
+    action_type: MANUAL
+    sla_minutes: 15
+    decision_points:
+      - condition: "If the agent was directed to the endpoint by an upstream Hive agent"
+        action: "Investigate the upstream agent as well. The compromise or misconfiguration may originate higher in the task chain."
+      - condition: "If the agent autonomously decided to contact the endpoint"
+        action: "Review the Soul constraints. Tighten the agent's network permissions and add explicit deny rules for the endpoint."
+      - condition: "If a user prompt directed the agent to the endpoint"
+        action: "Review the user's intent. If legitimate, add the endpoint to the allowlist. If suspicious, flag the user session for review."
+    actions:
+      - query_receipts:
+          agent_id: "{{ requesting_agent_id }}"
+          lookback_hours: 24
+
+  - step: 5
+    title: "Contain the threat if unauthorized access confirmed"
+    description: "If the investigation confirms unauthorized access or a compromised agent, isolate the requesting agent by disabling its outbound network access via kill switch. If the endpoint is confirmed malicious, add a blocklist annotation so future attempts from any agent are flagged at higher severity."
+    action_type: AUTOMATED
+    sla_minutes: 5
+    decision_points:
+      - condition: "If agent is confirmed compromised"
+        action: "Disable the agent via kill switch. Notify security team lead. Check if the agent had any successful outbound connections to other endpoints that should be investigated."
+      - condition: "If endpoint is confirmed malicious"
+        action: "Add blocklist annotation with threat classification. Notify all operators whose Souls reference agents that attempted contact with this endpoint."
+      - condition: "If neither agent compromise nor malicious endpoint is confirmed"
+        action: "Maintain monitoring with enhanced logging for 48 hours. Proceed to Step 6."
+    actions:
+      - invoke_kill_switch: conditional
+      - add_blocklist_annotation: conditional
+
+  - step: 6
+    title: "Remediate the root cause"
+    description: "Apply the appropriate fix based on the investigation outcome. For misconfiguration, update the Soul spec and allowlist. For unauthorized access, ensure containment is complete and credentials are rotated if applicable. For compromised agents, invoke the injection playbook if injection was the attack vector."
+    action_type: MANUAL
+    sla_minutes: 20
+    decision_points:
+      - condition: "If root cause was misconfiguration"
+        action: "Update the allowlist and Soul spec. Verify the agent can now reach the legitimate endpoint. No further escalation needed."
+      - condition: "If root cause was unauthorized access without compromise"
+        action: "Tighten Soul network permissions. Add explicit deny rules. Enable enhanced monitoring for 72 hours."
+      - condition: "If root cause was agent compromise via injection"
+        action: "Invoke the security-event-injection playbook as a linked incident. Keep the agent isolated until that playbook completes."
+    actions: []
+
+  - step: 7
+    title: "Post-incident documentation and closure"
+    description: "Document the full incident: trigger details, investigation findings, root cause classification, remediation actions, and any allowlist or blocklist changes made. If a new threat endpoint was identified, ensure it is permanently added to the blocklist with classification metadata."
+    action_type: MANUAL
+    sla_minutes: 60
+    decision_points:
+      - condition: "If a new threat endpoint was discovered"
+        action: "Confirm blocklist annotation is in place with full threat metadata. Share the indicator with any federated partners if federation is active."
+      - condition: "If the incident was a misconfiguration"
+        action: "Update the Soul deployment checklist to include allowlist verification as a pre-deployment gate. Close with standard report."
+    actions:
+      - create_report: post_incident
+      - close_incident: true

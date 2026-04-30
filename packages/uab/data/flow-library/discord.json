@@ -1,0 +1,27 @@
+{
+  "skill_name": "discord_chat_flow",
+  "app_name": "Discord",
+  "executable": "discord.exe",
+  "app_framework": "Electron",
+  "target_flow": "Send and read messages in Discord desktop app",
+  "input_method": "tab_then_type",
+  "focus_method": "focus_endpoint",
+  "read_method": "copy",
+  "navigation_plan": [
+    {"step": 1, "action": "connect", "params": {"target": "discord"}, "note": "Returns pid"},
+    {"step": 2, "action": "focus", "params": {"pid": "{pid}"}, "note": "Bring to front"},
+    {"step": 3, "action": "keypress", "params": {"pid": "{pid}", "key": "Tab"}, "note": "One Tab to focus message input"},
+    {"step": 4, "action": "type", "params": {"pid": "{pid}", "elementId": "", "action": "type", "params": {"text": "{message}"}}, "note": "Type message"},
+    {"step": 5, "action": "screenshot_confirm", "params": {"pid": "{pid}"}, "timeout_ms": 500},
+    {"step": 6, "action": "keypress", "params": {"pid": "{pid}", "key": "Enter"}, "note": "Send message"},
+    {"step": 7, "action": "wait", "duration_ms": 2000},
+    {"step": 8, "action": "read_response", "method": "copy_first", "note": "Try /copy first — returns full text including scrolled content. If empty, fall back to screenshot."}
+  ],
+  "known_issues": [
+    "Discord has many sub-processes — UAB picks windowed one",
+    "Server/channel switching: use Ctrl+K for quick switcher"
+  ],
+  "risk_tier": "T1",
+  "version": "1.0",
+  "last_verified": "2026-03-21"
+}

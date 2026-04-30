@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Risk Tier Colors */
+    --tier-t0: #22C55E;
+    --tier-t1: #F59E0B;
+    --tier-t2: #F97316;
+    --tier-t3: #EF4444;
+
+    /* System State Colors */
+    --state-healthy: #22C55E;
+    --state-degraded: #F59E0B;
+    --state-error: #EF4444;
+    --state-inactive: #6B7280;
+
+    /* Surface Colors (dark theme) */
+    --bg-primary: #0F1117;
+    --bg-card: #1A1D27;
+    --bg-card-elevated: #242735;
+    --bg-input: #2A2D3A;
+    --border-default: #2E3140;
+    --border-active: #4A5568;
+
+    /* Text Colors */
+    --text-primary: #F3F4F6;
+    --text-secondary: #9CA3AF;
+    --text-muted: #6B7280;
+
+    /* Accent Colors */
+    --accent-primary: #6366F1;
+    --accent-secondary: #8B5CF6;
+  }
+
+  body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--bg-primary);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-active);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+  }
+}

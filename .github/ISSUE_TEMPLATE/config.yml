@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Commercial Licensing
+    url: mailto:contact@projectlancelot.com
+    about: For AGPL exemptions, commercial licensing, or enterprise inquiries
+  - name: Critical Security Vulnerability
+    url: mailto:security@projectlancelot.com
+    about: For critical vulnerabilities requiring private disclosure
+  - name: Documentation
+    url: https://github.com/myles1663/lancelot/tree/master/docs
+    about: Check the docs — your question may already be answered

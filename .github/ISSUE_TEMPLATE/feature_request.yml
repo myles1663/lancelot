@@ -1,0 +1,61 @@
+name: Feature Request
+description: Propose a new capability or enhancement
+labels: ["feature-request", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before submitting, please check the [Anti-Roadmap](docs/anti-roadmap.md) — some features are intentionally excluded.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: "Describe the use case or pain point"
+      placeholder: "I need to... / Currently I have to..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: "How should this work? Be specific about governance implications."
+      placeholder: "The system should..."
+    validations:
+      required: true
+  - type: dropdown
+    id: subsystem
+    attributes:
+      label: Related Subsystem
+      description: Which subsystem would this primarily affect?
+      options:
+        - Soul / Constitutional Governance
+        - Risk-Tiered Pipeline (T0-T3)
+        - Trust Ledger
+        - Memory
+        - Tool Fabric
+        - Governed Connectors / Credential Vault
+        - Skill Security Pipeline
+        - Approval Pattern Learning
+        - Receipts / Audit Trail
+        - Scheduler
+        - War Room Dashboard
+        - Installer (create-lancelot)
+        - Kill Switches / Feature Flags
+        - New Subsystem
+        - Other / Unknown
+    validations:
+      required: true
+  - type: textarea
+    id: governance
+    attributes:
+      label: Governance considerations
+      description: "How does this interact with the Soul, risk tiers, or audit trail? Would it require a new kill switch?"
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: "Other approaches you've thought about"
+    validations:
+      required: false

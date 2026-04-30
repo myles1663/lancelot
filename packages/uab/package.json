@@ -1,0 +1,96 @@
+{
+  "name": "universal-app-bridge",
+  "version": "1.3.0",
+  "private": true,
+  "description": "Lancelot's internal framework detection and desktop app control runtime. Desktop + server dual-mode with vision fallback. Hook into Chrome, Electron, Qt, GTK, WPF, Flutter, Java, and Office apps with a unified API.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "uab": "dist/cli.js",
+    "uab-daemon": "dist/daemon.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
+    },
+    "./connector": {
+      "types": "./dist/connector.d.ts",
+      "import": "./dist/connector.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./environment": {
+      "types": "./dist/environment.d.ts",
+      "import": "./dist/environment.js"
+    },
+    "./hooks": {
+      "types": "./dist/hooks.d.ts",
+      "import": "./dist/hooks.js"
+    }
+  },
+  "files": [
+    "dist",
+    "data/action-risk.json",
+    "data/chrome-extension",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build.js",
+    "daemon": "node dist/daemon.js",
+    "test": "npm run build && node --test tests/*.test.mjs && node tests/daemon.test.js",
+    "prepublishOnly": "node scripts/verify-private-package.js"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.3"
+  },
+  "keywords": [
+    "desktop-automation",
+    "ui-automation",
+    "accessibility",
+    "electron",
+    "cdp",
+    "chrome-devtools-protocol",
+    "qt",
+    "gtk",
+    "wpf",
+    "flutter",
+    "java",
+    "office",
+    "ai-agent",
+    "app-control",
+    "framework-hook",
+    "uia",
+    "windows-automation",
+    "chrome-extension",
+    "browser-automation"
+  ],
+  "author": "myles1663",
+  "license": "BUSL-1.1",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/myles1663/lancelot.git",
+    "directory": "packages/uab"
+  },
+  "bugs": {
+    "url": "https://github.com/myles1663/lancelot/issues"
+  },
+  "homepage": "https://github.com/myles1663/lancelot/tree/master/packages/uab#readme",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "ws": "^8.19.0"
+  }
+}

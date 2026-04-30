@@ -1,0 +1,7 @@
+Extract structured data from the following text and return valid JSON.
+
+Text: {input}
+
+Schema: {schema}
+
+Return ONLY valid JSON matching the schema. No explanation.

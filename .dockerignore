@@ -1,0 +1,45 @@
+# Model weights (mounted as volume, not baked into image)
+local_models/weights/
+
+# Data directory — NOT excluded; seed files (CAPABILITIES.md, RULES.md,
+# USER.md, onboarding_snapshot.json) are baked into the image so named
+# Docker volumes auto-populate on first mount.
+# lancelot_data/
+
+# Git
+.git/
+
+# Local runtime configuration and generated artifacts
+.env
+.env.*
+!.env.example
+local/
+artifacts/
+audit_*.log
+.coverage
+.pytest_cache/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Tests (not needed in production image)
+tests/
+
+# Installer (npm package, not needed in Docker image)
+installer/
+
+# Frontend dependency/build outputs are recreated inside Docker
+src/warroom/node_modules/
+src/warroom/dist/
+
+# Docs
+docs/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db

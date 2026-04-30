@@ -1,0 +1,121 @@
+_playbook_metadata:
+  name: compliance-export-anomaly
+  display_name: "Anomalous Compliance Export Detected"
+  description: "Response protocol when a compliance export is generated with unexpected parameters, outside a scheduled window, or by an operator not authorized for compliance exports. Determines whether the export was legitimate or a data access incident."
+  category: COMPLIANCE_EVENT
+  severity_default: HIGH
+  industry: general
+  version: "1.0"
+  author: Lancelot
+  tags: [compliance, export, data-access, authorization, audit]
+
+trigger:
+  receipt_types: [COMPLIANCE_EXPORT_GENERATED]
+  conditions:
+    - field: anomaly_flag
+      operator: eq
+      value: true
+  severity: HIGH
+
+paging:
+  HIGH:
+    - channel: slack
+      endpoint_ref: vault://slack-incident-channel
+      escalation_minutes: 15
+  CRITICAL:
+    - channel: pagerduty
+      endpoint_ref: vault://pagerduty-webhook
+      escalation_minutes: 5
+    - channel: slack
+      endpoint_ref: vault://slack-security-critical
+      escalation_minutes: 3
+
+steps:
+  - step: 1
+    title: "Identify the export details"
+    description: "Extract the operator_id, export timestamp, export format, date range covered, and any filter parameters from the COMPLIANCE_EXPORT_GENERATED receipt. Record the export_id for evidence chain. Determine what data the export contains and its volume."
+    action_type: AUTOMATED
+    sla_minutes: 3
+    decision_points:
+      - condition: "If receipt is missing operator_id or export metadata"
+        action: "Escalate immediately — an export without attribution is a security incident. Page security on-call."
+      - condition: "If all fields are present"
+        action: "Proceed to Step 2."
+    actions:
+      - extract_field: operator_id
+      - extract_field: export_id
+      - extract_field: export_timestamp
+      - extract_field: export_format
+      - extract_field: date_range
+
+  - step: 2
+    title: "Determine if export was within a scheduled window"
+    description: "Check the compliance export schedule configuration. Was this export generated during a scheduled export window? Compare the export timestamp against all configured scheduled export jobs. An export outside the scheduled window is anomalous and requires justification."
+    action_type: AUTOMATED
+    sla_minutes: 5
+    decision_points:
+      - condition: "If export matches a scheduled job"
+        action: "Verify the parameters match the scheduled configuration. If parameters differ from the schedule, proceed to Step 3."
+      - condition: "If export is outside all scheduled windows"
+        action: "Flag as unscheduled. Proceed to Step 3."
+    actions:
+      - query_schedule: compliance_export
+
+  - step: 3
+    title: "Verify operator authorization"
+    description: "Check whether the operator_id that generated the export has the compliance_export permission in their role. Pull the operator's current role assignments and permission grants. Check the trust ledger for this operator's current tier and whether compliance export is permitted at that tier."
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "If operator is authorized for compliance exports"
+        action: "Proceed to Step 4 to verify the export was intentional."
+      - condition: "If operator is NOT authorized for compliance exports"
+        action: "Escalate to CRITICAL immediately. This is an unauthorized data access event. Proceed to Step 5."
+    actions:
+      - query_operator_permissions:
+          operator_id: "{{ operator_id }}"
+          permission: compliance_export
+
+  - step: 4
+    title: "Confirm export intent and justification"
+    description: "Contact the operator who generated the export. Verify the export was intentional and document the business justification. If the export was unscheduled, why was an ad-hoc export needed? If the parameters differ from standard exports, why were non-standard parameters used?"
+    action_type: MANUAL
+    sla_minutes: 15
+    decision_points:
+      - condition: "If operator confirms intentional export with valid business justification"
+        action: "Document the justification. Proceed to Step 6."
+      - condition: "If operator denies generating the export"
+        action: "Escalate to CRITICAL — possible account compromise. Proceed to Step 5."
+      - condition: "If operator cannot provide adequate justification"
+        action: "Flag for compliance review. Proceed to Step 5."
+    actions: []
+
+  - step: 5
+    title: "Treat as data access incident"
+    description: "Escalate to CRITICAL severity. Notify legal and the compliance officer immediately. Determine the scope of data contained in the export. If the export has been downloaded or transmitted externally, invoke the data breach response protocol. Preserve all evidence: the export file, the generating receipt, operator session logs, and network logs showing any data egress."
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "If export data has left the organization boundary"
+        action: "Invoke data breach response. Notify legal for regulatory disclosure assessment."
+      - condition: "If export data is still within controlled systems"
+        action: "Quarantine the export file. Revoke the operator's compliance export permission pending investigation."
+    actions:
+      - escalate_severity: CRITICAL
+      - notify: legal
+      - notify: compliance-officer
+      - preserve_evidence: export_file
+
+  - step: 6
+    title: "Document findings and close"
+    description: "Write the incident summary documenting: who generated the export, when, what data it contained, whether it was authorized, and the business justification. If the export was legitimate but anomalous (e.g., unscheduled), recommend process improvements such as requiring pre-approval for ad-hoc exports. Update the export schedule configuration if needed. Close the incident."
+    action_type: MANUAL
+    sla_minutes: 15
+    decision_points:
+      - condition: "If export was authorized and justified"
+        action: "Close with informational status. Recommend process improvements if applicable."
+      - condition: "If incident was escalated to data access event"
+        action: "Do not close until legal and compliance sign off. All remediation must be receipted."
+    actions:
+      - create_report: post_incident
+      - close_incident: true

@@ -1,0 +1,870 @@
+"""
+Control plane API endpoints for status, onboarding, routing, and tokens.
+
+Provides /system/status, /onboarding/*, /router/*, /warroom/*, and /tokens/*
+endpoints for the War Room and any other control surface.
+Mounted as a FastAPI APIRouter.
+
+All responses use safe error handling — no stack traces leak to clients.
+"""
+import os
+import time
+import logging
+from typing import Any, Optional
+from collections import deque
+
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability, resolve_authenticated_identity
+
+from src.core.onboarding_snapshot import OnboardingSnapshot, OnboardingState
+from src.core.operator_identity import resolve_operator_id
+from src.core import recovery_commands
+from src.core.response.war_room_artifact import ArtifactType, WarRoomArtifact
+from src.core.runtime_pause import (
+    get_runtime_pause_status,
+    init_runtime_pause,
+    pause_runtime,
+    resume_runtime,
+)
+from src.core.model_usage_policy import (
+    get_model_usage_status,
+    init_model_usage_policy,
+    update_model_usage_policy,
+)
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+# Snapshot instance — set by init_control_plane() at startup
+_snapshot: Optional[OnboardingSnapshot] = None
+_startup_time: Optional[float] = None
+_model_router = None  # Set by set_model_router()
+_usage_tracker = None  # Set by set_usage_tracker() — standalone tracker
+_usage_persistence = None  # Set by set_usage_persistence()
+
+_token_store = None  # Set by init_control_plane if available
+_runtime_emergency_stop_handler = None
+_ARTIFACT_STORE_MAX_ITEMS = int(os.getenv("WARROOM_ARTIFACT_STORE_MAX_ITEMS", "200"))
+_ARTIFACT_LIST_LIMIT = int(os.getenv("WARROOM_ARTIFACT_LIST_LIMIT", "50"))
+_ALLOWED_ARTIFACT_TYPES = {artifact_type.value for artifact_type in ArtifactType}
+
+
+class _WarRoomArtifactStore:
+    """Bounded in-memory artifact store with server-side normalization."""
+
+    def __init__(self, max_items: int):
+        self._items = deque(maxlen=max_items)
+
+    def clear(self) -> None:
+        self._items.clear()
+
+    def append(self, artifact: dict) -> dict:
+        self._items.append(artifact)
+        return artifact
+
+    def list(self, session_id: str = "", limit: int = _ARTIFACT_LIST_LIMIT) -> list[dict]:
+        items = list(self._items)
+        if session_id:
+            items = [item for item in items if item.get("session_id") == session_id]
+        return items[-limit:]
+
+    def get(self, artifact_id: str) -> Optional[dict]:
+        for item in self._items:
+            if item.get("id") == artifact_id:
+                return item
+        return None
+
+    def total(self, session_id: str = "") -> int:
+        if not session_id:
+            return len(self._items)
+        return sum(1 for item in self._items if item.get("session_id") == session_id)
+
+
+_war_room_artifacts = _WarRoomArtifactStore(_ARTIFACT_STORE_MAX_ITEMS)
+
+
+class UpdateModelUsagePolicyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    local_execution_mode: Optional[str] = None
+    frontier_scrub_mode: Optional[str] = None
+
+
+class RuntimePauseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: Optional[str] = Field(
+        default=None,
+        description="Operator-supplied pause reason.",
+    )
+
+
+class OnboardingCommandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    command: Optional[str] = Field(
+        default=None,
+        description="Recovery command such as STATUS, BACK, or RESET ONBOARDING.",
+    )
+
+
+class WarRoomArtifactRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: str
+    content: dict[str, Any]
+    id: Optional[str] = Field(
+        default=None,
+        description="Deprecated client field. Artifact IDs are generated server-side.",
+    )
+    session_id: Optional[str] = Field(
+        default=None,
+        description="Deprecated client field. Session is derived server-side for API writes.",
+    )
+    operator_id: Optional[str] = Field(
+        default=None,
+        description="Deprecated client field. Operator identity is derived server-side.",
+    )
+    source: Optional[str] = Field(
+        default=None,
+        description="Deprecated client field. API writes are always stored as source=api.",
+    )
+
+
+class TokenRevokeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: Optional[str] = Field(
+        default=None,
+        description="Optional operator-supplied revocation reason.",
+    )
+
+
+def init_control_plane(data_dir: str) -> None:
+    """Initialise the control-plane with a data directory.
+
+    Called once at app startup.
+    """
+    global _snapshot, _startup_time, _token_store
+    _snapshot = OnboardingSnapshot(data_dir)
+    _startup_time = time.time()
+    _war_room_artifacts.clear()
+    init_runtime_pause(data_dir)
+    init_model_usage_policy(data_dir)
+
+    # Try to initialize token store for War Room endpoints
+    try:
+        from pathlib import Path
+        from src.core.execution_authority.store import ExecutionTokenStore
+        _token_store = ExecutionTokenStore(Path(data_dir) / "tokens.db")
+        logger.info("Control-plane: ExecutionTokenStore initialised for /tokens/* endpoints")
+    except Exception as exc:
+        logger.warning("Control-plane: ExecutionTokenStore not available: %s", exc)
+        _token_store = None
+
+
+def _normalize_war_room_artifact(
+    artifact_data: dict | WarRoomArtifact,
+    *,
+    operator_id: str = "",
+    session_id: str = "",
+    source: str = "system",
+) -> dict:
+    """Normalize artifacts to the trusted server-side schema."""
+    if isinstance(artifact_data, WarRoomArtifact):
+        artifact = artifact_data
+    else:
+        if not isinstance(artifact_data, dict):
+            raise ValueError("Artifact payload must be a dict")
+        artifact_type = str(artifact_data.get("type", "")).strip()
+        if artifact_type not in _ALLOWED_ARTIFACT_TYPES:
+            raise ValueError(f"Unsupported artifact type: {artifact_type}")
+        content = artifact_data.get("content", {})
+        if not isinstance(content, dict):
+            raise ValueError("Artifact content must be an object")
+        trusted_session_id = session_id if source == "api" else (
+            session_id or artifact_data.get("session_id", "") or ""
+        )
+        artifact = WarRoomArtifact(
+            type=artifact_type,
+            content=content,
+            session_id=trusted_session_id,
+        )
+
+    payload = artifact.to_dict()
+    payload["session_id"] = session_id if source == "api" else (
+        session_id or payload.get("session_id", "") or ""
+    )
+    payload["operator_id"] = operator_id
+    payload["source"] = source
+    return payload
+
+
+def store_war_room_artifact(artifact_data: dict | WarRoomArtifact) -> dict:
+    """Store a normalized War Room artifact (called from orchestrator/assembler)."""
+    normalized = _normalize_war_room_artifact(
+        artifact_data,
+        operator_id=artifact_data.get("operator_id", "") if isinstance(artifact_data, dict) else "",
+        session_id=artifact_data.get("session_id", "") if isinstance(artifact_data, dict) else "",
+        source=artifact_data.get("source", "system") if isinstance(artifact_data, dict) else "system",
+    )
+    return _war_room_artifacts.append(normalized)
+
+
+def set_model_router(model_router) -> None:
+    """Register the ModelRouter instance for War Room endpoints."""
+    global _model_router
+    _model_router = model_router
+
+
+def get_model_router():
+    """Return the active ModelRouter (or None if not set)."""
+    return _model_router
+
+
+def set_usage_tracker(tracker) -> None:
+    """Register a standalone UsageTracker for War Room endpoints."""
+    global _usage_tracker
+    _usage_tracker = tracker
+
+
+def get_usage_tracker():
+    """Return the active UsageTracker (standalone or from model router)."""
+    if _usage_tracker is not None:
+        return _usage_tracker
+    if _model_router is not None:
+        return getattr(_model_router, "usage", None)
+    return None
+
+
+def set_usage_persistence(persistence) -> None:
+    """Register the UsagePersistence for monthly endpoints."""
+    global _usage_persistence
+    _usage_persistence = persistence
+
+
+def set_runtime_control_hooks(*, emergency_stop_handler=None) -> None:
+    """Register runtime-level control handlers such as emergency stop."""
+    global _runtime_emergency_stop_handler
+    _runtime_emergency_stop_handler = emergency_stop_handler
+
+
+def get_snapshot() -> OnboardingSnapshot:
+    """Return the active snapshot (raises if not initialised)."""
+    if _snapshot is None:
+        raise RuntimeError("Control-plane not initialised — call init_control_plane()")
+    return _snapshot
+
+
+def _safe_error(status_code: int, message: str) -> JSONResponse:
+    """Return a structured error response with no internal details."""
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": message, "status": status_code},
+    )
+
+
+# ------------------------------------------------------------------
+# /system/status
+# ------------------------------------------------------------------
+
+@router.get("/system/status", dependencies=[Depends(require_authenticated_request)])
+async def system_status():
+    """Full system provisioning status for the War Room."""
+    try:
+        snap = get_snapshot()
+        model_usage = get_model_usage_status()
+        uptime = round(time.time() - _startup_time, 1) if _startup_time else 0
+
+        return {
+            "onboarding": {
+                "state": snap.state.value,
+                "flagship_provider": snap.flagship_provider,
+                "credential_status": snap.credential_status,
+                "local_model_status": snap.local_model_status,
+                "local_model_runtime_status": model_usage.get("local_model_status"),
+                "local_model_runtime_ready": model_usage.get("local_model_ready"),
+                "local_model_runtime_loaded": model_usage.get("local_model_loaded"),
+                "local_model_last_verified_at": model_usage.get("local_model_last_verified_at"),
+                "local_model_last_error": model_usage.get("local_model_last_error"),
+                "is_ready": snap.is_ready,
+            },
+            "cooldown": {
+                "active": snap.is_in_cooldown(),
+                "remaining_seconds": round(snap.cooldown_remaining(), 1),
+                "reason": snap.last_error if snap.state == OnboardingState.COOLDOWN else None,
+            },
+            "runtime_pause": get_runtime_pause_status(),
+            "model_usage_policy": model_usage,
+            "uptime_seconds": uptime,
+        }
+    except Exception as exc:
+        logger.error("system_status error: %s", exc)
+        return _safe_error(500, "Failed to retrieve system status")
+
+
+@router.get("/system/pause", dependencies=[Depends(require_authenticated_request)])
+async def runtime_pause_status():
+    """Return the persisted runtime pause state."""
+    try:
+        return get_runtime_pause_status()
+    except Exception as exc:
+        logger.error("runtime_pause_status error: %s", exc)
+        return _safe_error(500, "Failed to retrieve runtime pause state")
+
+
+@router.post(
+    "/system/pause",
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("platform.admin")),
+    ],
+)
+async def runtime_pause(request: Request, body: RuntimePauseRequest | None = None):
+    """Pause new runtime work across ingress paths."""
+    try:
+        identity = resolve_authenticated_identity(request)
+        reason = (body.reason if body and body.reason is not None else "").strip()
+        if not reason:
+            return _safe_error(400, "Missing pause reason")
+
+        state = pause_runtime(
+            reason,
+            operator_id=identity.operator_id,
+            operator_name=identity.display_name,
+            session_id=identity.session_id,
+            source="warroom",
+        )
+
+        try:
+            from src.core.governance_receipts import emit_governance_receipt
+            from src.shared.receipts import ActionType
+
+            emit_governance_receipt(
+                request,
+                ActionType.SYSTEM,
+                action_name="global_runtime_pause",
+                inputs={"reason": reason},
+                outputs={"paused": True},
+            )
+        except Exception as exc:
+            logger.warning("Failed to emit runtime pause receipt: %s", exc)
+
+        return state
+    except Exception as exc:
+        logger.error("runtime_pause error: %s", exc)
+        return _safe_error(500, "Failed to pause runtime")
+
+
+@router.post(
+    "/system/resume",
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("platform.admin")),
+    ],
+)
+async def runtime_resume(request: Request):
+    """Resume new runtime work across ingress paths."""
+    try:
+        identity = resolve_authenticated_identity(request)
+        state = resume_runtime(
+            operator_id=identity.operator_id,
+            operator_name=identity.display_name,
+            session_id=identity.session_id,
+            source="warroom",
+        )
+
+        try:
+            from src.core.governance_receipts import emit_governance_receipt
+            from src.shared.receipts import ActionType
+
+            emit_governance_receipt(
+                request,
+                ActionType.SYSTEM,
+                action_name="global_runtime_resume",
+                outputs={"paused": False},
+            )
+        except Exception as exc:
+            logger.warning("Failed to emit runtime resume receipt: %s", exc)
+
+        return state
+    except Exception as exc:
+        logger.error("runtime_resume error: %s", exc)
+        return _safe_error(500, "Failed to resume runtime")
+
+
+@router.post(
+    "/system/emergency-stop",
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("platform.admin")),
+    ],
+)
+async def runtime_emergency_stop(request: Request, body: RuntimePauseRequest | None = None):
+    """Pause new runtime work and stop active local execution."""
+    try:
+        if _runtime_emergency_stop_handler is None:
+            return _safe_error(503, "Emergency stop engine not configured")
+
+        identity = resolve_authenticated_identity(request)
+        reason = (body.reason if body and body.reason is not None else "").strip()
+        if not reason:
+            return _safe_error(400, "Missing emergency stop reason")
+
+        state = pause_runtime(
+            reason,
+            operator_id=identity.operator_id,
+            operator_name=identity.display_name,
+            session_id=identity.session_id,
+            source="warroom",
+        )
+        stop_result = _runtime_emergency_stop_handler(
+            reason=reason,
+            operator_id=identity.operator_id,
+            operator_name=identity.display_name,
+            session_id=identity.session_id,
+        )
+
+        try:
+            from src.core.governance_receipts import emit_governance_receipt
+            from src.shared.receipts import ActionType
+
+            emit_governance_receipt(
+                request,
+                ActionType.KILL_SWITCH_ISSUED,
+                action_name="global_emergency_stop",
+                inputs={"reason": reason},
+                outputs={"paused": True, **(stop_result or {})},
+            )
+        except Exception as exc:
+            logger.warning("Failed to emit emergency stop receipt: %s", exc)
+
+        payload = dict(state)
+        if isinstance(stop_result, dict):
+            payload.update(stop_result)
+        return payload
+    except Exception as exc:
+        logger.error("runtime_emergency_stop error: %s", exc)
+        return _safe_error(500, "Failed to execute emergency stop")
+
+
+@router.get("/system/model-policy", dependencies=[Depends(require_authenticated_request)])
+async def system_model_policy():
+    """Return the persisted local-model usage policy and live availability state."""
+    try:
+        return get_model_usage_status()
+    except Exception as exc:
+        logger.error("system_model_policy error: %s", exc)
+        return _safe_error(500, "Failed to retrieve model usage policy")
+
+
+@router.put(
+    "/system/model-policy",
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("platform.admin")),
+    ],
+)
+async def update_system_model_policy(request: Request, body: UpdateModelUsagePolicyRequest):
+    """Persist local execution and frontier scrub policy."""
+    try:
+        if body.local_execution_mode is None and body.frontier_scrub_mode is None:
+            return _safe_error(400, "No model usage policy changes supplied")
+
+        state = update_model_usage_policy(
+            local_execution_mode=body.local_execution_mode,
+            frontier_scrub_mode=body.frontier_scrub_mode,
+        )
+
+        try:
+            from src.core.governance_receipts import emit_governance_receipt
+            from src.shared.receipts import ActionType
+
+            emit_governance_receipt(
+                request,
+                ActionType.SYSTEM,
+                action_name="update_model_usage_policy",
+                inputs={
+                    "local_execution_mode": body.local_execution_mode,
+                    "frontier_scrub_mode": body.frontier_scrub_mode,
+                },
+                outputs=state,
+            )
+        except Exception as exc:
+            logger.warning("Failed to emit model usage policy receipt: %s", exc)
+
+        return state
+    except ValueError as exc:
+        return _safe_error(400, str(exc))
+    except Exception as exc:
+        logger.error("update_system_model_policy error: %s", exc)
+        return _safe_error(500, "Failed to update model usage policy")
+
+
+# ------------------------------------------------------------------
+# /onboarding/*
+# ------------------------------------------------------------------
+
+@router.get("/onboarding/status", dependencies=[Depends(require_authenticated_request)])
+async def onboarding_status():
+    """Detailed onboarding snapshot for the War Room recovery panel."""
+    try:
+        snap = get_snapshot()
+        model_usage = get_model_usage_status()
+        # Read provider mode from env
+        provider_mode = os.environ.get("LANCELOT_PROVIDER_MODE", "sdk")
+        return {
+            "state": snap.state.value,
+            "flagship_provider": snap.flagship_provider,
+            "provider_mode": provider_mode,
+            "credential_status": snap.credential_status,
+            "local_model_status": snap.local_model_status,
+            "local_model_runtime_status": model_usage.get("local_model_status"),
+            "local_model_runtime_ready": model_usage.get("local_model_ready"),
+            "local_model_runtime_loaded": model_usage.get("local_model_loaded"),
+            "local_model_last_verified_at": model_usage.get("local_model_last_verified_at"),
+            "local_model_last_checked_at": model_usage.get("local_model_last_checked_at"),
+            "local_model_last_error": model_usage.get("local_model_last_error"),
+            "local_model_consecutive_failures": model_usage.get("local_model_consecutive_failures"),
+            "local_model_last_smoke_elapsed_ms": model_usage.get("local_model_last_smoke_elapsed_ms"),
+            "is_ready": snap.is_ready,
+            "cooldown_active": snap.is_in_cooldown(),
+            "cooldown_remaining": round(snap.cooldown_remaining(), 1),
+            "last_error": snap.last_error,
+            "resend_count": snap.resend_count,
+            "updated_at": snap.updated_at,
+        }
+    except Exception as exc:
+        logger.error("onboarding_status error: %s", exc)
+        return _safe_error(500, "Failed to retrieve onboarding status")
+
+
+@router.post("/onboarding/command")
+async def onboarding_command(
+    request: Request,
+    body: OnboardingCommandRequest | None = None,
+    _auth: None = Depends(require_authenticated_request),
+    _authz: None = Depends(require_operator_capability("onboarding.admin")),
+):
+    """Execute a recovery command (STATUS, BACK, RESTART STEP, RESEND CODE, RESET ONBOARDING).
+
+    Payload: ``{"command": "STATUS"}``
+    """
+    try:
+        command = (body.command if body and body.command is not None else "").strip()
+
+        if not command:
+            return _safe_error(400, "Missing 'command' field")
+
+        snap = get_snapshot()
+        result = recovery_commands.try_handle(command, snap)
+
+        if result is None:
+            return _safe_error(400, f"Unknown command: {command}")
+
+        return {
+            "command": command,
+            "response": result,
+            "state": snap.state.value,
+        }
+    except Exception as exc:
+        logger.error("onboarding_command error: %s", exc)
+        return _safe_error(500, "Failed to execute command")
+
+
+@router.post("/onboarding/back")
+async def onboarding_back(
+    _auth: None = Depends(require_authenticated_request),
+    _authz: None = Depends(require_operator_capability("onboarding.admin")),
+):
+    """Shortcut: execute BACK command."""
+    try:
+        snap = get_snapshot()
+        result = recovery_commands.try_handle("back", snap)
+        return {"response": result, "state": snap.state.value}
+    except Exception as exc:
+        logger.error("onboarding_back error: %s", exc)
+        return _safe_error(500, "Failed to execute BACK")
+
+
+@router.post("/onboarding/restart-step")
+async def onboarding_restart_step(
+    _auth: None = Depends(require_authenticated_request),
+    _authz: None = Depends(require_operator_capability("onboarding.admin")),
+):
+    """Shortcut: execute RESTART STEP command."""
+    try:
+        snap = get_snapshot()
+        result = recovery_commands.try_handle("restart step", snap)
+        return {"response": result, "state": snap.state.value}
+    except Exception as exc:
+        logger.error("onboarding_restart_step error: %s", exc)
+        return _safe_error(500, "Failed to execute RESTART STEP")
+
+
+@router.post("/onboarding/resend-code")
+async def onboarding_resend_code(
+    _auth: None = Depends(require_authenticated_request),
+    _authz: None = Depends(require_operator_capability("onboarding.admin")),
+):
+    """Shortcut: execute RESEND CODE command."""
+    try:
+        snap = get_snapshot()
+        result = recovery_commands.try_handle("resend code", snap)
+        return {"response": result, "state": snap.state.value}
+    except Exception as exc:
+        logger.error("onboarding_resend_code error: %s", exc)
+        return _safe_error(500, "Failed to execute RESEND CODE")
+
+
+@router.post("/onboarding/reset")
+async def onboarding_reset(
+    _auth: None = Depends(require_authenticated_request),
+    _authz: None = Depends(require_operator_capability("onboarding.admin")),
+):
+    """Shortcut: execute RESET ONBOARDING command."""
+    try:
+        snap = get_snapshot()
+        result = recovery_commands.try_handle("reset onboarding", snap)
+        return {"response": result, "state": snap.state.value}
+    except Exception as exc:
+        logger.error("onboarding_reset error: %s", exc)
+        return _safe_error(500, "Failed to execute RESET ONBOARDING")
+
+
+# ------------------------------------------------------------------
+# /router/* — Model router panel for the War Room.
+# ------------------------------------------------------------------
+
+@router.get("/router/decisions", dependencies=[Depends(require_authenticated_request)])
+async def router_decisions():
+    """Recent routing decisions for the War Room Model Router panel."""
+    try:
+        mr = get_model_router()
+        if mr is None:
+            return {"decisions": [], "message": "Model router not initialised"}
+        decisions = mr.recent_decisions
+        return {
+            "decisions": [d.to_dict() for d in decisions[:50]],
+            "total": len(decisions),
+        }
+    except Exception as exc:
+        logger.error("router_decisions error: %s", exc)
+        return _safe_error(500, "Failed to retrieve router decisions")
+
+
+@router.get("/router/stats", dependencies=[Depends(require_authenticated_request)])
+async def router_stats():
+    """Routing statistics for the War Room."""
+    try:
+        mr = get_model_router()
+        if mr is None:
+            return {"stats": {}, "message": "Model router not initialised"}
+        return {"stats": mr.stats}
+    except Exception as exc:
+        logger.error("router_stats error: %s", exc)
+        return _safe_error(500, "Failed to retrieve router stats")
+
+
+# ------------------------------------------------------------------
+# /usage/* — Usage and cost telemetry panel.
+# ------------------------------------------------------------------
+
+@router.get("/usage/summary", dependencies=[Depends(require_authenticated_request)])
+async def usage_summary():
+    """Full usage and cost summary for the War Room cost panel."""
+    try:
+        tracker = get_usage_tracker()
+        if tracker is None:
+            return {"usage": {}, "message": "Usage tracker not initialised"}
+        return {"usage": tracker.summary()}
+    except Exception as exc:
+        logger.error("usage_summary error: %s", exc)
+        return _safe_error(500, "Failed to retrieve usage summary")
+
+
+@router.get("/usage/lanes", dependencies=[Depends(require_authenticated_request)])
+async def usage_lanes():
+    """Per-lane usage breakdown."""
+    try:
+        tracker = get_usage_tracker()
+        if tracker is None:
+            return {"lanes": {}, "message": "Usage tracker not initialised"}
+        return {"lanes": tracker.lane_breakdown()}
+    except Exception as exc:
+        logger.error("usage_lanes error: %s", exc)
+        return _safe_error(500, "Failed to retrieve lane usage")
+
+
+@router.get("/usage/models", dependencies=[Depends(require_authenticated_request)])
+async def usage_models():
+    """Per-model usage breakdown."""
+    try:
+        tracker = get_usage_tracker()
+        if tracker is None:
+            return {"models": {}, "message": "Usage tracker not initialised"}
+        return {"models": tracker.model_breakdown()}
+    except Exception as exc:
+        logger.error("usage_models error: %s", exc)
+        return _safe_error(500, "Failed to retrieve model usage")
+
+
+@router.get("/usage/savings", dependencies=[Depends(require_authenticated_request)])
+async def usage_savings():
+    """Estimated savings from local model usage."""
+    try:
+        tracker = get_usage_tracker()
+        if tracker is None:
+            return {"savings": {}, "message": "Usage tracker not initialised"}
+        return {"savings": tracker.estimated_savings()}
+    except Exception as exc:
+        logger.error("usage_savings error: %s", exc)
+        return _safe_error(500, "Failed to retrieve savings data")
+
+
+@router.get("/usage/monthly", dependencies=[Depends(require_authenticated_request)])
+async def usage_monthly(month: str = ""):
+    """Monthly usage data from persistence (survives restarts).
+
+    Query params:
+        month: Optional month key (e.g. ``2026-02``). Defaults to current.
+    """
+    try:
+        if _usage_persistence is None:
+            return {"monthly": {}, "message": "Usage persistence not initialised"}
+        if month:
+            data = _usage_persistence.get_month(month)
+        else:
+            data = _usage_persistence.get_current_month()
+        return {
+            "monthly": data,
+            "available_months": _usage_persistence.get_available_months(),
+        }
+    except Exception as exc:
+        logger.error("usage_monthly error: %s", exc)
+        return _safe_error(500, "Failed to retrieve monthly usage")
+
+
+@router.post("/usage/reset", dependencies=[Depends(require_authenticated_request), Depends(require_operator_capability("platform.admin"))])
+async def usage_reset():
+    """Reset in-memory usage counters (starts a new tracking period)."""
+    try:
+        tracker = get_usage_tracker()
+        if tracker is None:
+            return _safe_error(400, "Usage tracker not initialised")
+        tracker.reset()
+        return {"message": "Usage counters reset", "usage": tracker.summary()}
+    except Exception as exc:
+        logger.error("usage_reset error: %s", exc)
+        return _safe_error(500, "Failed to reset usage counters")
+
+
+# ------------------------------------------------------------------
+# /warroom/* — War Room artifact endpoints
+# ------------------------------------------------------------------
+
+@router.post(
+    "/warroom/artifacts",
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("platform.admin")),
+    ],
+)
+async def warroom_store_artifact(request: Request, body: WarRoomArtifactRequest | None = None):
+    """Persist a trusted, structured War Room artifact."""
+    try:
+        if body is None:
+            return _safe_error(400, "Missing artifact data")
+        data = body.model_dump(exclude_none=True)
+        identity = resolve_authenticated_identity(request)
+        operator_id = identity.operator_id or (
+            resolve_operator_id(identity.display_name) if identity.display_name else ""
+        )
+        store_war_room_artifact(
+            _normalize_war_room_artifact(
+                data,
+                operator_id=operator_id,
+                session_id=identity.session_id or "",
+                source="api",
+            )
+        )
+        return {"status": "stored", "artifact_count": _war_room_artifacts.total()}
+    except ValueError as exc:
+        logger.warning("warroom_store_artifact validation error: %s", exc)
+        return _safe_error(400, str(exc))
+    except Exception as exc:
+        logger.error("warroom_store_artifact error: %s", exc)
+        return _safe_error(500, "Failed to store artifact")
+
+
+@router.get("/warroom/artifacts", dependencies=[Depends(require_authenticated_request)])
+async def warroom_list_artifacts(session_id: str = ""):
+    """List War Room artifacts, optionally filtered by session."""
+    try:
+        return {
+            "artifacts": _war_room_artifacts.list(session_id=session_id),
+            "total": _war_room_artifacts.total(session_id=session_id),
+        }
+    except Exception as exc:
+        logger.error("warroom_list_artifacts error: %s", exc)
+        return _safe_error(500, "Failed to list artifacts")
+
+
+@router.get("/warroom/artifacts/{artifact_id}", dependencies=[Depends(require_authenticated_request)])
+async def warroom_get_artifact(artifact_id: str):
+    """Get a single War Room artifact by ID."""
+    try:
+        art = _war_room_artifacts.get(artifact_id)
+        if art is not None:
+            return {"artifact": art}
+        return _safe_error(404, f"Artifact {artifact_id} not found")
+    except Exception as exc:
+        logger.error("warroom_get_artifact error: %s", exc)
+        return _safe_error(500, "Failed to retrieve artifact")
+
+
+# ------------------------------------------------------------------
+# /tokens/* — ExecutionToken endpoints
+# ------------------------------------------------------------------
+
+@router.get("/tokens", dependencies=[Depends(require_authenticated_request), Depends(require_operator_capability("platform.admin"))])
+async def tokens_list(status: str = "", limit: int = 50):
+    """List ExecutionTokens."""
+    try:
+        if _token_store is None:
+            return {"tokens": [], "message": "Token store not initialised"}
+        tokens = _token_store.list_tokens(limit=limit, status=status or None)
+        return {"tokens": [t.to_dict() for t in tokens], "total": len(tokens)}
+    except Exception as exc:
+        logger.error("tokens_list error: %s", exc)
+        return _safe_error(500, "Failed to list tokens")
+
+
+@router.get("/tokens/{token_id}", dependencies=[Depends(require_authenticated_request), Depends(require_operator_capability("platform.admin"))])
+async def tokens_get(token_id: str):
+    """Get a single ExecutionToken by ID."""
+    try:
+        if _token_store is None:
+            return _safe_error(400, "Token store not initialised")
+        token = _token_store.get(token_id)
+        if token is None:
+            return _safe_error(404, f"Token {token_id} not found")
+        return {"token": token.to_dict()}
+    except Exception as exc:
+        logger.error("tokens_get error: %s", exc)
+        return _safe_error(500, "Failed to retrieve token")
+
+
+@router.post("/tokens/{token_id}/revoke", dependencies=[Depends(require_authenticated_request), Depends(require_operator_capability("platform.admin"))])
+async def tokens_revoke(token_id: str, request: Request, body: TokenRevokeRequest | None = None):
+    """Revoke an ExecutionToken."""
+    try:
+        if _token_store is None:
+            return _safe_error(400, "Token store not initialised")
+        reason = body.reason if body and body.reason else "Manual revocation via control plane"
+        success = _token_store.revoke(token_id, reason)
+        if success:
+            return {"status": "revoked", "token_id": token_id, "reason": reason}
+        return _safe_error(400, f"Token {token_id} could not be revoked (already revoked or not found)")
+    except Exception as exc:
+        logger.error("tokens_revoke error: %s", exc)
+        return _safe_error(500, "Failed to revoke token")

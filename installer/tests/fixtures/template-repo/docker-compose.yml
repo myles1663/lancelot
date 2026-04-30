@@ -1,0 +1,15 @@
+services:
+  local-llm:
+    image: lancelot/local-llm:latest
+    environment:
+      - LOCAL_MODEL_GPU_LAYERS=99
+    volumes:
+      - ./lancelot_data:/home/lancelot/data
+      - ./lancelot_workspace:/home/lancelot/workspace
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

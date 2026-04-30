@@ -1,0 +1,53 @@
+_playbook_metadata:
+  name: healthcare-security-breach
+  display_name: "Injection Attack Response — Healthcare"
+  description: "Healthcare extension of the injection attack response. Adds HIPAA breach assessment protocol, mandatory privacy officer notification within 24 hours, and PHI-aware evidence handling requirements."
+  category: SECURITY_EVENT
+  severity_default: CRITICAL
+  industry: healthcare
+  version: "1.0"
+  author: Lancelot
+  tags: [variant, healthcare, hipaa, phi, injection, security, privacy]
+
+extends: security-event-injection
+
+variant_steps:
+  - step: 100
+    insert_after: 1
+    title: "Trigger HIPAA breach assessment protocol"
+    description: "Initiate the HIPAA breach assessment protocol immediately upon identifying the injection source. Notify the designated privacy officer within 24 hours of detection, regardless of whether a breach has been confirmed. Under HIPAA, the assessment must determine whether protected health information (PHI) was accessed, acquired, used, or disclosed as a result of the injection. Document the notification timestamp and the privacy officer's acknowledgment. The 24-hour notification clock starts at the time of the triggering receipt, not the time this step is reached."
+    action_type: MANUAL
+    sla_minutes: 60
+    decision_points:
+      - condition: "If PHI systems were in scope of the injection source"
+        action: "Classify as potential HIPAA breach. Privacy officer must lead the breach determination. Proceed with heightened evidence controls."
+      - condition: "If no PHI systems were accessible to the injection source"
+        action: "Document the scoping determination. Privacy officer notification is still required but breach assessment may conclude quickly."
+      - condition: "If scope cannot be determined within SLA"
+        action: "Assume PHI exposure until proven otherwise. Notify privacy officer immediately and continue investigation."
+    actions:
+      - notify: privacy-officer
+      - create_receipt: hipaa_breach_assessment_initiated
+      - start_timer:
+          name: hipaa_notification_deadline
+          hours: 24
+
+  - step: 101
+    insert_after: 6
+    title: "Preserve PHI handling records with redaction controls"
+    description: "As part of the blast radius assessment evidence package from Step 6, preserve all PHI handling records related to the injection source and affected systems. This includes data access logs, query records, and any cached or processed PHI. CRITICAL: PHI data must NEVER be included in incident reports, evidence summaries, or any documentation that leaves the organization. All incident reports must reference PHI records by identifier only, never by content. Evidence packages shared with external parties (vendors, regulators, law enforcement) must be reviewed by the privacy officer and scrubbed of all PHI before transmission."
+    action_type: MANUAL
+    sla_minutes: 20
+    decision_points:
+      - condition: "If PHI was confirmed accessed or exposed during the incident"
+        action: "Preserve the full PHI access chain as sealed evidence. Initiate HIPAA breach notification timeline (60 days from discovery). Privacy officer must determine notification scope."
+      - condition: "If PHI access cannot be confirmed or denied"
+        action: "Preserve all potentially relevant records under legal hold. Do not destroy or modify any logs until privacy officer clears them."
+      - condition: "If no PHI was accessed"
+        action: "Document the negative finding with supporting evidence. Privacy officer may close the HIPAA assessment."
+    actions:
+      - preserve_evidence: phi_handling_records
+      - apply_hold: legal_hold
+      - redaction_flag: all_external_reports
+
+paging: {}

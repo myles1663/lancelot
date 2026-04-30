@@ -1,0 +1,13 @@
+# Default — all changes require Myles's review
+* @myles1663
+
+# Patent-protected subsystems — extra vigilance
+/src/core/soul/                @myles1663
+/src/agents/                   @myles1663
+/src/core/feature_flags.py     @myles1663
+/config/                       @myles1663
+/soul/                         @myles1663
+
+# Community-contributed areas — can be relaxed later
+/docs/                         @myles1663
+/tests/                        @myles1663

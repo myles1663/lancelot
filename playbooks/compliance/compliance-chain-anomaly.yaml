@@ -1,0 +1,161 @@
+_playbook_metadata:
+  name: compliance-chain-anomaly
+  display_name: "Compliance — Chain Anomaly Detected"
+  description: "A CHAIN_ANOMALY has been detected in a compliance export. The receipt chain has a broken parent_id link, which compromises audit admissibility. Do NOT distribute the export. This requires immediate legal and compliance escalation."
+  category: COMPLIANCE_EVENT
+  severity_default: HIGH
+  industry: general
+  version: "1.0"
+  author: Lancelot
+  tags: [compliance, chain-integrity, anomaly, audit, legal, tampering]
+
+trigger:
+  receipt_types: [CHAIN_ANOMALY]
+  conditions: []
+  severity: HIGH
+
+paging:
+  CRITICAL:
+    - channel: pagerduty
+      endpoint_ref: vault://pagerduty-webhook
+      escalation_minutes: 5
+  HIGH:
+    - channel: slack
+      endpoint_ref: vault://slack-incident-channel
+      escalation_minutes: 15
+  MEDIUM:
+    - channel: slack
+      endpoint_ref: vault://slack-ops-channel
+      escalation_minutes: 60
+
+steps:
+  - step: 1
+    title: "Do NOT distribute the compliance export"
+    description: >
+      A compliance export with a CHAIN_ANOMALY result MUST NOT be distributed
+      to any external party, auditor, regulator, or partner. The broken chain
+      means the export cannot be verified as complete and untampered. If the
+      export has already been sent, immediately notify the recipient that the
+      export is under review and should not be relied upon. Mark the export
+      as QUARANTINED in the compliance export log.
+    action_type: MANUAL
+    sla_minutes: 3
+    decision_points:
+      - condition: "If the export has not been distributed"
+        action: "Quarantine the export and proceed to Step 2."
+      - condition: "If the export has already been distributed"
+        action: "Notify all recipients immediately. Issue a hold notice. Proceed to Step 2."
+    actions: []
+
+  - step: 2
+    title: "Quarantine the export artifact"
+    description: >
+      Move the compliance export file to a quarantine directory. Do not
+      delete it — it may be needed for forensic analysis. Record the
+      export ID, generation timestamp, the chain anomaly details, and
+      the quarantine timestamp. Ensure the quarantine directory is
+      access-controlled and append-only.
+    action_type: MANUAL
+    sla_minutes: 5
+    decision_points:
+      - condition: "If quarantine is successful"
+        action: "Proceed to Step 3 to identify the broken link."
+      - condition: "If quarantine directory is unavailable"
+        action: "Rename the export with a QUARANTINED prefix in place and restrict access."
+    actions: []
+
+  - step: 3
+    title: "Identify the broken parent_id link"
+    description: >
+      Analyze the chain anomaly to find the exact receipt where the
+      parent_id reference is broken. Determine which receipt is missing —
+      the parent that should exist but does not. Record the receipt ID of
+      the child with the broken link, the expected parent_id, and the
+      time range of the gap. This information is critical for determining
+      whether this is corruption, a defect, or tampering.
+    action_type: MANUAL
+    sla_minutes: 15
+    decision_points:
+      - condition: "If the missing parent receipt is found elsewhere (e.g., different partition)"
+        action: "This may be a software defect in the export pipeline. Proceed to Step 4."
+      - condition: "If the parent receipt does not exist anywhere"
+        action: "This is either data corruption or tampering. Proceed to Step 4 with elevated urgency."
+    actions: []
+
+  - step: 4
+    title: "Determine root cause: corruption, defect, or tampering"
+    description: >
+      Three possibilities must be evaluated. Data corruption: check disk
+      health, database integrity, and backup comparison. Software defect:
+      check the compliance export pipeline for bugs in chain construction
+      or parent_id assignment. Tampering: check access logs for unauthorized
+      database access, unexpected receipt deletions, or modifications to
+      the receipt store outside the application. Document all evidence for
+      each possibility.
+    action_type: MANUAL
+    sla_minutes: 30
+    decision_points:
+      - condition: "If software defect is confirmed"
+        action: "File a critical bug. Regenerate the export after the fix. Proceed to Step 6."
+      - condition: "If data corruption is confirmed"
+        action: "Assess data recovery options. Proceed to Step 5."
+      - condition: "If tampering cannot be ruled out"
+        action: "Proceed to Step 5 immediately. Treat as a security incident."
+    actions: []
+
+  - step: 5
+    title: "Escalate to legal AND compliance simultaneously"
+    description: >
+      This is an audit admissibility question and must be escalated to
+      both legal and compliance teams at the same time — not sequentially.
+      A broken receipt chain affects the evidentiary value of the entire
+      governance record. Provide both teams with: the chain anomaly
+      details, the affected time range, the root cause determination
+      (or lack thereof), and the quarantined export. Do not attempt to
+      repair or regenerate the export without legal guidance.
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "If legal determines the anomaly is explainable and non-material"
+        action: "Document the determination and proceed to Step 6."
+      - condition: "If legal determines the anomaly requires formal investigation"
+        action: "Freeze all receipt store modifications. Engage forensics. Escalate to CRITICAL."
+    actions: []
+
+  - step: 6
+    title: "Regenerate compliance export if root cause is resolved"
+    description: >
+      If the root cause was a software defect that has been fixed, or
+      data corruption that has been repaired, regenerate the compliance
+      export. Run the chain integrity check on the new export before
+      releasing it. The new export must show CHAIN_VALID status. If it
+      still shows CHAIN_ANOMALY, the fix was incomplete — return to
+      Step 3.
+    action_type: MANUAL
+    sla_minutes: 15
+    decision_points:
+      - condition: "If new export shows CHAIN_VALID"
+        action: "Proceed to Step 7 to close the incident."
+      - condition: "If new export still shows CHAIN_ANOMALY"
+        action: "The fix was incomplete. Return to Step 3 with the new anomaly details."
+    actions: []
+
+  - step: 7
+    title: "Close incident and document for audit trail"
+    description: >
+      Generate a complete incident report including: chain anomaly details,
+      root cause determination, all evidence reviewed, legal and compliance
+      team decisions, corrective actions taken, and the regenerated export
+      status. This incident report must be attached to the compliance
+      export metadata so that any future auditor reviewing the affected
+      time period can see that an anomaly was detected, investigated, and
+      resolved. Retain the quarantined export indefinitely — do not delete
+      it even after a clean export is generated.
+    action_type: MANUAL
+    sla_minutes: 15
+    decision_points:
+      - condition: "If all corrective actions are complete and documented"
+        action: "Close incident. Schedule a chain integrity check for the next 7 daily exports."
+      - condition: "If any corrective action is pending"
+        action: "Keep incident open with a daily review until all actions are resolved."
+    actions: []

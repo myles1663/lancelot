@@ -1,0 +1,312 @@
+// ============================================================
+// Prompts — interactive user prompts
+// ============================================================
+
+import { input, select, password, confirm } from '@inquirer/prompts';
+import chalk from 'chalk';
+import ora from 'ora';
+import { PROVIDERS, COMMS, DEFAULT_DIR } from './constants.mjs';
+import { validateApiKey } from './validate.mjs';
+
+export async function promptInstallDir(defaultDir) {
+  const dir = await input({
+    message: 'Where should we install Lancelot?',
+    default: defaultDir || DEFAULT_DIR,
+  });
+  return dir;
+}
+
+export async function promptOwnerName() {
+  return await input({
+    message: 'What should Lancelot call you?',
+    default: 'Commander',
+    validate: (val) => {
+      if (!val || val.trim().length < 1) {
+        return 'Please enter a name';
+      }
+      return true;
+    },
+  });
+}
+
+export async function promptProvider(preselected) {
+  if (preselected && PROVIDERS[preselected]) {
+    return preselected;
+  }
+
+  const choices = Object.entries(PROVIDERS).map(([key, p]) => ({
+    name: `${p.name}${p.recommended ? chalk.green(' (recommended)') : ''} — ${p.description}`,
+    value: key,
+  }));
+
+  return await select({
+    message: 'Choose your LLM provider:',
+    choices,
+  });
+}
+
+export async function promptAuthMethod(provider) {
+  const providerInfo = PROVIDERS[provider];
+  if (!providerInfo.supportsOAuth) return 'api_key';
+
+  return await select({
+    message: `How would you like to authenticate with ${providerInfo.name}?`,
+    choices: [
+      {
+        name: `API Key — ${chalk.gray('paste your key from console.anthropic.com')}`,
+        value: 'api_key',
+      },
+      {
+        name: `OAuth (sign in with browser) ${chalk.green('(recommended)')} — ${chalk.gray('no API key needed')}`,
+        value: 'oauth',
+      },
+    ],
+  });
+}
+
+export async function promptApiKey(provider) {
+  const providerInfo = PROVIDERS[provider];
+
+  console.log(chalk.gray(`  Get your key at: ${providerInfo.signupUrl}`));
+
+  while (true) {
+    const key = await password({
+      message: `Enter your ${providerInfo.name} API key:`,
+      mask: '*',
+    });
+
+    if (!key || key.trim().length < 10) {
+      console.log(chalk.red('  API key seems too short. Please try again.'));
+      continue;
+    }
+
+    // Validate via HTTP
+    const spinner = ora('  Validating API key...').start();
+    const result = await validateApiKey(provider, key.trim());
+
+    if (result.valid) {
+      if (result.warning) {
+        spinner.warn(`  ${result.warning}`);
+      } else {
+        spinner.succeed('  API key validated');
+      }
+      return key.trim();
+    } else {
+      spinner.fail(`  ${result.error}`);
+      const retry = await confirm({
+        message: 'Try again with a different key?',
+        default: true,
+      });
+      if (!retry) {
+        const switchProvider = await confirm({
+          message: 'Switch to a different provider?',
+          default: false,
+        });
+        if (switchProvider) return null; // Signal to re-prompt provider
+        process.exit(1);
+      }
+    }
+  }
+}
+
+export async function promptCommsChannel() {
+  const choices = Object.entries(COMMS).map(([key, c]) => ({
+    name: `${c.name}${c.recommended ? chalk.green(' (recommended)') : ''} — ${c.description}`,
+    value: key,
+  }));
+
+  return await select({
+    message: 'Choose communication channel:',
+    choices,
+  });
+}
+
+export async function promptTelegramToken() {
+  console.log(chalk.gray('  Create a bot via @BotFather on Telegram to get your token.'));
+  return await password({
+    message: 'Enter your Telegram bot token:',
+    mask: '*',
+    validate: (val) => {
+      if (!val || val.length < 20 || !val.includes(':')) {
+        return 'Token should be in format: 123456:ABC-DEF (from BotFather)';
+      }
+      return true;
+    },
+  });
+}
+
+export async function promptTelegramChatId() {
+  console.log(chalk.gray('  Send a message to your bot, then check https://api.telegram.org/bot<TOKEN>/getUpdates'));
+  return await input({
+    message: 'Enter your Telegram chat ID:',
+    validate: (val) => {
+      if (!val || !/^-?\d+$/.test(val.trim())) {
+        return 'Chat ID should be a number (can be negative for groups)';
+      }
+      return true;
+    },
+  });
+}
+
+export async function promptGoogleChatSpace() {
+  return await input({
+    message: 'Enter your Google Chat space name (e.g. spaces/AAAA...):',
+    validate: (val) => {
+      if (!val || !val.startsWith('spaces/')) {
+        return 'Space name should start with "spaces/"';
+      }
+      return true;
+    },
+  });
+}
+
+export async function promptWarRoomAuthModel() {
+  return await select({
+    message: 'Choose the War Room authentication model:',
+    choices: [
+      {
+        name: `Local account ${chalk.green('(recommended for personal and small-team deployments)')}`,
+        value: 'local',
+      },
+      {
+        name: `Enterprise SSO (OIDC) ${chalk.gray('Entra, Okta, Keycloak, Auth0, etc.')}`,
+        value: 'oidc',
+      },
+    ],
+  });
+}
+
+export async function promptWarRoomUsername() {
+  return await input({
+    message: 'Choose a War Room username:',
+    validate: (val) => {
+      if (!val || val.trim().length < 2) {
+        return 'Username must be at least 2 characters';
+      }
+      if (!/^[a-zA-Z0-9_.-]+$/.test(val.trim())) {
+        return 'Username can only contain letters, numbers, dots, dashes, and underscores';
+      }
+      return true;
+    },
+  });
+}
+
+export async function promptWarRoomPassword() {
+  while (true) {
+    const pw = await password({
+      message: 'Choose a War Room password:',
+      mask: '*',
+      validate: (val) => {
+        if (!val || val.length < 8) {
+          return 'Password must be at least 8 characters';
+        }
+        return true;
+      },
+    });
+
+    const pw2 = await password({
+      message: 'Confirm password:',
+      mask: '*',
+    });
+
+    if (pw !== pw2) {
+      console.log(chalk.red('  Passwords do not match. Please try again.'));
+      continue;
+    }
+
+    return pw;
+  }
+}
+
+export async function promptOidcIssuerUrl() {
+  return await input({
+    message: 'Enter your OIDC issuer URL:',
+    validate: (val) => {
+      if (!val || (!val.startsWith('https://') && !val.startsWith('http://'))) {
+        return 'Issuer URL must start with http:// or https://';
+      }
+      return true;
+    },
+  });
+}
+
+export async function promptOidcClientId() {
+  return await input({
+    message: 'Enter your OIDC client ID:',
+    validate: (val) => {
+      if (!val || val.trim().length < 2) {
+        return 'Client ID is required';
+      }
+      return true;
+    },
+  });
+}
+
+export async function promptOidcClientSecret() {
+  return await password({
+    message: 'Enter your OIDC client secret:',
+    mask: '*',
+    validate: (val) => {
+      if (!val || val.trim().length < 2) {
+        return 'Client secret is required';
+      }
+      return true;
+    },
+  });
+}
+
+export async function promptOidcBaseUrl() {
+  return await input({
+    message: 'Enter the base URL users will use to reach Lancelot:',
+    default: 'http://localhost:8000',
+    validate: (val) => {
+      if (!val || (!val.startsWith('https://') && !val.startsWith('http://'))) {
+        return 'Base URL must start with http:// or https://';
+      }
+      return true;
+    },
+  });
+}
+
+export async function promptOidcAllowedGroups() {
+  return await input({
+    message: 'Enter allowed OIDC groups (comma-separated), or type "open" to explicitly allow any authenticated user:',
+    validate: (val) => {
+      const trimmed = String(val || '').trim();
+      if (!trimmed) {
+        return 'At least one allowed OIDC group is required unless you explicitly type "open".';
+      }
+      return true;
+    },
+  });
+}
+
+export async function promptConfirm(config) {
+  const providerInfo = PROVIDERS[config.provider];
+  const commsInfo = COMMS[config.commsType];
+
+  console.log('');
+  console.log(chalk.white.bold('  Configuration Summary:'));
+  console.log(chalk.gray(`    Owner:      ${config.ownerName || 'Commander'}`));
+  console.log(chalk.gray(`    Location:   ${config.installDir}`));
+  const authLabel = config.authMode === 'oauth'
+    ? `${providerInfo?.name || config.provider} (OAuth — browser sign-in)`
+    : `${providerInfo?.name || config.provider} (API key)`;
+  console.log(chalk.gray(`    Provider:   ${authLabel}`));
+  console.log(chalk.gray(`    Comms:      ${commsInfo?.name || config.commsType}`));
+  const warRoomLabel = config.warRoomAuthModel === 'oidc'
+    ? `Enterprise SSO via ${config.oidcIssuerUrl || 'OIDC'}`
+    : `${config.warRoomUser || '(custom username)'} / ${'*'.repeat((config.warRoomPassword || '').length)}`;
+  console.log(chalk.gray(`    War Room:   ${warRoomLabel}`));
+  if (config.hasGpu) {
+    console.log(chalk.gray(`    GPU:        ${config.gpuName} (${config.gpuLayers} layers)`));
+  } else {
+    console.log(chalk.gray('    GPU:        CPU only'));
+  }
+  console.log('');
+
+  return await confirm({
+    message: 'Proceed with installation?',
+    default: true,
+  });
+}

@@ -1,0 +1,139 @@
+_playbook_metadata:
+  name: cost-anomaly-spend-rate
+  display_name: "Cost Anomaly — Spend Rate Spike"
+  description: "Spend rate has exceeded 3x the rolling average for 15 or more minutes. Investigate the driving quest and model to determine if this is legitimate complex work or a runaway loop."
+  category: COST_ANOMALY
+  severity_default: MEDIUM
+  industry: general
+  version: "1.0"
+  author: Lancelot
+  tags: [cost, spend-rate, anomaly, rolling-average, escalation]
+
+trigger:
+  receipt_types: [COST_RATE_ANOMALY]
+  conditions:
+    - field: spend_rate_multiplier
+      operator: gte
+      value: 3
+    - field: duration_minutes
+      operator: gte
+      value: 15
+  severity: MEDIUM
+
+paging:
+  CRITICAL:
+    - channel: pagerduty
+      endpoint_ref: vault://pagerduty-webhook
+      escalation_minutes: 5
+  HIGH:
+    - channel: slack
+      endpoint_ref: vault://slack-incident-channel
+      escalation_minutes: 15
+  MEDIUM:
+    - channel: slack
+      endpoint_ref: vault://slack-ops-channel
+      escalation_minutes: 60
+
+steps:
+  - step: 1
+    title: "Identify quest and model driving the spend rate"
+    description: >
+      Query the cost metrics endpoint to identify which quest and model
+      are responsible for the elevated spend rate. Sort active quests by
+      token consumption rate over the last 15 minutes. The top consumer
+      is the primary suspect. Record the quest ID, model, and current
+      tokens-per-minute rate.
+    action_type: MANUAL
+    sla_minutes: 5
+    decision_points:
+      - condition: "If a single quest accounts for the spike"
+        action: "Proceed to Step 2 focused on that quest."
+      - condition: "If multiple quests are all elevated"
+        action: "Check for a shared trigger (e.g., scheduled batch, operator action) before proceeding."
+    actions: []
+
+  - step: 2
+    title: "Check current task scope and expected cost profile"
+    description: >
+      Review the active task for the identified quest. Determine what the
+      agent is working on and whether the task's complexity justifies the
+      elevated spend rate. A code generation task on a large codebase may
+      legitimately spike spend. A simple lookup task should not. Compare
+      the task description against the observed token consumption pattern.
+    action_type: MANUAL
+    sla_minutes: 5
+    decision_points:
+      - condition: "If the task scope justifies elevated spend"
+        action: "Monitor for 10 more minutes. If rate stabilizes or declines, proceed to Step 6."
+      - condition: "If the task scope does not justify the rate"
+        action: "Proceed to Step 3 — investigate for reasoning loop."
+    actions: []
+
+  - step: 3
+    title: "Determine if agent is in a reasoning loop"
+    description: >
+      Pull the last 20 agent outputs for the quest. Look for repetitive
+      patterns: identical or near-identical outputs, circular reasoning
+      chains, or the same sub-task being attempted repeatedly without
+      forward progress. A reasoning loop will show diminishing novelty
+      in output while maintaining or increasing token consumption.
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "If reasoning loop is confirmed"
+        action: "Proceed to Step 4 — contain immediately."
+      - condition: "If no loop detected but rate is still elevated"
+        action: "Set a 15-minute timer. If rate has not dropped below 2x rolling average by then, proceed to Step 4 anyway."
+    actions: []
+
+  - step: 4
+    title: "Contain the spend — stop agent or activate kill switch"
+    description: >
+      If a reasoning loop is confirmed, stop the agent for the identified
+      quest. If the rate is climbing and the cause is unclear, activate the
+      HIVE spawn gate kill switch as a precaution. Verify containment by
+      checking that the spend rate begins declining within 2 minutes of
+      the action.
+    action_type: MANUAL
+    sla_minutes: 5
+    decision_points:
+      - condition: "If spend rate begins declining after containment"
+        action: "Proceed to Step 5 for root cause documentation."
+      - condition: "If spend rate continues to climb despite containment"
+        action: "Escalate to HIGH immediately. Invoke governance-breach-kill-switch playbook."
+    actions: []
+
+  - step: 5
+    title: "Escalate to HIGH if spend rate continues climbing"
+    description: >
+      If containment actions have not reduced the spend rate, this is no
+      longer a MEDIUM incident. Escalate to HIGH severity. Page the
+      incident channel. Invoke the governance-breach-kill-switch procedure
+      to halt all agent activity system-wide. Do not wait for further
+      analysis — uncontrolled spend acceleration is a financial risk.
+    action_type: MANUAL
+    sla_minutes: 3
+    decision_points:
+      - condition: "If system-wide halt succeeds"
+        action: "Investigate infrastructure-level causes (API rate misconfiguration, model endpoint issues)."
+      - condition: "If system-wide halt fails"
+        action: "Escalate to CRITICAL. Consider container restart as last resort."
+    actions: []
+
+  - step: 6
+    title: "Close incident and document findings"
+    description: >
+      Generate a summary receipt documenting: the quest and model involved,
+      peak spend rate observed, duration of the anomaly, root cause
+      determination (legitimate work, reasoning loop, or infrastructure
+      issue), and containment actions taken. If an APL rule would prevent
+      recurrence, create it. If the rolling average baseline needs
+      recalibration, note this for the operator.
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "If the incident was a reasoning loop"
+        action: "Create an APL rule to flag the pattern and lower the escalation threshold for this quest."
+      - condition: "If the incident was legitimate work"
+        action: "Consider adjusting the spend rate anomaly threshold for similar tasks."
+    actions: []

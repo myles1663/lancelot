@@ -1,0 +1,120 @@
+_playbook_metadata:
+  name: governance-breach-t3-pattern
+  display_name: "T3 Rejection Pattern Response"
+  description: "Response protocol when T3 (Tier 3 — highest risk) action rejections exceed threshold in a rolling window. Identifies whether the pattern indicates Soul misconfiguration, a compromised or misbehaving agent, or an external A2A caller probing governance boundaries."
+  category: GOVERNANCE_BREACH
+  severity_default: HIGH
+  industry: general
+  version: "1.0"
+  author: Lancelot
+  tags: [governance, trust-ledger, t3, rejection-pattern, escalation]
+
+trigger:
+  receipt_types: [t3_rejected]
+  conditions:
+    - field: count
+      operator: gt
+      value: 5
+      window_minutes: 30
+  severity: HIGH
+
+paging:
+  CRITICAL:
+    - channel: pagerduty
+      endpoint_ref: vault://pagerduty-webhook
+      escalation_minutes: 5
+  HIGH:
+    - channel: slack
+      endpoint_ref: vault://slack-incident-channel
+      escalation_minutes: 15
+
+steps:
+  - step: 1
+    title: "Pull all T3 receipts in the triggering window"
+    description: "Query all t3_rejected receipts within the rolling window that triggered this playbook. For each receipt, extract: agent_id, quest_id, action_type, requested_resource, caller_type (internal agent vs. A2A external), and timestamp. Sort by timestamp and record the total count and rate of rejections."
+    action_type: MANUAL
+    sla_minutes: 5
+    decision_points:
+      - condition: "All T3 rejections originate from a single quest and single agent"
+        action: "Proceed to step 2 — single-quest analysis"
+      - condition: "T3 rejections span multiple quests but share the same agent_id"
+        action: "Proceed to step 2 — flag as agent-level concern"
+      - condition: "T3 rejections include requests from an external A2A caller"
+        action: "Immediately escalate to CRITICAL. Proceed to step 5 — A2A security escalation."
+
+  - step: 2
+    title: "Identify the pattern and intent"
+    description: "Group the T3 rejections by action_type and requested_resource. Determine whether the agent is repeating the same T3 action or attempting a variety of different T3 actions. Pull the 20 receipts preceding the first T3 rejection to understand what workflow led to the T3 attempts. Check the agent's trust tier history — has it recently been demoted or has it never held T3 authorization?"
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "Agent is repeating the same T3 action — likely a stuck workflow or misconfigured quest"
+        action: "Proceed to step 3 — assess Soul and quest configuration"
+      - condition: "Agent is attempting diverse T3 actions — possible systematic boundary probing"
+        action: "Proceed to step 4 — containment and behavioral assessment"
+      - condition: "Agent was recently demoted from T3 and is attempting previously-authorized actions"
+        action: "Proceed to step 3 — check if demotion was correct"
+
+  - step: 3
+    title: "Assess Soul configuration and quest scope"
+    description: "Review the active Soul document for the agent. Check whether the T3 actions being attempted are within the agent's intended operational scope but blocked by trust tier, or whether they are genuinely outside the agent's purpose. Review the quest definition to determine if it requires T3 actions that the agent is not authorized for. Check if an APL rule or trust ledger threshold was recently changed that would explain the rejections."
+    action_type: MANUAL
+    sla_minutes: 15
+    decision_points:
+      - condition: "Quest requires T3 actions but agent lacks authorization — misconfiguration"
+        action: "Document the misconfiguration. Proceed to step 6 — remediation."
+      - condition: "Soul and quest are correctly configured — agent is genuinely attempting unauthorized actions"
+        action: "Proceed to step 4 — containment"
+      - condition: "Recent APL or trust tier change caused the rejections"
+        action: "Evaluate whether the change was correct. If it was a false positive, proceed to step 6 for rollback. If correct, proceed to step 4."
+
+  - step: 4
+    title: "Containment and behavioral assessment"
+    description: "Determine the risk level of continued T3 attempts. Even though the actions are being rejected, a high volume of T3 attempts may indicate a compromised agent or adversarial prompt injection. Check if the agent is in Crusader Mode. If the rejection rate is accelerating or the agent is attempting increasingly sensitive T3 actions, activate a kill switch for the agent. Monitor for 5 minutes after any containment action to confirm no new T3 rejections."
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "T3 attempts have stopped or are decelerating — agent self-corrected"
+        action: "Proceed to step 6 — root cause and remediation"
+      - condition: "T3 attempts are accelerating or targeting increasingly sensitive resources"
+        action: "Activate kill switch immediately. Proceed to step 6."
+      - condition: "Agent is in Crusader Mode and generating T3 rejections"
+        action: "Deactivate Crusader Mode. If rejections continue, activate kill switch. Proceed to step 6."
+
+  - step: 5
+    title: "A2A external caller security escalation"
+    description: "An external A2A caller is generating T3 rejections. This may indicate a misconfigured partner agent, a compromised external system, or a deliberate probe of governance boundaries. Pull the A2A caller's agent card and verify its identity. Check the a2a_permissions section of the Soul to confirm what the caller is authorized to do. Review all receipts from this caller_id in the last 24 hours for anomalous patterns. Notify the security team immediately."
+    action_type: MANUAL
+    sla_minutes: 10
+    actions:
+      - "Escalate severity to CRITICAL"
+      - "Page security team lead"
+    decision_points:
+      - condition: "A2A caller is a known partner with a valid agent card — likely misconfiguration"
+        action: "Contact the partner organization. Proceed to step 6."
+      - condition: "A2A caller identity cannot be verified or agent card is invalid"
+        action: "Block the caller_id at the A2A ingress. Proceed to step 6 with security incident flag."
+      - condition: "A2A caller is sending a high volume of varied T3 requests — boundary probing"
+        action: "Block the caller_id immediately. Open a separate security incident. Proceed to step 6."
+
+  - step: 6
+    title: "Root cause analysis and remediation"
+    description: "Document the root cause: Soul misconfiguration, quest scope mismatch, trust tier demotion side-effect, agent behavioral issue, or external A2A security concern. Determine remediation: trust tier adjustment, Soul amendment, APL rule update, quest reconfiguration, A2A permission change, or no action. All remediation must go through governed channels to generate receipts. Link all remediation receipts to this incident."
+    action_type: MANUAL
+    sla_minutes: 30
+    decision_points:
+      - condition: "Root cause identified and remediation applied"
+        action: "Proceed to step 7 — close incident"
+      - condition: "Root cause requires extended investigation"
+        action: "Set follow-up timer. Proceed to step 7 with status PENDING."
+
+  - step: 7
+    title: "Close incident"
+    description: "Verify all remediation actions are complete and receipted. If a kill switch was activated, document the conditions for lifting it. If an A2A caller was blocked, document the conditions for unblocking. Write the root_cause summary — required for all HIGH and CRITICAL incidents. If this incident revealed a gap in T3 governance coverage, file a follow-up to update the Soul or APL rules."
+    action_type: MANUAL
+    sla_minutes: 10
+    decision_points:
+      - condition: "Root cause documented, all remediations complete and receipted"
+        action: "Close incident"
+      - condition: "Remediation pending or root cause unclear"
+        action: "Return to step 6. Do not close until root cause is documented."

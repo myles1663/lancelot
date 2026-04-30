@@ -1,0 +1,3 @@
+fastapi
+uvicorn
+pyyaml>=6.0

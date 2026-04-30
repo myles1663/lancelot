@@ -1,0 +1,43 @@
+# ===========================================================================
+# HIVE Agent Mesh — Default Configuration
+# ===========================================================================
+# Feature flag: FEATURE_HIVE (default: false)
+#
+# Controls the ephemeral sub-agent architecture for decomposing complex
+# tasks into governed sub-agents that execute via UAB.
+
+# Maximum number of concurrent sub-agents (paused agents count toward limit)
+max_concurrent_agents: 10
+
+# Default task timeout in seconds
+default_task_timeout: 300
+
+# Maximum actions a single agent can perform before forced collapse
+max_actions_per_agent: 50
+
+# Maximum subtasks from a single decomposition
+max_subtasks_per_decomposition: 20
+
+# Governance tier required to spawn an agent (T0-T3)
+spawn_approval_tier: "T2"
+
+# Default control method: fully_autonomous | supervised | manual_confirm
+default_control_method: "supervised"
+
+# Collapse agent on governance violation (recommended: true)
+collapse_on_governance_violation: true
+
+# Collapse agent on scoped soul violation (recommended: true)
+collapse_on_soul_violation: true
+
+# UAB integration (requires FEATURE_HIVE_UAB=true)
+uab_enabled: false
+uab_allowed_apps: []
+
+# Retry configuration
+max_retry_attempts: 2
+never_retry_identical_plan: true
+
+# Logging
+log_agent_actions: true
+log_decomposition: true

@@ -1,0 +1,11 @@
+version: "1.0"
+thresholds:
+  T3_to_T2: 50
+  T2_to_T1: 100
+  T1_to_T0: 200
+revocation:
+  on_failure: "reset_to_default"
+  on_rollback: "reset_above_default"
+  cooldown_after_denial: 50
+  cooldown_after_revocation: 25
+proposal_delivery: "war_room"

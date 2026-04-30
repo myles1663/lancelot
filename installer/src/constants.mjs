@@ -1,0 +1,113 @@
+// ============================================================
+// Constants — shared config for the create-lancelot installer
+// ============================================================
+
+export const REPO_URL = process.env.CREATE_LANCELOT_REPO_URL || 'https://github.com/myles1663/lancelot.git';
+export const DEFAULT_DIR = './lancelot';
+export const CORE_IMAGE =
+  process.env.CREATE_LANCELOT_CORE_IMAGE || 'ghcr.io/myles1663/lancelot:latest';
+export const CORE_SERVICE = 'lancelot-core';
+export const LOCAL_LLM_IMAGE =
+  process.env.CREATE_LANCELOT_LOCAL_LLM_IMAGE ||
+  'ghcr.io/myles1663/lancelot-local-llm:llama-cpp-0.3.19-cpu';
+export const LOCAL_LLM_CUDA_IMAGE =
+  process.env.CREATE_LANCELOT_LOCAL_LLM_CUDA_IMAGE ||
+  'ghcr.io/myles1663/lancelot-local-llm:llama-cpp-0.3.19-cu123';
+export const LOCAL_IMAGE_SERVICES = ['local-llm'];
+
+export const PROVIDERS = {
+  gemini: {
+    name: 'Google Gemini',
+    envVar: 'GEMINI_API_KEY',
+    envProvider: 'gemini',
+    recommended: true,
+    description: 'Generous free tier, fast models',
+    keyPrefix: 'AIza',
+    validationUrl: 'https://generativelanguage.googleapis.com/v1beta/models',
+    signupUrl: 'https://aistudio.google.com/apikey',
+  },
+  openai: {
+    name: 'OpenAI',
+    envVar: 'OPENAI_API_KEY',
+    envProvider: 'openai',
+    recommended: false,
+    description: 'GPT-4o, pay-as-you-go',
+    keyPrefix: 'sk-',
+    validationUrl: 'https://api.openai.com/v1/models',
+    signupUrl: 'https://platform.openai.com/api-keys',
+  },
+  anthropic: {
+    name: 'Anthropic',
+    envVar: 'ANTHROPIC_API_KEY',
+    envProvider: 'anthropic',
+    recommended: false,
+    description: 'Claude — API key or sign in with OAuth',
+    keyPrefix: 'sk-ant-',
+    validationUrl: 'https://api.anthropic.com/v1/messages',
+    signupUrl: 'https://console.anthropic.com/',
+    supportsOAuth: true,
+  },
+  xai: {
+    name: 'xAI (Grok)',
+    envVar: 'XAI_API_KEY',
+    envProvider: 'xai',
+    recommended: false,
+    description: 'Grok models, pay-as-you-go',
+    keyPrefix: 'xai-',
+    validationUrl: 'https://api.x.ai/v1/models',
+    signupUrl: 'https://console.x.ai/',
+  },
+  nvidia: {
+    name: 'NVIDIA Nemotron',
+    envVar: 'NVIDIA_API_KEY',
+    envProvider: 'nvidia',
+    recommended: false,
+    description: 'Nemotron models via NIM, free tier available',
+    keyPrefix: 'nvapi-',
+    validationUrl: 'https://integrate.api.nvidia.com/v1/models',
+    signupUrl: 'https://build.nvidia.com/',
+  },
+};
+
+export const COMMS = {
+  telegram: {
+    name: 'Telegram',
+    recommended: true,
+    description: 'Simple setup via BotFather',
+  },
+  google_chat: {
+    name: 'Google Chat',
+    recommended: false,
+    description: 'Requires Google Cloud project',
+  },
+  skip: {
+    name: 'Skip for now',
+    recommended: false,
+    description: 'Configure later in the War Room',
+  },
+};
+
+export const MIN_DISK_GB = 10;
+export const MIN_RAM_GB = 8;
+
+export const HEALTH_CHECK_URL = process.env.CREATE_LANCELOT_HEALTH_URL || 'http://localhost:8000/health';
+export const HEALTH_CHECK_INTERVAL_MS = 3000;
+export const HEALTH_CHECK_MAX_ATTEMPTS = 60; // 3 min timeout
+export const HOST_AGENT_HEALTH_URL =
+  process.env.CREATE_LANCELOT_HOST_AGENT_HEALTH_URL || 'http://127.0.0.1:9111/health';
+
+export const STEPS = [
+  'prereqs',
+  'directory',
+  'clone',
+  'provider',
+  'comms',
+  'warroom_auth',
+  'config',
+  'model',
+  'docker_build',
+  'docker_up',
+  'health_check',
+  'onboarding',
+  'done',
+];

@@ -1,0 +1,52 @@
+services:
+  lancelot-peer:
+    image: lancelot-lancelot-core:latest
+    container_name: lancelot_peer
+    volumes:
+      - lancelot_peer_data:/home/lancelot/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/home/lancelot/app/src/core:/home/lancelot/app/src/ui:/home/lancelot/app/src/agents:/home/lancelot/app/src/memory:/home/lancelot/app/src/shared:/home/lancelot/app/src/integrations:/home/lancelot/app/src:/home/lancelot/app
+      # Disable everything except federation
+      - FEATURE_FEDERATION=true
+      - FEATURE_SOUL=false
+      - FEATURE_SKILLS=false
+      - FEATURE_SCHEDULER=false
+      - FEATURE_HEALTH_MONITOR=false
+      - FEATURE_MEMORY_VNEXT=false
+      - FEATURE_TOOLS_FABRIC=false
+      - FEATURE_TOOLS_UAB=false
+      - FEATURE_HIVE=false
+      - FEATURE_BAL=false
+      - FEATURE_TOOLS_HOST_BRIDGE=false
+      - FEATURE_AGENTIC_LOOP=false
+      - FEATURE_LOCAL_AGENTIC=false
+      - FEATURE_VAULT_SECRETS=false
+      - FEATURE_VOICE_NOTES=false
+      # Fake LLM URL (won't be used)
+      - LOCAL_LLM_URL=http://localhost:9999
+      - LANCELOT_DATA_DIR=/home/lancelot/data
+      # Dummy API key to prevent startup warnings
+      - GEMINI_API_KEY=dummy-for-peer
+      - LANCELOT_PROVIDER=gemini
+    ports:
+      - "8001:8000"
+    command: uvicorn gateway:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    restart: "no"
+    networks:
+      - lancelot_net
+
+volumes:
+  lancelot_peer_data:
+    name: lancelot_peer_data
+
+networks:
+  lancelot_net:
+    external: true
+    name: lancelot_lancelot_net

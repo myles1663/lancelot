@@ -1,0 +1,22 @@
+name: Governance Question
+description: Questions about Soul configuration, risk tiers, trust graduation, or policy design
+labels: ["governance-question", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Questions about how governance works, how to configure the Soul, or how risk tiers interact are welcome here.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: "What are you trying to understand or accomplish?"
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: "What are you building? What governance requirements do you have?"
+    validations:
+      required: false

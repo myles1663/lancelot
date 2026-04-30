@@ -1,0 +1,67 @@
+{
+  "__meta": {
+    "name": "Lancelot Security Operations",
+    "version": "1.0.0",
+    "description": "Security operations dashboard for Datadog. Threat signals, blocked actions, governance anomalies.",
+    "compatible_with": "Datadog Dashboard API v2"
+  },
+  "title": "Lancelot — Security Operations",
+  "description": "Injection detection, allowlist violations, credential events, MCP blocks, governance errors",
+  "layout_type": "ordered",
+  "widgets": [
+    {
+      "definition": {
+        "title": "Injection Detection Rate",
+        "type": "timeseries",
+        "requests": [
+          { "q": "sum:lancelot.actions.blocked{block_reason:injection_detected}.as_rate()", "display_type": "line" }
+        ],
+        "markers": [{ "value": "y = 0.1", "label": "Alert Threshold", "display_type": "error dashed" }]
+      }
+    },
+    {
+      "definition": {
+        "title": "Allowlist Violations",
+        "type": "toplist",
+        "requests": [
+          { "q": "sum:lancelot.actions.blocked{block_reason:allowlist_blocked}.as_count()" }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Kill Switch Activity",
+        "type": "timeseries",
+        "requests": [
+          { "q": "avg:lancelot.kill_switches.active{*}", "display_type": "line" }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "MCP Blocked Calls by Server",
+        "type": "toplist",
+        "requests": [
+          { "q": "sum:lancelot.mcp.tool_calls{status:blocked} by {server_id}.as_count()" }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Governance Write Errors",
+        "type": "event_stream",
+        "query": "lancelot governance_write_error"
+      }
+    },
+    {
+      "definition": {
+        "title": "Receipt Chain Lag",
+        "type": "timeseries",
+        "requests": [
+          { "q": "avg:lancelot.receipts.chain_lag_ms{*}", "display_type": "line" }
+        ],
+        "markers": [{ "value": "y = 500", "label": "Critical", "display_type": "error dashed" }]
+      }
+    }
+  ]
+}

@@ -1,0 +1,135 @@
+/* Lancelot War Room - Premium High-Tech Design System */
+
+:root {
+    --primary-blue: #007bff;
+    --royal-blue: #0056b3;
+    --deep-slate: #0f172a;
+    --glass-bg: rgba(15, 23, 42, 0.7);
+    --glass-border: rgba(255, 255, 255, 0.1);
+    --accent-silver: #94a3b8;
+    --crusader-red: #ef4444;
+    --glow-blue: 0 0 15px rgba(0, 123, 255, 0.5);
+    --glow-red: 0 0 15px rgba(239, 68, 68, 0.5);
+}
+
+/* Global Styles */
+.stApp {
+    background: radial-gradient(circle at top right, #1e293b, #0f172a);
+    color: #f1f5f9;
+    font-family: 'Inter', 'Roboto', sans-serif;
+}
+
+/* Glassmorphism Containers */
+[data-testid="stSidebar"] {
+    background-color: var(--glass-bg) !important;
+    backdrop-filter: blur(12px);
+    border-right: 1px solid var(--glass-border);
+}
+
+.stChatMessage {
+    background-color: var(--glass-bg) !important;
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--glass-border) !important;
+    border-radius: 12px !important;
+    margin-bottom: 1rem !important;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+/* Header & Title Styling */
+h1 {
+    color: var(--primary-blue) !important;
+    text-transform: uppercase;
+    letter-spacing: 0.1rem;
+    font-weight: 800 !important;
+    text-shadow: var(--glow-blue);
+}
+
+.crusader-title h1 {
+    color: var(--crusader-red) !important;
+    text-shadow: var(--glow-red);
+}
+
+/* Sidebar Widgets */
+.stSelectbox label,
+.stTextArea label {
+    color: var(--accent-silver) !important;
+    font-weight: 600 !important;
+    font-size: 0.8rem !important;
+    text-transform: uppercase;
+}
+
+/* Custom Buttons */
+.stButton button {
+    background: rgba(0, 123, 255, 0.1) !important;
+    border: 1px solid var(--primary-blue) !important;
+    color: var(--primary-blue) !important;
+    border-radius: 8px !important;
+    transition: all 0.3s ease !important;
+    font-weight: 600 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.05rem;
+}
+
+.stButton button:hover {
+    background: var(--primary-blue) !important;
+    color: white !important;
+    box-shadow: var(--glow-blue) !important;
+}
+
+/* Crusader Button Overlay */
+.crusader-btn button {
+    border-color: var(--crusader-red) !important;
+    color: var(--crusader-red) !important;
+    background: rgba(239, 68, 68, 0.1) !important;
+}
+
+.crusader-btn button:hover {
+    background: var(--crusader-red) !important;
+    color: white !important;
+    box-shadow: var(--glow-red) !important;
+}
+
+/* Status Monitor Cards */
+.status-card {
+    padding: 1.5rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    text-align: center;
+}
+
+.status-label {
+    font-size: 0.75rem;
+    color: var(--accent-silver);
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+    display: block;
+}
+
+.status-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #f1f5f9;
+}
+
+/* Animations */
+@keyframes pulse {
+    0% {
+        opacity: 0.6;
+    }
+
+    50% {
+        opacity: 1;
+    }
+
+    100% {
+        opacity: 0.6;
+    }
+}
+
+.scanning-text {
+    animation: pulse 2s infinite;
+    color: #10b981;
+    /* Emerald green */
+    font-family: 'Courier New', Courier, monospace;
+}

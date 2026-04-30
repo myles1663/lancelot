@@ -1,0 +1,38 @@
+{
+  "skill_name": "excel_data_flow",
+  "app_name": "Excel",
+  "executable": "excel.exe",
+  "app_framework": "Office",
+  "target_flow": "Read and write data in Microsoft Excel",
+  "input_method": "com_api",
+  "focus_method": "focus_endpoint",
+  "read_method": "com_api",
+  "navigation_plan": [
+    {"step": 1, "action": "connect", "params": {"target": "excel"}, "note": "Returns pid — connects via COM automation"},
+    {"step": 2, "action": "act", "params": {"pid": "{pid}", "elementId": "_", "action": "readRange", "params": {"range": "A1:D10"}}, "note": "Read cell range via COM"},
+    {"step": 3, "action": "act", "params": {"pid": "{pid}", "elementId": "_", "action": "writeRange", "params": {"range": "A1", "text": "{value}"}}, "note": "Write to cell via COM"},
+    {"step": 4, "action": "act", "params": {"pid": "{pid}", "elementId": "_", "action": "createPivotTable", "params": {"sheet": "Data", "sourceRange": "A1:D50", "destinationSheet": "Summary", "destinationCell": "F3", "rowFields": ["Region"], "columnFields": ["Quarter"], "dataField": "Revenue", "aggregation": "sum"}}, "note": "Build a pivot table via Excel COM"},
+    {"step": 5, "action": "act", "params": {"pid": "{pid}", "elementId": "_", "action": "createChart", "params": {"sheet": "Summary", "sourceRange": "F3:J7", "chartType": "column", "chartTitle": "Regional Revenue Benchmark"}}, "note": "Create a chart from the pivot output via Excel COM"},
+    {"step": 6, "action": "act", "params": {"pid": "{pid}", "elementId": "_", "action": "applyConditionalFormatting", "params": {"sheet": "Summary", "targetRange": "G4:J7", "formatType": "colorScale"}}, "note": "Apply conditional formatting via Excel COM"},
+    {"step": 7, "action": "act", "params": {"pid": "{pid}", "elementId": "_", "action": "getSheets"}, "note": "List all sheets"}
+  ],
+  "common_actions": {
+    "read_cell": {"action": "readRange", "params": {"range": "{cell}"}},
+    "write_cell": {"action": "writeRange", "params": {"range": "{cell}", "text": "{value}"}},
+    "read_formula": {"action": "readFormula", "params": {"range": "{cell}"}},
+    "list_sheets": {"action": "getSheets"},
+    "create_pivot": {"action": "createPivotTable", "params": {"sheet": "{sheet}", "sourceRange": "{sourceRange}", "destinationSheet": "{destinationSheet}", "destinationCell": "{destinationCell}", "rowFields": ["{rowField}"], "columnFields": ["{columnField}"], "dataField": "{dataField}", "aggregation": "sum"}},
+    "create_chart": {"action": "createChart", "params": {"sheet": "{sheet}", "sourceRange": "{sourceRange}", "chartType": "column", "chartTitle": "{title}"}},
+    "apply_conditional_formatting": {"action": "applyConditionalFormatting", "params": {"sheet": "{sheet}", "targetRange": "{targetRange}", "formatType": "colorScale"}}
+  },
+  "benchmark_command": "uab excel-benchmark --rows 2000 --output data/uab-benchmarks/demo.xlsx --manifest data/uab-benchmarks/demo.benchmark.json",
+  "known_issues": [
+    "COM requires Excel to be running with a workbook open",
+    "Large ranges can be slow — limit to 1000 cells per read",
+    "Formula writes use the formula param, not text",
+    "The benchmark harness requires local Excel COM automation and writes a workbook plus JSON manifest on disk"
+  ],
+  "risk_tier": "T1",
+  "version": "1.1",
+  "last_verified": "2026-04-19"
+}

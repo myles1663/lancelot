@@ -1,0 +1,939 @@
+import { useState, useEffect, useCallback } from 'react'
+import { usePolling, usePageTitle } from '@/hooks'
+import {
+  fetchUsageSummary, fetchUsageLanes, fetchUsageModels, fetchUsageMonthly,
+  fetchProviderStack, refreshModelDiscovery,
+  fetchAvailableProviders, switchProvider, overrideLane, resetLanes,
+  fetchProviderKeys, rotateProviderKey,
+  initiateOAuth, fetchOAuthStatus, revokeOAuth,
+  initiateCodexOAuth, fetchCodexOAuthStatus, revokeCodexOAuth,
+} from '@/api'
+import type { DiscoveredModel, AvailableProvider, ProviderKeyInfo, OAuthStatusResponse } from '@/api'
+import { MetricCard } from '@/components'
+import { formatTimeOnly } from '@/utils/dateFormat'
+import { getErrorMessage } from '@/utils/errors'
+
+/** Format context window size for display */
+function formatCtx(tokens: number): string {
+  if (!tokens) return '--'
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`
+  return String(tokens)
+}
+
+/** Lane display order and labels */
+const LANE_ORDER = ['fast', 'deep', 'cache'] as const
+const LANE_LABELS: Record<string, string> = {
+  fast: 'Fast',
+  deep: 'Deep',
+  cache: 'Cache',
+}
+
+function laneSourceLabel(source?: string): string {
+  if (source === 'override') return 'Pinned'
+  if (source === 'fallback') return 'Default'
+  return 'Auto'
+}
+
+export function CostTracker() {
+  usePageTitle('Cost Tracker')
+  const { data: summary } = usePolling({ fetcher: fetchUsageSummary, interval: 15000 })
+  const { data: lanes } = usePolling({ fetcher: fetchUsageLanes, interval: 30000 })
+  const { data: models } = usePolling({ fetcher: fetchUsageModels, interval: 30000 })
+  const { data: monthly } = usePolling({ fetcher: () => fetchUsageMonthly(), interval: 60000 })
+  const { data: stack, refetch: refetchStack } = usePolling({ fetcher: fetchProviderStack, interval: 60000 })
+
+  const [providers, setProviders] = useState<AvailableProvider[]>([])
+  const [refreshing, setRefreshing] = useState(false)
+  const [switching, setSwitching] = useState(false)
+  const [laneLoading, setLaneLoading] = useState<string | null>(null)
+  const [statusMsg, setStatusMsg] = useState<string | null>(null)
+
+  // Key management state
+  const [providerKeys, setProviderKeys] = useState<ProviderKeyInfo[]>([])
+  const [editingKey, setEditingKey] = useState<string | null>(null)
+  const [newKeyValue, setNewKeyValue] = useState('')
+  const [keyLoading, setKeyLoading] = useState(false)
+  const [keyError, setKeyError] = useState<string | null>(null)
+
+  // OAuth state (Anthropic)
+  const [oauthStatus, setOauthStatus] = useState<OAuthStatusResponse | null>(null)
+  const [oauthLoading, setOauthLoading] = useState(false)
+
+  // OpenAI Codex OAuth state
+  const [codexOauthStatus, setCodexOauthStatus] = useState<OAuthStatusResponse | null>(null)
+  const [codexOauthLoading, setCodexOauthLoading] = useState(false)
+
+  const showStatus = useCallback((msg: string) => {
+    setStatusMsg(msg)
+    setTimeout(() => setStatusMsg(null), 4000)
+  }, [])
+
+  const loadProviders = useCallback(async (failureMessage = 'Failed to load available providers') => {
+    try {
+      const res = await fetchAvailableProviders()
+      setProviders(res.providers ?? [])
+    } catch (error) {
+      showStatus(getErrorMessage(error, failureMessage))
+    }
+  }, [showStatus])
+
+  const loadProviderKeys = useCallback(async (failureMessage = 'Failed to load provider keys') => {
+    try {
+      const res = await fetchProviderKeys()
+      setProviderKeys(res.keys ?? [])
+    } catch (error) {
+      showStatus(getErrorMessage(error, failureMessage))
+    }
+  }, [showStatus])
+
+  // Fetch available providers on mount
+  useEffect(() => {
+    void loadProviders()
+    void loadProviderKeys()
+    // Fetch OAuth status
+    fetchOAuthStatus()
+      .then(res => setOauthStatus(res))
+      .catch((error) => showStatus(getErrorMessage(error, 'Failed to load Anthropic OAuth status')))
+    // Fetch Codex OAuth status
+    fetchCodexOAuthStatus()
+      .then(res => setCodexOauthStatus(res))
+      .catch((error) => showStatus(getErrorMessage(error, 'Failed to load Codex OAuth status')))
+  }, [loadProviderKeys, loadProviders, showStatus])
+
+  // Re-fetch providers after stack changes (to update active indicator)
+  const refreshProviders = useCallback(() => {
+    return loadProviders('Failed to refresh available providers')
+  }, [loadProviders])
+
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    try {
+      await refreshModelDiscovery()
+      await refetchStack()
+      await refreshProviders()
+    } catch (error) {
+      showStatus(getErrorMessage(error, 'Model discovery refresh failed'))
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  const handleSwitchProvider = async (providerName: string) => {
+    setSwitching(true)
+    setStatusMsg(null)
+    try {
+      const res = await switchProvider(providerName)
+      if (res.status === 'ok') {
+        showStatus(res.message || `Switched to ${providerName}`)
+        await refetchStack()
+        await refreshProviders()
+      } else {
+        showStatus(res.message || 'Switch failed')
+      }
+    } catch (error) {
+      showStatus(getErrorMessage(error, 'Provider switch failed'))
+    } finally {
+      setSwitching(false)
+    }
+  }
+
+  const handleLaneOverride = async (lane: string, modelId: string) => {
+    setLaneLoading(lane)
+    setStatusMsg(null)
+    try {
+      const res = await overrideLane(lane, modelId)
+      if (res.status === 'ok') {
+        showStatus(res.message || `Lane ${lane} updated`)
+        await refetchStack()
+      } else {
+        showStatus(res.message || 'Override failed')
+      }
+    } catch {
+      showStatus('Lane override failed')
+    } finally {
+      setLaneLoading(null)
+    }
+  }
+
+  const handleResetLanes = async () => {
+    setStatusMsg(null)
+    try {
+      const res = await resetLanes()
+      if (res.status === 'ok') {
+        showStatus(res.message || 'Lanes reset to auto')
+        await refetchStack()
+      } else {
+        showStatus(res.message || 'Reset failed')
+      }
+    } catch {
+      showStatus('Lane reset failed')
+    }
+  }
+
+  const handleRotateKey = async (provider: string) => {
+    if (!newKeyValue.trim()) return
+    setKeyLoading(true)
+    setKeyError(null)
+    try {
+      const res = await rotateProviderKey(provider, newKeyValue.trim())
+      if (res.status === 'ok') {
+        showStatus(res.message || `Key rotated for ${provider}`)
+        setEditingKey(null)
+        setNewKeyValue('')
+        // Refresh key list, providers, and stack status
+        await loadProviderKeys('Failed to refresh provider keys')
+        await refreshProviders()
+        await refetchStack()
+      } else {
+        setKeyError(res.message || 'Rotation failed')
+      }
+    } catch (error) {
+      setKeyError(getErrorMessage(error, 'Key rotation failed — check the key and try again'))
+    } finally {
+      setKeyLoading(false)
+    }
+  }
+
+  // OAuth handlers
+  const handleOAuthSetup = async () => {
+    setOauthLoading(true)
+    try {
+      const res = await initiateOAuth()
+      if (res.status === 'ok' && res.auth_url) {
+        window.open(res.auth_url, '_blank', 'noopener,noreferrer')
+        showStatus('Opened Anthropic authorization in new tab…')
+        // Poll for completion
+        const pollId = setInterval(async () => {
+          try {
+            const status = await fetchOAuthStatus()
+            setOauthStatus(status)
+            if (status.configured) {
+              clearInterval(pollId)
+              showStatus('OAuth authorized successfully!')
+              await loadProviderKeys('Failed to refresh provider keys')
+              await refreshProviders()
+              await refetchStack()
+            }
+          } catch (error) {
+            clearInterval(pollId)
+            showStatus(getErrorMessage(error, 'Failed to refresh Anthropic OAuth status'))
+          }
+        }, 3000)
+        // Stop polling after 5 minutes
+        setTimeout(() => clearInterval(pollId), 300000)
+      } else {
+        showStatus(res.message || 'Failed to initiate OAuth')
+      }
+    } catch {
+      showStatus('OAuth initiation failed')
+    } finally {
+      setOauthLoading(false)
+    }
+  }
+
+  const handleOAuthRevoke = async () => {
+    try {
+      await revokeOAuth()
+      setOauthStatus({ configured: false, status: 'not_configured' })
+      showStatus('OAuth tokens revoked')
+      await loadProviderKeys('Failed to refresh provider keys')
+    } catch (error) {
+      showStatus(getErrorMessage(error, 'Failed to revoke OAuth'))
+    }
+  }
+
+  // OpenAI Codex OAuth handlers
+  const handleCodexOAuthSetup = async () => {
+    setCodexOauthLoading(true)
+    try {
+      const res = await initiateCodexOAuth()
+      if (res.status === 'ok' && res.auth_url) {
+        window.open(res.auth_url, '_blank', 'noopener,noreferrer')
+        showStatus('Opened ChatGPT authorization in new tab…')
+        // Poll for completion
+        const pollId = setInterval(async () => {
+          try {
+            const status = await fetchCodexOAuthStatus()
+            setCodexOauthStatus(status)
+            if (status.configured) {
+              clearInterval(pollId)
+              showStatus('Codex OAuth authorized successfully!')
+              await loadProviderKeys('Failed to refresh provider keys')
+              await refreshProviders()
+              await refetchStack()
+            }
+          } catch (error) {
+            clearInterval(pollId)
+            showStatus(getErrorMessage(error, 'Failed to refresh Codex OAuth status'))
+          }
+        }, 3000)
+        setTimeout(() => clearInterval(pollId), 300000)
+      } else if (res.status === 'ok') {
+        showStatus(res.message || 'Codex auth is already available')
+        const status = await fetchCodexOAuthStatus()
+        setCodexOauthStatus(status)
+        await loadProviderKeys('Failed to refresh provider keys')
+        await refreshProviders()
+        await refetchStack()
+      } else {
+        showStatus(res.message || 'Failed to initiate Codex OAuth')
+      }
+    } catch {
+      showStatus('Codex OAuth initiation failed')
+    } finally {
+      setCodexOauthLoading(false)
+    }
+  }
+
+  const handleCodexOAuthRevoke = async () => {
+    try {
+      await revokeCodexOAuth()
+      setCodexOauthStatus({ configured: false, status: 'not_configured' })
+      showStatus('Codex OAuth tokens revoked')
+      await loadProviderKeys('Failed to refresh provider keys')
+    } catch (error) {
+      showStatus(getErrorMessage(error, 'Failed to revoke Codex OAuth'))
+    }
+  }
+
+  const usage = summary?.usage ?? {} as Record<string, unknown>
+  const laneData = lanes?.lanes ?? {}
+  const modelData = models?.models ?? {}
+  const monthlyData = monthly?.monthly ?? {} as Record<string, unknown>
+
+  // Backend field names: total_requests, total_tokens_est, total_cost_est, avg_elapsed_ms
+  const totalRequests = (usage as Record<string, unknown>).total_requests
+  const totalTokens = (usage as Record<string, unknown>).total_tokens_est
+  const estCost = (usage as Record<string, unknown>).total_cost_est
+  const avgLatency = (usage as Record<string, unknown>).avg_elapsed_ms
+
+  // Monthly data fields
+  const md = monthlyData as Record<string, unknown>
+  const byModel = (md.by_model ?? {}) as Record<string, Record<string, unknown>>
+  const byDay = (md.by_day ?? {}) as Record<string, Record<string, unknown>>
+
+  // Use monthly by_model / summary by_model as fallback for per-model breakdown
+  const summaryByModel = (usage as Record<string, unknown>).by_model as Record<string, Record<string, unknown>> | undefined
+  const effectiveModelData = Object.keys(modelData).length > 0
+    ? modelData
+    : (Object.keys(byModel).length > 0 ? byModel : (summaryByModel ?? {}))
+
+  // Use summary by_lane as fallback for per-lane breakdown
+  const summaryByLane = (usage as Record<string, unknown>).by_lane as Record<string, Record<string, unknown>> | undefined
+  const effectiveLaneData = Object.keys(laneData).length > 0 ? laneData : (summaryByLane ?? {})
+
+  // Model stack data
+  const stackLanes = stack?.lanes ?? {}
+  const discoveredModels = stack?.discovered_models ?? []
+  const isConnected = stack?.status === 'connected'
+  const hasNoKey = stack?.status === 'no_key'
+  const hasAuthError = stack?.status === 'auth_error'
+
+  // Format last refresh time
+  const lastRefresh = stack?.last_refresh
+    ? formatTimeOnly(stack.last_refresh)
+    : null
+
+  return (
+    <div>
+      <h2 className="text-lg font-semibold text-text-primary mb-6">Cost Tracker</h2>
+
+      {/* Status message toast */}
+      {statusMsg && (
+        <div className="mb-4 px-4 py-2 rounded bg-accent-primary/15 text-accent-primary text-sm font-mono">
+          {statusMsg}
+        </div>
+      )}
+
+      {/* ======= Model Stack Section ======= */}
+      <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">
+            Model Stack
+          </h3>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleResetLanes}
+              className="text-xs px-3 py-1 rounded border border-border-default text-text-secondary
+                         hover:bg-surface-card-elevated hover:text-text-primary transition-colors"
+            >
+              Reset to Auto
+            </button>
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="text-xs px-3 py-1 rounded border border-border-default text-text-secondary
+                         hover:bg-surface-card-elevated hover:text-text-primary transition-colors
+                         disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {refreshing ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
+        </div>
+
+        {/* Provider selector row */}
+        <div className="flex items-center gap-3 mb-4 flex-wrap">
+          <span className="text-sm text-text-secondary">Provider:</span>
+          <select
+            value={stack?.provider || ''}
+            onChange={(e) => handleSwitchProvider(e.target.value)}
+            disabled={switching || providers.length === 0}
+            className="text-sm font-medium bg-surface-input border border-border-default
+                       rounded px-3 py-1.5 text-text-primary
+                       focus:outline-none focus:ring-1 focus:ring-accent-primary
+                       disabled:opacity-50 disabled:cursor-not-allowed
+                       [&>option]:bg-surface-input [&>option]:text-text-primary"
+          >
+            {providers.length === 0 && stack?.provider && (
+              <option value={stack.provider}>
+                {stack.provider_display_name || stack.provider}
+              </option>
+            )}
+            {providers.map(p => (
+              <option key={p.name} value={p.name} disabled={!p.has_key}>
+                {p.display_name}{!p.has_key ? ' (no key)' : ''}
+              </option>
+            ))}
+          </select>
+          {switching && (
+            <span className="text-xs text-text-muted">Switching...</span>
+          )}
+          <span className={`inline-flex items-center gap-1.5 text-xs ${
+            isConnected ? 'text-green-400'
+            : (hasNoKey || hasAuthError) ? 'text-state-error'
+            : 'text-text-muted'
+          }`}>
+            <span className={`w-2 h-2 rounded-full ${
+              isConnected ? 'bg-green-400'
+              : (hasNoKey || hasAuthError) ? 'bg-state-error'
+              : 'bg-text-muted'
+            }`} />
+            {isConnected ? 'Connected' : hasAuthError ? 'Invalid API Key' : hasNoKey ? 'No API Key' : 'Unavailable'}
+          </span>
+          {lastRefresh && (
+            <span className="text-xs text-text-muted ml-auto">
+              Last discovery: {lastRefresh}
+            </span>
+          )}
+        </div>
+
+        {/* Lane assignments table with model selectors */}
+        {Object.keys(stackLanes).length > 0 && (
+          <div className="overflow-x-auto mb-4">
+            <table className="w-full text-xs font-mono">
+              <thead>
+                <tr className="text-text-muted text-left">
+                  <th className="py-1 pr-4">Lane</th>
+                  <th className="py-1 pr-4">Model</th>
+                  <th className="py-1 pr-4">Mode</th>
+                  <th className="py-1 pr-4 text-right">Context</th>
+                  <th className="py-1 pr-4 text-right">$/1K out</th>
+                  <th className="py-1 text-center">Tools</th>
+                </tr>
+              </thead>
+              <tbody className="text-text-primary">
+                {LANE_ORDER.filter(lane => stackLanes[lane]).map(lane => {
+                  const l = stackLanes[lane]!
+                  // Filter models for lane: fast/deep need tool support, cache doesn't
+                  const requiresTools = lane === 'fast' || lane === 'deep'
+                  const eligibleModels = discoveredModels.filter(
+                    m => !requiresTools || m.supports_tools
+                  )
+                  const isLoading = laneLoading === lane
+                  return (
+                    <tr key={lane} className="border-t border-border-default/50">
+                      <td className="py-2 pr-4 font-medium">{LANE_LABELS[lane] || lane}</td>
+                      <td className="py-2 pr-4">
+                        {eligibleModels.length > 0 ? (
+                          <select
+                            value={l.model}
+                            onChange={(e) => handleLaneOverride(lane, e.target.value)}
+                            disabled={isLoading}
+                            className="bg-surface-input border border-border-default/50 rounded
+                                       px-2 py-0.5 text-xs text-text-primary w-full max-w-[280px]
+                                       focus:outline-none focus:ring-1 focus:ring-accent-primary
+                                       disabled:opacity-50
+                                       [&>option]:bg-surface-input [&>option]:text-text-primary"
+                          >
+                            {/* Always include the current model even if not in discovered list */}
+                            {!eligibleModels.find(m => m.id === l.model) && (
+                              <option value={l.model}>{l.display_name || l.model}</option>
+                            )}
+                            {eligibleModels.map(m => (
+                              <option key={m.id} value={m.id}>
+                                {m.display_name || m.id}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span>{l.display_name || l.model}</span>
+                        )}
+                        {isLoading && <span className="ml-2 text-text-muted">...</span>}
+                      </td>
+                      <td className="py-2 pr-4">
+                        <span className={`inline-flex rounded border px-1.5 py-0.5 text-[10px] ${
+                          l.source === 'override'
+                            ? 'border-accent-primary/40 text-accent-primary'
+                            : 'border-border-default text-text-muted'
+                        }`}>
+                          {laneSourceLabel(l.source)}
+                        </span>
+                      </td>
+                      <td className="py-2 pr-4 text-right">{formatCtx(l.context_window)}</td>
+                      <td className="py-2 pr-4 text-right">
+                        {l.cost_output_per_1k ? `$${l.cost_output_per_1k.toFixed(4)}` : '--'}
+                      </td>
+                      <td className="py-2 text-center">
+                        {l.supports_tools
+                          ? <span className="text-green-400">Yes</span>
+                          : <span className="text-text-muted">No</span>
+                        }
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Discovered models (collapsible) */}
+        {discoveredModels.length > 0 && (
+          <DiscoveredModelsList models={discoveredModels} />
+        )}
+      </section>
+
+      {/* ======= Provider Keys Section ======= */}
+      <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
+        <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+          Provider API Keys
+        </h3>
+        <p className="text-xs text-text-muted mb-3">
+          Rotate or add API keys for each provider. Keys are validated before saving and persisted to .env.
+        </p>
+        <div className="space-y-2">
+          {providerKeys.length === 0 && (
+            <p className="text-sm text-text-muted py-4 text-center">Loading provider keys...</p>
+          )}
+          {providerKeys.filter(k => !k.oauth_only).map(k => (
+            <div key={k.provider} className="flex items-center gap-3 p-3 bg-surface-card-elevated rounded-md">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-text-primary">{k.display_name}</span>
+                  {k.active && (
+                    <span className="text-[10px] px-1.5 py-0.5 bg-accent-primary/15 text-accent-primary rounded font-mono">
+                      ACTIVE
+                    </span>
+                  )}
+                  {k.has_key ? (
+                    <span className="text-[10px] px-1.5 py-0.5 bg-state-healthy/15 text-state-healthy rounded font-mono">
+                      CONFIGURED
+                    </span>
+                  ) : (
+                    <span className="text-[10px] px-1.5 py-0.5 bg-state-error/15 text-state-error rounded font-mono">
+                      NOT SET
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs text-text-muted font-mono">{k.env_var}</span>
+                  {k.key_preview && (
+                    <span className="text-xs text-text-muted font-mono">{k.key_preview}</span>
+                  )}
+                </div>
+              </div>
+              {editingKey === k.provider ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="password"
+                    value={newKeyValue}
+                    onChange={e => { setNewKeyValue(e.target.value); setKeyError(null) }}
+                    placeholder="Paste new API key..."
+                    className="text-xs font-mono bg-surface-base border border-border-default rounded
+                               px-3 py-1.5 text-text-primary w-64
+                               focus:outline-none focus:ring-1 focus:ring-accent-primary
+                               placeholder:text-text-muted"
+                    autoFocus
+                    onKeyDown={e => e.key === 'Escape' && (setEditingKey(null), setNewKeyValue(''), setKeyError(null))}
+                  />
+                  <button
+                    onClick={() => handleRotateKey(k.provider)}
+                    disabled={keyLoading || !newKeyValue.trim()}
+                    className="px-3 py-1.5 text-xs bg-accent-primary/15 text-accent-primary rounded
+                               hover:bg-accent-primary/25 transition-colors
+                               disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                  >
+                    {keyLoading ? 'Validating...' : 'Save'}
+                  </button>
+                  <button
+                    onClick={() => { setEditingKey(null); setNewKeyValue(''); setKeyError(null) }}
+                    className="px-2 py-1.5 text-xs text-text-muted hover:text-text-primary transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => { setEditingKey(k.provider); setNewKeyValue(''); setKeyError(null) }}
+                  className="px-3 py-1.5 text-xs border border-border-default text-text-secondary rounded
+                             hover:bg-surface-card hover:text-text-primary transition-colors whitespace-nowrap"
+                >
+                  {k.has_key ? 'Rotate Key' : 'Add Key'}
+                </button>
+              )}
+            </div>
+          ))}
+          {editingKey && keyError && (
+            <p className="text-xs text-state-error mt-1 px-3">{keyError}</p>
+          )}
+        </div>
+      </section>
+
+      {/* ======= Anthropic OAuth Section ======= */}
+      <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
+        <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+          Anthropic OAuth
+        </h3>
+        <p className="text-xs text-text-muted mb-3">
+          Connect via your claude.ai subscription (Pro/Max). OAuth tokens auto-refresh every 8 hours.
+        </p>
+        <div className="flex items-center gap-3 p-3 bg-surface-card-elevated rounded-md">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-text-primary">Anthropic OAuth</span>
+              {oauthStatus?.configured ? (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                  oauthStatus.status === 'active'
+                    ? 'bg-state-healthy/15 text-state-healthy'
+                    : oauthStatus.status === 'expiring'
+                    ? 'bg-yellow-500/15 text-yellow-400'
+                    : 'bg-state-error/15 text-state-error'
+                }`}>
+                  {oauthStatus.status === 'active' ? 'CONNECTED' :
+                   oauthStatus.status === 'expiring' ? 'EXPIRING' : 'EXPIRED'}
+                </span>
+              ) : (
+                <span className="text-[10px] px-1.5 py-0.5 bg-text-muted/15 text-text-muted rounded font-mono">
+                  NOT CONFIGURED
+                </span>
+              )}
+            </div>
+            {oauthStatus?.configured && oauthStatus.expires_in_seconds != null && (
+              <span className="text-xs text-text-muted mt-1 block">
+                Expires in {Math.round(oauthStatus.expires_in_seconds / 60)} min
+                {oauthStatus.status === 'active' && ' (auto-refresh enabled)'}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {oauthStatus?.configured ? (
+              <>
+                <button
+                  onClick={handleOAuthSetup}
+                  disabled={oauthLoading}
+                  className="px-3 py-1.5 text-xs border border-border-default text-text-secondary rounded
+                             hover:bg-surface-card hover:text-text-primary transition-colors whitespace-nowrap"
+                >
+                  Re-authorize
+                </button>
+                <button
+                  onClick={handleOAuthRevoke}
+                  className="px-3 py-1.5 text-xs border border-state-error/30 text-state-error rounded
+                             hover:bg-state-error/10 transition-colors whitespace-nowrap"
+                >
+                  Revoke
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={handleOAuthSetup}
+                disabled={oauthLoading}
+                className="px-3 py-1.5 text-xs bg-accent-primary/15 text-accent-primary rounded
+                           hover:bg-accent-primary/25 transition-colors
+                           disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+              >
+                {oauthLoading ? 'Opening…' : 'Setup OAuth'}
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* ======= OpenAI Codex OAuth Section ======= */}
+      <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
+        <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+          OpenAI Codex Access
+        </h3>
+        <p className="text-xs text-text-muted mb-3">
+          Preferred: sign in on the host with the Codex CLI so `~/.codex/auth.json` is mounted into the container.
+          Browser OAuth is available only as a fallback when mounted Codex auth is not present.
+        </p>
+        <div className="flex items-center gap-3 p-3 bg-surface-card-elevated rounded-md">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-text-primary">OpenAI Codex</span>
+              {codexOauthStatus?.configured ? (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                  codexOauthStatus.status === 'active' || codexOauthStatus.status === 'cli_auth'
+                    ? 'bg-state-healthy/15 text-state-healthy'
+                    : codexOauthStatus.status === 'expiring'
+                    ? 'bg-yellow-500/15 text-yellow-400'
+                    : 'bg-state-error/15 text-state-error'
+                }`}>
+                  {codexOauthStatus.status === 'cli_auth' ? 'CLI AUTH' :
+                   codexOauthStatus.status === 'active' ? 'CONNECTED' :
+                   codexOauthStatus.status === 'expiring' ? 'EXPIRING' : 'EXPIRED'}
+                </span>
+              ) : (
+                <span className="text-[10px] px-1.5 py-0.5 bg-text-muted/15 text-text-muted rounded font-mono">
+                  NOT CONFIGURED
+                </span>
+              )}
+            </div>
+            {codexOauthStatus?.configured && codexOauthStatus.expires_in_seconds != null && (
+              <span className="text-xs text-text-muted mt-1 block">
+                Expires in {Math.round(codexOauthStatus.expires_in_seconds / 60)} min
+                {codexOauthStatus.status === 'active' && ' (auto-refresh enabled)'}
+              </span>
+            )}
+            {codexOauthStatus?.status === 'cli_auth' && (
+              <span className="text-xs text-text-muted mt-1 block">
+                Using mounted host Codex auth. Revoke it by signing out on the host machine.
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {codexOauthStatus?.configured ? (
+              <>
+                <button
+                  onClick={handleCodexOAuthSetup}
+                  disabled={codexOauthLoading}
+                  className="px-3 py-1.5 text-xs border border-border-default text-text-secondary rounded
+                             hover:bg-surface-card hover:text-text-primary transition-colors whitespace-nowrap"
+                >
+                  Re-check
+                </button>
+                <button
+                  onClick={handleCodexOAuthRevoke}
+                  className="px-3 py-1.5 text-xs border border-state-error/30 text-state-error rounded
+                             hover:bg-state-error/10 transition-colors whitespace-nowrap"
+                >
+                  Revoke
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={handleCodexOAuthSetup}
+                disabled={codexOauthLoading}
+                className="px-3 py-1.5 text-xs bg-accent-primary/15 text-accent-primary rounded
+                           hover:bg-accent-primary/25 transition-colors
+                           disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+              >
+                {codexOauthLoading ? 'Checking…' : 'Check Codex Access'}
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* Summary Metrics */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <MetricCard label="Total Calls" value={totalRequests != null ? String(totalRequests) : '--'} />
+        <MetricCard label="Total Tokens" value={totalTokens ? Number(totalTokens).toLocaleString() : '--'} />
+        <MetricCard label="Est. Cost" value={estCost ? `$${Number(estCost).toFixed(4)}` : '--'} />
+        <MetricCard label="Avg Latency" value={avgLatency ? `${Math.round(Number(avgLatency))}ms` : '--'} />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Per-Lane Breakdown */}
+        <section className="bg-surface-card border border-border-default rounded-lg p-4">
+          <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+            Usage by Lane
+          </h3>
+          {Object.keys(effectiveLaneData).length === 0 ? (
+            <p className="text-sm text-text-muted">No lane data available</p>
+          ) : (
+            <div className="space-y-3">
+              {Object.entries(effectiveLaneData).map(([lane, data]) => {
+                const d = data as Record<string, unknown>
+                return (
+                  <div key={lane} className="flex items-center justify-between p-2 bg-surface-card-elevated rounded">
+                    <span className="text-sm text-text-primary font-mono">{lane}</span>
+                    <div className="text-right text-xs text-text-secondary font-mono">
+                      <span>{String(d.calls ?? d.requests ?? 0)} calls</span>
+                      <span className="ml-3">{Number(d.tokens ?? d.tokens_est ?? 0).toLocaleString()} tokens</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </section>
+
+        {/* Per-Model Breakdown */}
+        <section className="bg-surface-card border border-border-default rounded-lg p-4">
+          <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+            Usage by Model
+          </h3>
+          {Object.keys(effectiveModelData).length === 0 ? (
+            <p className="text-sm text-text-muted">No model data available</p>
+          ) : (
+            <div className="space-y-3">
+              {Object.entries(effectiveModelData).map(([model, data]) => {
+                const d = data as Record<string, unknown>
+                return (
+                  <div key={model} className="flex items-center justify-between p-2 bg-surface-card-elevated rounded">
+                    <span className="text-sm text-text-primary font-mono truncate max-w-[200px]">{model}</span>
+                    <div className="text-right text-xs text-text-secondary font-mono">
+                      <span>{String(d.calls ?? d.requests ?? 0)} calls</span>
+                      <span className="ml-3">{Number(d.tokens ?? d.tokens_est ?? 0).toLocaleString()} tokens</span>
+                      {(d.estimated_cost ?? d.cost) != null && (
+                        <span className="ml-3">${Number(d.estimated_cost ?? d.cost).toFixed(4)}</span>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </section>
+
+        {/* Monthly Summary — Rendered as proper tables */}
+        <section className="bg-surface-card border border-border-default rounded-lg p-4 lg:col-span-2">
+          <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+            Monthly Summary
+          </h3>
+          <div className="flex gap-3 mb-4 flex-wrap items-center">
+            {monthly?.available_months?.map((m: string) => (
+              <span key={m} className="text-xs font-mono px-2 py-1 bg-accent-primary/15 text-accent-primary rounded">
+                {m}
+              </span>
+            ))}
+          </div>
+
+          {!md.month ? (
+            <p className="text-sm text-text-muted">No monthly data yet</p>
+          ) : (
+            <div className="space-y-4">
+              {/* Monthly totals */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="p-3 bg-surface-card-elevated rounded-md">
+                  <span className="text-[10px] uppercase tracking-wider text-text-muted">Month</span>
+                  <p className="text-sm font-mono text-text-primary mt-1">{String(md.month)}</p>
+                </div>
+                <div className="p-3 bg-surface-card-elevated rounded-md">
+                  <span className="text-[10px] uppercase tracking-wider text-text-muted">Requests</span>
+                  <p className="text-sm font-mono text-text-primary mt-1">{String(md.total_requests ?? 0)}</p>
+                </div>
+                <div className="p-3 bg-surface-card-elevated rounded-md">
+                  <span className="text-[10px] uppercase tracking-wider text-text-muted">Tokens</span>
+                  <p className="text-sm font-mono text-text-primary mt-1">{Number(md.total_tokens ?? 0).toLocaleString()}</p>
+                </div>
+                <div className="p-3 bg-surface-card-elevated rounded-md">
+                  <span className="text-[10px] uppercase tracking-wider text-text-muted">Cost</span>
+                  <p className="text-sm font-mono text-text-primary mt-1">${Number(md.total_cost ?? 0).toFixed(4)}</p>
+                </div>
+              </div>
+
+              {/* By Model table */}
+              {Object.keys(byModel).length > 0 && (
+                <div>
+                  <h4 className="text-xs font-medium text-text-secondary mb-2">By Model</h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs font-mono">
+                      <thead>
+                        <tr className="text-text-muted text-left">
+                          <th className="py-1 pr-4">Model</th>
+                          <th className="py-1 pr-4 text-right">Requests</th>
+                          <th className="py-1 pr-4 text-right">Tokens</th>
+                          <th className="py-1 text-right">Cost</th>
+                        </tr>
+                      </thead>
+                      <tbody className="text-text-primary">
+                        {Object.entries(byModel).map(([model, d]) => (
+                          <tr key={model} className="border-t border-border-default/50">
+                            <td className="py-2 pr-4">{model}</td>
+                            <td className="py-2 pr-4 text-right">{String(d.requests ?? 0)}</td>
+                            <td className="py-2 pr-4 text-right">{Number(d.tokens ?? 0).toLocaleString()}</td>
+                            <td className="py-2 text-right">${Number(d.cost ?? 0).toFixed(4)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* By Day table */}
+              {Object.keys(byDay).length > 0 && (
+                <div>
+                  <h4 className="text-xs font-medium text-text-secondary mb-2">By Day</h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs font-mono">
+                      <thead>
+                        <tr className="text-text-muted text-left">
+                          <th className="py-1 pr-4">Date</th>
+                          <th className="py-1 pr-4 text-right">Requests</th>
+                          <th className="py-1 pr-4 text-right">Tokens</th>
+                          <th className="py-1 text-right">Cost</th>
+                        </tr>
+                      </thead>
+                      <tbody className="text-text-primary">
+                        {Object.entries(byDay).map(([day, d]) => (
+                          <tr key={day} className="border-t border-border-default/50">
+                            <td className="py-2 pr-4">{day}</td>
+                            <td className="py-2 pr-4 text-right">{String(d.requests ?? 0)}</td>
+                            <td className="py-2 pr-4 text-right">{Number(d.tokens ?? 0).toLocaleString()}</td>
+                            <td className="py-2 text-right">${Number(d.cost ?? 0).toFixed(4)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      </div>
+    </div>
+  )
+}
+
+/** Collapsible list of discovered models */
+function DiscoveredModelsList({ models }: { models: DiscoveredModel[] }) {
+  const [expanded, setExpanded] = useState(false)
+  const TIER_COLORS: Record<string, string> = {
+    fast: 'text-blue-400',
+    standard: 'text-text-secondary',
+    deep: 'text-purple-400',
+  }
+
+  return (
+    <div>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="text-xs text-text-secondary hover:text-text-primary transition-colors"
+      >
+        {expanded ? 'Hide' : 'Show'} Available Models ({models.length} discovered)
+      </button>
+      {expanded && (
+        <div className="mt-2 space-y-1">
+          {models.map(m => (
+            <div key={m.id} className="flex items-center gap-3 px-2 py-1.5 text-xs font-mono rounded bg-surface-card-elevated">
+              <span className="text-text-primary truncate max-w-[220px]">{m.display_name || m.id}</span>
+              <span className={`${TIER_COLORS[m.capability_tier] || 'text-text-muted'}`}>
+                {m.capability_tier}
+              </span>
+              {m.supports_tools && (
+                <span className="text-green-400/70">tools</span>
+              )}
+              <span className="text-text-muted ml-auto">{formatCtx(m.context_window)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}

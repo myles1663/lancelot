@@ -1,0 +1,252 @@
+services:
+  lancelot-core:
+    image: ${LANCELOT_CORE_IMAGE:-ghcr.io/myles1663/lancelot:latest}
+    build: .
+    container_name: lancelot_core
+    volumes:
+      # Persistent runtime storage. Installer env uses host bind mounts;
+      # bare compose falls back to Docker-managed named volumes.
+      - ${LANCELOT_DATA_MOUNT:-lancelot_data}:/home/lancelot/data
+      - ${LANCELOT_WORKSPACE_MOUNT:-lancelot_workspace}:/home/lancelot/workspace
+      - ${USERPROFILE}/.codex:/home/lancelot/.codex
+      # Mount Google OAuth credentials (ADC) from host (uncomment if using Google OAuth)
+      # - ${APPDATA}/gcloud/application_default_credentials.json:/home/lancelot/.config/gcloud/application_default_credentials.json:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - PYTHONUNBUFFERED=1
+      # - GOOGLE_APPLICATION_CREDENTIALS=/home/lancelot/.config/gcloud/application_default_credentials.json
+      - LOCAL_LLM_URL=http://local-llm:8080
+      - LANCELOT_DATA_DIR=/home/lancelot/data
+      - LANCELOT_WORKSPACE=/home/lancelot/workspace
+      - PYTHONPATH=/home/lancelot/app/src/core:/home/lancelot/app/src/ui:/home/lancelot/app/src/agents:/home/lancelot/app/src/memory:/home/lancelot/app/src/shared:/home/lancelot/app/src/integrations:/home/lancelot/app/src:/home/lancelot/app
+      # Host Agent bridge — HOST_AGENT_TOKEN must be explicitly configured in .env
+      - HOST_AGENT_URL=http://host.docker.internal:9111
+      - HOST_AGENT_TOKEN=${HOST_AGENT_TOKEN:-}
+      # F-001: Docker socket proxy — no direct socket mount
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
+    depends_on:
+      local-llm:
+        condition: service_started
+      docker-socket-proxy:
+        condition: service_started
+    ports:
+      - "8000:8000"
+      - "1455:8000"   # OpenAI Codex OAuth callback (redirect_uri: localhost:1455/auth/callback)
+    command: uvicorn gateway:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - lancelot_net
+    # Phase 3: Docker Secrets — mount vault key from file instead of env
+    # To use: create the secret file, then uncomment the two lines below.
+    # secrets:
+    #   - lancelot_vault_key
+
+  # F-001: Docker Socket Proxy — restricts Docker API access for sandbox provider.
+  # Only allows container operations (create, start, wait, remove, logs).
+  # Blocks network/volume/swarm/exec/build operations.
+  # See: https://github.com/Tecnativa/docker-socket-proxy
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: lancelot_docker_proxy
+    restart: unless-stopped
+    environment:
+      # Allow container lifecycle (needed for sandbox execution)
+      - CONTAINERS=1
+      - POST=1
+      - IMAGES=1
+      - INFO=1
+      # Block everything else
+      - NETWORKS=0
+      - VOLUMES=0
+      - SERVICES=0
+      - SWARM=0
+      - NODES=0
+      - BUILD=0
+      - EXEC=0
+      - PLUGINS=0
+      - SECRETS=0
+      - CONFIGS=0
+      - TASKS=0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - lancelot_net
+
+  local-llm:
+    image: ${LOCAL_LLM_IMAGE:-ghcr.io/myles1663/lancelot-local-llm:llama-cpp-0.3.19-cpu}
+    pull_policy: ${LOCAL_LLM_PULL_POLICY:-missing}
+    build:
+      context: ./local_models
+      dockerfile: ${LOCAL_LLM_DOCKERFILE:-Dockerfile}
+      args:
+        LOCAL_LLM_WHEEL_VARIANT: ${LOCAL_LLM_WHEEL_VARIANT:-cpu}
+        LOCAL_LLM_WHEEL_VERSION: ${LOCAL_LLM_WHEEL_VERSION:-0.3.19}
+        PRISM_RELEASE_TAG: ${PRISM_RELEASE_TAG:-prism-b8846-d104cf1}
+        PRISM_RELEASE_ASSET: ${PRISM_RELEASE_ASSET:-llama-prism-b8846-d104cf1-bin-ubuntu-x64.tar.gz}
+        PRISM_RELEASE_SHA256: ${PRISM_RELEASE_SHA256:-80bb9a820bb61389dc9f34c976f00afc33018d199b8ae81dd1afeaad2044ec87}
+        PRISM_CUDA_BASE_IMAGE: ${PRISM_CUDA_BASE_IMAGE:-nvidia/cuda:12.3.2-devel-ubuntu22.04}
+        PRISM_LLAMA_CPP_REPO: ${PRISM_LLAMA_CPP_REPO:-https://github.com/PrismML-Eng/llama.cpp.git}
+        PRISM_LLAMA_CPP_REF: ${PRISM_LLAMA_CPP_REF:-d104cf1b639a909ddea521d61f7cb023c6e41f57}
+        PRISM_CMAKE_ARGS: ${PRISM_CMAKE_ARGS:--DGGML_CUDA=ON}
+        PRISM_CUDA_ARCHITECTURES: ${PRISM_CUDA_ARCHITECTURES:-}
+        PRISM_BUILD_JOBS: ${PRISM_BUILD_JOBS:-2}
+    container_name: lancelot_local_llm
+    volumes:
+      # Model weights — downloaded during onboarding, never baked into image
+      - ./local_models/weights:/home/llm/models:ro
+    environment:
+      - LOCAL_MODELS_DIR=/home/llm/models
+      - LOCAL_MODEL_PROFILE=${LOCAL_MODEL_PROFILE:-qwen3-8b}
+      - LOCAL_LLM_ENGINE=${LOCAL_LLM_ENGINE:-llama_cpp_python}
+      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-local-llm}
+      - LOCAL_MODEL_CTX=${LOCAL_MODEL_CTX:-4096}
+      - LOCAL_MODEL_THREADS=${LOCAL_MODEL_THREADS:-4}
+      - LOCAL_MODEL_GPU_LAYERS=${LOCAL_MODEL_GPU_LAYERS:-0}
+      - LOCAL_LLM_PORT=${LOCAL_LLM_PORT:-8080}
+    # GPU access for CUDA offload
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: ${LOCAL_LLM_HEALTH_START_PERIOD:-900s}
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - lancelot_net
+
+  local-bonsai-17b:
+    profiles: ["bonsai"]
+    image: ${BONSAI_LLM_IMAGE:-ghcr.io/myles1663/lancelot-local-llm:prism-b8846-d104cf1}
+    pull_policy: ${BONSAI_LLM_PULL_POLICY:-missing}
+    build:
+      context: ./local_models
+      dockerfile: ${BONSAI_LLM_DOCKERFILE:-Dockerfile.prism}
+      args:
+        PRISM_RELEASE_TAG: ${PRISM_RELEASE_TAG:-prism-b8846-d104cf1}
+        PRISM_RELEASE_ASSET: ${PRISM_RELEASE_ASSET:-llama-prism-b8846-d104cf1-bin-ubuntu-x64.tar.gz}
+        PRISM_RELEASE_SHA256: ${PRISM_RELEASE_SHA256:-80bb9a820bb61389dc9f34c976f00afc33018d199b8ae81dd1afeaad2044ec87}
+        PRISM_CUDA_BASE_IMAGE: ${PRISM_CUDA_BASE_IMAGE:-nvidia/cuda:12.3.2-devel-ubuntu22.04}
+        PRISM_LLAMA_CPP_REPO: ${PRISM_LLAMA_CPP_REPO:-https://github.com/PrismML-Eng/llama.cpp.git}
+        PRISM_LLAMA_CPP_REF: ${PRISM_LLAMA_CPP_REF:-d104cf1b639a909ddea521d61f7cb023c6e41f57}
+        PRISM_CMAKE_ARGS: ${PRISM_CMAKE_ARGS:--DGGML_CUDA=ON}
+        PRISM_CUDA_ARCHITECTURES: ${PRISM_CUDA_ARCHITECTURES:-}
+        PRISM_BUILD_JOBS: ${PRISM_BUILD_JOBS:-2}
+    container_name: lancelot_local_bonsai_17b
+    volumes:
+      - ./local_models/weights:/home/llm/models:ro
+    environment:
+      - LOCAL_MODELS_DIR=/home/llm/models
+      - LOCAL_MODEL_PROFILE=bonsai-1.7b
+      - LOCAL_LLM_ENGINE=prism_llama_server
+      - LOCAL_LLM_MODEL=bonsai-1.7b
+      - LOCAL_MODEL_CTX=${BONSAI_17B_CTX:-32768}
+      - LOCAL_MODEL_THREADS=${BONSAI_17B_THREADS:-4}
+      - LOCAL_MODEL_GPU_LAYERS=${BONSAI_17B_GPU_LAYERS:-99}
+      - LOCAL_LLM_PORT=8080
+      - LOCAL_LLM_BACKEND_PORT=8091
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    ports:
+      - "${BONSAI_17B_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - lancelot_net
+
+  local-bonsai-8b:
+    profiles: ["bonsai"]
+    image: ${BONSAI_LLM_IMAGE:-ghcr.io/myles1663/lancelot-local-llm:prism-b8846-d104cf1}
+    pull_policy: ${BONSAI_LLM_PULL_POLICY:-missing}
+    build:
+      context: ./local_models
+      dockerfile: ${BONSAI_LLM_DOCKERFILE:-Dockerfile.prism}
+      args:
+        PRISM_RELEASE_TAG: ${PRISM_RELEASE_TAG:-prism-b8846-d104cf1}
+        PRISM_RELEASE_ASSET: ${PRISM_RELEASE_ASSET:-llama-prism-b8846-d104cf1-bin-ubuntu-x64.tar.gz}
+        PRISM_RELEASE_SHA256: ${PRISM_RELEASE_SHA256:-80bb9a820bb61389dc9f34c976f00afc33018d199b8ae81dd1afeaad2044ec87}
+        PRISM_CUDA_BASE_IMAGE: ${PRISM_CUDA_BASE_IMAGE:-nvidia/cuda:12.3.2-devel-ubuntu22.04}
+        PRISM_LLAMA_CPP_REPO: ${PRISM_LLAMA_CPP_REPO:-https://github.com/PrismML-Eng/llama.cpp.git}
+        PRISM_LLAMA_CPP_REF: ${PRISM_LLAMA_CPP_REF:-d104cf1b639a909ddea521d61f7cb023c6e41f57}
+        PRISM_CMAKE_ARGS: ${PRISM_CMAKE_ARGS:--DGGML_CUDA=ON}
+        PRISM_CUDA_ARCHITECTURES: ${PRISM_CUDA_ARCHITECTURES:-}
+        PRISM_BUILD_JOBS: ${PRISM_BUILD_JOBS:-2}
+    container_name: lancelot_local_bonsai_8b
+    volumes:
+      - ./local_models/weights:/home/llm/models:ro
+    environment:
+      - LOCAL_MODELS_DIR=/home/llm/models
+      - LOCAL_MODEL_PROFILE=${BONSAI_8B_PROFILE:-bonsai-8b}
+      - LOCAL_LLM_ENGINE=prism_llama_server
+      - LOCAL_LLM_MODEL=${BONSAI_8B_MODEL_LABEL:-bonsai-8b}
+      - LOCAL_MODEL_CTX=${BONSAI_8B_CTX:-8192}
+      - LOCAL_MODEL_THREADS=${BONSAI_8B_THREADS:-4}
+      - LOCAL_MODEL_GPU_LAYERS=${BONSAI_8B_GPU_LAYERS:-99}
+      - LOCAL_LLM_PORT=8080
+      - LOCAL_LLM_BACKEND_PORT=8091
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    ports:
+      - "${BONSAI_8B_PORT:-8082}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - lancelot_net
+
+volumes:
+  lancelot_data:
+    name: lancelot_data
+  lancelot_workspace:
+    name: lancelot_workspace
+
+# Phase 3: Docker Secrets — file-based vault key (avoids /proc/PID/environ exposure)
+# To use: 1) Create the file  2) Uncomment the secrets: block on lancelot-core
+# secrets:
+#   lancelot_vault_key:
+#     file: ./secrets/lancelot_vault_key.txt
+
+networks:
+  lancelot_net:
+    driver: bridge
