@@ -4,6 +4,8 @@
 
 - [Installation Guide](installation.md)
 - [Quickstart](quickstart.md)
+- [Proof Walkthrough](proof-walkthrough.md)
+- [Release Verification](release-verification.md)
 - [Configuration Reference](configuration-reference.md)
 - [War Room Guide](war-room.md)
 

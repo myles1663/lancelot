@@ -6,7 +6,6 @@ on:
     branches:
       - master
       - main
-      - release-prep
 
 permissions:
   contents: read

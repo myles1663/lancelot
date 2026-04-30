@@ -47,7 +47,7 @@
     "build": "node scripts/build.js",
     "daemon": "node dist/daemon.js",
     "test": "npm run build && node --test tests/*.test.mjs && node tests/daemon.test.js",
-    "prepublishOnly": "node scripts/refuse-publish.js"
+    "prepublishOnly": "node scripts/verify-private-package.js"
   },
   "devDependencies": {
     "@types/node": "^25.3.3",

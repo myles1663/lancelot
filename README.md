@@ -1,6 +1,18 @@
 # Lancelot
 
-Lancelot is a self-hosted AI operator for technical users who want model-driven automation with hard policy boundaries. It can call tools, control desktop applications through a governed bridge, keep structured memory, and write immutable receipts for every action. The design goal is simple: treat the model as untrusted planning logic inside a system that can say no, require approval, and leave an audit trail.
+Lancelot is a self-hosted AI operator with policy gates, approvals, and immutable action receipts. It is built for technical users who want model-driven automation that can call tools, control desktop applications through a governed bridge, keep structured memory, and leave a verifiable audit trail.
+
+The core design choice is to treat the model as untrusted planning logic inside a system that can say no. The model proposes actions; Lancelot classifies risk, checks policy, requires approval when needed, and records what happened.
+
+Lancelot is source-available under BSL 1.1. Non-production use is free; production use requires a commercial license.
+
+## Install Expectations
+
+- Requires Docker Desktop, Docker Compose, Node.js 18+, Git, and one LLM provider credential.
+- Plan for at least 10 GB free disk. The local GGUF utility model is about 5 GB; Docker images and runtime data use the rest.
+- First install time depends mostly on image pulls, model download speed, and whether the local model is CPU-only or GPU-assisted.
+- The War Room can come up while the local model is still warming. Readiness endpoints report degraded lanes explicitly instead of hiding them.
+- If Docker, ports, provider keys, or model download fail, start with the [Quickstart troubleshooting section](docs/quickstart.md#troubleshooting) and the full [Installation Guide](docs/installation.md).
 
 ## Quickstart
 
@@ -26,6 +38,71 @@ docker compose up -d
 For installation details and provider-specific setup, see [docs/installation.md](docs/installation.md).
 
 Lancelot is built for developers, operators, and technical teams who need governed automation rather than a lightweight agent demo or consumer chatbot.
+
+## Verify the Governance Loop
+
+You can inspect the core guarantees without trusting a demo transcript. From a clone with the Python and frontend dependencies installed, these checks do not require a live frontier model account:
+
+```bash
+# Receipt integrity, immutability, and tamper detection.
+python -m pytest -q tests/test_receipts.py
+
+# Scoped HIVE task execution and boundary enforcement.
+python -m pytest -q tests/hive/test_runtime.py
+
+# Kill switch propagation and fail-closed behavior.
+python -m pytest -q tests/test_kill_switch_contract.py
+
+# War Room frontend typecheck and production build.
+(cd src/warroom && npm ci && npm run type-check && npm run build)
+```
+
+For a fuller command-by-command path, including live receipt-chain validation inside Docker, see the [Proof Walkthrough](docs/proof-walkthrough.md).
+For release-candidate checks, dependency lockfiles, and Docker image pinning guidance, see [Release Verification](docs/release-verification.md).
+
+## What Lancelot Is Not
+
+- Not a consumer chatbot or companion app.
+- Not a generic agent SDK where governance is optional.
+- Not unrestricted computer control. Desktop and tool actions are intended to be scoped, classified, approved when needed, and receipt-traced.
+- Not a managed SaaS. The default posture is local-first and self-hosted.
+
+## Current Maturity
+
+| Area | Status |
+| --- | --- |
+| Governance checks, approvals, kill switches, and receipts | Core path to inspect first |
+| Health/readiness, async chat runs, and War Room build | Covered by public proof tests and CI |
+| UAB routing, fallback behavior, and action-risk taxonomy | Implemented with focused test coverage |
+| HIVE scoped sub-agents | Implemented and feature-gated |
+| Federation, A2A, MCP governance, Time Travel, Observability | Feature-gated or early; evaluate as separate subsystems |
+| Broad desktop automation coverage | Strongest on supported host setups and frameworks; not universal app control |
+
+## Evaluation FAQ
+
+### Is Lancelot open source?
+
+No. Lancelot is source-available under BSL 1.1. You can use, copy, modify, and redistribute it for non-production evaluation, development, and testing. Production use requires a commercial license. See [LICENSE](LICENSE) for the exact terms.
+
+### What should I evaluate first?
+
+Start with governance, receipts, health/readiness, the core tool bridge, and the War Room. Those are the default paths the README proof commands are intended to exercise.
+
+### What is still early?
+
+HIVE, Federation, A2A, MCP governance, Time Travel, Observability, and parts of UAB are feature-gated or still maturing. Treat them as separate subsystems, not as proof that every advanced path is production-ready by default.
+
+### Is UAB universal desktop automation?
+
+No. UAB is strongest on supported host setups and desktop frameworks. It is a governed route for application control, not permissionless "let the model click anything" automation.
+
+### Was this built with AI assistance?
+
+Yes. Lancelot was built through AI-assisted development. The project should be evaluated by its contracts, tests, failure modes, and reviewable boundaries rather than by trusting the generation process.
+
+### Should I expose this directly to the internet?
+
+No. The recommended posture is local-first and self-hosted. For production-style use, put it behind private network or VPN access and follow the [Production Hardening Guide](docs/production-hardening.md).
 
 ## Core Components
 
@@ -65,7 +142,7 @@ The diagram shows the system boundary clearly: governance sits in front of execu
 
 Key guarantees are backed by contract tests you can run directly:
 
-- Public release verification: `python scripts/verify-public-release.py`
+- Release verification: `python scripts/verify-public-release.py`
 - Receipt immutability and integrity-chain validation: [tests/test_receipts.py](tests/test_receipts.py)
 - HIVE scoped execution and boundary enforcement: [tests/hive/test_runtime.py](tests/hive/test_runtime.py)
 - Kill switch propagation and fail-closed behavior: [tests/test_kill_switch_contract.py](tests/test_kill_switch_contract.py)
@@ -126,9 +203,9 @@ pytest \
 (cd src/warroom && npm ci && npm run type-check && npm run build)
 
 # Docker Compose configuration validation
-if [ ! -f .env ]; then cp .env.example .env && cleanup_env=1; fi
+if [ ! -f .env ]; then cp .env.example .env && created_env=1; fi
 docker compose config --quiet
-if [ "${cleanup_env:-0}" = "1" ]; then rm .env; fi
+if [ "${created_env:-0}" = "1" ]; then rm .env; fi
 ```
 
 ## Development Note
@@ -141,7 +218,7 @@ Lancelot was built through AI-assisted development. The engineering bar for the 
 - UAB is strongest on supported desktop frameworks and host setups. It is not universal automation for every application.
 - The system is local-first and self-hosted, not a managed SaaS.
 - The configuration surface is large. Operators should treat `config/*.yaml` and `.env` as deployment artifacts, not casual defaults.
-- Some modules still need refactoring and logging cleanup to match the maturity of the core governance and receipt systems.
+- Some less central modules are still being consolidated; evaluate the core governance, receipt, health, and tool-bridge paths first.
 
 ## Deep Dives
 

@@ -369,8 +369,6 @@ settings:
 
 ## Connector Registry
 
-![War Room — Connectors Panel](images/war-room-connectors.png)
-
 Registered connectors appear in the War Room Connector Status panel, showing:
 - Enabled/disabled status
 - Rate limit usage

@@ -1,0 +1,88 @@
+# Release Verification
+
+This document describes the public checks a reviewer or release operator should run before treating a Lancelot source tree as a clean public release candidate.
+
+## Source Tree Hygiene
+
+Run:
+
+```bash
+python scripts/verify-public-release.py --public-artifact --skip-pytest --skip-uab --skip-docker
+```
+
+This verifies that the public tree does not track private/internal release artifacts and that source files pass the release hygiene checks encoded in `scripts/verify-public-release.py`.
+
+## Dependency Lockfiles
+
+The release tree includes lockfiles for the main dependency surfaces:
+
+| Surface | Lockfile |
+| --- | --- |
+| Python runtime | `uv.lock` |
+| War Room frontend | `src/warroom/package-lock.json` |
+| UAB package | `packages/uab/package-lock.json` |
+
+Use the lockfiles for reproducible local verification:
+
+```bash
+uv sync --frozen
+npm --prefix src/warroom ci
+npm --prefix packages/uab ci
+```
+
+The legacy `requirements.txt` file is kept as a compatibility fallback. The canonical Python dependency source is `pyproject.toml` plus `uv.lock`.
+
+## Proof Tests
+
+Run the focused proof suites first:
+
+```bash
+python -m pytest -q \
+  tests/test_receipts.py \
+  tests/hive/test_runtime.py \
+  tests/test_kill_switch_contract.py \
+  tests/test_gateway_health.py \
+  tests/test_token_url_hardening.py::test_live_websocket_rejects_query_param_tokens
+```
+
+Then verify the UI and UAB surfaces:
+
+```bash
+npm --prefix src/warroom ci
+npm --prefix src/warroom run type-check
+npm --prefix src/warroom run build
+
+npm --prefix packages/uab ci
+npm --prefix packages/uab test
+```
+
+Finally validate Docker Compose:
+
+```bash
+if [ ! -f .env ]; then cp .env.example .env && cleanup_env=1; fi
+docker compose config --quiet
+if [ "${cleanup_env:-0}" = "1" ]; then rm .env; fi
+```
+
+## Docker Image Defaults
+
+`docker-compose.yml` defaults to prebuilt images for convenience:
+
+- `LANCELOT_CORE_IMAGE`
+- `LOCAL_LLM_IMAGE`
+- `BONSAI_LLM_IMAGE`
+
+For casual evaluation, the documented defaults keep installation short. For controlled releases or production-style deployments, pin these environment variables to a specific tag or digest before rollout.
+
+The Dockerfile pins several build-time tools directly, including the `uv` version and Codex CLI package version. If you build images locally, prefer a clean checkout and capture the resulting image digest in your release notes.
+
+## Release Candidate Checklist
+
+- [ ] Public release verification passes.
+- [ ] Focused Python proof tests pass.
+- [ ] War Room typecheck and production build pass.
+- [ ] UAB build and tests pass.
+- [ ] Docker Compose config resolves.
+- [ ] Release notes list mature paths and known limitations.
+- [ ] Docker image tags or digests are recorded for the release.
+- [ ] The release is tagged from the public repository, not from a private/dev-only tree.

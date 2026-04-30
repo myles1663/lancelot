@@ -118,8 +118,6 @@ Pipeline: [Flush Batch + Drain Async] → Approval Gate → Execute → Verify �
 
 ### Step 5: Operator Review
 
-![War Room — Command Center with completed action](../images/war-room-command-center-completed.png)
-
 In the War Room, the approval queue showed:
 
 ```

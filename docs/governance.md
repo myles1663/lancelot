@@ -178,8 +178,6 @@ The Trust Ledger tracks how much trust each connector and capability has earned 
   <img src="images/fig6_trust_ledger.svg" alt="Trust Ledger — Graduation and Revocation" width="800">
 </p>
 
-![War Room — Trust Ledger Panel](images/war-room-trust-ledger.png)
-
 ### How Trust Is Earned
 
 Trust starts at zero. Every successful governed action increments the trust score for that connector/capability. Every failure, denial, or rollback affects the score.
@@ -216,8 +214,6 @@ The Soul can set maximum trust ceilings for specific capabilities. For example, 
 ## Approval Pattern Learning (APL)
 
 APL detects patterns in owner approval decisions and proposes automation rules. It learns *from the owner*, not from the model.
-
-![War Room — APL Learning Panel](images/war-room-apl-learning.png)
 
 ### How It Works
 
