@@ -616,11 +616,12 @@ async def test_boot_composition_root_registers_core_subsystems_without_optional_
     )
 
     try:
+        monkeypatch.setenv("LANCELOT_PROVIDER", "gemini")
         result = await boot.boot(app, boot.BootConfig())
 
         assert result.env.provider in {"", "gemini"}
         assert librarian.started is True
-        assert antigravity.started is True
+        assert antigravity.started is False
         assert {"memory", "soul", "skills", "scheduler", "health_monitor", "hive"}.issubset(
             subsystem_manager.registered
         )

@@ -40,7 +40,7 @@ def app():
             auth_method="local",
             ip_address="127.0.0.1",
         ),
-        "capabilities": sorted({"warroom.login", "federation.admin"}),
+        "capabilities": sorted({"warroom.login", "federation.admin", "governance.admin"}),
         "groups": [],
     }
     test_app = FastAPI()
@@ -903,6 +903,384 @@ class TestDiscoveryEndpoints:
         init_federation_api(identity, emitter, config)
         resp = client.put("/api/federation/settings", json={"self_address": "notaurl"})
         assert resp.status_code == 400
+
+    def test_dashboard_returns_self_command_center_entry(self, client, identity, emitter, config, monkeypatch):
+        import feature_flags as ff
+
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION", True)
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION_DASHBOARD", True)
+        config.self_address = "https://root.example"
+        init_federation_api(identity, emitter, config)
+        emitter.emit_once()
+
+        resp = client.get("/api/federation/dashboard")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["enabled"] is True
+        assert data["fleet"]["total_instances"] == 1
+        assert data["instances"][0]["is_self"] is True
+        assert data["instances"][0]["command_center_url"] == "/war-room/command"
+
+    def test_dashboard_activity_feed_uses_receipt_service_for_agent_events(self, client, identity, emitter, config, monkeypatch):
+        import feature_flags as ff
+        from src.core import receipts_api
+        from src.shared.receipts import ActionType, Receipt, ReceiptStatus
+
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION", True)
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION_DASHBOARD", True)
+        receipt = Receipt(
+            id="receipt-agent-1",
+            timestamp="2026-04-30T12:00:00+00:00",
+            action_type=ActionType.HIVE_AGENT_EVENT.value,
+            action_name="",
+            status=ReceiptStatus.SUCCESS.value,
+            metadata={"event": "hive_agent_spawned", "operator_id": "op-arthur"},
+        )
+
+        class FakeReceiptService:
+            def list(self, limit=100, **kwargs):
+                return [receipt]
+
+        monkeypatch.setattr(receipts_api, "_receipt_service", FakeReceiptService())
+        init_federation_api(identity, emitter, config)
+        emitter.emit_once()
+
+        resp = client.get("/api/federation/dashboard")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["activity"][0]["id"] == "receipt-agent-1"
+        assert data["activity"][0]["event_type"] == ActionType.HIVE_AGENT_EVENT.value
+        assert data["activity"][0]["description"] == "hive_agent_spawned"
+        assert data["activity"][0]["operator"] == "op-arthur"
+        assert data["instances"][0]["recent_activity"] == "hive_agent_spawned"
+
+    def test_dashboard_approval_queue_includes_pending_sentry_request(self, client, identity, emitter, config, monkeypatch, tmp_path):
+        import feature_flags as ff
+        from src.core import governance_api
+        from src.integrations.mcp_sentry import MCPSentry
+
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION", True)
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION_DASHBOARD", True)
+        sentry = MCPSentry(data_dir=str(tmp_path))
+        pending = sentry.check_permission(
+            "connector.email.send_message",
+            {"recipient": "customer@example.com", "subject": "Fleet approval test"},
+        )
+        assert pending["status"] == "PENDING"
+        monkeypatch.setattr(governance_api, "_mcp_sentry", sentry)
+        init_federation_api(identity, emitter, config)
+        emitter.emit_once()
+
+        resp = client.get("/api/federation/dashboard")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        approval = next(item for item in data["approvals"] if item["id"] == pending["request_id"])
+        assert approval["instance_id"] == identity.instance_id
+        assert approval["capability"] == "connector.email.send_message"
+        assert approval["risk_tier"] == "T3"
+        assert data["fleet"]["pending_approvals"] == 1
+        assert data["instances"][0]["pending_approvals"] == 1
+
+    def test_dashboard_ignores_stale_cost_for_unregistered_peers(self, client, identity, emitter, config, monkeypatch):
+        import feature_flags as ff
+
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION", True)
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION_DASHBOARD", True)
+        init_federation_api(identity, emitter, config)
+        federation_api._divergence_detector = SimpleNamespace(
+            state=SimpleNamespace(value="connected"),
+            get_divergence_duration_s=lambda: 0.0,
+            last_reconciliation=None,
+        )
+        init_federation_transport(
+            soul_transport=SimpleNamespace(
+                get_consistency_state=lambda: "synchronized",
+                get_active_propagations=lambda: [],
+                get_local_soul_hash=lambda: "root-soul",
+            ),
+            cost_reporter=SimpleNamespace(
+                running=True,
+                get_aggregate_status=lambda: {
+                    "threshold": "normal",
+                    "stale_instance_ids": ["retired-peer"],
+                },
+            ),
+            transport=SimpleNamespace(
+                started=True,
+                get_circuit_breaker_states=lambda: {},
+            ),
+            heartbeat_mesh=SimpleNamespace(
+                running=True,
+                get_subscription_status=lambda: {},
+                get_stream_outcome_status=lambda: {},
+                get_stream_errors=lambda: {},
+                divergence_evaluation_failed=False,
+                divergence_status_error=None,
+            ),
+        )
+        emitter.emit_once()
+
+        resp = client.get("/api/federation/dashboard")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        local = data["instances"][0]
+        assert local["health"] == "healthy"
+        assert local["state"] == "healthy"
+        assert data["fleet"]["instances_needing_attention"] == 0
+        assert all("cost data stale" not in reason.lower() for reason in local["attention_reasons"])
+
+    def test_dashboard_formats_current_peer_cost_staleness_as_attention_notice(self, client, identity, emitter, config, monkeypatch):
+        import feature_flags as ff
+        from src.federation.topology import TopologyRegistry
+
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION", True)
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION_DASHBOARD", True)
+        topology = TopologyRegistry(identity.instance_id)
+        topology.register_peer(
+            "peer-1",
+            fingerprint="fp-1",
+            public_key_hex="abcd",
+            address="https://peer.example",
+            role="child",
+            soul_version_hash="root-soul",
+        )
+        init_federation_api(identity, emitter, config, topology_registry=topology)
+        federation_api._divergence_detector = SimpleNamespace(
+            state=SimpleNamespace(value="connected"),
+            get_divergence_duration_s=lambda: 0.0,
+            last_reconciliation=None,
+        )
+        init_federation_transport(
+            soul_transport=SimpleNamespace(
+                get_consistency_state=lambda: "synchronized",
+                get_active_propagations=lambda: [],
+                get_local_soul_hash=lambda: "root-soul",
+            ),
+            cost_reporter=SimpleNamespace(
+                running=True,
+                get_aggregate_status=lambda: {
+                    "threshold": "normal",
+                    "stale_instance_ids": ["peer-1"],
+                },
+            ),
+            transport=SimpleNamespace(
+                started=True,
+                get_circuit_breaker_states=lambda: {},
+            ),
+            heartbeat_mesh=SimpleNamespace(
+                running=True,
+                get_subscription_status=lambda: {},
+                get_stream_outcome_status=lambda: {},
+                get_stream_errors=lambda: {},
+                divergence_evaluation_failed=False,
+                divergence_status_error=None,
+            ),
+        )
+        emitter.emit_once()
+
+        resp = client.get("/api/federation/dashboard")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        local = next(item for item in data["instances"] if item["is_self"])
+        assert local["health"] == "healthy"
+        assert "Cost telemetry stale for peer.example" in local["attention_reasons"]
+        assert all("Federation cost data stale" not in reason for reason in local["attention_reasons"])
+
+    def test_dashboard_surfaces_peer_command_center_fallback(self, client, identity, emitter, config, monkeypatch):
+        import feature_flags as ff
+        from src.federation.topology import TopologyRegistry
+
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION", True)
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION_DASHBOARD", True)
+        topology = TopologyRegistry(identity.instance_id)
+        topology.register_peer(
+            "peer-1",
+            fingerprint="fp-1",
+            public_key_hex="abcd",
+            address="https://peer.example",
+            role="child",
+            soul_version_hash="peer-soul",
+        )
+        topology.update_heartbeat("peer-1", soul_version_hash="peer-soul")
+        init_federation_api(identity, emitter, config, topology_registry=topology)
+        emitter.emit_once()
+
+        resp = client.get("/api/federation/dashboard")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        peer = next(item for item in data["instances"] if item["instance_id"] == "peer-1")
+        assert peer["command_center_url"] == "https://peer.example/war-room/command"
+        assert peer["detail_status"] == "unavailable"
+        assert any("Remote detail unavailable" in reason for reason in peer["attention_reasons"])
+
+    def test_dashboard_local_approval_uses_operator_identity(self, client, identity, emitter, config, monkeypatch):
+        import feature_flags as ff
+        from src.core import governance_api
+
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION", True)
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION_DASHBOARD", True)
+        init_federation_api(identity, emitter, config)
+        recorded = {}
+
+        def fake_approve(approval_id, *, reason="", identity=None):
+            recorded["approval_id"] = approval_id
+            recorded["reason"] = reason
+            recorded["operator_id"] = identity.operator_id if identity else ""
+            return {"status": "approved", "id": approval_id, "type": "sentry"}
+
+        monkeypatch.setattr(governance_api, "_approve_item_direct", fake_approve)
+
+        resp = client.post(
+            f"/api/federation/dashboard/instances/{identity.instance_id}/approvals/ap-1/approve",
+            json={"reason": "operator reviewed the action"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["result"]["status"] == "approved"
+        assert recorded == {
+            "approval_id": "ap-1",
+            "reason": "operator reviewed the action",
+            "operator_id": "op-arthur",
+        }
+
+    def test_dashboard_remote_approval_proxies_operator_identity(self, client, identity, emitter, config, monkeypatch):
+        import feature_flags as ff
+        from src.federation.topology import TopologyRegistry
+
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION", True)
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION_DASHBOARD", True)
+        topology = TopologyRegistry(identity.instance_id)
+        topology.register_peer(
+            "peer-1",
+            fingerprint="fp-1",
+            public_key_hex="abcd",
+            address="https://peer.example",
+            role="child",
+            soul_version_hash="peer-soul",
+        )
+        init_federation_api(identity, emitter, config, topology_registry=topology)
+        recorded = {}
+
+        class FakeTransport:
+            async def send(self, **kwargs):
+                recorded.update(kwargs)
+                return SimpleNamespace(
+                    success=True,
+                    status_code=200,
+                    body={
+                        "success": True,
+                        "result": {"status": "approved", "id": "ap-1", "type": "sentry"},
+                    },
+                    error="",
+                )
+
+        init_federation_transport(transport=FakeTransport())
+
+        resp = client.post(
+            "/api/federation/dashboard/instances/peer-1/approvals/ap-1/approve",
+            json={"reason": "operator reviewed the remote action"},
+        )
+
+        assert resp.status_code == 200
+        assert recorded["method"] == "POST"
+        assert recorded["path"] == "/api/federation/dashboard/local/approvals/ap-1/approve"
+        assert recorded["body"]["reason"] == "operator reviewed the remote action"
+        assert recorded["body"]["operator_identity"]["operator_id"] == "op-arthur"
+        assert recorded["body"]["source_instance_id"] == identity.instance_id
+
+    def test_dashboard_local_detail_rejects_non_root_peer(self, app, identity, emitter, config, monkeypatch):
+        import feature_flags as ff
+        from src.federation.topology import TopologyRegistry
+
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION", True)
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION_DASHBOARD", True)
+        api_auth.init_api_auth(lambda request: False)
+        client = TestClient(app)
+        topology = TopologyRegistry(identity.instance_id)
+        topology.register_peer(
+            "peer-1",
+            fingerprint="fp-1",
+            public_key_hex="abcd",
+            address="https://peer.example",
+            role="peer",
+            soul_version_hash="peer-soul",
+        )
+        init_federation_api(identity, emitter, config, topology_registry=topology)
+
+        class FakeAuth:
+            def verify_request(self, method, path, body, headers):
+                return SimpleNamespace(valid=True, reason="", instance_id="peer-1")
+
+        init_federation_transport(auth=FakeAuth())
+
+        resp = client.get("/api/federation/dashboard/local")
+
+        assert resp.status_code == 403
+        assert "ROOT" in resp.json()["detail"]
+
+    def test_dashboard_local_approval_accepts_root_peer_identity_payload(self, app, identity, emitter, config, monkeypatch):
+        import feature_flags as ff
+        from src.core import governance_api
+        from src.federation.topology import TopologyRegistry
+
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION", True)
+        monkeypatch.setattr(ff, "FEATURE_FEDERATION_DASHBOARD", True)
+        api_auth.init_api_auth(lambda request: False)
+        client = TestClient(app)
+        topology = TopologyRegistry(identity.instance_id)
+        topology.register_peer(
+            "root-1",
+            fingerprint="fp-root",
+            public_key_hex="abcd",
+            address="https://root.example",
+            role="root",
+            soul_version_hash="root-soul",
+        )
+        init_federation_api(identity, emitter, config, topology_registry=topology)
+        recorded = {}
+
+        class FakeAuth:
+            def verify_request(self, method, path, body, headers):
+                return SimpleNamespace(valid=True, reason="", instance_id="root-1")
+
+        def fake_approve(approval_id, *, reason="", identity=None):
+            recorded["approval_id"] = approval_id
+            recorded["reason"] = reason
+            recorded["operator_id"] = identity.operator_id if identity else ""
+            return {"status": "approved", "id": approval_id, "type": "sentry"}
+
+        init_federation_transport(auth=FakeAuth())
+        monkeypatch.setattr(governance_api, "_approve_item_direct", fake_approve)
+
+        resp = client.post(
+            "/api/federation/dashboard/local/approvals/ap-1/approve",
+            json={
+                "reason": "root operator approved",
+                "operator_identity": {
+                    "operator_id": "op-root",
+                    "display_name": "Root Operator",
+                    "session_id": "session-root",
+                    "session_started_at": "2026-04-10T00:00:00Z",
+                    "auth_method": "local",
+                    "ip_address": "127.0.0.1",
+                },
+                "source_instance_id": "root-1",
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["result"]["status"] == "approved"
+        assert recorded == {
+            "approval_id": "ap-1",
+            "reason": "root operator approved",
+            "operator_id": "op-root",
+        }
 
 
 class TestHeartbeatEndpoint:

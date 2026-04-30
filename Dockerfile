@@ -66,8 +66,11 @@ RUN mkdir -p /home/lancelot/data && \
 # Build War Room React SPA
 RUN cd src/warroom && npm ci && npm run build && rm -rf node_modules
 
-# Change ownership of the application directory to the non-root user
-RUN chown -R lancelot:lancelot /home/lancelot
+# Runtime-writable paths are owned by the non-root user. The application,
+# virtualenv, and browser binaries remain root-owned/readable, which avoids
+# an expensive recursive chown over the full image during every rebuild.
+RUN mkdir -p /home/lancelot/data /home/lancelot/workspace /home/lancelot/.codex && \
+    chown -R lancelot:lancelot /home/lancelot/data /home/lancelot/workspace /home/lancelot/.codex
 
 # F-001: Docker group no longer needed — socket proxy used instead of direct mount
 

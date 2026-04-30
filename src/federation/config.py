@@ -30,6 +30,18 @@ class DeploymentMode(str, Enum):
     FEDERATED = "federated"
 
 
+class FederationDashboardConfig(BaseModel):
+    """Configuration for the operator-facing fleet dashboard."""
+
+    enabled: bool = Field(default=True)
+    poll_interval_s: float = Field(default=10.0, ge=2.0, le=120.0)
+    stream_interval_s: float = Field(default=3.0, ge=1.0, le=30.0)
+    max_recent_activity_items: int = Field(default=50, ge=1, le=500)
+    card_sort_order: str = Field(default="urgency")
+    show_fleet_activity_feed: bool = Field(default=True)
+    activity_feed_max_events: int = Field(default=200, ge=10, le=1000)
+
+
 class FederationConfig(BaseModel):
     """Configuration for the Federation subsystem."""
 
@@ -79,6 +91,9 @@ class FederationConfig(BaseModel):
 
     # This instance's externally-reachable address (for peer registration)
     self_address: str = Field(default="")
+
+    # Operator fleet dashboard
+    dashboard: FederationDashboardConfig = Field(default_factory=FederationDashboardConfig)
 
 
 def get_federation_config_path(config_dir: Optional[str] = None) -> Path:

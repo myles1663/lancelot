@@ -576,6 +576,58 @@ That means the page can now reflect real federation control-plane degradation in
 
 ---
 
+## Fleet Dashboard
+
+The Fleet Dashboard is the multi-instance operator view for federated Lancelot deployments. It appears in the Federation navigation when both `FEATURE_FEDERATION=true` and `FEATURE_FEDERATION_DASHBOARD=true`.
+
+**Access:** `/war-room/federation/fleet`
+
+Use it as the first screen when you are operating more than one Lancelot instance. It surfaces health awareness, heartbeat freshness, budget state, pending approvals, trust proposals, active HIVE agent counts, recent receipt activity, and attention reasons in one place.
+
+### Instance Cards
+
+Each card represents one Lancelot instance and is sorted by urgency by default. The card shows:
+
+- local health monitor state
+- heartbeat freshness
+- Soul hash/version signal
+- active agent count
+- pending approval count
+- pending trust proposal count
+- budget utilization
+- latest receipt-backed activity
+- specific `Needs Attention` notices
+
+The `Open Command Center` button deep-links to that instance's Command Center, not just the War Room root. For the local instance it opens `/war-room/command`; for remote peers it opens the peer address with `/war-room/command` appended. If the operator must sign in first, the auth flow preserves the destination and returns to the deep link after login.
+
+### Health vs. Needs Attention
+
+`Health` is the instance readiness/health monitor result. It should only show degraded or error when the instance health snapshot says so.
+
+`Needs Attention` is broader. A card can be healthy and still need attention because it has pending approvals, pending trust proposals, stale heartbeat, stale budget telemetry, remote detail unavailable, Soul mismatch, or federation runtime notices.
+
+`Latest Activity` comes from receipts. It should begin populating after governed chat actions, HIVE events, approvals, denials, kills, pauses, or other receipted work runs on that instance.
+
+### Unified Approval Queue
+
+The Unified Approval Queue aggregates pending T2/T3 governance approvals across the local instance and federated peers. Approve and Deny actions are sent through the federation dashboard proxy, carry the operator identity, and emit governance receipts.
+
+Use the instance Governance Dashboard for detailed local review when needed, but the fleet queue is the control point for operating multiple instances without tab hopping.
+
+### Fleet Activity
+
+Fleet Activity is receipt-backed. It is not a standalone event log. If no activity appears after an agent or governed command runs, check that the instance is emitting receipts and that remote dashboard detail is reachable through signed federation traffic.
+
+### Troubleshooting
+
+If the Fleet Dashboard page is missing, verify both feature flags and `dashboard.enabled` in `config/federation.yaml`.
+
+If a peer card says remote detail is unavailable, check peer registration, `self_address`, signed federation auth, and the peer's `/api/federation/dashboard/local` endpoint.
+
+If `Needs Attention` names stale cost peers, confirm those peer IDs are still registered. Stale cost telemetry for unregistered peers should be filtered out.
+
+---
+
 ## Tips for Daily Operation
 
 1. **Start your session** by checking the Health panel — make sure everything is green

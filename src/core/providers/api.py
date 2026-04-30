@@ -269,7 +269,7 @@ def _codex_cli_auth_available() -> bool:
         return False
 
 
-def _provider_profile_lane_overrides(provider_name: str) -> dict:
+def _read_provider_profile_lanes(provider_name: str, label: str) -> dict:
     try:
         from provider_profile import ProfileRegistry
 
@@ -285,11 +285,45 @@ def _provider_profile_lane_overrides(provider_name: str) -> dict:
             return lane_overrides
     except Exception as exc:
         logger.warning(
-            "Failed to seed provider lane overrides from profile '%s': %s",
+            "Failed to seed provider lane %s from profile '%s': %s",
+            label,
             provider_name,
             exc,
         )
     return {}
+
+
+def _provider_profile_lane_defaults(provider_name: str) -> dict:
+    return _read_provider_profile_lanes(provider_name, "defaults")
+
+
+def _provider_profile_lane_overrides(provider_name: str) -> dict:
+    """Backward-compatible alias for tests and older call sites."""
+    return _read_provider_profile_lanes(provider_name, "overrides")
+
+
+def _create_model_discovery(provider, *, lane_overrides: dict, fallback_lanes: dict):
+    from model_discovery import ModelDiscovery
+
+    try:
+        return ModelDiscovery(
+            provider,
+            lane_overrides=lane_overrides,
+            fallback_lanes=fallback_lanes,
+        )
+    except TypeError:
+        return ModelDiscovery(provider, lane_overrides=lane_overrides)
+
+
+def _replace_discovery_provider(discovery, new_provider, *, lane_overrides: dict, fallback_lanes: dict) -> None:
+    try:
+        discovery.replace_provider(
+            new_provider,
+            lane_overrides=lane_overrides,
+            fallback_lanes=fallback_lanes,
+        )
+    except TypeError:
+        discovery.replace_provider(new_provider, lane_overrides=lane_overrides)
 
 
 # ---------------------------------------------------------------------------
@@ -479,19 +513,24 @@ def switch_provider(req: SwitchProviderRequest):
         # Read existing config to preserve lane overrides if desired
         config = _read_current_config()
         lane_overrides = config.get("lane_overrides", {})
-
-        # If no lane overrides, seed from models.yaml profile
-        if not lane_overrides:
-            lane_overrides = _provider_profile_lane_overrides(provider_name)
+        fallback_lanes = _provider_profile_lane_defaults(provider_name)
 
         # Replace provider in discovery and re-run
         global _discovery
         if _discovery:
-            _discovery.replace_provider(new_provider, lane_overrides=lane_overrides)
+            _replace_discovery_provider(
+                _discovery,
+                new_provider,
+                lane_overrides=lane_overrides,
+                fallback_lanes=fallback_lanes,
+            )
         else:
             # Discovery wasn't initialized at startup (no provider). Create it now.
-            from model_discovery import ModelDiscovery
-            _discovery = ModelDiscovery(new_provider, lane_overrides=lane_overrides)
+            _discovery = _create_model_discovery(
+                new_provider,
+                lane_overrides=lane_overrides,
+                fallback_lanes=fallback_lanes,
+            )
             _discovery.refresh()
 
         # Persist the switch
@@ -742,10 +781,16 @@ def rotate_provider_key(req: RotateKeyRequest):
 
             config = _read_current_config()
             lane_overrides = config.get("lane_overrides", {})
+            fallback_lanes = _provider_profile_lane_defaults(provider_name)
 
             if _discovery:
                 new_provider = create_provider(provider_name, new_key)
-                _discovery.replace_provider(new_provider, lane_overrides=lane_overrides)
+                _replace_discovery_provider(
+                    _discovery,
+                    new_provider,
+                    lane_overrides=lane_overrides,
+                    fallback_lanes=fallback_lanes,
+                )
 
             hot_swapped = True
         except Exception as e:

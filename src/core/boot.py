@@ -189,7 +189,16 @@ def _validate_boot_environment(api_token: str | None) -> BootEnvironment:
 async def _start_core_runtime_services() -> None:
     """Start gateway-owned services that critical subsystems depend on."""
     librarian.start()
-    await antigravity.start()
+    try:
+        from feature_flags import FEATURE_TOOLS_ANTIGRAVITY
+    except Exception as exc:
+        FEATURE_TOOLS_ANTIGRAVITY = False
+        logger.warning("Antigravity feature flag lookup failed; skipping browser startup: %s", exc)
+
+    if FEATURE_TOOLS_ANTIGRAVITY:
+        await antigravity.start()
+    else:
+        logger.info("Antigravity browser startup skipped (FEATURE_TOOLS_ANTIGRAVITY=false).")
 
 
 def _wire_orchestrator_runtime_services() -> None:

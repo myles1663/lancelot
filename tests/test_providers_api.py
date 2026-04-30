@@ -242,12 +242,12 @@ def test_refresh_and_switch_provider_handle_errors_and_initialize_discovery(monk
     orchestrator = _FakeOrchestrator()
     providers_api.init_provider_api(None, orchestrator)
     monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
-    monkeypatch.setattr(providers_api, "_provider_profile_lane_overrides", lambda provider: {"fast": "gpt-fast"})
+    monkeypatch.setattr(providers_api, "_provider_profile_lane_defaults", lambda provider: {"fast": "gpt-fast"})
     created = []
 
     class _ModelDiscovery:
-        def __init__(self, provider, lane_overrides=None):
-            created.append((provider, lane_overrides))
+        def __init__(self, provider, lane_overrides=None, fallback_lanes=None):
+            created.append((provider, lane_overrides, fallback_lanes))
             self.provider_name = "openai"
             self.lane_assignments = lane_overrides or {}
             self.discovered_models = []
@@ -277,7 +277,8 @@ def test_refresh_and_switch_provider_handle_errors_and_initialize_discovery(monk
     assert body["message"] == "switched:openai"
     assert body["stack"]["provider"] == "openai"
     assert orchestrator.switch_calls == ["openai"]
-    assert created[0][1] == {"fast": "gpt-fast"}
+    assert created[0][1] == {}
+    assert created[0][2] == {"fast": "gpt-fast"}
     assert created[1] == "refresh"
     assert providers_api.load_persisted_config()["active_provider"] == "openai"
 

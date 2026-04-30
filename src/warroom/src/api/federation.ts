@@ -79,6 +79,127 @@ export interface FederationHealthSummary {
   active_propagation_count?: number
 }
 
+export type FleetInstanceState = 'healthy' | 'attention' | 'critical' | 'paused'
+
+export interface FleetDashboardConfig {
+  enabled: boolean
+  poll_interval_s: number
+  stream_interval_s: number
+  max_recent_activity_items: number
+  card_sort_order: string
+  show_fleet_activity_feed: boolean
+  activity_feed_max_events: number
+}
+
+export interface FleetSummary {
+  total_instances: number
+  instances_needing_attention: number
+  critical_instances: number
+  lost_instances: number
+  paused_instances: number
+  pending_approvals: number
+  trust_proposals: number
+  active_agents: number
+  fleet_cost_utilization_pct: number
+  budget_threshold: string
+  soul_consistency: string
+}
+
+export interface FleetDashboardInstance {
+  instance_id: string
+  instance_short_id: string
+  name: string
+  role: string
+  address: string
+  command_center_url: string
+  is_self: boolean
+  state: FleetInstanceState
+  health: string
+  heartbeat_state: string
+  heartbeat_age_s: number | null
+  last_heartbeat_at: string | null
+  soul_version_hash: string
+  soul_matches_root: boolean | null
+  budget_utilization_pct: number
+  budget_threshold: string
+  active_agents: number
+  paused_agents: number
+  pending_approvals: number
+  trust_proposals: number
+  recent_activity: string
+  recent_activity_at: string | null
+  attention_reasons: string[]
+  runtime_errors: string[]
+  detail_status: string
+  paused: boolean
+  pause_reason: string | null
+}
+
+export interface FleetApproval {
+  id: string
+  instance_id: string
+  instance_name: string
+  type: string
+  action_name: string
+  risk_tier: string
+  capability: string
+  context: string
+  created_at: string
+  waiting_since: string
+}
+
+export interface FleetTrustProposal {
+  id: string
+  instance_id: string
+  instance_name: string
+  capability: string
+  scope: string
+  current_tier: number
+  proposed_tier: number
+  consecutive_successes: number
+  status: string
+  created_at: string
+}
+
+export interface FleetActivityEvent {
+  id: string
+  timestamp: string
+  instance_id: string
+  instance_name: string
+  event_type: string
+  description: string
+  operator: string
+  status: string
+}
+
+export interface FleetDashboardError {
+  instance_id: string
+  message: string
+}
+
+export interface FleetDashboardSnapshot {
+  enabled: boolean
+  disabled_reason: string
+  generated_at: string
+  command_center_path: string
+  dashboard: FleetDashboardConfig
+  fleet: FleetSummary
+  instances: FleetDashboardInstance[]
+  approvals: FleetApproval[]
+  trust_proposals: FleetTrustProposal[]
+  activity: FleetActivityEvent[]
+  errors: FleetDashboardError[]
+}
+
+export interface FleetDecisionResponse {
+  success: boolean
+  decision: 'approve' | 'deny'
+  instance_id: string
+  approval_id: string
+  result: Record<string, unknown>
+  remote?: Record<string, unknown>
+}
+
 // Graph Builder types
 export interface TopologyNode {
   node_id: string
@@ -320,6 +441,69 @@ export async function fetchFederationPeers(): Promise<FederationPeer[]> {
 
 export async function fetchFederationHealth(): Promise<FederationHealthSummary> {
   return apiGet<FederationHealthSummary>('/api/federation/health')
+}
+
+export async function fetchFederationDashboard(): Promise<FleetDashboardSnapshot> {
+  return apiGet<FleetDashboardSnapshot>('/api/federation/dashboard')
+}
+
+function encodePathSegment(value: string): string {
+  return encodeURIComponent(value)
+}
+
+export function subscribeFederationDashboard(
+  onSnapshot: (snapshot: FleetDashboardSnapshot) => void,
+  onError?: (error: Error) => void,
+  onConnectionChange?: (connected: boolean) => void,
+): () => void {
+  const source = new EventSource('/api/federation/dashboard/stream', { withCredentials: true })
+
+  source.onopen = () => {
+    onConnectionChange?.(true)
+  }
+  source.onerror = () => {
+    onConnectionChange?.(false)
+    onError?.(new Error('Fleet dashboard stream disconnected'))
+  }
+  source.addEventListener('snapshot', (event) => {
+    try {
+      onSnapshot(JSON.parse((event as MessageEvent<string>).data) as FleetDashboardSnapshot)
+    } catch (error) {
+      onError?.(error instanceof Error ? error : new Error(String(error)))
+    }
+  })
+  source.addEventListener('dashboard_error', (event) => {
+    try {
+      const payload = JSON.parse((event as MessageEvent<string>).data) as { error?: string }
+      onError?.(new Error(payload.error || 'Fleet dashboard stream snapshot failed'))
+    } catch {
+      onError?.(new Error('Fleet dashboard stream snapshot failed'))
+    }
+  })
+
+  return () => source.close()
+}
+
+export async function approveFederationDashboardApproval(
+  instanceId: string,
+  approvalId: string,
+  reason: string,
+): Promise<FleetDecisionResponse> {
+  return apiPost<FleetDecisionResponse>(
+    `/api/federation/dashboard/instances/${encodePathSegment(instanceId)}/approvals/${encodePathSegment(approvalId)}/approve`,
+    { reason },
+  )
+}
+
+export async function denyFederationDashboardApproval(
+  instanceId: string,
+  approvalId: string,
+  reason: string,
+): Promise<FleetDecisionResponse> {
+  return apiPost<FleetDecisionResponse>(
+    `/api/federation/dashboard/instances/${encodePathSegment(instanceId)}/approvals/${encodePathSegment(approvalId)}/deny`,
+    { reason },
+  )
 }
 
 // ── Graph Builder ────────────────────────────────────────────

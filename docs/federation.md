@@ -39,6 +39,62 @@ Mode is derived automatically from the topology shape — not configured directl
 
 ---
 
+## Fleet Dashboard
+
+The Fleet Dashboard is the operator control layer above individual War Rooms. It is exposed in War Room at `/war-room/federation/fleet` when `FEATURE_FEDERATION_DASHBOARD=true` and `FEATURE_FEDERATION=true`.
+
+It is designed to answer one operational question first: which Lancelot instances need human attention right now?
+
+### Snapshot Contract
+
+The dashboard control plane uses `GET /api/federation/dashboard` for the fleet snapshot and `GET /api/federation/dashboard/stream` for live snapshot updates. The root dashboard fetches each reachable peer through the signed `GET /api/federation/dashboard/local` endpoint, so peer detail uses the same Ed25519 federation request-signing and replay protection as the rest of the federation plane.
+
+The snapshot includes:
+
+- fleet counters: total instances, instances needing attention, critical instances, pending approvals, active agents, Soul consistency, and fleet cost utilization
+- sorted instance cards with health, heartbeat, Soul hash, budget, active HIVE agents, pending approvals, trust proposals, latest receipt activity, and attention reasons
+- unified approval queue entries aggregated across the local instance and peers
+- unified trust graduation proposals aggregated across the local instance and peers
+- fleet activity sourced from receipt streams, not a separate event log
+
+### Instance Card Semantics
+
+`health` is the local instance health-monitor/readiness state. Federation notices such as stale cost data, Soul propagation, or peer-detail fetch failures are shown as `Needs Attention` reasons instead of automatically marking the instance health as degraded.
+
+Important card fields:
+
+| Field | Meaning |
+|-------|---------|
+| `command_center_url` | Deep link to the instance Command Center (`/war-room/command`) |
+| `health` | Local health snapshot: healthy, degraded, or error |
+| `heartbeat` | Federation heartbeat freshness for that instance |
+| `budget` | Latest cost utilization and threshold state |
+| `recent_activity` | Latest receipt-derived activity description |
+| `attention_reasons` | Operator-facing notices that explain amber/red card state |
+
+The local `SELF` card links inside the current War Room. Remote cards link to the peer War Room address with the Command Center path appended. The War Room auth flow preserves the requested path so a signed-in operator lands back on the deep link after login.
+
+### Unified Approval Proxy
+
+Fleet-level approve and deny actions call:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/dashboard/instances/{instance_id}/approvals/{approval_id}/approve` | Approve a pending local or remote dashboard approval |
+| POST | `/dashboard/instances/{instance_id}/approvals/{approval_id}/deny` | Deny a pending local or remote dashboard approval |
+| POST | `/dashboard/local/approvals/{approval_id}/approve` | Root-to-peer signed local approval endpoint |
+| POST | `/dashboard/local/approvals/{approval_id}/deny` | Root-to-peer signed local denial endpoint |
+
+Operator decisions require both `federation.admin` and `governance.admin` on the root dashboard path. Remote local endpoints require an operator request or a signed ROOT peer request. Every proxy decision carries operator identity and emits a governance receipt with `federated_proxy=true`.
+
+### Activity and Attention Sources
+
+Fleet Activity and card `Latest Activity` are receipt-backed. They surface meaningful receipt descriptions from `action_name`, tool/capability metadata, request text, or receipt action type.
+
+An instance can be `Healthy` while still `Needs Attention`. Examples include pending approvals, pending trust proposals, stale heartbeat, stale budget telemetry for a current peer, Soul mismatch, remote dashboard detail unavailable, or runtime errors reported by the federation control plane.
+
+---
+
 ## Module Reference
 
 | Module | Purpose |
@@ -456,6 +512,9 @@ The audit engine supports complete timeline reconstruction across all instances,
 |--------|----------|-------------|
 | GET | `/stream` | SSE heartbeat stream + initial snapshot |
 | GET | `/health` | Current health summary |
+| GET | `/dashboard` | Fleet Dashboard snapshot with local and peer cards |
+| GET | `/dashboard/stream` | Fleet Dashboard SSE snapshot stream |
+| GET | `/dashboard/local` | Local dashboard detail for an operator or signed ROOT peer |
 
 ### Discovery
 | Method | Endpoint | Description |
@@ -541,6 +600,10 @@ Pause semantics are now fail-closed and runtime-backed:
 |--------|----------|-------------|
 | POST | `/killswitch` | Receive kill command |
 | POST | `/cost/report` | Report cost data |
+| POST | `/dashboard/instances/{instance_id}/approvals/{approval_id}/approve` | Approve a dashboard approval on a local or remote instance |
+| POST | `/dashboard/instances/{instance_id}/approvals/{approval_id}/deny` | Deny a dashboard approval on a local or remote instance |
+| POST | `/dashboard/local/approvals/{approval_id}/approve` | Signed ROOT-to-peer local approval proxy endpoint |
+| POST | `/dashboard/local/approvals/{approval_id}/deny` | Signed ROOT-to-peer local denial proxy endpoint |
 
 Budget-report authority is intentionally narrow:
 
@@ -604,3 +667,10 @@ Peer state is persisted in SQLite with WAL mode for concurrent reads and thread-
 | `auth_timestamp_window_s` | 30.0 | Replay protection window |
 | `nonce_cache_size` | 10000 | Max cached nonces |
 | `cost_report_interval_s` | 30.0 | Cost reporting interval |
+| `dashboard.enabled` | true | Enables dashboard API responses when feature flags are enabled |
+| `dashboard.poll_interval_s` | 10.0 | War Room polling interval for dashboard refreshes |
+| `dashboard.stream_interval_s` | 3.0 | Dashboard SSE snapshot interval |
+| `dashboard.max_recent_activity_items` | 50 | Receipt-backed activity items kept per local snapshot |
+| `dashboard.card_sort_order` | urgency | Instance card sort order: urgency, alphabetical, or role |
+| `dashboard.show_fleet_activity_feed` | true | Include fleet activity rows in the snapshot |
+| `dashboard.activity_feed_max_events` | 200 | Max fleet activity rows returned to War Room |

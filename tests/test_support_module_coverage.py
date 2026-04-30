@@ -1788,6 +1788,64 @@ def test_model_discovery_handles_missing_profiles_and_provider_errors(tmp_path):
     assert discovery.get_stack()["provider"] == "broken"
 
 
+def test_model_discovery_profile_fallbacks_do_not_pin_newer_models(tmp_path):
+    from providers.base import ModelInfo
+    from model_discovery import ModelDiscovery
+
+    profiles = tmp_path / "profiles.yaml"
+    profiles.write_text(
+        """
+profiles:
+  gpt-5.4:
+    capability_tier: deep
+    context_window: 1000000
+    supports_tools: true
+    cost_output_per_1k: 0.015
+  gpt-5.5:
+    capability_tier: deep
+    context_window: 1000000
+    supports_tools: true
+    cost_output_per_1k: 0.03
+""",
+        encoding="utf-8",
+    )
+
+    class Provider:
+        provider_name = "openai"
+
+        def list_models(self):
+            return [
+                ModelInfo(id="gpt-5.4", display_name="GPT-5.4", supports_tools=True),
+                ModelInfo(id="gpt-5.5", display_name="GPT-5.5", supports_tools=True),
+            ]
+
+    discovery = ModelDiscovery(
+        Provider(),
+        profiles_path=str(profiles),
+        fallback_lanes={"deep": "gpt-5.4"},
+    )
+    discovery.refresh()
+
+    assert discovery.get_lane_model("deep") == "gpt-5.5"
+    assert discovery.get_stack()["lanes"]["deep"]["source"] == "auto"
+
+    class FailingProvider:
+        provider_name = "openai"
+
+        def list_models(self):
+            raise RuntimeError("provider unavailable")
+
+    fallback = ModelDiscovery(
+        FailingProvider(),
+        profiles_path=str(profiles),
+        fallback_lanes={"deep": "gpt-5.4"},
+    )
+    fallback.refresh()
+
+    assert fallback.get_lane_model("deep") == "gpt-5.4"
+    assert fallback.get_stack()["lanes"]["deep"]["source"] == "fallback"
+
+
 def test_soul_template_registry_loads_filters_applies_and_invalidates(tmp_path, monkeypatch):
     from src.core.soul import amendments, linter, store, templates
 

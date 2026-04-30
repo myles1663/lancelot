@@ -184,12 +184,15 @@ class OpenAIProviderClient(ProviderClient):
     # Legacy Codex OAuth model list retained for compatibility only.
     # Pricing: per 1M tokens → per 1K tokens (divide by 1000)
     _CODEX_MODELS = [
+        ModelInfo(id="gpt-5.5", display_name="GPT-5.5", supports_tools=True,
+                  capability_tier="deep", context_window=1000000,
+                  input_cost_per_1k=0.005, output_cost_per_1k=0.03),
         ModelInfo(id="gpt-5.4", display_name="GPT-5.4", supports_tools=True,
-                  capability_tier="deep", context_window=400000,
-                  input_cost_per_1k=0.00125, output_cost_per_1k=0.01),
+                  capability_tier="deep", context_window=1000000,
+                  input_cost_per_1k=0.0025, output_cost_per_1k=0.015),
         ModelInfo(id="gpt-5.4-mini", display_name="GPT-5.4 Mini", supports_tools=True,
                   capability_tier="fast", context_window=400000,
-                  input_cost_per_1k=0.00025, output_cost_per_1k=0.002),
+                  input_cost_per_1k=0.00075, output_cost_per_1k=0.0045),
         ModelInfo(id="gpt-5.4-nano", display_name="GPT-5.4 Nano", supports_tools=True,
                   capability_tier="fast", context_window=400000,
                   input_cost_per_1k=0.00005, output_cost_per_1k=0.0004),
@@ -214,9 +217,16 @@ class OpenAIProviderClient(ProviderClient):
                     continue
 
                 tier = "standard"
-                if "mini" in model_id:
+                if "mini" in model_id or "nano" in model_id:
                     tier = "fast"
-                elif "o1" in model_id or "o3" in model_id or "o4" in model_id:
+                elif (
+                    "o1" in model_id
+                    or "o3" in model_id
+                    or "o4" in model_id
+                    or model_id.startswith("gpt-5")
+                    or model_id.endswith("-pro")
+                    or "-pro-" in model_id
+                ):
                     tier = "deep"
 
                 models.append(ModelInfo(

@@ -24,7 +24,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from urllib.parse import quote, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -39,6 +41,9 @@ router = APIRouter(
     prefix="/api/federation",
     tags=["federation"],
 )
+
+_COST_STALE_REASON_PREFIX = "Federation cost data stale for peer(s): "
+_HEARTBEAT_STREAM_FAILED_PREFIX = "Federation heartbeat stream failed for peer(s): "
 
 # Module-level state — set by init_federation_api()
 _identity = None
@@ -215,6 +220,20 @@ class ManageKillRequest(BaseModel):
     target_ids: Optional[list[str]] = None
 
 
+class DashboardDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(..., min_length=1, max_length=1000)
+
+
+class FederatedDashboardDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(..., min_length=1, max_length=1000)
+    operator_identity: Dict[str, Any] = Field(default_factory=dict)
+    source_instance_id: str = ""
+
+
 def init_federation_api(
     identity,
     heartbeat_emitter,
@@ -291,6 +310,21 @@ def _summarize_circuit_breakers(states: Dict[str, Dict[str, Any]]) -> Dict[str, 
         if state_name in summary:
             summary[state_name] += 1
     return summary
+
+
+def _current_federation_instance_ids() -> set[str]:
+    ids: set[str] = set()
+    if _identity and getattr(_identity, "instance_id", ""):
+        ids.add(str(_identity.instance_id))
+    if _topology_registry is not None:
+        try:
+            for peer in _topology_registry.list_peers():
+                peer_id = str(getattr(peer, "instance_id", "") or "")
+                if peer_id:
+                    ids.add(peer_id)
+        except Exception as exc:
+            logger.debug("Failed to collect current federation instance IDs: %s", exc)
+    return ids
 
 
 async def _parse_request_model(
@@ -423,7 +457,17 @@ def _build_runtime_status() -> Dict[str, Any]:
                     )
                     degraded_reasons.append("Federation cost status unavailable")
                 cost_threshold = budget_status.get("threshold", cost_threshold)
-                stale_instance_ids = list(budget_status.get("stale_instance_ids", []) or [])
+                raw_stale_ids = [
+                    str(instance_id)
+                    for instance_id in list(budget_status.get("stale_instance_ids", []) or [])
+                    if str(instance_id)
+                ]
+                current_ids = _current_federation_instance_ids()
+                stale_instance_ids = [
+                    instance_id
+                    for instance_id in raw_stale_ids
+                    if not current_ids or instance_id in current_ids
+                ]
                 if stale_instance_ids:
                     degraded_reasons.append(
                         "Federation cost data stale for peer(s): "
@@ -477,6 +521,1194 @@ def _build_runtime_status() -> Dict[str, Any]:
         "divergence_duration_s": divergence_duration_s,
         "reconciliation": reconciliation,
     }
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc_now_iso() -> str:
+    return _utc_now().isoformat()
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _short_id(value: str) -> str:
+    if not value:
+        return ""
+    return value[:12]
+
+
+def _elapsed_seconds(iso_timestamp: Optional[str]) -> Optional[float]:
+    if not iso_timestamp:
+        return None
+    try:
+        parsed = datetime.fromisoformat(iso_timestamp)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return max(0.0, (_utc_now() - parsed).total_seconds())
+    except Exception:
+        return None
+
+
+def _display_name_from_address(address: str) -> str:
+    if not address:
+        return ""
+    try:
+        parsed = urlparse(address)
+        return parsed.hostname or address.replace("https://", "").replace("http://", "")
+    except Exception:
+        return address.replace("https://", "").replace("http://", "")
+
+
+def _command_center_url(address: str) -> str:
+    if not address:
+        return ""
+    base = str(address).rstrip("/")
+    if base.endswith("/war-room/command"):
+        return base
+    if base.endswith("/war-room"):
+        return f"{base}/command"
+    return f"{base}/war-room/command"
+
+
+def _dashboard_instance_label_map() -> Dict[str, str]:
+    labels: Dict[str, str] = {}
+    if _identity and getattr(_identity, "instance_id", ""):
+        labels[str(_identity.instance_id)] = "Local Lancelot"
+    if _topology_registry is not None:
+        try:
+            for peer in _topology_registry.list_peers():
+                peer_id = str(getattr(peer, "instance_id", "") or "")
+                if not peer_id:
+                    continue
+                metadata = getattr(peer, "metadata", {}) or {}
+                address = str(getattr(peer, "address", "") or "")
+                labels[peer_id] = (
+                    str(metadata.get("instance_name", "")).strip()
+                    or _display_name_from_address(address)
+                    or f"Instance {_short_id(peer_id)}"
+                )
+        except Exception as exc:
+            logger.debug("Failed to collect dashboard instance labels: %s", exc)
+    return labels
+
+
+def _format_dashboard_instance_list(instance_ids: list[str]) -> str:
+    labels = _dashboard_instance_label_map()
+    return ", ".join(
+        labels.get(instance_id) or f"Instance {_short_id(instance_id)}"
+        for instance_id in instance_ids
+    )
+
+
+def _parse_reason_instance_ids(reason: str, prefix: str) -> list[str]:
+    if not reason.startswith(prefix):
+        return []
+    return [
+        item.strip()
+        for item in reason[len(prefix):].split(",")
+        if item.strip()
+    ]
+
+
+def _dashboard_runtime_attention_reasons(runtime_status: Dict[str, Any]) -> list[str]:
+    current_ids = _current_federation_instance_ids()
+    formatted: list[str] = []
+    for raw_reason in runtime_status.get("degraded_reasons", []) or []:
+        reason = str(raw_reason or "").strip()
+        if not reason:
+            continue
+
+        stale_cost_ids = _parse_reason_instance_ids(reason, _COST_STALE_REASON_PREFIX)
+        if stale_cost_ids:
+            relevant_ids = [
+                instance_id for instance_id in stale_cost_ids
+                if not current_ids or instance_id in current_ids
+            ]
+            if relevant_ids:
+                formatted.append(
+                    "Cost telemetry stale for "
+                    + _format_dashboard_instance_list(relevant_ids)
+                )
+            continue
+
+        failed_stream_ids = _parse_reason_instance_ids(
+            reason,
+            _HEARTBEAT_STREAM_FAILED_PREFIX,
+        )
+        if failed_stream_ids:
+            relevant_ids = [
+                instance_id for instance_id in failed_stream_ids
+                if not current_ids or instance_id in current_ids
+            ]
+            if relevant_ids:
+                formatted.append(
+                    "Heartbeat stream failed for "
+                    + _format_dashboard_instance_list(relevant_ids)
+                )
+            continue
+
+        formatted.append(reason)
+    return list(dict.fromkeys(formatted))
+
+
+def _dashboard_config_payload() -> Dict[str, Any]:
+    dashboard = getattr(_config, "dashboard", None)
+    return {
+        "enabled": bool(getattr(dashboard, "enabled", True)),
+        "poll_interval_s": _safe_float(getattr(dashboard, "poll_interval_s", 10.0), 10.0),
+        "stream_interval_s": _safe_float(
+            getattr(dashboard, "stream_interval_s", 3.0),
+            3.0,
+        ),
+        "max_recent_activity_items": _safe_int(
+            getattr(dashboard, "max_recent_activity_items", 50),
+            50,
+        ),
+        "card_sort_order": str(getattr(dashboard, "card_sort_order", "urgency") or "urgency"),
+        "show_fleet_activity_feed": bool(
+            getattr(dashboard, "show_fleet_activity_feed", True)
+        ),
+        "activity_feed_max_events": _safe_int(
+            getattr(dashboard, "activity_feed_max_events", 200),
+            200,
+        ),
+    }
+
+
+def _dashboard_disabled_reason() -> str:
+    try:
+        import feature_flags as ff
+    except Exception:
+        return "Feature flags unavailable"
+
+    if not getattr(ff, "FEATURE_FEDERATION", False):
+        return "FEATURE_FEDERATION is disabled"
+    if not getattr(ff, "FEATURE_FEDERATION_DASHBOARD", False):
+        return "FEATURE_FEDERATION_DASHBOARD is disabled"
+    if not _dashboard_config_payload()["enabled"]:
+        return "Federation dashboard is disabled in config/federation.yaml"
+    return ""
+
+
+def _empty_dashboard_snapshot(*, enabled: bool, disabled_reason: str = "") -> Dict[str, Any]:
+    return {
+        "enabled": enabled,
+        "disabled_reason": disabled_reason,
+        "generated_at": _utc_now_iso(),
+        "command_center_path": "/war-room/command",
+        "dashboard": _dashboard_config_payload(),
+        "fleet": {
+            "total_instances": 0,
+            "instances_needing_attention": 0,
+            "critical_instances": 0,
+            "lost_instances": 0,
+            "paused_instances": 0,
+            "pending_approvals": 0,
+            "trust_proposals": 0,
+            "active_agents": 0,
+            "fleet_cost_utilization_pct": 0.0,
+            "budget_threshold": "unknown",
+            "soul_consistency": "unknown",
+        },
+        "instances": [],
+        "approvals": [],
+        "trust_proposals": [],
+        "activity": [],
+        "errors": [],
+    }
+
+
+def _budget_threshold_for_pct(pct: float) -> str:
+    if pct >= 100.0:
+        return "hard_stop"
+    if pct >= 95.0:
+        return "spawn_gated"
+    if pct >= 85.0:
+        return "spawn_restricted"
+    if pct >= 75.0:
+        return "warning"
+    return "normal"
+
+
+def _collect_cost_data() -> tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
+    by_instance: Dict[str, Dict[str, Any]] = {}
+    aggregate: Dict[str, Any] = {
+        "utilization_pct": 0.0,
+        "threshold": "unknown",
+        "stale_instance_ids": [],
+    }
+    if not _cost_reporter:
+        return by_instance, aggregate
+
+    try:
+        status = _cost_reporter.get_aggregate_status()
+        if isinstance(status, dict):
+            aggregate.update(status)
+            if status.get("instance_id"):
+                by_instance[str(status["instance_id"])] = status
+    except Exception as exc:
+        aggregate["error"] = str(exc)
+        return by_instance, aggregate
+
+    aggregator = getattr(_cost_reporter, "_cost_aggregator", None)
+    if aggregator is not None:
+        try:
+            for item in aggregator.get_all_instances():
+                payload = item.to_dict() if hasattr(item, "to_dict") else dict(item)
+                instance_id = str(payload.get("instance_id", ""))
+                if instance_id:
+                    by_instance[instance_id] = payload
+        except Exception as exc:
+            aggregate["instance_error"] = str(exc)
+
+    return by_instance, aggregate
+
+
+def _collect_local_hive_summary() -> Dict[str, int]:
+    summary = {"active_agents": 0, "paused_agents": 0}
+    try:
+        from src.hive import api as hive_api
+
+        registry = getattr(hive_api, "_registry", None)
+        if registry is None:
+            return summary
+        agents = registry.list_active()
+        for agent in agents:
+            state = getattr(getattr(agent, "state", ""), "value", getattr(agent, "state", ""))
+            state = str(state).lower()
+            if state == "paused":
+                summary["paused_agents"] += 1
+            elif state in {"spawning", "ready", "executing", "waiting", "completing"}:
+                summary["active_agents"] += 1
+        if not agents and hasattr(registry, "active_count"):
+            summary["active_agents"] = _safe_int(registry.active_count())
+    except Exception as exc:
+        logger.debug("Failed to collect local HIVE dashboard summary: %s", exc)
+    return summary
+
+
+def _approval_context_from_params(params: Any) -> str:
+    if not params:
+        return ""
+    try:
+        return json.dumps(params, sort_keys=True)[:240]
+    except Exception:
+        return str(params)[:240]
+
+
+def _collect_local_approvals(instance_id: str, instance_name: str) -> list[Dict[str, Any]]:
+    approvals: list[Dict[str, Any]] = []
+    try:
+        from src.core import governance_api
+
+        sentry = getattr(governance_api, "_mcp_sentry", None)
+        if sentry is not None:
+            cleanup = getattr(sentry, "cleanup_expired", None)
+            if callable(cleanup):
+                cleanup()
+            for approval_id, req in getattr(sentry, "pending_requests", {}).items():
+                if str(req.get("status", "")).upper() != "PENDING":
+                    continue
+                capability = str(req.get("tool", "unknown"))
+                approvals.append({
+                    "id": approval_id,
+                    "instance_id": instance_id,
+                    "instance_name": instance_name,
+                    "type": "sentry",
+                    "action_name": capability,
+                    "risk_tier": str(req.get("risk_tier") or "T3"),
+                    "capability": capability,
+                    "context": _approval_context_from_params(req.get("params", {})),
+                    "created_at": req.get("timestamp", ""),
+                    "waiting_since": req.get("timestamp", ""),
+                })
+
+        rule_engine = getattr(governance_api, "_rule_engine", None)
+        if rule_engine is not None:
+            for rule in rule_engine.list_rules(status="proposed"):
+                approvals.append({
+                    "id": rule.id,
+                    "instance_id": instance_id,
+                    "instance_name": instance_name,
+                    "type": "apl_rule",
+                    "action_name": getattr(rule, "name", "Approval learning rule"),
+                    "risk_tier": "T2",
+                    "capability": "approval_learning.rule",
+                    "context": getattr(rule, "description", ""),
+                    "created_at": getattr(rule, "created_at", ""),
+                    "waiting_since": getattr(rule, "created_at", ""),
+                })
+    except Exception as exc:
+        logger.debug("Failed to collect local approval dashboard data: %s", exc)
+    return approvals
+
+
+def _collect_local_trust_proposals(instance_id: str, instance_name: str) -> list[Dict[str, Any]]:
+    proposals: list[Dict[str, Any]] = []
+    try:
+        from src.core import trust_api, governance_api
+
+        ledger = getattr(trust_api, "_trust_ledger", None) or getattr(
+            governance_api,
+            "_trust_ledger",
+            None,
+        )
+        if ledger is None:
+            return proposals
+        for proposal in ledger.pending_proposals():
+            proposals.append({
+                "id": proposal.id,
+                "instance_id": instance_id,
+                "instance_name": instance_name,
+                "capability": proposal.capability,
+                "scope": proposal.scope,
+                "current_tier": int(proposal.current_tier),
+                "proposed_tier": int(proposal.proposed_tier),
+                "consecutive_successes": proposal.consecutive_successes,
+                "status": proposal.status,
+                "created_at": proposal.created_at,
+            })
+    except Exception as exc:
+        logger.debug("Failed to collect local trust dashboard data: %s", exc)
+    return proposals
+
+
+def _receipt_payload_value(receipt: Any, key: str) -> str:
+    for attr in ("metadata", "outputs", "inputs"):
+        payload = getattr(receipt, attr, {}) or {}
+        if isinstance(payload, dict) and payload.get(key):
+            return str(payload[key])
+    return ""
+
+
+def _receipt_activity_description(receipt: Any) -> str:
+    action_name = str(getattr(receipt, "action_name", "") or "").strip()
+    if action_name:
+        return action_name
+    for key in ("description", "message", "event", "phase", "capability"):
+        value = _receipt_payload_value(receipt, key)
+        if value:
+            return value
+    return str(getattr(receipt, "action_type", "") or "receipt")
+
+
+def _collect_local_activity(instance_id: str, instance_name: str, limit: int) -> list[Dict[str, Any]]:
+    events: list[Dict[str, Any]] = []
+    try:
+        from src.core.receipts_api import get_receipt_service_instance
+
+        service = get_receipt_service_instance()
+        if service is None:
+            return events
+        receipts = service.list(limit=limit)
+        for receipt in receipts:
+            metadata = getattr(receipt, "metadata", {}) or {}
+            operator = (
+                metadata.get("operator_id")
+                or metadata.get("operator")
+                or metadata.get("actor")
+                or ""
+            )
+            events.append({
+                "id": getattr(receipt, "id", ""),
+                "timestamp": getattr(receipt, "timestamp", ""),
+                "instance_id": instance_id,
+                "instance_name": instance_name,
+                "event_type": getattr(receipt, "action_type", ""),
+                "description": _receipt_activity_description(receipt),
+                "operator": operator,
+                "status": getattr(receipt, "status", ""),
+            })
+    except Exception as exc:
+        logger.debug("Failed to collect local dashboard activity: %s", exc)
+    return events
+
+
+def _collect_runtime_pause() -> Dict[str, Any]:
+    try:
+        from src.core.runtime_pause import get_runtime_pause_status
+
+        status = get_runtime_pause_status()
+        return status if isinstance(status, dict) else {}
+    except Exception as exc:
+        logger.debug("Failed to collect runtime pause status: %s", exc)
+        return {}
+
+
+def _collect_local_health_state() -> tuple[str, list[str]]:
+    try:
+        from health import api as health_api
+
+        if getattr(health_api, "_snapshot_provider", None) is None:
+            return "healthy", []
+        snapshot = health_api._get_snapshot()
+        reasons = [
+            str(reason)
+            for reason in getattr(snapshot, "degraded_reasons", []) or []
+            if str(reason)
+        ]
+        if getattr(snapshot, "ready", False):
+            return "healthy", []
+        if not getattr(snapshot, "last_health_tick_at", None) and not reasons:
+            return "healthy", []
+        return "degraded", reasons or ["System health degraded"]
+    except Exception as exc:
+        logger.debug("Failed to collect local health dashboard state: %s", exc)
+        return "healthy", []
+
+
+def _derive_attention_state(instance: Dict[str, Any]) -> tuple[str, list[str]]:
+    reasons = list(instance.get("attention_reasons", []) or [])
+    heartbeat_state = str(instance.get("heartbeat_state", "")).lower()
+    health = str(instance.get("health", "")).lower()
+    budget_threshold = str(instance.get("budget_threshold", "")).lower()
+    soul_matches_root = instance.get("soul_matches_root")
+    pending_approvals = _safe_int(instance.get("pending_approvals"))
+    trust_proposals = _safe_int(instance.get("trust_proposals"))
+    paused_agents = _safe_int(instance.get("paused_agents"))
+    runtime_errors = instance.get("runtime_errors", []) or []
+    detail_status = str(instance.get("detail_status", "available")).lower()
+    paused = bool(instance.get("paused")) or paused_agents > 0
+
+    if heartbeat_state in {"critical", "lost"}:
+        reasons.append(f"Heartbeat {heartbeat_state}")
+    elif heartbeat_state == "warning":
+        reasons.append("Heartbeat warning")
+
+    if health in {"degraded", "error"}:
+        reasons.append(f"Health {health}")
+
+    if pending_approvals > 0:
+        reasons.append(f"{pending_approvals} pending approval(s)")
+    if trust_proposals > 0:
+        reasons.append(f"{trust_proposals} trust proposal(s)")
+    if budget_threshold in {"spawn_gated", "hard_stop", "blocked", "exceeded", "critical"}:
+        reasons.append(f"Budget {budget_threshold}")
+    elif budget_threshold in {"warning", "spawn_restricted", "restricted"}:
+        reasons.append(f"Budget {budget_threshold}")
+    if soul_matches_root is False:
+        reasons.append("Soul hash differs from root")
+    if detail_status != "available":
+        reasons.append("Remote detail unavailable")
+    if runtime_errors:
+        reasons.append("Runtime errors present")
+    if paused:
+        reasons.append("Runtime paused")
+
+    deduped = list(dict.fromkeys(reason for reason in reasons if reason))
+
+    if paused:
+        state = "paused"
+    elif (
+        heartbeat_state in {"critical", "lost"}
+        or health == "error"
+        or budget_threshold in {"spawn_gated", "hard_stop", "blocked", "exceeded", "critical"}
+        or runtime_errors
+    ):
+        state = "critical"
+    elif deduped:
+        state = "attention"
+    else:
+        state = "healthy"
+    return state, deduped
+
+
+def _build_local_instance_snapshot(
+    runtime_status: Dict[str, Any],
+    cost_by_instance: Dict[str, Dict[str, Any]],
+    aggregate_cost: Dict[str, Any],
+) -> tuple[Dict[str, Any], list[Dict[str, Any]], list[Dict[str, Any]], list[Dict[str, Any]]]:
+    instance_id = _identity.instance_id if _identity else ""
+    instance_name = "Local Lancelot"
+    if _config and getattr(_config, "self_address", ""):
+        instance_name = _display_name_from_address(_config.self_address) or instance_name
+
+    latest_hb = _heartbeat_emitter.get_latest() if _heartbeat_emitter else None
+    heartbeat_age = _elapsed_seconds(latest_hb.timestamp if latest_hb else None)
+    heartbeat_state = "fresh" if latest_hb else "lost"
+    soul_hash = (
+        runtime_status.get("local_soul_hash")
+        or (latest_hb.soul_version_hash if latest_hb else "")
+        or ""
+    )
+
+    hive = _collect_local_hive_summary()
+    approvals = _collect_local_approvals(instance_id, instance_name)
+    trust_proposals = _collect_local_trust_proposals(instance_id, instance_name)
+    activity_limit = _dashboard_config_payload()["max_recent_activity_items"]
+    activity = _collect_local_activity(instance_id, instance_name, activity_limit)
+    recent = activity[0] if activity else None
+    pause_status = _collect_runtime_pause()
+    paused = bool(pause_status.get("paused", False))
+    health, health_reasons = _collect_local_health_state()
+    attention_reasons = list(health_reasons)
+    attention_reasons.extend(_dashboard_runtime_attention_reasons(runtime_status))
+
+    cost = cost_by_instance.get(instance_id, {})
+    budget_pct = _safe_float(
+        cost.get("utilization_pct")
+        or (latest_hb.budget_utilization_pct if latest_hb else 0.0)
+    )
+    budget_threshold = (
+        str(cost.get("threshold_level") or cost.get("threshold") or "")
+        or (
+            str(aggregate_cost.get("threshold"))
+            if aggregate_cost.get("instance_count", 1) <= 1
+            else ""
+        )
+        or _budget_threshold_for_pct(budget_pct)
+    )
+
+    if paused:
+        health = "paused"
+
+    instance = {
+        "instance_id": instance_id,
+        "instance_short_id": _short_id(instance_id),
+        "name": instance_name,
+        "role": "self",
+        "address": getattr(_config, "self_address", "") if _config else "",
+        "command_center_url": "/war-room/command",
+        "is_self": True,
+        "state": "healthy",
+        "health": health,
+        "heartbeat_state": heartbeat_state,
+        "heartbeat_age_s": heartbeat_age,
+        "last_heartbeat_at": latest_hb.timestamp if latest_hb else None,
+        "soul_version_hash": soul_hash,
+        "soul_matches_root": True if soul_hash else None,
+        "budget_utilization_pct": round(budget_pct, 1),
+        "budget_threshold": budget_threshold,
+        "active_agents": hive["active_agents"],
+        "paused_agents": hive["paused_agents"],
+        "pending_approvals": len(approvals),
+        "trust_proposals": len(trust_proposals),
+        "recent_activity": recent.get("description") if recent else "",
+        "recent_activity_at": recent.get("timestamp") if recent else None,
+        "attention_reasons": attention_reasons,
+        "runtime_errors": list(runtime_status.get("runtime_errors", []) or []),
+        "detail_status": "available",
+        "paused": paused,
+        "pause_reason": pause_status.get("reason"),
+    }
+    instance["state"], instance["attention_reasons"] = _derive_attention_state(instance)
+    return instance, approvals, trust_proposals, activity
+
+
+def _peer_instance_base(
+    peer: Any,
+    *,
+    root_soul_hash: str,
+    cost_by_instance: Dict[str, Dict[str, Any]],
+    detail_error: str = "",
+) -> Dict[str, Any]:
+    from src.federation.heartbeat import compute_staleness
+
+    peer_id = str(getattr(peer, "instance_id", ""))
+    address = str(getattr(peer, "address", ""))
+    metadata = getattr(peer, "metadata", {}) or {}
+    instance_name = (
+        str(metadata.get("instance_name", "")).strip()
+        or _display_name_from_address(address)
+        or f"Instance {_short_id(peer_id)}"
+    )
+    last_heartbeat = getattr(peer, "last_heartbeat_at", None)
+    heartbeat_state, heartbeat_age = compute_staleness(
+        last_heartbeat,
+        warning_s=getattr(_config, "staleness_warning_s", 10.0),
+        critical_s=getattr(_config, "staleness_critical_s", 20.0),
+        lost_s=getattr(_config, "staleness_lost_s", 30.0),
+    )
+    cost = cost_by_instance.get(peer_id, {})
+    budget_pct = _safe_float(cost.get("utilization_pct"))
+    budget_threshold = str(
+        cost.get("threshold_level")
+        or cost.get("threshold")
+        or _budget_threshold_for_pct(budget_pct)
+    )
+    soul_hash = str(getattr(peer, "soul_version_hash", "") or "")
+    soul_matches_root = None
+    if root_soul_hash and soul_hash:
+        soul_matches_root = soul_hash == root_soul_hash
+
+    instance = {
+        "instance_id": peer_id,
+        "instance_short_id": _short_id(peer_id),
+        "name": instance_name,
+        "role": str(getattr(peer, "role", "peer") or "peer"),
+        "address": address,
+        "command_center_url": _command_center_url(address),
+        "is_self": False,
+        "state": "healthy",
+        "health": "unknown" if detail_error else "healthy",
+        "heartbeat_state": heartbeat_state,
+        "heartbeat_age_s": heartbeat_age if heartbeat_age >= 0 else None,
+        "last_heartbeat_at": last_heartbeat,
+        "soul_version_hash": soul_hash,
+        "soul_matches_root": soul_matches_root,
+        "budget_utilization_pct": round(budget_pct, 1),
+        "budget_threshold": budget_threshold,
+        "active_agents": 0,
+        "paused_agents": 0,
+        "pending_approvals": 0,
+        "trust_proposals": 0,
+        "recent_activity": "",
+        "recent_activity_at": None,
+        "attention_reasons": [detail_error] if detail_error else [],
+        "runtime_errors": [],
+        "detail_status": "unavailable" if detail_error else "topology_only",
+        "paused": False,
+        "pause_reason": "",
+    }
+    instance["state"], instance["attention_reasons"] = _derive_attention_state(instance)
+    return instance
+
+
+def _merge_peer_detail(base: Dict[str, Any], detail: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(base)
+    passthrough_fields = {
+        "health",
+        "active_agents",
+        "paused_agents",
+        "pending_approvals",
+        "trust_proposals",
+        "recent_activity",
+        "recent_activity_at",
+        "runtime_errors",
+        "paused",
+        "pause_reason",
+    }
+    for field in passthrough_fields:
+        if field in detail:
+            merged[field] = detail[field]
+
+    if detail.get("name"):
+        merged["name"] = detail["name"]
+    if detail.get("soul_version_hash") and not merged.get("soul_version_hash"):
+        merged["soul_version_hash"] = detail["soul_version_hash"]
+    if detail.get("budget_utilization_pct"):
+        merged["budget_utilization_pct"] = detail["budget_utilization_pct"]
+    if detail.get("budget_threshold"):
+        merged["budget_threshold"] = detail["budget_threshold"]
+
+    detail_reasons = list(detail.get("attention_reasons", []) or [])
+    merged["attention_reasons"] = list(
+        dict.fromkeys(list(merged.get("attention_reasons", []) or []) + detail_reasons)
+    )
+    merged["detail_status"] = "available"
+    merged["state"], merged["attention_reasons"] = _derive_attention_state(merged)
+    return merged
+
+
+def _normalize_remote_rows(
+    rows: Any,
+    *,
+    instance_id: str,
+    instance_name: str,
+) -> list[Dict[str, Any]]:
+    normalized: list[Dict[str, Any]] = []
+    if not isinstance(rows, list):
+        return normalized
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        item["instance_id"] = item.get("instance_id") or instance_id
+        item["instance_name"] = item.get("instance_name") or instance_name
+        normalized.append(item)
+    return normalized
+
+
+def _sort_dashboard_instances(instances: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    sort_order = _dashboard_config_payload()["card_sort_order"]
+    if sort_order == "alphabetical":
+        return sorted(instances, key=lambda item: str(item.get("name", "")).lower())
+    if sort_order == "role":
+        return sorted(instances, key=lambda item: (str(item.get("role", "")), str(item.get("name", ""))))
+
+    severity = {"critical": 0, "attention": 1, "paused": 2, "healthy": 3}
+    return sorted(
+        instances,
+        key=lambda item: (
+            severity.get(str(item.get("state", "healthy")), 4),
+            -_safe_int(item.get("pending_approvals")),
+            -_safe_int(item.get("trust_proposals")),
+            str(item.get("name", "")).lower(),
+        ),
+    )
+
+
+def _build_fleet_summary(
+    instances: list[Dict[str, Any]],
+    *,
+    aggregate_cost: Dict[str, Any],
+    runtime_status: Dict[str, Any],
+) -> Dict[str, Any]:
+    return {
+        "total_instances": len(instances),
+        "instances_needing_attention": sum(
+            1 for item in instances if item.get("state") in {"attention", "critical", "paused"}
+        ),
+        "critical_instances": sum(1 for item in instances if item.get("state") == "critical"),
+        "lost_instances": sum(1 for item in instances if item.get("heartbeat_state") == "lost"),
+        "paused_instances": sum(1 for item in instances if item.get("state") == "paused"),
+        "pending_approvals": sum(_safe_int(item.get("pending_approvals")) for item in instances),
+        "trust_proposals": sum(_safe_int(item.get("trust_proposals")) for item in instances),
+        "active_agents": sum(_safe_int(item.get("active_agents")) for item in instances),
+        "fleet_cost_utilization_pct": round(_safe_float(aggregate_cost.get("utilization_pct")), 1),
+        "budget_threshold": str(aggregate_cost.get("threshold", "unknown") or "unknown"),
+        "soul_consistency": str(runtime_status.get("soul_consistency", "unknown") or "unknown"),
+    }
+
+
+async def _fetch_peer_dashboard_local(peer: Any) -> tuple[Optional[Dict[str, Any]], str]:
+    if _transport is None or not callable(getattr(_transport, "send", None)):
+        return None, "Federation transport not available for remote dashboard detail"
+    address = str(getattr(peer, "address", "") or "")
+    if not address:
+        return None, "Peer address unavailable"
+    timeout = min(_safe_float(getattr(_config, "command_timeout_s", 5.0), 5.0), 5.0)
+    result = await _transport.send(
+        peer_address=address,
+        method="GET",
+        path="/api/federation/dashboard/local",
+        peer_id=str(getattr(peer, "instance_id", "")),
+        timeout_override_s=timeout,
+    )
+    if not getattr(result, "success", False):
+        status_code = getattr(result, "status_code", None)
+        error = getattr(result, "error", "") or f"HTTP {status_code}"
+        return None, f"Remote dashboard detail unavailable: {error}"
+    body = getattr(result, "body", None)
+    if not isinstance(body, dict):
+        return None, "Remote dashboard detail returned an invalid payload"
+    if body.get("enabled") is False:
+        return None, body.get("disabled_reason") or "Remote dashboard disabled"
+    return body, ""
+
+
+async def _build_dashboard_snapshot(*, include_remote: bool) -> Dict[str, Any]:
+    disabled_reason = _dashboard_disabled_reason()
+    if disabled_reason:
+        return _empty_dashboard_snapshot(enabled=False, disabled_reason=disabled_reason)
+
+    runtime_status = _build_runtime_status()
+    cost_by_instance, aggregate_cost = _collect_cost_data()
+    local_instance, approvals, trust_proposals, activity = _build_local_instance_snapshot(
+        runtime_status,
+        cost_by_instance,
+        aggregate_cost,
+    )
+
+    instances = [local_instance]
+    errors: list[Dict[str, Any]] = []
+
+    peers = _topology_registry.list_peers() if _topology_registry else []
+    root_soul_hash = str(runtime_status.get("local_soul_hash", "") or "")
+
+    if include_remote and peers:
+        remote_results = await asyncio.gather(
+            *[_fetch_peer_dashboard_local(peer) for peer in peers],
+            return_exceptions=True,
+        )
+        for peer, result in zip(peers, remote_results):
+            detail: Optional[Dict[str, Any]] = None
+            detail_error = ""
+            if isinstance(result, Exception):
+                detail_error = f"Remote dashboard detail failed: {result}"
+            else:
+                detail, detail_error = result
+
+            base = _peer_instance_base(
+                peer,
+                root_soul_hash=root_soul_hash,
+                cost_by_instance=cost_by_instance,
+                detail_error=detail_error,
+            )
+
+            if detail:
+                remote_instances = detail.get("instances", [])
+                remote_instance = remote_instances[0] if remote_instances else {}
+                if isinstance(remote_instance, dict):
+                    base = _merge_peer_detail(base, remote_instance)
+                instance_id = str(base.get("instance_id", ""))
+                instance_name = str(base.get("name", ""))
+                approvals.extend(
+                    _normalize_remote_rows(
+                        detail.get("approvals", []),
+                        instance_id=instance_id,
+                        instance_name=instance_name,
+                    )
+                )
+                trust_proposals.extend(
+                    _normalize_remote_rows(
+                        detail.get("trust_proposals", []),
+                        instance_id=instance_id,
+                        instance_name=instance_name,
+                    )
+                )
+                activity.extend(
+                    _normalize_remote_rows(
+                        detail.get("activity", []),
+                        instance_id=instance_id,
+                        instance_name=instance_name,
+                    )
+                )
+            elif detail_error:
+                errors.append({
+                    "instance_id": getattr(peer, "instance_id", ""),
+                    "message": detail_error,
+                })
+            instances.append(base)
+    elif include_remote:
+        for peer in peers:
+            instances.append(
+                _peer_instance_base(
+                    peer,
+                    root_soul_hash=root_soul_hash,
+                    cost_by_instance=cost_by_instance,
+                )
+            )
+
+    instances = _sort_dashboard_instances(instances)
+    approvals.sort(
+        key=lambda item: (
+            0 if str(item.get("risk_tier", "")).upper() == "T3" else 1,
+            str(item.get("created_at") or item.get("waiting_since") or ""),
+        )
+    )
+    trust_proposals.sort(key=lambda item: str(item.get("created_at", "")))
+    activity.sort(key=lambda item: str(item.get("timestamp", "")), reverse=True)
+    if not _dashboard_config_payload()["show_fleet_activity_feed"]:
+        activity = []
+    else:
+        activity = activity[:_dashboard_config_payload()["activity_feed_max_events"]]
+
+    return {
+        "enabled": True,
+        "disabled_reason": "",
+        "generated_at": _utc_now_iso(),
+        "command_center_path": "/war-room/command",
+        "dashboard": _dashboard_config_payload(),
+        "fleet": _build_fleet_summary(
+            instances,
+            aggregate_cost=aggregate_cost,
+            runtime_status=runtime_status,
+        ),
+        "instances": instances,
+        "approvals": approvals,
+        "trust_proposals": trust_proposals,
+        "activity": activity,
+        "errors": errors,
+    }
+
+
+def _require_dashboard_enabled_for_action() -> None:
+    disabled_reason = _dashboard_disabled_reason()
+    if disabled_reason:
+        raise HTTPException(status_code=403, detail=disabled_reason)
+
+
+def _clean_decision_reason(reason: str) -> str:
+    cleaned = str(reason or "").strip()
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="A decision reason is required")
+    return cleaned
+
+
+def _dashboard_operator_identity_from_request(request: Request):
+    from src.core.auth_api import resolve_authenticated_identity
+
+    identity = resolve_authenticated_identity(request)
+    if identity is None or not getattr(identity, "is_valid", False):
+        raise HTTPException(status_code=401, detail="Operator identity is required")
+    return identity
+
+
+def _operator_identity_from_payload(payload: Dict[str, Any]):
+    from src.core.operator_identity import OperatorIdentity
+
+    try:
+        identity = OperatorIdentity.from_dict(payload or {})
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Invalid operator_identity payload") from exc
+    if not identity.is_valid:
+        raise HTTPException(status_code=401, detail="Valid operator_identity is required")
+    return identity
+
+
+def _require_dashboard_operator_decision_capabilities(request: Request) -> None:
+    if getattr(request.state, "federation_auth_mode", "") == "root_peer":
+        return
+
+    from src.core.auth_api import request_has_capability
+
+    missing = [
+        capability
+        for capability in ("federation.admin", "governance.admin")
+        if not request_has_capability(request, capability)
+    ]
+    if missing:
+        raise HTTPException(status_code=403, detail=f"Missing capability: {missing[0]}")
+
+
+def _apply_local_dashboard_decision(
+    approval_id: str,
+    *,
+    decision: str,
+    reason: str,
+    identity: Any,
+) -> Dict[str, Any]:
+    from src.core import governance_api
+
+    normalized = str(decision or "").lower()
+    if normalized == "approve":
+        result = governance_api._approve_item_direct(
+            approval_id,
+            reason=reason,
+            identity=identity,
+        )
+    elif normalized == "deny":
+        result = governance_api._deny_item_direct(
+            approval_id,
+            reason=reason,
+            identity=identity,
+        )
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported decision: {decision}")
+
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Approval item {approval_id} not found")
+    if not isinstance(result, dict):
+        return {"status": normalized, "id": approval_id, "result": result}
+    return result
+
+
+def _receipt_action_type_for_dashboard_decision(result: Dict[str, Any], decision: str):
+    from src.shared.receipts import ActionType
+
+    result_type = str(result.get("type", "")).lower()
+    approved = decision == "approve"
+    if result_type == "sentry":
+        return ActionType.MCP_T3_APPROVED if approved else ActionType.MCP_T3_REJECTED
+    if result_type == "apl_rule":
+        return ActionType.APL_RULE_APPROVED if approved else ActionType.APL_RULE_REJECTED
+    return ActionType.T3_APPROVED if approved else ActionType.T3_REJECTED
+
+
+def _emit_dashboard_proxy_receipt(
+    *,
+    identity: Any,
+    decision: str,
+    target_instance_id: str,
+    approval_id: str,
+    result: Dict[str, Any],
+) -> None:
+    from src.core.governance_receipts import emit_governance_receipt_for_identity
+
+    action_type = _receipt_action_type_for_dashboard_decision(result, decision)
+    source_instance_id = _identity.instance_id if _identity else ""
+    emit_governance_receipt_for_identity(
+        identity,
+        action_type,
+        action_name=f"federation_approval_proxy_{decision}",
+        inputs={
+            "approval_id": approval_id,
+            "target_instance_id": target_instance_id,
+            "source_instance_id": source_instance_id,
+            "decision": decision,
+            "result_type": result.get("type", ""),
+        },
+        outputs={"remote_result": result},
+        metadata={
+            "federated_proxy": True,
+            "target_instance_id": target_instance_id,
+            "source_instance_id": source_instance_id,
+            "operator_id": getattr(identity, "operator_id", ""),
+        },
+    )
+
+
+def _find_dashboard_peer(instance_id: str):
+    if not _topology_registry:
+        raise HTTPException(status_code=404, detail="Federation topology is unavailable")
+    peer = _topology_registry.get_peer(instance_id)
+    if peer is None:
+        raise HTTPException(status_code=404, detail=f"Federation instance {instance_id} not found")
+    return peer
+
+
+async def _send_dashboard_decision_to_peer(
+    peer: Any,
+    *,
+    approval_id: str,
+    decision: str,
+    reason: str,
+    identity: Any,
+) -> Dict[str, Any]:
+    if _transport is None or not callable(getattr(_transport, "send", None)):
+        raise HTTPException(status_code=503, detail="Federation transport not available")
+
+    address = str(getattr(peer, "address", "") or "")
+    if not address:
+        raise HTTPException(status_code=503, detail="Federation peer address unavailable")
+
+    peer_id = str(getattr(peer, "instance_id", "") or "")
+    timeout = min(_safe_float(getattr(_config, "command_timeout_s", 5.0), 5.0), 10.0)
+    result = await _transport.send(
+        peer_address=address,
+        method="POST",
+        path=(
+            "/api/federation/dashboard/local/approvals/"
+            f"{quote(approval_id, safe='')}/{decision}"
+        ),
+        body={
+            "reason": reason,
+            "operator_identity": identity.to_dict(),
+            "source_instance_id": _identity.instance_id if _identity else "",
+        },
+        peer_id=peer_id,
+        timeout_override_s=timeout,
+    )
+
+    body = getattr(result, "body", None)
+    if not getattr(result, "success", False):
+        status_code = getattr(result, "status_code", 0) or 502
+        if status_code < 400 or status_code > 599:
+            status_code = 502
+        detail = ""
+        if isinstance(body, dict):
+            detail = str(body.get("detail") or body.get("error") or "")
+        detail = detail or getattr(result, "error", "") or f"HTTP {status_code}"
+        raise HTTPException(status_code=status_code, detail=detail)
+
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=502, detail="Remote approval decision returned invalid payload")
+    return body
+
+
+async def _handle_federation_dashboard_decision(
+    request: Request,
+    *,
+    instance_id: str,
+    approval_id: str,
+    decision: str,
+    reason: str,
+) -> JSONResponse:
+    if not _initialized:
+        return _not_initialized()
+    _require_dashboard_enabled_for_action()
+
+    normalized_decision = str(decision or "").lower()
+    clean_reason = _clean_decision_reason(reason)
+    identity = _dashboard_operator_identity_from_request(request)
+    local_instance_id = _identity.instance_id if _identity else ""
+
+    if instance_id == local_instance_id:
+        result = _apply_local_dashboard_decision(
+            approval_id,
+            decision=normalized_decision,
+            reason=clean_reason,
+            identity=identity,
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "decision": normalized_decision,
+                "instance_id": instance_id,
+                "approval_id": approval_id,
+                "result": result,
+            },
+        )
+
+    peer = _find_dashboard_peer(instance_id)
+    remote_body = await _send_dashboard_decision_to_peer(
+        peer,
+        approval_id=approval_id,
+        decision=normalized_decision,
+        reason=clean_reason,
+        identity=identity,
+    )
+    if remote_body.get("success") is False:
+        raise HTTPException(
+            status_code=502,
+            detail=remote_body.get("error") or remote_body.get("detail") or "Remote decision failed",
+        )
+
+    remote_result = remote_body.get("result")
+    if not isinstance(remote_result, dict):
+        remote_result = {"result": remote_result}
+    _emit_dashboard_proxy_receipt(
+        identity=identity,
+        decision=normalized_decision,
+        target_instance_id=instance_id,
+        approval_id=approval_id,
+        result=remote_result,
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": True,
+            "decision": normalized_decision,
+            "instance_id": instance_id,
+            "approval_id": approval_id,
+            "result": remote_result,
+            "remote": remote_body,
+        },
+    )
+
+
+def _handle_local_dashboard_decision(
+    request: Request,
+    *,
+    approval_id: str,
+    decision: str,
+    body: FederatedDashboardDecisionRequest,
+) -> JSONResponse:
+    if not _initialized:
+        return _not_initialized()
+    _require_dashboard_enabled_for_action()
+    _require_dashboard_operator_decision_capabilities(request)
+
+    identity = (
+        _operator_identity_from_payload(body.operator_identity)
+        if body.operator_identity
+        else _dashboard_operator_identity_from_request(request)
+    )
+    clean_reason = _clean_decision_reason(body.reason)
+    normalized_decision = str(decision or "").lower()
+    result = _apply_local_dashboard_decision(
+        approval_id,
+        decision=normalized_decision,
+        reason=clean_reason,
+        identity=identity,
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": True,
+            "decision": normalized_decision,
+            "instance_id": _identity.instance_id if _identity else "",
+            "approval_id": approval_id,
+            "source_instance_id": body.source_instance_id,
+            "result": result,
+        },
+    )
 
 
 def _not_initialized() -> JSONResponse:
@@ -542,6 +1774,34 @@ async def _require_operator_or_valid_peer_request(request: Request) -> None:
         if exc.status_code not in {401, 503}:
             raise
     await _require_valid_peer_request(request)
+
+
+async def _require_operator_or_root_peer_request(request: Request) -> None:
+    """Allow either a local operator or a signed ROOT federation peer request."""
+    try:
+        require_authenticated_request(request)
+        request.state.federation_auth_mode = "operator"
+        return
+    except HTTPException as exc:
+        if exc.status_code not in {401, 503}:
+            raise
+
+    if not _auth:
+        raise HTTPException(status_code=401, detail="Federation authentication is required")
+
+    await _require_valid_peer_request(request)
+    peer_id = str(getattr(request.state, "federation_peer_instance_id", "") or "")
+    if not peer_id:
+        raise HTTPException(status_code=401, detail="Signed federation peer identity is required")
+
+    peer = _topology_registry.get_peer(peer_id) if _topology_registry else None
+    role = str(getattr(peer, "role", "") or "").lower() if peer else ""
+    if role != "root":
+        raise HTTPException(
+            status_code=403,
+            detail="Dashboard detail and decisions require ROOT peer authority",
+        )
+    request.state.federation_auth_mode = "root_peer"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -972,6 +2232,141 @@ async def get_federation_health(
         "divergence_status_error": runtime_status["divergence_status_error"],
         "active_propagation_count": len(runtime_status["active_propagations"]),
     })
+
+
+@router.get("/dashboard")
+async def get_federation_dashboard(
+    _authn: None = Depends(require_authenticated_request),
+):
+    """Return the operator fleet dashboard snapshot for this control plane."""
+    if not _initialized:
+        return _not_initialized()
+
+    snapshot = await _build_dashboard_snapshot(include_remote=True)
+    return JSONResponse(status_code=200, content=snapshot)
+
+
+@router.get("/dashboard/stream")
+async def stream_federation_dashboard(
+    _authn: None = Depends(require_authenticated_request),
+):
+    """Stream live fleet dashboard snapshots for the operator control plane."""
+    if not _initialized:
+        return _not_initialized()
+
+    async def event_generator():
+        while True:
+            try:
+                snapshot = await _build_dashboard_snapshot(include_remote=True)
+                yield f"event: snapshot\ndata: {json.dumps(snapshot)}\n\n"
+                interval = _safe_float(
+                    snapshot.get("dashboard", {}).get("stream_interval_s"),
+                    3.0,
+                )
+                await asyncio.sleep(max(1.0, min(interval, 30.0)))
+            except asyncio.CancelledError:
+                logger.debug("Federation dashboard stream cancelled")
+                raise
+            except Exception as exc:
+                logger.warning("Federation dashboard stream snapshot failed: %s", exc)
+                payload = {"error": str(exc), "generated_at": _utc_now_iso()}
+                yield f"event: dashboard_error\ndata: {json.dumps(payload)}\n\n"
+                await asyncio.sleep(3.0)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/dashboard/local")
+async def get_local_federation_dashboard(
+    request: Request,
+    _authn_or_peer: None = Depends(_require_operator_or_root_peer_request),
+):
+    """Return this instance's local dashboard detail for an operator or ROOT peer."""
+    if not _initialized:
+        return _not_initialized()
+
+    snapshot = await _build_dashboard_snapshot(include_remote=False)
+    return JSONResponse(status_code=200, content=snapshot)
+
+
+@router.post("/dashboard/instances/{instance_id}/approvals/{approval_id}/approve")
+async def approve_federation_dashboard_approval(
+    request: Request,
+    instance_id: str,
+    approval_id: str,
+    body: DashboardDecisionRequest,
+    _authn: None = Depends(require_authenticated_request),
+    _federation_capability: None = Depends(require_operator_capability("federation.admin")),
+    _governance_capability: None = Depends(require_operator_capability("governance.admin")),
+):
+    """Approve a pending governance item on any federated dashboard instance."""
+    return await _handle_federation_dashboard_decision(
+        request,
+        instance_id=instance_id,
+        approval_id=approval_id,
+        decision="approve",
+        reason=body.reason,
+    )
+
+
+@router.post("/dashboard/instances/{instance_id}/approvals/{approval_id}/deny")
+async def deny_federation_dashboard_approval(
+    request: Request,
+    instance_id: str,
+    approval_id: str,
+    body: DashboardDecisionRequest,
+    _authn: None = Depends(require_authenticated_request),
+    _federation_capability: None = Depends(require_operator_capability("federation.admin")),
+    _governance_capability: None = Depends(require_operator_capability("governance.admin")),
+):
+    """Deny a pending governance item on any federated dashboard instance."""
+    return await _handle_federation_dashboard_decision(
+        request,
+        instance_id=instance_id,
+        approval_id=approval_id,
+        decision="deny",
+        reason=body.reason,
+    )
+
+
+@router.post("/dashboard/local/approvals/{approval_id}/approve")
+async def approve_local_dashboard_approval(
+    request: Request,
+    approval_id: str,
+    body: FederatedDashboardDecisionRequest,
+    _authn_or_peer: None = Depends(_require_operator_or_root_peer_request),
+):
+    """Approve a local pending governance item for a federated ROOT dashboard."""
+    return _handle_local_dashboard_decision(
+        request,
+        approval_id=approval_id,
+        decision="approve",
+        body=body,
+    )
+
+
+@router.post("/dashboard/local/approvals/{approval_id}/deny")
+async def deny_local_dashboard_approval(
+    request: Request,
+    approval_id: str,
+    body: FederatedDashboardDecisionRequest,
+    _authn_or_peer: None = Depends(_require_operator_or_root_peer_request),
+):
+    """Deny a local pending governance item for a federated ROOT dashboard."""
+    return _handle_local_dashboard_decision(
+        request,
+        approval_id=approval_id,
+        decision="deny",
+        body=body,
+    )
 
 
 @router.get("/peers")

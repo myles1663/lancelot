@@ -60,6 +60,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     title: 'FEDERATION',
     items: [
+      { label: 'Fleet Dashboard', path: '/federation/fleet' },
       { label: 'Overview', path: '/federation' },
       { label: 'Graph Builder', path: '/federation/graph' },
       { label: 'Audit Trail', path: '/federation/audit' },

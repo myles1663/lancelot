@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Outlet, Navigate, useNavigate } from 'react-router-dom'
+import { Outlet, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { validateSession, logout } from '@/api/auth'
 import { SessionExpiryModal } from './SessionExpiryModal'
 import { getErrorMessage } from '@/utils/errors'
@@ -12,6 +12,7 @@ const WARNING_THRESHOLD_S = 300 // Show warning when <5 min remaining
 
 export function AuthGuard() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [authState, setAuthState] = useState<AuthState>('checking')
   const [showExpiryModal, setShowExpiryModal] = useState(false)
   const [remainingSeconds, setRemainingSeconds] = useState(0)
@@ -77,7 +78,13 @@ export function AuthGuard() {
   }
 
   if (authState === 'unauthenticated') {
-    return <Navigate to="/login" replace />
+    return (
+      <Navigate
+        to="/login"
+        replace
+        state={{ returnTo: `${location.pathname}${location.search}${location.hash}` }}
+      />
+    )
   }
 
   return (

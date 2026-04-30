@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   getAuthConfig,
   getOidcLoginUrl,
@@ -12,8 +12,18 @@ import { ApiClientError } from '@/api/client'
 import logo from '@/assets/logo.jpeg'
 import { getErrorMessage } from '@/utils/errors'
 
+function isSafeReturnPath(value: unknown): value is string {
+  return (
+    typeof value === 'string'
+    && value.startsWith('/')
+    && !value.startsWith('//')
+    && !value.startsWith('/login')
+  )
+}
+
 export function LoginPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [authConfig, setAuthConfig] = useState<AuthConfigResponse | null>(null)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -23,6 +33,13 @@ export function LoginPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [resetMode, setResetMode] = useState(false)
+  const stateReturnTo = (location.state as { returnTo?: unknown } | null)?.returnTo
+  const queryReturnTo = new URLSearchParams(location.search).get('return_to')
+  const returnTo = isSafeReturnPath(stateReturnTo)
+    ? stateReturnTo
+    : isSafeReturnPath(queryReturnTo)
+      ? queryReturnTo
+      : '/command'
 
   useEffect(() => {
     document.title = 'Sign In | Lancelot War Room'
@@ -36,7 +53,7 @@ export function LoginPage() {
     validateSession()
       .then((session) => {
         if (!cancelled && session.valid) {
-          navigate('/command', { replace: true })
+          navigate(returnTo, { replace: true })
         }
       })
       .catch((error) => {
@@ -49,7 +66,7 @@ export function LoginPage() {
     return () => {
       cancelled = true
     }
-  }, [navigate])
+  }, [navigate, returnTo])
 
   useEffect(() => {
     let cancelled = false
@@ -77,7 +94,7 @@ export function LoginPage() {
     setLoading(true)
     try {
       await login(username, password)
-      navigate('/command', { replace: true })
+      navigate(returnTo, { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')
     } finally {
@@ -288,6 +305,9 @@ export function LoginPage() {
 
       <a
         href={getOidcLoginUrl(authConfig?.oidc.login_path || '/auth/oidc/login')}
+        onClick={() => {
+          window.sessionStorage.setItem('warRoomReturnTo', returnTo)
+        }}
         className="block w-full py-2.5 bg-accent-primary hover:bg-accent-primary/90 text-white text-sm font-medium rounded-lg transition-colors text-center"
       >
         {authConfig?.oidc.display_name || 'Continue with Enterprise SSO'}

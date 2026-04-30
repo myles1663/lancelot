@@ -106,6 +106,34 @@ profiles:
     cost_input_per_1k: 0.00113
     cost_output_per_1k: 0.0045
 
+  gpt-5.5:
+    capability_tier: deep
+    context_window: 1000000
+    supports_tools: true
+    cost_input_per_1k: 0.005
+    cost_output_per_1k: 0.03
+
+  gpt-5.4:
+    capability_tier: deep
+    context_window: 1000000
+    supports_tools: true
+    cost_input_per_1k: 0.0025
+    cost_output_per_1k: 0.015
+
+  gpt-5.4-mini:
+    capability_tier: fast
+    context_window: 400000
+    supports_tools: true
+    cost_input_per_1k: 0.00075
+    cost_output_per_1k: 0.0045
+
+  gpt-5.4-nano:
+    capability_tier: fast
+    context_window: 400000
+    supports_tools: true
+    cost_input_per_1k: 0.00005
+    cost_output_per_1k: 0.0004
+
   # ── Anthropic ──────────────────────────────────────────────────────
   claude-3-5-haiku-latest:
     capability_tier: fast

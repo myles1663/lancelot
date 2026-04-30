@@ -86,6 +86,7 @@ class CodexCLIProviderClient(ProviderClient):
     """
 
     _CODEX_MODELS = [
+        ModelInfo(id="gpt-5.5", display_name="GPT-5.5", supports_tools=True, capability_tier="deep"),
         ModelInfo(id="gpt-5.4", display_name="GPT-5.4", supports_tools=True, capability_tier="deep"),
         ModelInfo(id="gpt-5.4-mini", display_name="GPT-5.4 Mini", supports_tools=True, capability_tier="fast"),
         ModelInfo(id="gpt-5.4-nano", display_name="GPT-5.4 Nano", supports_tools=True, capability_tier="fast"),

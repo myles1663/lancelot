@@ -54,7 +54,11 @@ async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     // Session expired — redirect to login
     if (res.status === 401) {
-      window.location.href = '/war-room/login'
+      const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`
+      const returnTo = currentPath.startsWith('/war-room')
+        ? currentPath.slice('/war-room'.length) || '/command'
+        : currentPath
+      window.location.href = `/war-room/login?return_to=${encodeURIComponent(returnTo)}`
       throw new ApiClientError(401, { error: 'Session expired', status: 401 })
     }
     let body: ApiError

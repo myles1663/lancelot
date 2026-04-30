@@ -1359,30 +1359,46 @@ def _bootstrap_model_discovery():
         _persisted_config = load_persisted_config()
         _persisted_lane_overrides = _persisted_config.get("lane_overrides", {})
 
-        _lane_overrides = {}
+        _fallback_lanes = {}
         try:
             from provider_profile import ProfileRegistry
             _registry = ProfileRegistry()
             _prov_name = main_orchestrator.provider.provider_name
             if _registry.has_provider(_prov_name):
                 _profile = _registry.get_profile(_prov_name)
-                _lane_overrides["fast"] = _profile.fast.model
-                _lane_overrides["deep"] = _profile.deep.model
+                _fallback_lanes["fast"] = _profile.fast.model
+                _fallback_lanes["deep"] = _profile.deep.model
                 if _profile.cache:
-                    _lane_overrides["cache"] = _profile.cache.model
+                    _fallback_lanes["cache"] = _profile.cache.model
         except Exception as exc:
             logger.warning("Model discovery profile lookup failed; using persisted/env overrides only: %s", exc)
 
-        _lane_overrides.update(_persisted_lane_overrides)
+        _lane_overrides = dict(_persisted_lane_overrides)
 
-        discovery = ModelDiscovery(
-            provider=main_orchestrator.provider,
-            profiles_path="config/model_profiles.yaml",
-            lane_overrides=_lane_overrides,
-        )
+        try:
+            discovery = ModelDiscovery(
+                provider=main_orchestrator.provider,
+                profiles_path="config/model_profiles.yaml",
+                lane_overrides=_lane_overrides,
+                fallback_lanes=_fallback_lanes,
+            )
+        except TypeError:
+            discovery = ModelDiscovery(
+                provider=main_orchestrator.provider,
+                profiles_path="config/model_profiles.yaml",
+                lane_overrides=_lane_overrides,
+            )
         discovery.refresh()
 
+        for _lane, _model_id in discovery.lane_assignments.items():
+            try:
+                main_orchestrator.set_lane_model(_lane, _model_id)
+            except Exception as _e:
+                logger.warning("Failed to apply lane assignment %s=%s: %s", _lane, _model_id, _e)
+
         for _lane, _model_id in _persisted_lane_overrides.items():
+            if discovery.lane_assignments.get(_lane) == _model_id:
+                continue
             try:
                 main_orchestrator.set_lane_model(_lane, _model_id)
             except Exception as _e:

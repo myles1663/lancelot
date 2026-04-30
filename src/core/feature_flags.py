@@ -56,6 +56,7 @@ Google OAuth environment variables:
 
 Federation Environment variables:
     FEATURE_FEDERATION               — default: false (multi-instance federation layer)
+    FEATURE_FEDERATION_DASHBOARD     — default: false (fleet dashboard UI/API)
 
 MCP (Model Context Protocol) Environment variables:
     FEATURE_MCP                      — default: false (master kill switch for all MCP invocations)
@@ -244,6 +245,7 @@ FEATURE_VAULT_SECRETS: bool = _env_bool("FEATURE_VAULT_SECRETS", default=True)  
 
 # Federation — multi-instance coordination
 FEATURE_FEDERATION: bool = _env_bool("FEATURE_FEDERATION", default=False)  # Master switch for Federation subsystem (Governance API, heartbeat, identity)
+FEATURE_FEDERATION_DASHBOARD: bool = _env_bool("FEATURE_FEDERATION_DASHBOARD", default=False)  # Operator fleet dashboard above per-instance War Rooms
 
 # MCP (Model Context Protocol) — governed tool proxy
 FEATURE_MCP: bool = _env_bool("FEATURE_MCP", default=False)  # Master kill switch for all MCP tool invocations
@@ -335,7 +337,7 @@ def reload_flags() -> None:
     global FEATURE_TOOL_FLOW_STREAMING, FEATURE_ACTION_CARDS
     global FEATURE_HIVE, FEATURE_HIVE_UAB
     global FEATURE_VAULT_SECRETS
-    global FEATURE_FEDERATION
+    global FEATURE_FEDERATION, FEATURE_FEDERATION_DASHBOARD
     global FEATURE_MCP
     global FEATURE_TIME_TRAVEL
     global FEATURE_A2A
@@ -417,6 +419,7 @@ def reload_flags() -> None:
 
     # Federation
     FEATURE_FEDERATION = _env_bool("FEATURE_FEDERATION", default=False)
+    FEATURE_FEDERATION_DASHBOARD = _env_bool("FEATURE_FEDERATION_DASHBOARD", default=False)
 
     # MCP
     FEATURE_MCP = _env_bool("FEATURE_MCP", default=False)
@@ -516,8 +519,8 @@ def log_feature_flags() -> None:
         FEATURE_VAULT_SECRETS,
     )
     logger.info(
-        "Federation flags: FEDERATION=%s",
-        FEATURE_FEDERATION,
+        "Federation flags: FEDERATION=%s, FEDERATION_DASHBOARD=%s",
+        FEATURE_FEDERATION, FEATURE_FEDERATION_DASHBOARD,
     )
     logger.info(
         "MCP flags: MCP=%s",

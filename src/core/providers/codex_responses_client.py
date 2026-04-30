@@ -27,8 +27,11 @@ class OpenAICodexResponsesProviderClient(ProviderClient):
     CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
     _DEFAULT_INSTRUCTIONS = "You are Lancelot's governed model planner."
     _CODEX_MODELS = [
+        ModelInfo(id="gpt-5.5", display_name="GPT-5.5", supports_tools=True,
+                  capability_tier="deep", context_window=1000000,
+                  input_cost_per_1k=0.005, output_cost_per_1k=0.03),
         ModelInfo(id="gpt-5.4", display_name="GPT-5.4", supports_tools=True,
-                  capability_tier="deep", context_window=1050000,
+                  capability_tier="deep", context_window=1000000,
                   input_cost_per_1k=0.0025, output_cost_per_1k=0.015),
         ModelInfo(id="gpt-5.4-mini", display_name="GPT-5.4 Mini", supports_tools=True,
                   capability_tier="fast", context_window=272000,

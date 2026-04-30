@@ -14,6 +14,7 @@ Public API:
 
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -51,12 +52,15 @@ class ModelDiscovery:
         provider: ProviderClient,
         profiles_path: str = None,
         lane_overrides: Optional[dict] = None,
+        fallback_lanes: Optional[dict] = None,
     ):
         self._provider = provider
         self._profiles = _load_profiles(profiles_path)
         self._lane_overrides = lane_overrides or {}
+        self._fallback_lanes = fallback_lanes or {}
         self._discovered: list[ModelInfo] = []
         self._lane_assignments: dict[str, str] = {}
+        self._lane_sources: dict[str, str] = {}
         self._last_refresh: Optional[datetime] = None
 
     @property
@@ -70,6 +74,10 @@ class ModelDiscovery:
     @property
     def lane_assignments(self) -> dict[str, str]:
         return dict(self._lane_assignments)
+
+    @property
+    def lane_sources(self) -> dict[str, str]:
+        return dict(self._lane_sources)
 
     def refresh(self) -> None:
         """Query provider API for available models and assign to lanes."""
@@ -117,54 +125,73 @@ class ModelDiscovery:
         - deep lane: highest-capability model with tool support
         - cache lane: cheapest model (tools not required)
 
-        Lane overrides (from models.yaml config) take priority.
+        Explicit lane overrides take priority. Profile lane defaults are used
+        only as fallback when discovery cannot assign a lane.
         """
         assignments = {}
+        sources = {}
 
         # Apply overrides first
         for lane in ("fast", "deep", "cache"):
             if lane in self._lane_overrides:
                 assignments[lane] = self._lane_overrides[lane]
+                sources[lane] = "override"
 
+        if self._discovered:
+            # Filter models with tool support
+            tool_models = [m for m in self._discovered if m.supports_tools]
+            all_models = list(self._discovered)
+
+            # Sort by cost (ascending) for fast/cache selection
+            tool_models_by_cost = sorted(
+                tool_models,
+                key=lambda m: m.output_cost_per_1k or 999.0,
+            )
+            all_by_cost = sorted(
+                all_models,
+                key=lambda m: m.output_cost_per_1k or 999.0,
+            )
+
+            # Sort by capability for deep selection
+            _TIER_RANK = {"fast": 1, "standard": 2, "deep": 3}
+            tool_models_by_cap = sorted(
+                tool_models,
+                key=lambda m: (
+                    _TIER_RANK.get(m.capability_tier, 2),
+                    _model_version_score(m.id),
+                    m.context_window or 0,
+                    m.output_cost_per_1k or 0.0,
+                ),
+                reverse=True,
+            )
+
+            # Fast lane: cheapest with tools
+            if "fast" not in assignments and tool_models_by_cost:
+                assignments["fast"] = tool_models_by_cost[0].id
+                sources["fast"] = "auto"
+
+            # Deep lane: highest capability with tools
+            if "deep" not in assignments and tool_models_by_cap:
+                assignments["deep"] = tool_models_by_cap[0].id
+                sources["deep"] = "auto"
+
+            # Cache lane: cheapest overall
+            if "cache" not in assignments:
+                if all_by_cost:
+                    assignments["cache"] = all_by_cost[0].id
+                    sources["cache"] = "auto"
+                elif "fast" in assignments:
+                    assignments["cache"] = assignments["fast"]
+                    sources["cache"] = sources.get("fast", "auto")
+
+        for lane in ("fast", "deep", "cache"):
+            if lane not in assignments and lane in self._fallback_lanes:
+                assignments[lane] = self._fallback_lanes[lane]
+                sources[lane] = "fallback"
+
+        self._lane_sources = sources
         if not self._discovered:
             return assignments
-
-        # Filter models with tool support
-        tool_models = [m for m in self._discovered if m.supports_tools]
-        all_models = list(self._discovered)
-
-        # Sort by cost (ascending) for fast/cache selection
-        tool_models_by_cost = sorted(
-            tool_models,
-            key=lambda m: m.output_cost_per_1k or 999.0,
-        )
-        all_by_cost = sorted(
-            all_models,
-            key=lambda m: m.output_cost_per_1k or 999.0,
-        )
-
-        # Sort by capability for deep selection
-        _TIER_RANK = {"fast": 1, "standard": 2, "deep": 3}
-        tool_models_by_cap = sorted(
-            tool_models,
-            key=lambda m: _TIER_RANK.get(m.capability_tier, 2),
-            reverse=True,
-        )
-
-        # Fast lane: cheapest with tools
-        if "fast" not in assignments and tool_models_by_cost:
-            assignments["fast"] = tool_models_by_cost[0].id
-
-        # Deep lane: highest capability with tools
-        if "deep" not in assignments and tool_models_by_cap:
-            assignments["deep"] = tool_models_by_cap[0].id
-
-        # Cache lane: cheapest overall
-        if "cache" not in assignments:
-            if all_by_cost:
-                assignments["cache"] = all_by_cost[0].id
-            elif "fast" in assignments:
-                assignments["cache"] = assignments["fast"]
 
         return assignments
 
@@ -172,6 +199,7 @@ class ModelDiscovery:
         """Override a single lane's model assignment at runtime."""
         self._lane_overrides[lane] = model_id
         self._lane_assignments[lane] = model_id
+        self._lane_sources[lane] = "override"
         logger.info("Lane '%s' overridden to %s", lane, model_id)
 
     def reset_overrides(self) -> None:
@@ -184,10 +212,13 @@ class ModelDiscovery:
         self,
         new_provider: ProviderClient,
         lane_overrides: Optional[dict] = None,
+        fallback_lanes: Optional[dict] = None,
     ) -> None:
         """Hot-swap the underlying provider and re-run discovery."""
         self._provider = new_provider
         self._lane_overrides = lane_overrides or {}
+        if fallback_lanes is not None:
+            self._fallback_lanes = fallback_lanes or {}
         self.refresh()
 
     def get_lane_model(self, lane: str) -> Optional[str]:
@@ -233,6 +264,7 @@ class ModelDiscovery:
                 "context_window": profile.get("context_window", 0),
                 "cost_output_per_1k": profile.get("cost_output_per_1k", 0.0),
                 "supports_tools": profile.get("supports_tools", False),
+                "source": self._lane_sources.get(lane, "auto"),
             }
 
         return {
@@ -255,4 +287,22 @@ class ModelDiscovery:
             "last_refresh": (
                 self._last_refresh.isoformat() if self._last_refresh else None
             ),
+            "lane_sources": dict(self._lane_sources),
         }
+
+
+def _model_version_score(model_id: str) -> tuple[int, ...]:
+    """Best-effort recency score for model IDs that encode versions."""
+    model = model_id.lower()
+    match = re.search(r"gpt[-_]?(\d+(?:\.\d+){0,2})", model)
+    if not match:
+        match = re.search(r"gemini[-_](\d+(?:\.\d+){0,2})", model)
+    if not match:
+        match = re.search(r"grok[-_](\d+(?:\.\d+){0,2})", model)
+    if not match:
+        match = re.search(r"claude[-_](?:opus|sonnet|haiku)[-_](\d+)(?:[-_](\d+))?", model)
+        if match:
+            return tuple(int(part) for part in match.groups(default="0"))
+    if match:
+        return tuple(int(part) for part in match.group(1).split("."))
+    return (0,)

@@ -24,6 +24,7 @@ const SkillsPanelPage = lazy(() => import('@/pages/SkillsPanel').then(module => 
 const HiveAgentMeshPage = lazy(() => import('@/pages/HiveAgentMesh').then(module => ({ default: module.HiveAgentMesh })))
 const LoginPageRoute = lazy(() => import('@/pages/LoginPage').then(module => ({ default: module.LoginPage })))
 const LoginCallbackPageRoute = lazy(() => import('@/pages/LoginCallbackPage').then(module => ({ default: module.LoginCallbackPage })))
+const FleetDashboardPage = lazy(() => import('@/pages/FleetDashboard').then(module => ({ default: module.FleetDashboard })))
 const FederationOverviewPage = lazy(() => import('@/pages/FederationOverview').then(module => ({ default: module.FederationOverview })))
 const GraphBuilderPage = lazy(() => import('@/pages/GraphBuilder').then(module => ({ default: module.GraphBuilder })))
 const FederationAuditPage = lazy(() => import('@/pages/FederationAudit').then(module => ({ default: module.FederationAudit })))
@@ -74,6 +75,7 @@ function App() {
           <Route path="/flags" element={routeElement(KillSwitchesPage)} />
 
           {/* FEDERATION */}
+          <Route path="/federation/fleet" element={routeElement(FleetDashboardPage)} />
           <Route path="/federation" element={routeElement(FederationOverviewPage)} />
           <Route path="/federation/graph" element={routeElement(GraphBuilderPage)} />
           <Route path="/federation/audit" element={routeElement(FederationAuditPage)} />

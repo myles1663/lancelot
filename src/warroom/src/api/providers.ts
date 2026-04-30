@@ -10,6 +10,7 @@ export interface LaneAssignment {
   context_window: number
   cost_output_per_1k: number
   supports_tools: boolean
+  source?: string
 }
 
 export interface DiscoveredModel {
@@ -29,6 +30,7 @@ export interface ProviderStackResponse {
   discovered_models: DiscoveredModel[]
   models_count: number
   last_refresh: string | null
+  lane_sources?: Record<string, string>
   status: string
 }
 

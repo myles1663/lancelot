@@ -64,3 +64,13 @@ cost_report_interval_s: 30.0    # How often children report cost to root
 # ── Self Address ────────────────────────────────────────────
 # This instance's externally-reachable address for peer registration
 # self_address: "http://localhost:8000"
+
+# Dashboard settings for the operator-facing fleet view.
+dashboard:
+  enabled: true
+  poll_interval_s: 10
+  stream_interval_s: 3
+  max_recent_activity_items: 50
+  card_sort_order: "urgency"    # urgency | alphabetical | role
+  show_fleet_activity_feed: true
+  activity_feed_max_events: 200

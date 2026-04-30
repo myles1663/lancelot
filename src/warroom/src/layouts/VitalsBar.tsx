@@ -21,13 +21,23 @@ function barColor(val: number, thresholds: [number, number] = [50, 90]) {
 
 function connectionState(health: HealthCheckResponse | null, ready: HealthReadyResponse | null) {
   if (!health && !ready) return { label: 'INITIALIZING', color: 'text-state-inactive', pulse: true }
+  if (ready?.ready) return { label: 'ACTIVE', color: 'text-state-healthy', pulse: false }
+
   const components = health?.components ?? {}
-  const values = Object.values(components)
-  const allHealthy = values.every((v) => v === 'ok' || v === 'disabled')
-  const anyDegraded = values.some((v) => v === 'degraded')
-  const anyError = values.some((v) => v !== 'ok' && v !== 'disabled' && v !== 'degraded')
-  if (allHealthy) return { label: 'ACTIVE', color: 'text-state-healthy', pulse: false }
-  if (anyDegraded && !anyError) return { label: 'DEGRADED', color: 'text-state-degraded', pulse: false }
+  const coreComponents = ['gateway', 'orchestrator', 'local_llm']
+  const coreValues = coreComponents
+    .map((key) => components[key])
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+  const gatewayOffline = health?.status && !['online', 'ok', 'healthy'].includes(health.status)
+  const coreBroken = coreValues.some((v) => !['ok', 'disabled', 'degraded'].includes(v))
+  const coreDegraded = coreValues.some((v) => v === 'degraded') || ready?.ready === false
+
+  if (!gatewayOffline && !coreBroken && !coreDegraded) {
+    return { label: 'ACTIVE', color: 'text-state-healthy', pulse: false }
+  }
+  if (!gatewayOffline && !coreBroken) {
+    return { label: 'DEGRADED', color: 'text-state-degraded', pulse: false }
+  }
   return { label: 'SEVERED', color: 'text-state-error', pulse: false }
 }
 
@@ -187,7 +197,7 @@ export function VitalsBar() {
       {/* Connection */}
       <Vital
         label="Connection"
-        tooltip="Connection to LLM providers. ACTIVE = all providers responding."
+        tooltip="Browser-to-gateway control connection. LLM provider status is shown in Cost Tracker."
       >
         <div className="flex items-center gap-1.5">
           <span

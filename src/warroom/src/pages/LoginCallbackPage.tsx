@@ -2,6 +2,15 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { exchangeOidcLogin } from '@/api/auth'
 
+function isSafeReturnPath(value: unknown): value is string {
+  return (
+    typeof value === 'string'
+    && value.startsWith('/')
+    && !value.startsWith('//')
+    && !value.startsWith('/login')
+  )
+}
+
 export function LoginCallbackPage() {
   const navigate = useNavigate()
   const [error, setError] = useState('')
@@ -10,6 +19,13 @@ export function LoginCallbackPage() {
     const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
     const exchangeCode = hash.get('exchange_code') || ''
     const callbackError = hash.get('error') || ''
+    const hashReturnTo = hash.get('return_to')
+    const storedReturnTo = window.sessionStorage.getItem('warRoomReturnTo')
+    const returnTo = isSafeReturnPath(hashReturnTo)
+      ? hashReturnTo
+      : isSafeReturnPath(storedReturnTo)
+        ? storedReturnTo
+        : '/command'
 
     if (callbackError) {
       setError(callbackError.replace(/_/g, ' '))
@@ -23,7 +39,8 @@ export function LoginCallbackPage() {
 
     exchangeOidcLogin(exchangeCode)
       .then(() => {
-        navigate('/command', { replace: true })
+        window.sessionStorage.removeItem('warRoomReturnTo')
+        navigate(returnTo, { replace: true })
       })
       .catch((err) => {
         setError(err instanceof Error ? err.message : 'Enterprise login failed')

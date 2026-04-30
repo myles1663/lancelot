@@ -7,7 +7,7 @@
 - [Proof Walkthrough](proof-walkthrough.md)
 - [Release Verification](release-verification.md)
 - [Configuration Reference](configuration-reference.md)
-- [War Room Guide](war-room.md)
+- [War Room Guide](war-room.md) - includes Fleet Dashboard operator workflow
 
 ## Architecture
 
@@ -18,7 +18,7 @@
 - [Receipts](receipts.md)
 - [UAB](uab.md)
 - [HIVE](hive.md)
-- [Federation](federation.md)
+- [Federation](federation.md) - includes Fleet Dashboard API and proxy approval contract
 - [MCP Governance](mcp.md)
 
 ## Security and Operations

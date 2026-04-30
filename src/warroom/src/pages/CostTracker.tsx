@@ -29,6 +29,12 @@ const LANE_LABELS: Record<string, string> = {
   cache: 'Cache',
 }
 
+function laneSourceLabel(source?: string): string {
+  if (source === 'override') return 'Pinned'
+  if (source === 'fallback') return 'Default'
+  return 'Auto'
+}
+
 export function CostTracker() {
   usePageTitle('Cost Tracker')
   const { data: summary } = usePolling({ fetcher: fetchUsageSummary, interval: 15000 })
@@ -420,6 +426,7 @@ export function CostTracker() {
                 <tr className="text-text-muted text-left">
                   <th className="py-1 pr-4">Lane</th>
                   <th className="py-1 pr-4">Model</th>
+                  <th className="py-1 pr-4">Mode</th>
                   <th className="py-1 pr-4 text-right">Context</th>
                   <th className="py-1 pr-4 text-right">$/1K out</th>
                   <th className="py-1 text-center">Tools</th>
@@ -463,6 +470,15 @@ export function CostTracker() {
                           <span>{l.display_name || l.model}</span>
                         )}
                         {isLoading && <span className="ml-2 text-text-muted">...</span>}
+                      </td>
+                      <td className="py-2 pr-4">
+                        <span className={`inline-flex rounded border px-1.5 py-0.5 text-[10px] ${
+                          l.source === 'override'
+                            ? 'border-accent-primary/40 text-accent-primary'
+                            : 'border-border-default text-text-muted'
+                        }`}>
+                          {laneSourceLabel(l.source)}
+                        </span>
                       </td>
                       <td className="py-2 pr-4 text-right">{formatCtx(l.context_window)}</td>
                       <td className="py-2 pr-4 text-right">

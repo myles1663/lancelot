@@ -367,6 +367,13 @@ FLAG_META = {
         "conflicts": [],
         "warning": "Exposes federation API endpoints. Peers authenticate via Ed25519 challenge/response. All federation events are receipt-traced and audit-logged.",
     },
+    "FEATURE_FEDERATION_DASHBOARD": {
+        "description": "Federation Dashboard - operator fleet view above per-instance War Rooms. Surfaces instance health, pending approvals, trust proposals, budget pressure, and Command Center entry points.",
+        "category": "Federation",
+        "requires": ["FEATURE_FEDERATION"],
+        "conflicts": [],
+        "warning": "Shows cross-instance operational metadata to authenticated War Room operators. Remote detail retrieval uses signed federation requests.",
+    },
 
     # ── MCP (Model Context Protocol) ────────────────────────────────
     "FEATURE_MCP": {
