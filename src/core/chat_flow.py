@@ -30,6 +30,11 @@ from orchestrator_consts import COMMAND_BLACKLIST_CHARS, COMMAND_WHITELIST
 
 _gov_logger = _logging.getLogger("src.core.orchestrator")
 
+try:
+    from memory.receipt_events import MemoryReceiptEmitter
+except Exception:  # pragma: no cover - package path differs in test runners
+    from src.core.memory.receipt_events import MemoryReceiptEmitter
+
 _SHORT_ACKNOWLEDGEMENTS = {
     "ok",
     "okay",
@@ -701,6 +706,10 @@ def chat(
                     objective=user_message,
                     quest_id=getattr(self, "_current_quest_id", None),
                     mode="crusader" if crusader_mode else "normal",
+                    emit_receipt=True,
+                    receipt_emitter=MemoryReceiptEmitter(
+                        getattr(self, "data_dir", "/home/lancelot/data")
+                    ),
                 )
                 # Structured memory compiler provides core blocks, working memory,
                 # and retrieval items — but NOT conversation history or receipts.

@@ -118,7 +118,11 @@ def test_long_running_context_continuity_smoke(monkeypatch, tmp_data_dir):
 
     assert summary_result.success is True
     assert summary_result.details["summaries_created"] == 1
-    assert archival_items[0].metadata["promotion_decision"]["allowed"] is True
+    summary_items = [
+        item for item in archival_items
+        if item.metadata.get("blob_type") != "full_source"
+    ]
+    assert summary_items[0].metadata["promotion_decision"]["allowed"] is True
     assert "WORKING MEMORY" in compiled.rendered_prompt
     assert "Active Objective" in compiled.rendered_prompt
     assert "RELEVANT MEMORIES" in compiled.rendered_prompt

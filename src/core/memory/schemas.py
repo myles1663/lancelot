@@ -138,6 +138,10 @@ class MemoryItem(BaseModel):
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    last_retrieved_at: Optional[datetime] = Field(
+        default=None,
+        description="Last time the item was included in compiled context.",
+    )
     expires_at: Optional[datetime] = Field(default=None)
     decay_half_life_days: Optional[int] = Field(default=None, ge=1)
     provenance: list[Provenance] = Field(default_factory=list)
@@ -180,6 +184,11 @@ class MemoryEdit(BaseModel):
     reason: str = Field(description="Why this edit is being made")
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     provenance: list[Provenance] = Field(default_factory=list)
+    suggested_status: Optional[MemoryStatus] = Field(
+        default=None,
+        description="Lifecycle status suggested by write gates for the resulting memory.",
+    )
+    editor: Optional[str] = Field(default=None, description="Validated edit actor: owner, agent, or system")
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     @field_validator("target")

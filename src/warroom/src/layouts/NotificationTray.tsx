@@ -14,7 +14,7 @@ export function NotificationTray({ sidebarCollapsed, notifications, onClear }: N
   return (
     <footer
       className={`fixed bottom-0 right-0 z-40 bg-surface-card border-t border-border-default transition-all duration-200 ${
-        sidebarCollapsed ? 'left-0' : 'left-60'
+        sidebarCollapsed ? 'left-0' : 'left-0 lg:left-60'
       } ${expanded ? 'h-60' : 'h-12'}`}
     >
       {/* Collapsed bar */}

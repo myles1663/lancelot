@@ -83,6 +83,7 @@ python -m pytest -q --cov=src --cov-report=term-missing --cov-report=json:covera
 | Area | Status |
 | --- | --- |
 | Governance checks, approvals, kill switches, and receipts | Core path to inspect first |
+| Structured memory, context compilation, quarantine, and memory receipts | Core path to inspect first |
 | Health/readiness, async chat runs, and War Room build | Covered by public proof tests and CI |
 | UAB routing, fallback behavior, and action-risk taxonomy | Implemented with focused test coverage |
 | HIVE scoped sub-agents | Implemented as an optional governed capability surface |

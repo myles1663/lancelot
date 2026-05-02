@@ -38,6 +38,8 @@ from .schemas import (
     ProvenanceType,
 )
 from .store import CoreBlockStore, estimate_tokens
+from .ethics import MemoryEthicsAction, MemoryEthicsEvaluator
+from src.core.security import detect_injection
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +85,7 @@ class ContextCompiler:
         self.core_store = core_store
         self.config = config or default_config
         self.soul_version = soul_version
+        self.ethics = MemoryEthicsEvaluator()
 
     def compile(
         self,
@@ -307,7 +310,37 @@ class ContextCompiler:
         total_tokens = 0
 
         for item in valid_items:
-            item_tokens = item.token_count or estimate_tokens(item.content)
+            ethics_decision = self.ethics.evaluate_retrieval(item)
+            if ethics_decision.action == MemoryEthicsAction.quarantine:
+                ctx.add_exclusion(
+                    item.id,
+                    "memory_ethics",
+                    rule=ethics_decision.rule_name,
+                    reason_detail=ethics_decision.reason,
+                    action=ethics_decision.action.value,
+                )
+                continue
+            if ethics_decision.action == MemoryEthicsAction.exclude:
+                ctx.add_exclusion(
+                    item.id,
+                    "memory_ethics",
+                    rule=ethics_decision.rule_name,
+                    reason_detail=ethics_decision.reason,
+                )
+                continue
+
+            rendered_content = ethics_decision.scrubbed_content or item.content
+            injection = detect_injection(rendered_content)
+            if injection.detected:
+                ctx.add_exclusion(
+                    item.id,
+                    "injection_detected",
+                    detection_reason=injection.reason,
+                    matched=injection.matched,
+                )
+                continue
+
+            item_tokens = estimate_tokens(rendered_content)
 
             if total_tokens + item_tokens > budget:
                 ctx.add_exclusion(
@@ -329,7 +362,7 @@ class ContextCompiler:
                 continue
 
             lines.append(f"\n[{item.title}]")
-            lines.append(item.content)
+            lines.append(rendered_content)
             if item.tags:
                 lines.append(f"Tags: {', '.join(item.tags)}")
 
@@ -367,6 +400,44 @@ class ContextCompiler:
             if item.id in ctx.included_memory_item_ids:
                 continue
 
+            if (item.metadata or {}).get("blob_type") == "full_source":
+                ctx.add_exclusion(
+                    item.id,
+                    "blob_excluded",
+                    blob_type="full_source",
+                )
+                continue
+
+            ethics_decision = self.ethics.evaluate_retrieval(item)
+            if ethics_decision.action == MemoryEthicsAction.quarantine:
+                ctx.add_exclusion(
+                    item.id,
+                    "memory_ethics",
+                    rule=ethics_decision.rule_name,
+                    reason_detail=ethics_decision.reason,
+                    action=ethics_decision.action.value,
+                )
+                continue
+            if ethics_decision.action == MemoryEthicsAction.exclude:
+                ctx.add_exclusion(
+                    item.id,
+                    "memory_ethics",
+                    rule=ethics_decision.rule_name,
+                    reason_detail=ethics_decision.reason,
+                )
+                continue
+
+            rendered_content = ethics_decision.scrubbed_content or item.content
+            injection = detect_injection(rendered_content)
+            if injection.detected:
+                ctx.add_exclusion(
+                    item.id,
+                    "injection_detected",
+                    detection_reason=injection.reason,
+                    matched=injection.matched,
+                )
+                continue
+
             # Skip quarantined
             if item.status == MemoryStatus.quarantined:
                 ctx.add_exclusion(
@@ -376,7 +447,7 @@ class ContextCompiler:
                 )
                 continue
 
-            item_tokens = item.token_count or estimate_tokens(item.content)
+            item_tokens = estimate_tokens(rendered_content)
 
             if total_tokens + item_tokens > budget:
                 ctx.add_exclusion(
@@ -399,7 +470,7 @@ class ContextCompiler:
 
             tier_label = item.tier.value.upper()
             lines.append(f"\n[{tier_label}: {item.title}]")
-            lines.append(item.content)
+            lines.append(rendered_content)
 
             total_tokens += item_tokens
             ctx.included_memory_item_ids.append(item.id)
@@ -487,6 +558,8 @@ class ContextCompilerService:
         mode: str = "normal",
         search_query: Optional[str] = None,
         retrieval_limit: int = 10,
+        emit_receipt: bool = False,
+        receipt_emitter: Optional[Any] = None,
     ) -> CompiledContext:
         """
         Compile a context for the given objective with automatic retrieval.
@@ -523,16 +596,76 @@ class ContextCompilerService:
             query=query,
             tiers=[MemoryTier.episodic, MemoryTier.archival],
             limit=retrieval_limit,
+            total_limit=retrieval_limit,
+            current_quest_id=quest_id or "",
         )
+        self._quarantine_injection_candidates([*working_items, *retrieved_items])
 
         # Compile
-        return self.compiler.compile(
+        ctx = self.compiler.compile(
             objective=objective,
             quest_id=quest_id,
             mode=mode,
             working_items=working_items,
             retrieved_items=retrieved_items,
         )
+        if emit_receipt and receipt_emitter is not None:
+            receipt_emitter.emit(
+                action_type="memory_compile",
+                action_name="compile_for_objective",
+                inputs={
+                    "objective": objective,
+                    "quest_id": quest_id,
+                    "mode": mode,
+                    "search_query": query,
+                },
+                outputs={
+                    "context_id": ctx.context_id,
+                    "objective": objective,
+                    "included_count": len(ctx.included_memory_item_ids),
+                    "excluded_count": len(ctx.excluded_candidates),
+                    "token_estimate": ctx.token_estimate,
+                    "soul_version": ctx.soul_version,
+                },
+                token_count=ctx.token_estimate,
+                quest_id=quest_id,
+            )
+        self._mark_included_items_retrieved(ctx.included_memory_item_ids)
+        return ctx
+
+    def _mark_included_items_retrieved(self, item_ids: list[str]) -> None:
+        """Track retrieval of memories included in compiled context."""
+        seen = set(item_ids)
+        for tier in (MemoryTier.working, MemoryTier.episodic, MemoryTier.archival):
+            store = self.memory_manager.get_store(tier)
+            for item_id in seen:
+                try:
+                    store.mark_retrieved(item_id)
+                except Exception as exc:  # pragma: no cover - telemetry failure should not block context compilation
+                    logger.debug("Failed to mark memory %s as retrieved in %s: %s", item_id, tier.value, exc)
+
+    def _quarantine_injection_candidates(self, items: list[MemoryItem]) -> None:
+        """Persistently quarantine memory items that contain injection patterns."""
+        seen: set[str] = set()
+        for item in items:
+            if item.id in seen:
+                continue
+            seen.add(item.id)
+            injection = detect_injection(item.content)
+            if not injection.detected:
+                continue
+            metadata = dict(item.metadata or {})
+            metadata["flagged_reason"] = "injection_detected"
+            metadata["injection_detection"] = {
+                "reason": injection.reason,
+                "matched": injection.matched,
+            }
+            item.metadata = metadata
+            item.status = MemoryStatus.quarantined
+            try:
+                self.memory_manager.get_store(item.tier).update(item)
+            except Exception as exc:  # pragma: no cover - compiler exclusion still protects prompt
+                logger.warning("Failed to persist injection quarantine for memory %s: %s", item.id, exc)
 
     def record_active_objective(
         self,

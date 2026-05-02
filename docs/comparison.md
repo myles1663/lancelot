@@ -40,7 +40,7 @@ We compare across seven dimensions:
 |-----------|------------------|----------|
 | **Governance** | Model-level instructions via system prompts. No enforcement layer — the model decides whether to follow instructions. | Constitutional document (Soul) enforced by code outside the model. Model cannot override governance regardless of prompt. |
 | **Verification** | No built-in verification. Developer must implement their own checks. | Mandatory Planner/Executor/Verifier pipeline. Results are checked, not assumed. |
-| **Memory** | Conversation history only. No structured memory, no quarantine, no rollback. | Four-tier memory with commit-based edits, quarantine for risky writes, and exact rollback. |
+| **Memory** | Conversation history only. No structured memory, no quarantine, no rollback. | Four-tier memory with commit-based edits, quarantine for risky writes, core-block rollback, and persisted item-level rollback. |
 | **Observability** | Basic tracing via OpenAI dashboard. | Receipt system records every action with full governance trace. Searchable in War Room. |
 | **Tool Security** | Developer-defined tools with no sandboxing framework. | Capability-based access with default-deny, Docker sandboxing, command denylist, workspace boundary enforcement. |
 | **Recovery** | No built-in rollback. Developer must implement recovery logic. | Automatic rollback for T1 actions on verification failure. Commit-based memory rollback. |
@@ -109,7 +109,7 @@ We compare across seven dimensions:
 | Dimension | AutoGen | Lancelot |
 |-----------|---------|----------|
 | **Governance** | Human-in-the-loop for approval. No constitutional governance. | Constitutional Soul + Policy Engine + Risk Tiers. Human-in-the-loop at T3, but T0-T2 are governance-automated. |
-| **Memory** | Teachable agents with memory injection. No quarantine or governed edits. | Tiered memory with quarantine, commit-based edits, and full rollback capability. |
+| **Memory** | Teachable agents with memory injection. No quarantine or governed edits. | Tiered memory with quarantine, prompt-injection exclusion on retrieval, commit-based edits, core-block rollback, and persisted item-level rollback. |
 | **Observability** | Conversation logging. | Full receipt system with governance traces and risk tier decisions. |
 | **Tool Security** | Docker-based code execution available. No capability-based access control. | Capability-based access with default-deny, policy engine, workspace boundary enforcement. |
 

@@ -584,6 +584,8 @@ export interface QuarantineItem {
   title: string
   content: string
   status: string
+  flagged_reason?: string | null
+  detection_metadata?: Record<string, unknown>
 }
 
 export interface QuarantineResponse {

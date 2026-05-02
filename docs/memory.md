@@ -100,13 +100,21 @@ Promotion is the point where short-lived context becomes durable memory that can
 
 The deterministic promotion policy lives in `src/core/memory/promotion.py`. It returns a structured decision with `allowed`, `suggested_status`, `reason`, and `requires_approval`. Scheduler-generated episodic summaries record that decision in item metadata before archival insertion. If a candidate is inference-only, it can enter archival quarantine for operator review; if it contains secret-like material or lacks required provenance, promotion is blocked.
 
+Working-to-episodic promotion runs during working-memory compaction. An expiring
+working item can survive TTL cleanup when it has sufficient confidence,
+provenance, at least one recorded context retrieval, and an explicit promotion
+signal such as `learning`, `decision`, `outcome`, `promote`, or
+`metadata.should_promote=true`. Items that have evidence and retrieval history
+but lack an explicit promotion signal become quarantined episodic review
+candidates instead of being silently promoted.
+
 These rules are intentionally conservative. They prevent multi-day task context from becoming permanent instruction state just because it appeared in chat, while still allowing verified summaries and receipts to improve long-running continuity.
 
 ---
 
 ## Commit-Based Editing
 
-All memory writes follow an atomic commit model. This ensures consistency and enables exact rollback.
+Governed memory writes follow a commit model. Core block edits take a snapshot before application and can be rolled back through the memory admin path. Working, episodic, and archival item commits persist undo-log entries, so inserts, updates, and deletes can be rolled back at item level. Rollback operations themselves write undo logs, so a rollback can be rolled back.
 
 ### The Commit Workflow
 
@@ -221,7 +229,46 @@ Before each LLM call, the Context Compiler assembles memory into a token-budgete
 6. **Security filters** — remove detected injection patterns, redact secrets
 7. **Emit CompiledContext + receipt**
 
-After the memory compiler renders the prompt, the orchestrator appends the compact Active Work Ledger block for the current quest or authenticated session. This block comes from `/home/lancelot/data/work/work_ledger.sqlite`, not from memory, and contains only resume-critical state: objective, status, phase, blocker, next action, recent ledger events, checkpoint pending work, open decisions, and receipt IDs. The purpose is continuity across long-running work and context compaction without turning chat history into the system of record.
+After the memory compiler renders the prompt, the orchestrator appends the compact Active Work Ledger block for the current quest or authenticated session. This block comes from `/home/lancelot/data/work/work_ledger.sqlite`, not from memory, and contains only resume-critical state: objective, status, phase, blocker, next action, recent ledger events, checkpoint pending work, open decisions, files touched, approvals, and receipt IDs. When no active work item remains, the ledger can fall back to the latest persisted session brief for the same session or operator. The purpose is continuity across long-running work and context compaction without turning chat history into the system of record.
+
+When an item is included in compiled context through the compiler service, the
+store records `last_retrieved_at`. Compaction and future scale policies use that
+signal to distinguish remembered context that was actually useful from scratch
+state that merely existed.
+
+Current retrieval behavior combines a local entity sidecar index with tokenized
+SQLite FTS/BM25-style search over episodic and archival memory. Memory writes
+extract project, quest, workflow, operator, customer, file, date, organization,
+and person-like references without an external NLP dependency. The compiler
+blends entity matches and FTS matches, then ranking prefers current quest
+evidence, same operator, same workflow, and global memory in that order.
+Matching tags, receipt-backed records, work-ledger records, and task-experience
+records receive additional weight, and repeated episodic/archival content is
+deduped before inclusion.
+
+The same retrieval path is exposed through `POST /memory/query` and the
+`memory_query` built-in skill for mid-turn governed memory lookup.
+
+Memory can also store structured factual claims as entity-attribute-value
+triples. Claims are written through `metadata.claim` or `metadata.claims`, and
+the store also supports conservative text extraction when
+`metadata.claim_extraction=text` is present. A newer contradictory claim for the
+same entity and attribute enters claim review first. When an operator approves
+the quarantined claim, Lancelot records validity history, emits a
+`memory_claim_supersede` receipt, and default retrieval filters out superseded
+claim items.
+
+### Context Efficiency Telemetry
+
+Each `CompiledContext` carries `context_efficiency` metadata used by receipts and internal diagnostics:
+
+- `max_tokens`, `used_tokens`, `remaining_tokens`, and `budget_used_ratio`
+- included memory count and excluded candidate count
+- exclusion reasons such as budget, TTL, quarantine, or low confidence
+- working and retrieval candidate counts
+- section token percentages for core blocks, objective, working memory, and retrieval
+
+The authenticated `POST /memory/compile` endpoint currently returns the compact compile result: context ID, token estimate, token breakdown, included blocks, included memory count, and excluded count. The richer `context_efficiency` object is attached to compiled context objects and receipt data; a dedicated War Room efficiency view is not yet exposed.
 
 ### Token Budget
 
@@ -256,22 +303,26 @@ Before any commit is finalized, write gates enforce:
 | **Evidence requirement** | Core:human edits require provenance from a user message |
 | **Quarantine-by-default** | New core edits go to quarantine unless explicitly safe |
 | **Confidence floor** | Below-floor writes go to archival only, never core |
-| **Secret scrubbing** | Detected API keys, tokens, and credentials are blocked |
+| **Secret scrubbing** | Detected API keys, tokens, and credentials are redacted before persistence |
+| **Memory ethics** | Deterministic Soul ethics rules quarantine PII without consent and prevent recursive Soul storage |
 
 ### Memory Exclusions
 
 - The **Soul is never stored in memory** — memory references Soul version numbers, never Soul content. This prevents memory poisoning from corrupting governance.
-- **PII is redacted** before storage via the local model when that lane is enabled and inference-ready; if the runtime scrub policy allows fallback, that degraded privacy event is surfaced separately
-- **Secrets are never persisted** in any memory tier
+- **PII in long-term memory requires explicit consent**. Episodic or archival items containing email addresses, phone numbers, or SSN-like identifiers are quarantined unless they carry a consent marker such as `metadata.consent_marker=true`.
+- **Secrets are redacted before persistence** in any memory tier.
+- **Ethics decisions emit receipts** with type `memory_ethics_evaluation`, including the rule name, action, tier, item id, and reason.
 
 ### Poisoning Defense
 
 Memory poisoning (injecting persistent malicious instructions) is defended by:
 1. Input sanitization before memory writes
-2. Quarantine for risky content
-3. Confidence scoring and decay
-4. Commit-based rollback for recovery
-5. Provenance tracking for attribution
+2. Prompt-injection detection on retrieved memory before rendering
+3. Quarantine for risky content
+4. Deterministic memory ethics checks for PII, secrets, and Soul content
+5. Confidence scoring and decay
+6. Commit-based rollback for recovery
+7. Provenance tracking for attribution
 
 ---
 
@@ -281,12 +332,35 @@ The scheduler runs automated memory maintenance:
 
 | Job | Schedule | Description |
 |-----|----------|-------------|
-| `memory_working_compaction` | Hourly | Remove expired items and compact stale working-memory entries |
+| `memory_working_compaction` | Hourly | Promote eligible expiring working items to episodic memory, quarantine reviewable candidates, delete ineligible expired items, and compact stale entries |
 | `memory_archival_decay` | Daily | Reduce confidence over time unless reinforced |
 | `memory_episodic_summarization` | Daily | Promote episodic summaries into archival memory and deprecate the summarized episodic items |
+| `memory_eviction` | Daily | Enforce tier item caps with deprecated-first, least-recently-retrieved eviction and cold-storage export |
 | `memory_integrity_audit` | Daily | Verify commits have receipts, blocks within budget |
 
-Each job emits receipts: `memory_job_run`, `memory_job_failed`, or `memory_job_skipped`.
+Each job emits a finalized, queryable receipt with a job-specific type:
+`memory_job_working_compaction`, `memory_job_episodic_summary`,
+`memory_job_archival_decay`, `memory_job_eviction`, or
+`memory_job_integrity_audit`. Failed job runs use receipt status `failure` and
+include a short error summary.
+
+Episodic summarization is journaled. If the runtime stops after an archival
+summary is written but before source episodic items are deprecated, the next run
+recovers the pending compaction and completes source deprecation instead of
+creating duplicate summaries.
+
+Each episodic summary also writes a lossless full-source archival blob that
+contains the source memory items as stored at summarization time. The summary
+records `metadata.source_blob_id`, while the blob records
+`metadata.blob_type=full_source`. Full-source blobs are excluded from default
+search and compiled context; auditor workflows must opt in with
+`include_blobs=true`.
+
+Tier size caps are configurable in `src/core/memory/config.py`. When a tier is
+over cap, deprecated items are removed first; remaining pressure is handled by
+least-recently-retrieved order using `last_retrieved_at`, then update/create
+time. Evicted rows are written to JSONL cold storage under
+`lancelot_data/memory/cold_storage/` before deletion.
 
 ---
 
@@ -294,14 +368,25 @@ Each job emits receipts: `memory_job_run`, `memory_job_failed`, or `memory_job_s
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/memory/status` | None | Tier sizes, block counts, quarantine depth |
-| GET | `/memory/core` | None | Current core blocks |
-| GET | `/memory/search` | None | Search across tiers (query, tier filter, tags) |
-| POST | `/memory/edit` | Bearer | Submit a governed memory edit |
-| POST | `/memory/compile` | None | Compile context for a given objective |
-| GET | `/memory/quarantine` | None | List quarantined items |
-| POST | `/memory/quarantine/{id}/approve` | Bearer | Approve quarantined item |
-| POST | `/memory/rollback/{commit_id}` | Bearer | Roll back to a previous commit |
+| GET | `/memory/stats` | Authenticated | Tier sizes, core block token totals, write-gate summary |
+| GET | `/memory/core` | Authenticated | Current core blocks |
+| GET | `/memory/core/{block_type}` | Authenticated | One core block |
+| POST | `/memory/search` | Authenticated | Search working, episodic, and archival tiers by query, namespace, tier, tags, and confidence |
+| POST | `/memory/query` | Authenticated | Entity-aware natural-language memory query for mid-turn retrieval |
+| GET | `/memory/recent` | Authenticated | Recent working, episodic, and archival items |
+| POST | `/memory/compile` | Authenticated | Compile context for an objective and optional quest ID |
+| POST | `/memory/commit/begin` | `memory.admin` | Begin a governed staged memory commit |
+| POST | `/memory/commit/{commit_id}/edit` | `memory.admin` | Add an edit to a staged commit |
+| POST | `/memory/commit/{commit_id}/finish` | `memory.admin` | Apply a staged commit |
+| GET | `/memory/commits` | Authenticated | List recent governed memory commits |
+| POST | `/memory/rollback/{commit_id}` | `memory.admin` | Roll back to a previous commit |
+| GET | `/memory/quarantine` | Authenticated | List quarantined core blocks and tiered items |
+| POST | `/memory/quarantine/core/{block_type}/approve` | `memory.admin` | Approve a quarantined core block |
+| POST | `/memory/quarantine/core/{block_type}/reject` | `memory.admin` | Reject a quarantined core block |
+| POST | `/memory/quarantine/{tier}/{item_id}/approve` | `memory.admin` | Approve a quarantined tiered item |
+| POST | `/memory/quarantine/{tier}/{item_id}/reject` | `memory.admin` | Reject a quarantined tiered item |
+| POST | `/memory/item/{tier}/{item_id}/status?status=...` | `memory.admin` | Update a tiered item lifecycle status |
+| POST | `/memory/item/{tier}/{item_id}/delete` | `memory.admin` | Hard-delete a tiered memory item |
 
 ---
 

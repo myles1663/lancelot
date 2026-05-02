@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .config import SECRET_PATTERNS
+from .config import MINIMUM_CONFIDENCE_FOR_ARCHIVAL
 from .schemas import MemoryItem, MemoryStatus, MemoryTier, ProvenanceType
 
 
@@ -30,6 +31,7 @@ VERIFIABLE_PROVENANCE = {
     ProvenanceType.external_doc,
     ProvenanceType.system,
 }
+WORKING_PROMOTION_SIGNALS = {"promote", "learning", "decision", "outcome"}
 
 
 @dataclass
@@ -183,3 +185,68 @@ def _evaluate_archival_promotion(
 def _contains_secret_material(item: MemoryItem) -> bool:
     content = "\n".join([item.title or "", item.content or ""])
     return any(re.search(pattern, content, flags=re.IGNORECASE) for pattern in SECRET_PATTERNS)
+
+
+def evaluate_working_to_episodic_promotion(item: MemoryItem) -> PromotionDecision:
+    """Evaluate whether expiring working memory should become episodic memory."""
+    if item.tier != MemoryTier.working:
+        return PromotionDecision(
+            allowed=False,
+            target_tier=MemoryTier.episodic,
+            suggested_status=MemoryStatus.staged,
+            reason="Only working memory can use working-to-episodic promotion",
+        )
+
+    if _contains_secret_material(item):
+        return PromotionDecision(
+            allowed=False,
+            target_tier=MemoryTier.episodic,
+            suggested_status=MemoryStatus.quarantined,
+            reason="Promotion blocked because candidate content matched secret patterns",
+            requires_approval=True,
+        )
+
+    if item.confidence < MINIMUM_CONFIDENCE_FOR_ARCHIVAL:
+        return PromotionDecision(
+            allowed=False,
+            target_tier=MemoryTier.episodic,
+            suggested_status=MemoryStatus.staged,
+            reason=(
+                f"Confidence {item.confidence:.2f} below working promotion floor "
+                f"{MINIMUM_CONFIDENCE_FOR_ARCHIVAL:.2f}"
+            ),
+        )
+
+    if not item.provenance:
+        return PromotionDecision(
+            allowed=False,
+            target_tier=MemoryTier.episodic,
+            suggested_status=MemoryStatus.staged,
+            reason="Working promotion requires provenance",
+        )
+
+    if item.last_retrieved_at is None:
+        return PromotionDecision(
+            allowed=False,
+            target_tier=MemoryTier.episodic,
+            suggested_status=MemoryStatus.staged,
+            reason="Working promotion requires at least one context retrieval",
+        )
+
+    tags = {tag.strip().lower() for tag in item.tags if tag}
+    should_promote = bool((item.metadata or {}).get("should_promote") is True)
+    if tags & WORKING_PROMOTION_SIGNALS or should_promote:
+        return PromotionDecision(
+            allowed=True,
+            target_tier=MemoryTier.episodic,
+            suggested_status=MemoryStatus.active,
+            reason="Working memory has provenance, retrieval history, confidence, and promotion signal",
+        )
+
+    return PromotionDecision(
+        allowed=True,
+        target_tier=MemoryTier.episodic,
+        suggested_status=MemoryStatus.quarantined,
+        reason="Working memory is reviewable but lacks an explicit promotion signal",
+        requires_approval=True,
+    )

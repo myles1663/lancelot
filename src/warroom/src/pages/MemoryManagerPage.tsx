@@ -21,6 +21,7 @@ import { validateSession } from '@/api/auth'
 import { ConfirmDialog, EmptyState } from '@/components'
 import type { CoreBlock, MemoryCommitSummary, QuarantineItem, RecentMemoryItem } from '@/types/api'
 import { emitWarRoomNotification } from '@/utils/notifications'
+import { quarantineBadgeClass, quarantineReviewSummary } from '@/utils/memoryReview'
 
 type ConfirmState = {
   title: string
@@ -382,47 +383,63 @@ export function MemoryManagerPage() {
             <p className="text-sm text-text-muted">No quarantined tiered items.</p>
           ) : (
             <div className="space-y-3">
-              {quarantinedItems.map((item: QuarantineItem) => (
-                <div key={item.id} className="rounded-md border border-border-default bg-surface-card-elevated p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-xs font-mono ${tierTone(item.tier)}`}>{item.tier}</span>
-                        <span className="text-sm text-text-primary truncate">{item.title}</span>
+              {quarantinedItems.map((item: QuarantineItem) => {
+                const review = quarantineReviewSummary(item)
+                return (
+                  <div key={item.id} className="rounded-md border border-border-default bg-surface-card-elevated p-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`text-xs font-mono whitespace-nowrap ${tierTone(item.tier)}`}>{item.tier}</span>
+                          <span className="min-w-0 text-sm text-text-primary break-words">{item.title}</span>
+                          <span className={`rounded border px-2 py-0.5 text-[10px] font-medium whitespace-nowrap ${quarantineBadgeClass(review.tone)}`}>
+                            {review.label}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-text-muted mt-1 font-mono break-all">{item.id}</div>
+                        <p className="mt-2 text-xs text-text-muted">{review.description}</p>
                       </div>
-                      <div className="text-[10px] text-text-muted mt-1 font-mono">{item.id}</div>
+                      <div className="flex shrink-0 justify-end gap-2 sm:justify-start">
+                        <button
+                          onClick={() =>
+                            runAction(
+                              () => approveQuarantinedItem(item.tier, item.id, operatorName, 'Approved from War Room'),
+                              `Approved quarantined item ${item.title}.`,
+                            )
+                          }
+                          className="px-3 py-1 text-xs rounded bg-state-healthy/15 text-state-healthy hover:bg-state-healthy/25"
+                        >
+                          Approve
+                        </button>
+                        <button
+                          onClick={() =>
+                            requestConfirm({
+                              title: `Reject ${item.title}?`,
+                              description: 'Rejecting a quarantined item deletes it from the selected tier.',
+                              confirmLabel: 'Reject Item',
+                              variant: 'destructive',
+                              onConfirm: () => rejectQuarantinedItem(item.tier, item.id, operatorName, 'Rejected from War Room'),
+                            })
+                          }
+                          className="px-3 py-1 text-xs rounded bg-state-error/15 text-state-error hover:bg-state-error/25"
+                        >
+                          Reject
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() =>
-                          runAction(
-                            () => approveQuarantinedItem(item.tier, item.id, operatorName, 'Approved from War Room'),
-                            `Approved quarantined item ${item.title}.`,
-                          )
-                        }
-                        className="px-3 py-1 text-xs rounded bg-state-healthy/15 text-state-healthy hover:bg-state-healthy/25"
-                      >
-                        Approve
-                      </button>
-                      <button
-                        onClick={() =>
-                          requestConfirm({
-                            title: `Reject ${item.title}?`,
-                            description: 'Rejecting a quarantined item deletes it from the selected tier.',
-                            confirmLabel: 'Reject Item',
-                            variant: 'destructive',
-                            onConfirm: () => rejectQuarantinedItem(item.tier, item.id, operatorName, 'Rejected from War Room'),
-                          })
-                        }
-                        className="px-3 py-1 text-xs rounded bg-state-error/15 text-state-error hover:bg-state-error/25"
-                      >
-                        Reject
-                      </button>
-                    </div>
+                    {review.details.length > 0 ? (
+                      <div className="mt-3 rounded border border-border-default bg-surface-input px-3 py-2">
+                        {review.details.map((detail) => (
+                          <div key={detail} className="text-[10px] text-text-secondary break-words">
+                            {detail}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    <p className="mt-2 text-xs text-text-secondary whitespace-pre-wrap break-words">{item.content}</p>
                   </div>
-                  <p className="mt-2 text-xs text-text-secondary whitespace-pre-wrap break-words">{item.content}</p>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </section>

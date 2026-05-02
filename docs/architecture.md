@@ -297,11 +297,11 @@ Lancelot maintains structured memory across four tiers:
 | **Episodic Memory** | Session-scoped | Conversation history, recent interactions |
 | **Archival Memory** | Long-term | Accumulated knowledge, searchable via FTS |
 
-**Commit-based editing:** Memory edits are atomic transactions. Each edit creates a snapshot before modification, applies changes, and can be rolled back to any previous state.
+**Commit-based editing:** Memory edits are applied through governed commits. Core block edits create snapshots before modification and can be rolled back through the memory admin path. Working, episodic, and archival item commits persist undo logs, allowing item-level rollback of inserts, updates, deletes, and rollback operations.
 
-**Quarantine:** Risky memory writes (those that modify core blocks or contain sensitive patterns) land in quarantine. Promotion to active memory requires owner verification or approval.
+**Quarantine:** Agent edits to allowed core blocks land in quarantine by default, owner-only core blocks reject agent edits outright, and retrieved memory that matches prompt-injection patterns is excluded from compiled context and surfaced for review.
 
-**Context compiler:** Before each LLM call, the context compiler assembles memory tiers into a token-budgeted context window. Priority is Core > Working > Episodic > Archival, with LRU eviction when the budget is exceeded. The orchestrator records the active objective into quest-scoped working memory before compilation, appends the compact Active Work Ledger state for long-running Command Center work, and the scheduler ensures working compaction, episodic summarization to archival, archival decay, and integrity audit jobs stay registered.
+**Context compiler:** Before each LLM call, the context compiler assembles memory tiers into a token-budgeted context window. Priority is Core > Working > Episodic > Archival. Items that exceed the context budget, fall below confidence thresholds, are quarantined, or match prompt-injection patterns are excluded with an explicit reason. Included items record `last_retrieved_at`, giving compaction and scale policies evidence of which memories were actually useful. The orchestrator records the active objective into quest-scoped working memory before compilation, appends the compact Active Work Ledger state for long-running Command Center work, and the scheduler ensures working compaction with working-to-episodic promotion, journaled episodic summarization to archival, archival decay, and integrity audit jobs stay registered.
 
 For more details, see [Memory](memory.md).
 

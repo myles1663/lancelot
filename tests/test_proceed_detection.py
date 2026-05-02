@@ -313,6 +313,35 @@ class TestChatToolRouting:
         assert response == "Completed approved governed actions:\n- repo_writer: SUCCESS"
         runtime._provider_generate.assert_not_called()
 
+    def test_runtime_memory_compile_emits_receipt(self, monkeypatch, tmp_path):
+        import chat_flow
+        import feature_flags
+
+        monkeypatch.setattr(feature_flags, "FEATURE_UNIFIED_CLASSIFICATION", False)
+        monkeypatch.setattr(feature_flags, "FEATURE_AGENTIC_LOOP", True)
+        monkeypatch.setattr(feature_flags, "FEATURE_LOCAL_AGENTIC", True)
+        monkeypatch.setattr(feature_flags, "FEATURE_DEEP_REASONING_LOOP", False)
+        monkeypatch.setattr(feature_flags, "FEATURE_COMPETITIVE_SCAN", False)
+        monkeypatch.setattr(chat_flow, "create_receipt", lambda *_args, **_kwargs: self._Receipt())
+        monkeypatch.setattr(chat_flow, "classify_intent", lambda *_args, **_kwargs: chat_flow.IntentType.KNOWLEDGE_REQUEST)
+
+        runtime = self._runtime()
+        runtime.data_dir = tmp_path
+        runtime._memory_enabled = True
+        runtime.context_env.get_recent_receipts = lambda *_args, **_kwargs: ""
+        runtime.context_compiler = MagicMock()
+        runtime.context_compiler.compile_for_objective.return_value = SimpleNamespace(
+            rendered_prompt="compiled memory context"
+        )
+
+        response = chat_flow.chat(runtime, "What should I remember?")
+
+        assert response == "local"
+        runtime.context_compiler.compile_for_objective.assert_called_once()
+        call_kwargs = runtime.context_compiler.compile_for_objective.call_args.kwargs
+        assert call_kwargs["emit_receipt"] is True
+        assert call_kwargs["receipt_emitter"] is not None
+
     def test_explicit_repo_writer_request_enables_writes(self, monkeypatch):
         import chat_flow
         import feature_flags

@@ -371,6 +371,58 @@ class TestRetrievalCompilation:
         exclusions = [e for e in ctx.excluded_candidates if e["reason"] == "quarantined"]
         assert len(exclusions) == 1
 
+    def test_full_source_blob_retrieval_excluded(self, compiler):
+        """Full-source audit blobs are never rendered into default prompt context."""
+        blob = create_archival_item(
+            title="Source Blob",
+            content="Full source audit payload that should not enter normal context.",
+        )
+        blob.metadata = {"blob_type": "full_source"}
+        valid = create_archival_item(title="Summary", content="Compact summary context.")
+
+        ctx = compiler.compile(
+            objective="Test",
+            retrieved_items=[blob, valid],
+        )
+
+        assert valid.id in ctx.included_memory_item_ids
+        assert blob.id not in ctx.included_memory_item_ids
+        exclusions = [e for e in ctx.excluded_candidates if e["reason"] == "blob_excluded"]
+        assert len(exclusions) == 1
+
+    def test_retrieval_ethics_scrubs_imported_secret_before_rendering(self, compiler):
+        """Imported rows that bypassed write scrubbing must still be scrubbed on retrieval."""
+        item = create_archival_item(
+            title="Legacy secret",
+            content="Legacy note with api_key=sk_test_1234567890abcdef",
+        )
+
+        ctx = compiler.compile(
+            objective="Review legacy notes",
+            retrieved_items=[item],
+        )
+
+        assert item.id in ctx.included_memory_item_ids
+        assert "sk_test_1234567890abcdef" not in ctx.rendered_prompt
+        assert "[REDACTED_SECRET]" in ctx.rendered_prompt
+
+    def test_retrieval_ethics_excludes_imported_pii_without_consent(self, compiler):
+        """Imported long-term PII without consent must not be rendered into context."""
+        item = create_archival_item(
+            title="Legacy contact",
+            content="Customer email is person@example.com.",
+        )
+
+        ctx = compiler.compile(
+            objective="Review legacy contacts",
+            retrieved_items=[item],
+        )
+
+        assert item.id not in ctx.included_memory_item_ids
+        exclusions = [e for e in ctx.excluded_candidates if e["reason"] == "memory_ethics"]
+        assert len(exclusions) == 1
+        assert exclusions[0]["rule"] == "pii_requires_consent"
+
     def test_duplicate_items_not_repeated(self, compiler):
         """Test that items in working memory aren't duplicated in retrieval."""
         item = create_working_item(title="Shared")
@@ -557,6 +609,56 @@ class TestContextCompilerService:
 
         assert "WORKING MEMORY" in ctx.rendered_prompt
         assert "Active Objective" in ctx.rendered_prompt
+
+    def test_compile_for_objective_marks_included_memory_retrieved(self, tmp_data_dir):
+        """Included retrieval items should record last_retrieved_at for promotion/eviction policy."""
+        service = ContextCompilerService(data_dir=tmp_data_dir)
+        item = MemoryItem(
+            id="retrieval-tracked",
+            tier=MemoryTier.episodic,
+            title="Tracked memory",
+            content="Tracked memory content for retrieval telemetry.",
+            confidence=0.9,
+        )
+        service.memory_manager.episodic.insert(item)
+
+        ctx = service.compile_for_objective(
+            objective="Tracked memory",
+            search_query="Tracked memory content",
+        )
+
+        stored = service.memory_manager.episodic.get("retrieval-tracked")
+        assert "retrieval-tracked" in ctx.included_memory_item_ids
+        assert stored.last_retrieved_at is not None
+
+    def test_compile_for_objective_prioritizes_current_quest_memory(self, tmp_data_dir):
+        """Quest-scoped retrieval should outrank otherwise similar global memories."""
+        service = ContextCompilerService(data_dir=tmp_data_dir)
+        service.memory_manager.episodic.insert(MemoryItem(
+            id="global-atlas-memory",
+            tier=MemoryTier.episodic,
+            namespace="global",
+            title="Atlas deployment",
+            content="Atlas deployment checkpoint is globally scoped.",
+            confidence=0.95,
+        ))
+        service.memory_manager.episodic.insert(MemoryItem(
+            id="quest-atlas-memory",
+            tier=MemoryTier.episodic,
+            namespace="quest:quest-atlas",
+            title="Atlas deployment",
+            content="Atlas deployment checkpoint is quest scoped.",
+            confidence=0.8,
+        ))
+
+        ctx = service.compile_for_objective(
+            objective="Atlas deployment checkpoint",
+            quest_id="quest-atlas",
+            search_query="Atlas deployment checkpoint",
+            retrieval_limit=1,
+        )
+
+        assert ctx.included_memory_item_ids == ["quest-atlas-memory"]
 
 
 # ---------------------------------------------------------------------------
