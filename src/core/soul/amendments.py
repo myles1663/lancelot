@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -108,7 +109,8 @@ def compute_yaml_diff(
 def _proposals_path(soul_dir: Optional[str] = None) -> Path:
     """Resolve the path to soul_proposals.json."""
     d = _resolve_soul_dir(soul_dir)
-    data_dir = d.parent / _DATA_DIR
+    runtime_data_dir = os.getenv("LANCELOT_DATA_DIR", "").strip()
+    data_dir = Path(runtime_data_dir) if soul_dir is None and runtime_data_dir else d.parent / _DATA_DIR
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir / _PROPOSALS_FILE
 

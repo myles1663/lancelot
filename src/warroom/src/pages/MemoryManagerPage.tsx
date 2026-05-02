@@ -387,19 +387,19 @@ export function MemoryManagerPage() {
                 const review = quarantineReviewSummary(item)
                 return (
                   <div key={item.id} className="rounded-md border border-border-default bg-surface-card-elevated p-3">
-                    <div className="flex items-start justify-between gap-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className={`text-xs font-mono ${tierTone(item.tier)}`}>{item.tier}</span>
-                          <span className="text-sm text-text-primary truncate">{item.title}</span>
-                          <span className={`rounded border px-2 py-0.5 text-[10px] font-medium ${quarantineBadgeClass(review.tone)}`}>
+                          <span className={`text-xs font-mono whitespace-nowrap ${tierTone(item.tier)}`}>{item.tier}</span>
+                          <span className="min-w-0 text-sm text-text-primary break-words">{item.title}</span>
+                          <span className={`rounded border px-2 py-0.5 text-[10px] font-medium whitespace-nowrap ${quarantineBadgeClass(review.tone)}`}>
                             {review.label}
                           </span>
                         </div>
-                        <div className="text-[10px] text-text-muted mt-1 font-mono">{item.id}</div>
+                        <div className="text-[10px] text-text-muted mt-1 font-mono break-all">{item.id}</div>
                         <p className="mt-2 text-xs text-text-muted">{review.description}</p>
                       </div>
-                      <div className="flex shrink-0 gap-2">
+                      <div className="flex shrink-0 justify-end gap-2 sm:justify-start">
                         <button
                           onClick={() =>
                             runAction(
@@ -430,7 +430,7 @@ export function MemoryManagerPage() {
                     {review.details.length > 0 ? (
                       <div className="mt-3 rounded border border-border-default bg-surface-input px-3 py-2">
                         {review.details.map((detail) => (
-                          <div key={detail} className="text-[10px] text-text-secondary">
+                          <div key={detail} className="text-[10px] text-text-secondary break-words">
                             {detail}
                           </div>
                         ))}

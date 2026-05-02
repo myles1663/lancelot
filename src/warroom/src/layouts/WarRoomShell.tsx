@@ -20,7 +20,10 @@ export interface Notification {
 
 // Inner shell — has access to LiveEventsContext via useLiveEvents()
 function WarRoomShellInner() {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return window.innerWidth < 1024
+  })
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [toasts, setToasts] = useState<Notification[]>([])
   const { handleLiveEvent } = useLiveEvents()
@@ -64,6 +67,15 @@ function WarRoomShellInner() {
     enqueueNotification(message, priority)
   }), [enqueueNotification])
 
+  useEffect(() => {
+    const handleResize = () => {
+      setSidebarCollapsed(window.innerWidth < 1024)
+    }
+    handleResize()
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
   useWebSocket({
     url: '/ws/warroom',
     enabled: true,
@@ -94,11 +106,11 @@ function WarRoomShellInner() {
 
       {/* Primary content area */}
       <main
-        className={`pt-14 pb-12 transition-all duration-200 ${
-          sidebarCollapsed ? 'pl-0' : 'pl-60'
+        className={`pt-14 pb-20 lg:pb-16 transition-all duration-200 ${
+          sidebarCollapsed ? 'pl-0' : 'lg:pl-60'
         }`}
       >
-        <div className="p-6 max-w-[1600px] mx-auto">
+        <div className="p-4 sm:p-6 max-w-[1600px] mx-auto">
           <UpdateBanner />
           <Outlet />
         </div>

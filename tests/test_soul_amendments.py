@@ -230,6 +230,17 @@ class TestPersistence:
         data_file = tmp_path / "data" / "soul_proposals.json"
         assert data_file.exists()
 
+    def test_default_proposals_use_runtime_data_dir(self, tmp_path, monkeypatch):
+        soul_dir = _write_soul_dir(tmp_path, active="v1")
+        runtime_data = tmp_path / "runtime_data"
+        monkeypatch.setenv("SOUL_DIR", soul_dir)
+        monkeypatch.setenv("LANCELOT_DATA_DIR", str(runtime_data))
+
+        save_proposals([SoulAmendmentProposal(proposed_version="v2")])
+
+        assert (runtime_data / "soul_proposals.json").exists()
+        assert not (tmp_path / "data" / "soul_proposals.json").exists()
+
     def test_proposals_file_is_valid_json(self, tmp_path):
         soul_dir = _write_soul_dir(tmp_path, active="v1")
         create_proposal("v1", yaml.dump(_soul_dict("v2")), soul_dir=soul_dir)
