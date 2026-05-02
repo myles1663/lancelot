@@ -70,8 +70,8 @@ export function fetchQuarantine() {
 }
 
 /** POST /memory/promote/:id — Promote a quarantined item */
-export function promoteItem(itemId: string) {
-  return apiPost<{ status: string; item_id: string }>(`/memory/promote/${itemId}`)
+export function promoteItem(itemId: string, tier = 'working') {
+  return apiPost<{ status: string; item_id: string }>(`/memory/promote/${itemId}?tier=${encodeURIComponent(tier)}`, {})
 }
 
 /** POST /memory/quarantine/:tier/:id/approve — Approve a quarantined item */

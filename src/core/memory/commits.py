@@ -304,7 +304,7 @@ class CommitManager:
             commit = self.load_commit(commit_id)
             if commit is None:
                 raise CommitError(f"Commit {commit_id} not found")
-            existing_rollback = self._find_existing_rollback(commit_id)
+            existing_rollback = self._find_active_rollback(commit_id)
             if existing_rollback is not None:
                 logger.info(
                     "Rollback for commit %s already exists as %s",
@@ -340,13 +340,31 @@ class CommitManager:
             logger.info("Rolled back commit %s -> %s", commit_id, rollback_commit.commit_id)
             return rollback_commit.commit_id
 
-    def _find_existing_rollback(self, commit_id: str) -> Optional[MemoryCommit]:
-        """Return the already-committed rollback for a commit, if one exists."""
+    def _find_active_rollback(self, commit_id: str) -> Optional[MemoryCommit]:
+        """Return an unreversed rollback for a commit, if one exists."""
+        commits = self._load_commits_for_lineage()
+        reversed_rollback_ids = {
+            commit.rollback_of
+            for commit in commits
+            if commit.status == CommitStatus.committed and commit.rollback_of
+        }
+        for commit in commits:
+            if (
+                commit.status == CommitStatus.committed
+                and commit.rollback_of == commit_id
+                and commit.commit_id not in reversed_rollback_ids
+            ):
+                return commit
+        return None
+
+    def _load_commits_for_lineage(self) -> list[MemoryCommit]:
+        """Load committed history newest-first for rollback lineage checks."""
         commit_files = sorted(
             self.commits_dir.glob("*.json"),
             key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
+        commits: list[MemoryCommit] = []
         for commit_file in commit_files:
             try:
                 with open(commit_file, "r", encoding="utf-8") as handle:
@@ -354,12 +372,8 @@ class CommitManager:
             except Exception as exc:
                 logger.warning("Failed to inspect commit file %s: %s", commit_file, exc)
                 continue
-            if (
-                commit.status == CommitStatus.committed
-                and commit.rollback_of == commit_id
-            ):
-                return commit
-        return None
+            commits.append(commit)
+        return commits
 
     def _get_current_content(self, target: str) -> Optional[str]:
         """Get current content for a target."""

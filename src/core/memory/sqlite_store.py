@@ -326,7 +326,12 @@ class MemoryItemStore:
             """
         )
         for row in cursor.fetchall():
-            self._replace_claims(cursor, self._row_to_item(row))
+            item = self._row_to_item(row)
+            self._replace_claims(cursor, item)
+            cursor.execute(
+                "UPDATE memory_items SET status = ?, metadata = ? WHERE id = ?",
+                (item.status.value, json.dumps(item.metadata), item.id),
+            )
 
     def _ensure_initialized(self) -> None:
         """Ensure the store is initialized."""

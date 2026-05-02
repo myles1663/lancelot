@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { usePolling, usePageTitle } from '@/hooks'
-import { fetchCoreBlocks, fetchQuarantine, fetchMemoryStats, fetchRecentMemory, searchMemory, promoteItem } from '@/api'
+import { fetchCoreBlocks, fetchQuarantine, fetchMemoryStats, fetchRecentMemory, searchMemory, approveQuarantinedItem } from '@/api'
 import { MetricCard, EmptyState } from '@/components'
-import type { CoreBlock, SearchResultItem, RecentMemoryItem } from '@/types/api'
+import type { CoreBlock, SearchResultItem, RecentMemoryItem, QuarantineItem } from '@/types/api'
 import { quarantineBadgeClass, quarantineReviewSummary } from '@/utils/memoryReview'
 
 function formatTimestamp(value: string): string {
@@ -66,8 +66,8 @@ export function MemoryPanel() {
     }
   }
 
-  const handlePromote = async (itemId: string) => {
-    await promoteItem(itemId)
+  const handlePromote = async (item: QuarantineItem) => {
+    await approveQuarantinedItem(item.tier, item.id, 'War Room', 'Approved from Memory panel')
     refetchQuarantine()
   }
 
@@ -191,7 +191,7 @@ export function MemoryPanel() {
                   ) : null}
                   <p className="text-xs text-text-secondary mt-2 whitespace-pre-wrap break-words">{item.content}</p>
                   <button
-                    onClick={() => handlePromote(item.id)}
+                    onClick={() => handlePromote(item)}
                     className="mt-2 px-3 py-1 text-xs bg-state-healthy/15 text-state-healthy rounded hover:bg-state-healthy/25"
                   >
                     Promote

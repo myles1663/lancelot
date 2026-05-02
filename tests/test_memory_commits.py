@@ -595,6 +595,45 @@ class TestRollback:
         assert second_rollback_id == rollback_id
         assert store_manager.working.get("idempotent_rollback").content == "Later work"
 
+    def test_original_commit_can_be_rolled_back_again_after_rollback_is_reversed(
+        self,
+        commit_manager,
+        store_manager,
+    ):
+        """After a rollback is itself rolled back, the original commit can be undone again."""
+        store_manager.working.insert(MemoryItem(
+            id="lineage_rollback",
+            tier=MemoryTier.working,
+            title="Lineage rollback",
+            content="Before",
+            confidence=0.4,
+        ))
+        commit_id = commit_manager.begin_edits(created_by="agent")
+        commit_manager.add_edit(
+            commit_id=commit_id,
+            op=MemoryEditOp.replace,
+            target="working:lineage_rollback",
+            after="After",
+            reason="Update item",
+            confidence=0.9,
+        )
+        commit_manager.finish_edits(commit_id)
+
+        rollback_id = commit_manager.rollback(commit_id=commit_id, reason="undo", created_by="owner")
+        assert store_manager.working.get("lineage_rollback").content == "Before"
+
+        commit_manager.rollback(commit_id=rollback_id, reason="redo", created_by="owner")
+        assert store_manager.working.get("lineage_rollback").content == "After"
+
+        second_rollback_id = commit_manager.rollback(
+            commit_id=commit_id,
+            reason="undo again after redo",
+            created_by="owner",
+        )
+
+        assert second_rollback_id != rollback_id
+        assert store_manager.working.get("lineage_rollback").content == "Before"
+
     def test_item_only_rollback_survives_new_commit_manager(self, core_store, store_manager, tmp_data_dir):
         """Persisted item undo logs allow item-only rollback after manager restart."""
         manager = CommitManager(core_store=core_store, store_manager=store_manager, data_dir=tmp_data_dir)

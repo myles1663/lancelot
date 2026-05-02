@@ -9,6 +9,7 @@ These tests validate:
 - Multi-tier search
 """
 
+import json
 import os
 import pytest
 from datetime import datetime, timedelta
@@ -162,6 +163,45 @@ class TestMemoryItemStoreCRUD:
         """Test getting a nonexistent item returns None."""
         retrieved = working_store.get("nonexistent_id")
         assert retrieved is None
+
+    def test_claim_backfill_persists_quarantine_metadata(self, tmp_data_dir):
+        """Claim backfill should persist review status for contradictory legacy rows."""
+        store = MemoryItemStore(data_dir=tmp_data_dir, tier=MemoryTier.episodic)
+        store.initialize()
+        old = MemoryItem(
+            id="legacy-claim-old",
+            tier=MemoryTier.episodic,
+            title="Atlas status blocked",
+            content="Atlas status is blocked.",
+            confidence=0.9,
+            metadata={"claim": {"entity": "Atlas", "attribute": "status", "value": "blocked"}},
+        )
+        new_metadata = {"claim": {"entity": "Atlas", "attribute": "status", "value": "ready"}}
+        new = MemoryItem(
+            id="legacy-claim-new",
+            tier=MemoryTier.episodic,
+            title="Atlas status ready",
+            content="Atlas status is ready.",
+            confidence=0.9,
+            metadata=dict(new_metadata),
+        )
+        store.insert(old)
+        store.insert(new)
+        with store._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM memory_claims WHERE item_id = ?", [new.id])
+            cursor.execute(
+                "UPDATE memory_items SET status = ?, metadata = ? WHERE id = ?",
+                [MemoryStatus.active.value, json.dumps(new_metadata), new.id],
+            )
+            store._backfill_missing_claims(cursor)
+            conn.commit()
+
+        backfilled = store.get(new.id)
+        assert backfilled is not None
+        assert backfilled.status == MemoryStatus.quarantined
+        assert backfilled.metadata["flagged_reason"] == "claim_supersession"
+        store.close()
 
 
 # ---------------------------------------------------------------------------

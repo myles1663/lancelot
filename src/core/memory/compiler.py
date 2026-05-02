@@ -311,6 +311,15 @@ class ContextCompiler:
 
         for item in valid_items:
             ethics_decision = self.ethics.evaluate_retrieval(item)
+            if ethics_decision.action == MemoryEthicsAction.quarantine:
+                ctx.add_exclusion(
+                    item.id,
+                    "memory_ethics",
+                    rule=ethics_decision.rule_name,
+                    reason_detail=ethics_decision.reason,
+                    action=ethics_decision.action.value,
+                )
+                continue
             if ethics_decision.action == MemoryEthicsAction.exclude:
                 ctx.add_exclusion(
                     item.id,
@@ -320,7 +329,8 @@ class ContextCompiler:
                 )
                 continue
 
-            injection = detect_injection(item.content)
+            rendered_content = ethics_decision.scrubbed_content or item.content
+            injection = detect_injection(rendered_content)
             if injection.detected:
                 ctx.add_exclusion(
                     item.id,
@@ -330,7 +340,7 @@ class ContextCompiler:
                 )
                 continue
 
-            item_tokens = item.token_count or estimate_tokens(item.content)
+            item_tokens = estimate_tokens(rendered_content)
 
             if total_tokens + item_tokens > budget:
                 ctx.add_exclusion(
@@ -352,7 +362,7 @@ class ContextCompiler:
                 continue
 
             lines.append(f"\n[{item.title}]")
-            lines.append(item.content)
+            lines.append(rendered_content)
             if item.tags:
                 lines.append(f"Tags: {', '.join(item.tags)}")
 
@@ -399,6 +409,15 @@ class ContextCompiler:
                 continue
 
             ethics_decision = self.ethics.evaluate_retrieval(item)
+            if ethics_decision.action == MemoryEthicsAction.quarantine:
+                ctx.add_exclusion(
+                    item.id,
+                    "memory_ethics",
+                    rule=ethics_decision.rule_name,
+                    reason_detail=ethics_decision.reason,
+                    action=ethics_decision.action.value,
+                )
+                continue
             if ethics_decision.action == MemoryEthicsAction.exclude:
                 ctx.add_exclusion(
                     item.id,
@@ -408,7 +427,8 @@ class ContextCompiler:
                 )
                 continue
 
-            injection = detect_injection(item.content)
+            rendered_content = ethics_decision.scrubbed_content or item.content
+            injection = detect_injection(rendered_content)
             if injection.detected:
                 ctx.add_exclusion(
                     item.id,
@@ -427,7 +447,7 @@ class ContextCompiler:
                 )
                 continue
 
-            item_tokens = item.token_count or estimate_tokens(item.content)
+            item_tokens = estimate_tokens(rendered_content)
 
             if total_tokens + item_tokens > budget:
                 ctx.add_exclusion(
@@ -450,7 +470,7 @@ class ContextCompiler:
 
             tier_label = item.tier.value.upper()
             lines.append(f"\n[{tier_label}: {item.title}]")
-            lines.append(item.content)
+            lines.append(rendered_content)
 
             total_tokens += item_tokens
             ctx.included_memory_item_ids.append(item.id)

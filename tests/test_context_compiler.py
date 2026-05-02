@@ -390,6 +390,39 @@ class TestRetrievalCompilation:
         exclusions = [e for e in ctx.excluded_candidates if e["reason"] == "blob_excluded"]
         assert len(exclusions) == 1
 
+    def test_retrieval_ethics_scrubs_imported_secret_before_rendering(self, compiler):
+        """Imported rows that bypassed write scrubbing must still be scrubbed on retrieval."""
+        item = create_archival_item(
+            title="Legacy secret",
+            content="Legacy note with api_key=sk_test_1234567890abcdef",
+        )
+
+        ctx = compiler.compile(
+            objective="Review legacy notes",
+            retrieved_items=[item],
+        )
+
+        assert item.id in ctx.included_memory_item_ids
+        assert "sk_test_1234567890abcdef" not in ctx.rendered_prompt
+        assert "[REDACTED_SECRET]" in ctx.rendered_prompt
+
+    def test_retrieval_ethics_excludes_imported_pii_without_consent(self, compiler):
+        """Imported long-term PII without consent must not be rendered into context."""
+        item = create_archival_item(
+            title="Legacy contact",
+            content="Customer email is person@example.com.",
+        )
+
+        ctx = compiler.compile(
+            objective="Review legacy contacts",
+            retrieved_items=[item],
+        )
+
+        assert item.id not in ctx.included_memory_item_ids
+        exclusions = [e for e in ctx.excluded_candidates if e["reason"] == "memory_ethics"]
+        assert len(exclusions) == 1
+        assert exclusions[0]["rule"] == "pii_requires_consent"
+
     def test_duplicate_items_not_repeated(self, compiler):
         """Test that items in working memory aren't duplicated in retrieval."""
         item = create_working_item(title="Shared")

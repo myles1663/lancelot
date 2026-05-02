@@ -253,9 +253,10 @@ Memory can also store structured factual claims as entity-attribute-value
 triples. Claims are written through `metadata.claim` or `metadata.claims`, and
 the store also supports conservative text extraction when
 `metadata.claim_extraction=text` is present. A newer contradictory claim for the
-same entity and attribute supersedes the previous claim, records validity
-history, emits a `memory_claim_supersede` receipt, and default retrieval filters
-out superseded claim items.
+same entity and attribute enters claim review first. When an operator approves
+the quarantined claim, Lancelot records validity history, emits a
+`memory_claim_supersede` receipt, and default retrieval filters out superseded
+claim items.
 
 ### Context Efficiency Telemetry
 
