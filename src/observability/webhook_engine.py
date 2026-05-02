@@ -462,3 +462,11 @@ def init_webhook_engine(
     )
     _engine.start()
     return _engine
+
+
+def shutdown_webhook_engine() -> None:
+    """Stop and clear the webhook engine singleton."""
+    global _engine
+    if _engine:
+        _engine.stop()
+    _engine = None

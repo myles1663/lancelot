@@ -78,12 +78,6 @@ const NAV_GROUPS: NavGroup[] = [
       { label: 'Time-Travel Debugger', path: '/timetravel' },
     ],
   },
-  {
-    title: 'BUSINESS',
-    items: [
-      { label: 'Business Dashboard', path: '/business' },
-    ],
-  },
 ]
 
 interface SidebarProps {
@@ -117,7 +111,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             />
             <div>
               <h1 className="text-sm font-semibold text-text-primary tracking-wide">LANCELOT OS</h1>
-              <span className="text-[10px] text-text-muted font-mono">v7.0</span>
+              <span className="text-[10px] text-text-muted font-mono">v{__LANCELOT_VERSION__}</span>
             </div>
           </div>
           <button

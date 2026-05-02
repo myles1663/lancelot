@@ -176,11 +176,12 @@ class ExecResult:
 class FileChange:
     """Record of a file change with before/after hashes."""
     path: str
-    action: str  # "created", "modified", "deleted"
+    action: str  # "created", "modified", "deleted", "error"
     hash_before: Optional[str] = None
     hash_after: Optional[str] = None
     size_before: Optional[int] = None
     size_after: Optional[int] = None
+    error_message: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""

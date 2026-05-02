@@ -81,7 +81,7 @@ async def oauth_anthropic_callback(request: Request):
         return render_callback_exception_page("OAuth")
 
 
-# --- OpenAI Codex OAuth Callback (unauthenticated â€” browser redirect) ---
+# --- OpenAI Codex OAuth Callback (unauthenticated browser redirect) ---
 
 @router.get("/auth/callback")
 async def oauth_codex_callback(request: Request):

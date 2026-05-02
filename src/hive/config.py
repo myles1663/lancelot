@@ -1,7 +1,6 @@
 """
 HIVE Config — Pydantic configuration model + YAML loader.
 
-Follows the BAL config pattern: Pydantic model with YAML file loading.
 """
 
 from __future__ import annotations

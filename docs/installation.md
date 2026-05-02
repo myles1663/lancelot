@@ -234,8 +234,15 @@ FEATURE_SOUL=true
 FEATURE_SKILLS=true
 FEATURE_HEALTH_MONITOR=true
 FEATURE_SCHEDULER=true
+FEATURE_MEMORY_VNEXT=true
+FEATURE_TOOLS_FABRIC=true
+FEATURE_RISK_TIERED_GOVERNANCE=true
+FEATURE_TRUST_LEDGER=true
+FEATURE_APPROVAL_LEARNING=true
 FEATURE_AGENTIC_LOOP=true
 FEATURE_LOCAL_AGENTIC=true
+FEATURE_TOOL_FLOW_STREAMING=true
+FEATURE_ACTION_CARDS=true
 ```
 
 > **Tip:** If you skip the security tokens, the in-app onboarding at `http://localhost:8000` will auto-generate them on first launch.
@@ -834,14 +841,14 @@ Open `http://localhost:8000` in a browser. You should see the operator dashboard
 | `FEATURE_SKILLS` | `true` | Modular skill system |
 | `FEATURE_HEALTH_MONITOR` | `true` | Background health monitoring |
 | `FEATURE_SCHEDULER` | `true` | Job scheduling |
-| `FEATURE_MEMORY_VNEXT` | `false` | Tiered memory system |
+| `FEATURE_MEMORY_VNEXT` | `true` | Tiered memory system |
 | `FEATURE_TOOLS_FABRIC` | `true` | Tool execution layer |
 | `FEATURE_TOOLS_CLI_PROVIDERS` | `false` | CLI tool adapters |
 | `FEATURE_TOOLS_ANTIGRAVITY` | `false` | Generative UI/Vision |
 | `FEATURE_TOOLS_NETWORK` | `false` | Network access in sandbox |
 | `FEATURE_TOOLS_HOST_EXECUTION` | `false` | Host execution (no sandbox) |
-| `FEATURE_AGENTIC_LOOP` | `false` | Agentic tool loop |
-| `FEATURE_LOCAL_AGENTIC` | `false` | Enable the local utility execution lane for low-risk token-saving work |
+| `FEATURE_AGENTIC_LOOP` | `true` | Agentic tool loop |
+| `FEATURE_LOCAL_AGENTIC` | `true` | Enable the local utility execution lane for low-risk token-saving work |
 
 Set to `true`, `1`, or `yes` to enable; anything else disables.
 

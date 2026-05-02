@@ -86,6 +86,17 @@ def init_a2a_api(
     logger.info("A2A management API initialized")
 
 
+def shutdown_a2a_api() -> None:
+    """Clear A2A management API runtime references for hot-toggle shutdown."""
+    global _registry, _receipt_service, _soul, _outbound_pipeline, _a2a_client
+    _registry = None
+    _receipt_service = None
+    _soul = None
+    _outbound_pipeline = None
+    _a2a_client = None
+    logger.info("A2A management API shutdown complete")
+
+
 # ── Request Models ───────────────────────────────────────────
 
 class RegisterAgentRequest(BaseModel):

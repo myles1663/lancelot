@@ -690,7 +690,7 @@ A core architectural principle: **any subsystem can be disabled without breaking
 | Incident Response | No incident auto-detection, playbook checklists, or PDF reports; receipt DAG and manual audit still available |
 | Soul Template Library | Always available (no feature flag). Depends on Soul Store, Soul Linter, Soul Amendments. Template registry and apply flow unavailable only if Soul subsystem itself is disabled |
 
-This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FEATURE_DEEP_REASONING_LOOP`, `FEATURE_PROVIDER_SDK`, `FEATURE_ANTHROPIC_OAUTH`, `FEATURE_GOOGLE_OAUTH`, `FEATURE_A2A`, `FEATURE_INCIDENT_RESPONSE`, etc.) that gate each subsystem at initialization. When a subsystem is disabled, its code paths are skipped and its API endpoints return appropriate "not available" responses.
+This is implemented through deployment-profile feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FEATURE_DEEP_REASONING_LOOP`, `FEATURE_GOOGLE_OAUTH`, `FEATURE_A2A`, `FEATURE_INCIDENT_RESPONSE`, etc.) that gate each subsystem. Process-local optional subsystems are hot-toggleable through the SubsystemManager; when disabled, route-gated API endpoints return appropriate "not available" responses.
 
 ---
 
@@ -711,7 +711,7 @@ This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FE
 | Encryption | cryptography library |
 | Containerization | Docker + Docker Compose |
 | Dependency Management | uv (deterministic lockfile via `pyproject.toml` + `uv.lock`) |
-| Testing | pytest (thousands of tests in the current private-dev gate) |
+| Testing | pytest release verification suite |
 
 ---
 

@@ -41,7 +41,7 @@ import type {
   ModelUsagePolicyResponse,
 } from '@/types/api'
 
-// â”€â”€ Tab definitions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Tab definitions
 
 const TABS = [
   { id: 'system', label: 'System' },
@@ -62,7 +62,7 @@ function normalizeLocalModelRoles(
   return Object.entries(rolesPayload as Record<string, LocalModelRoleStatus>)
 }
 
-// â”€â”€ Section wrapper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Section wrapper
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -94,7 +94,7 @@ function getVaultStatusState(
   }
 }
 
-// â”€â”€ Button helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Button helpers
 
 function ActionButton({
   label,
@@ -123,7 +123,7 @@ function ActionButton({
   )
 }
 
-// â”€â”€ Main Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Main component
 
 export function SetupRecovery() {
   usePageTitle('Setup & Recovery')
@@ -208,7 +208,7 @@ function SystemTab() {
       if (confirmAction === 'restart') await restartContainer()
       if (confirmAction === 'shutdown') await shutdownContainer()
     } catch {
-      // Expected â€” connection will drop
+      // Expected: connection will drop.
     } finally {
       setConfirmAction(null)
     }
@@ -376,7 +376,7 @@ function SystemTab() {
         {onboarding?.cooldown_active && (
           <div className="mt-4 p-3 bg-state-degraded/10 border border-state-degraded/30 rounded">
             <span className="text-xs font-semibold text-state-degraded">
-              Cooldown Active â€” {Math.round(onboarding.cooldown_remaining)}s remaining
+              Cooldown Active - {Math.round(onboarding.cooldown_remaining)}s remaining
             </span>
             {onboarding.last_error && (
               <p className="text-xs text-text-secondary mt-1">{onboarding.last_error}</p>
@@ -1179,7 +1179,7 @@ function DangerTab() {
         </Section>
       )}
 
-      {/* Reset Connector Vault â€” Custom Confirm Dialog with typed input */}
+      {/* Reset Connector Vault - custom confirm dialog with typed input */}
       {connectorVaultResetConfirm && (
         <dialog
           open
@@ -1223,7 +1223,7 @@ function DangerTab() {
         </dialog>
       )}
 
-      {/* Factory Reset â€” Custom Confirm Dialog with typed input */}
+      {/* Factory Reset - custom confirm dialog with typed input */}
       {factoryResetConfirm && (
         <dialog
           open

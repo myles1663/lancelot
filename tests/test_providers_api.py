@@ -504,3 +504,269 @@ def test_ensure_persisted_active_provider_creates_or_updates_config():
     unchanged = providers_api.ensure_persisted_active_provider("openai-codex")
 
     assert unchanged is False
+
+
+def test_provider_api_oauth_and_profile_fallback_helpers(monkeypatch, tmp_path):
+    profile = SimpleNamespace(
+        fast=SimpleNamespace(model="fast-profile"),
+        deep=SimpleNamespace(model="deep-profile"),
+        cache=SimpleNamespace(model="cache-profile"),
+    )
+    registry = SimpleNamespace(
+        has_provider=lambda provider: provider == "openai",
+        get_profile=lambda provider: profile,
+    )
+    monkeypatch.setattr("provider_profile.ProfileRegistry", lambda: registry)
+
+    assert providers_api._provider_profile_lane_defaults("openai") == {
+        "fast": "fast-profile",
+        "deep": "deep-profile",
+        "cache": "cache-profile",
+    }
+    assert providers_api._provider_profile_lane_overrides("missing") == {}
+
+    monkeypatch.setattr(
+        "provider_profile.ProfileRegistry",
+        lambda: (_ for _ in ()).throw(RuntimeError("profiles unavailable")),
+    )
+    assert providers_api._provider_profile_lane_defaults("openai") == {}
+
+    class LegacyDiscovery:
+        def __init__(self, provider, lane_overrides=None, fallback_lanes=None):
+            if fallback_lanes is not None:
+                raise TypeError("old discovery constructor")
+            self.provider = provider
+            self.lane_overrides = lane_overrides
+
+    monkeypatch.setattr(model_discovery, "ModelDiscovery", LegacyDiscovery)
+    discovery = providers_api._create_model_discovery(
+        "provider",
+        lane_overrides={"fast": "m1"},
+        fallback_lanes={"fast": "default"},
+    )
+    assert discovery.lane_overrides == {"fast": "m1"}
+
+    class ReplaceLegacy:
+        def __init__(self):
+            self.calls = []
+
+        def replace_provider(self, provider, lane_overrides=None, fallback_lanes=None):
+            if fallback_lanes is not None:
+                raise TypeError("old replace signature")
+            self.calls.append((provider, lane_overrides))
+
+    replace_legacy = ReplaceLegacy()
+    providers_api._replace_discovery_provider(
+        replace_legacy,
+        "new-provider",
+        lane_overrides={"deep": "m2"},
+        fallback_lanes={"deep": "default"},
+    )
+    assert replace_legacy.calls == [("new-provider", {"deep": "m2"})]
+
+    monkeypatch.setattr("oauth_token_manager.get_oauth_manager", lambda: None)
+    assert providers_api._anthropic_oauth_status() is None
+    assert providers_api._anthropic_oauth_token() == ""
+
+    monkeypatch.setattr(
+        "oauth_token_manager.get_oauth_manager",
+        lambda: (_ for _ in ()).throw(RuntimeError("vault down")),
+    )
+    assert providers_api._anthropic_oauth_status() is None
+    assert providers_api._anthropic_oauth_token() == ""
+
+    monkeypatch.setattr("openai_codex_oauth_manager.get_openai_codex_manager", lambda: None)
+    monkeypatch.setattr(providers_api, "_codex_cli_auth_available", lambda: False)
+    assert providers_api._codex_oauth_status() is None
+    assert providers_api._codex_oauth_token() == ""
+
+    monkeypatch.setattr(
+        "openai_codex_oauth_manager.get_openai_codex_manager",
+        lambda: (_ for _ in ()).throw(RuntimeError("codex store down")),
+    )
+    assert providers_api._codex_oauth_status() is None
+    assert providers_api._codex_oauth_token() == ""
+
+    monkeypatch.setattr(
+        "providers.codex_cli_client.has_codex_cli_auth",
+        lambda: (_ for _ in ()).throw(RuntimeError("home missing")),
+    )
+    assert providers_api._codex_cli_auth_available() is False
+
+    monkeypatch.setattr(providers_api, "_DATA_DIR", tmp_path / "missing-parent")
+    monkeypatch.setattr(providers_api, "_CONFIG_FILE", tmp_path / "missing-parent" / "provider_config.json")
+    monkeypatch.setattr(
+        providers_api.tempfile,
+        "mkstemp",
+        lambda **kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    providers_api._save_config({"active_provider": "openai"})
+    assert not providers_api._CONFIG_FILE.exists()
+
+
+def test_provider_api_switch_rotate_and_lane_error_branches(monkeypatch):
+    client = _client()
+    monkeypatch.setattr(provider_factory, "API_KEY_VARS", {"openai": "OPENAI_API_KEY", "anthropic": ""})
+
+    unknown = client.post("/api/v1/providers/switch", json={"provider": "missing"})
+    assert unknown.status_code == 200
+    assert "Unknown provider" in unknown.json()["message"]
+
+    monkeypatch.setattr(providers_api, "_anthropic_oauth_token", lambda: "oauth-token")
+    monkeypatch.setattr(
+        provider_factory,
+        "create_provider",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("provider factory failed")),
+    )
+    switched = client.post("/api/v1/providers/switch", json={"provider": "anthropic"})
+    assert switched.status_code == 200
+    assert switched.json() == {"status": "error", "message": "provider factory failed"}
+
+    discovery = _FakeDiscovery(
+        provider_name="openai",
+        discovered_models=[_FakeModel("model-fast")],
+        lane_assignments={"fast": "model-fast"},
+    )
+    orchestrator = _FakeOrchestrator()
+    orchestrator.set_lane_model = lambda *args: (_ for _ in ()).throw(RuntimeError("lane locked"))
+    providers_api.init_provider_api(discovery, orchestrator)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-current-123456")
+
+    missing_model = client.post("/api/v1/providers/lanes/override", json={"lane": "fast", "model_id": ""})
+    assert missing_model.status_code == 200
+    assert missing_model.json() == {"status": "error", "message": "model_id is required"}
+
+    failed_override = client.post(
+        "/api/v1/providers/lanes/override",
+        json={"lane": "fast", "model_id": "model-fast"},
+    )
+    assert failed_override.status_code == 200
+    assert failed_override.json()["status"] == "error"
+    assert "lane locked" in failed_override.json()["message"]
+
+    class ResetDiscovery(_FakeDiscovery):
+        def reset_overrides(self):
+            self.reset_calls += 1
+            self.lane_assignments = {"fast": "model-fast", "deep": "model-deep"}
+
+    reset_discovery = ResetDiscovery(provider_name="openai")
+    reset_orchestrator = _FakeOrchestrator()
+
+    def set_lane(lane, model):
+        reset_orchestrator.lane_calls.append((lane, model))
+        if lane == "deep":
+            raise RuntimeError("deep lane unavailable")
+
+    reset_orchestrator.set_lane_model = set_lane
+    providers_api.init_provider_api(reset_discovery, reset_orchestrator)
+    reset = client.post("/api/v1/providers/lanes/reset")
+    assert reset.status_code == 200
+    assert reset.json()["status"] == "ok"
+    assert reset_orchestrator.lane_calls == [("fast", "model-fast"), ("deep", "model-deep")]
+
+    providers_api.init_provider_api(_FakeDiscovery(provider_name="openai"), _FakeOrchestrator())
+    created = []
+
+    def create_provider(provider_name, api_key, auth_token=""):
+        created.append((provider_name, api_key, auth_token))
+        if len(created) == 1:
+            return SimpleNamespace(list_models=lambda: ["m1"])
+        raise RuntimeError("hotswap unavailable")
+
+    monkeypatch.setattr(provider_factory, "create_provider", create_provider)
+    monkeypatch.setattr(providers_api, "_update_env_file", lambda *args: False)
+    rotated = client.post(
+        "/api/v1/providers/keys/rotate",
+        json={"provider": "openai", "api_key": "sk-new-123456789"},
+    )
+    assert rotated.status_code == 200
+    body = rotated.json()
+    assert body["status"] == "ok"
+    assert body["hot_swapped"] is False
+    assert body["persisted_to_env"] is False
+
+    unknown_rotate = client.post(
+        "/api/v1/providers/keys/rotate",
+        json={"provider": "unknown", "api_key": "sk-new-123456789"},
+    )
+    assert unknown_rotate.status_code == 200
+    assert "Unknown provider" in unknown_rotate.json()["message"]
+
+    monkeypatch.setattr(
+        provider_factory,
+        "create_provider",
+        lambda provider_name, api_key, auth_token="": SimpleNamespace(
+            list_models=lambda: (_ for _ in ()).throw(RuntimeError("auth rejected"))
+        ),
+    )
+    failed_validation = client.post(
+        "/api/v1/providers/keys/rotate",
+        json={"provider": "openai", "api_key": "sk-bad-123456789"},
+    )
+    assert failed_validation.status_code == 200
+    assert "Key validation failed" in failed_validation.json()["message"]
+
+
+def test_provider_api_refresh_and_oauth_error_routes(monkeypatch):
+    client = _client()
+    discovery = _FakeDiscovery(provider_name="openai", discovered_models=[_FakeModel("m1")])
+    discovery.refresh = lambda: (_ for _ in ()).throw(RuntimeError("provider timeout"))
+    providers_api.init_provider_api(discovery, None)
+
+    refresh = client.post("/api/v1/providers/refresh")
+    assert refresh.status_code == 200
+    assert refresh.json() == {"status": "error", "message": "provider timeout"}
+
+    monkeypatch.setattr("oauth_token_manager.get_oauth_manager", lambda: None)
+    assert client.post("/api/v1/providers/oauth/initiate").json() == {
+        "status": "error",
+        "message": "OAuth manager not initialized",
+    }
+    assert client.get("/api/v1/providers/oauth/status").json() == {
+        "configured": False,
+        "status": "not_available",
+    }
+
+    monkeypatch.setattr(
+        "oauth_token_manager.get_oauth_manager",
+        lambda: (_ for _ in ()).throw(RuntimeError("oauth store down")),
+    )
+    assert client.post("/api/v1/providers/oauth/initiate").json()["message"] == "oauth store down"
+    assert client.get("/api/v1/providers/oauth/status").json()["error"] == "oauth store down"
+    assert client.post("/api/v1/providers/oauth/revoke").json() == {
+        "status": "error",
+        "message": "oauth store down",
+    }
+
+    monkeypatch.setattr(providers_api, "_codex_cli_auth_available", lambda: False)
+    monkeypatch.setattr("openai_codex_oauth_manager.get_openai_codex_manager", lambda: None)
+    assert client.post("/api/v1/providers/oauth/openai-codex/initiate").json() == {
+        "status": "error",
+        "message": "Codex OAuth manager not initialized",
+    }
+    assert client.get("/api/v1/providers/oauth/openai-codex/status").json() == {
+        "configured": False,
+        "status": "not_available",
+        "provider": "openai-codex",
+    }
+    assert client.post("/api/v1/providers/oauth/openai-codex/revoke").json() == {
+        "status": "ok",
+        "message": "Codex OAuth tokens revoked",
+    }
+
+    monkeypatch.setattr(providers_api, "_codex_cli_auth_available", lambda: True)
+    assert client.post("/api/v1/providers/oauth/openai-codex/revoke").json() == {
+        "status": "ok",
+        "message": "Codex CLI auth is sourced from mounted ~/.codex/auth.json. Sign out on the host to revoke it.",
+    }
+
+    monkeypatch.setattr(
+        "openai_codex_oauth_manager.get_openai_codex_manager",
+        lambda: (_ for _ in ()).throw(RuntimeError("codex oauth down")),
+    )
+    monkeypatch.setattr(providers_api, "_codex_cli_auth_available", lambda: False)
+    assert client.post("/api/v1/providers/oauth/openai-codex/initiate").json()["message"] == "codex oauth down"
+    assert client.post("/api/v1/providers/oauth/openai-codex/revoke").json() == {
+        "status": "error",
+        "message": "codex oauth down",
+    }

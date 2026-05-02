@@ -104,7 +104,6 @@ _ADMIN_CAPABILITIES = {
     "federation.admin",
     "hive.admin",
     "compliance.admin",
-    "bal.admin",
     "scheduler.admin",
     "timetravel.admin",
     "a2a.admin",

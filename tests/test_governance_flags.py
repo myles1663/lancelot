@@ -10,30 +10,38 @@ GOV_FLAGS = [
     "FEATURE_POLICY_CACHE",
     "FEATURE_ASYNC_VERIFICATION",
     "FEATURE_INTENT_TEMPLATES",
+]
+
+OPT_IN_GOV_FLAGS = [
     "FEATURE_BATCH_RECEIPTS",
 ]
 
-ENV_KEYS = [f for f in GOV_FLAGS]  # env var names match flag names
+ENV_KEYS = [*GOV_FLAGS, *OPT_IN_GOV_FLAGS]  # env var names match flag names
 
 
 @pytest.fixture(autouse=True)
 def clean_env():
     """Remove governance env vars before/after each test."""
+    import feature_flags
+    previous_state = feature_flags.persisted_flag_state_snapshot()
+    feature_flags.clear_persisted_flag_state()
     for key in ENV_KEYS:
         os.environ.pop(key, None)
-    import feature_flags
     feature_flags.reload_flags()
     yield
     for key in ENV_KEYS:
         os.environ.pop(key, None)
+    feature_flags.replace_persisted_flag_state(previous_state)
     feature_flags.reload_flags()
 
 
-def test_all_flags_default_false():
-    """All five governance flags default to False when env vars are not set."""
+def test_governance_baseline_defaults_on_except_batched_receipts():
+    """Governed local defaults enable policy checks while leaving batched receipts off."""
     import feature_flags
     feature_flags.reload_flags()
     for flag_name in GOV_FLAGS:
+        assert getattr(feature_flags, flag_name) is True, f"{flag_name} should default to True"
+    for flag_name in OPT_IN_GOV_FLAGS:
         assert getattr(feature_flags, flag_name) is False, f"{flag_name} should default to False"
 
 
@@ -48,7 +56,7 @@ def test_flags_truthy_values(value):
         assert getattr(feature_flags, flag_name) is True, f"{flag_name} should be True for '{value}'"
 
 
-@pytest.mark.parametrize("value", ["false", "maybe", "2", "", "no", "0"])
+@pytest.mark.parametrize("value", ["false", "maybe", "2", "no", "0"])
 def test_flags_falsy_values(value):
     """Invalid/falsy values default to False."""
     import feature_flags
@@ -60,12 +68,14 @@ def test_flags_falsy_values(value):
 
 
 def test_reload_updates_flags():
-    """reload_flags() correctly updates all five flags when env changes."""
+    """reload_flags() correctly updates all governance flags when env changes."""
     import feature_flags
 
-    # Start False
+    # Start from governed baseline.
     feature_flags.reload_flags()
     for flag_name in GOV_FLAGS:
+        assert getattr(feature_flags, flag_name) is True
+    for flag_name in OPT_IN_GOV_FLAGS:
         assert getattr(feature_flags, flag_name) is False
 
     # Set to True

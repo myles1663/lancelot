@@ -57,3 +57,30 @@ def test_list_gemini_models_filters_to_generate_content_support():
 
     assert configured == ["test-key"]
     assert result == ["models/gemini-1.5-pro", "models/gemini-2.0-flash"]
+
+
+def test_list_gemini_models_uses_environment_api_key(monkeypatch):
+    module = importlib.import_module("src.shared.list_models")
+    configured = []
+    monkeypatch.setenv("GEMINI_API_KEY", "env-key")
+    fake_genai = types.SimpleNamespace(
+        configure=lambda **kwargs: configured.append(kwargs["api_key"]),
+        list_models=lambda: [],
+    )
+
+    assert module.list_gemini_models(genai_module=fake_genai) == []
+    assert configured == ["env-key"]
+
+
+def test_list_models_main_reports_success_and_errors(monkeypatch, capsys):
+    module = importlib.import_module("src.shared.list_models")
+
+    monkeypatch.setattr(module, "list_gemini_models", lambda: ["models/a", "models/b"])
+    assert module.main() == 0
+    assert capsys.readouterr().out == "models/a\nmodels/b\n"
+
+    monkeypatch.setattr(module, "list_gemini_models", lambda: (_ for _ in ()).throw(ValueError("missing key")))
+    assert module.main() == 1
+
+    monkeypatch.setattr(module, "list_gemini_models", lambda: (_ for _ in ()).throw(RuntimeError("provider down")))
+    assert module.main() == 1

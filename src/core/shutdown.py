@@ -23,7 +23,6 @@ SUBSYSTEM_SHUTDOWN_MANIFEST: tuple[ShutdownTask, ...] = (
     ShutdownTask("hive", 10.0),
     ShutdownTask("uab_bridge", 5.0),
     ShutdownTask("host_bridge", 5.0),
-    ShutdownTask("bal", 5.0),
     ShutdownTask("health_monitor", 5.0),
     ShutdownTask("scheduler", 5.0),
     ShutdownTask("skills", 5.0),

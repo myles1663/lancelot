@@ -60,6 +60,14 @@ def init_incidents_api(receipt_service, data_dir: str) -> None:
     logger.info("Incidents API initialized")
 
 
+def shutdown_incidents_api() -> None:
+    """Clear incidents API runtime references for hot-toggle shutdown."""
+    global _data_dir, _receipt_service
+    _data_dir = None
+    _receipt_service = None
+    logger.info("Incidents API shutdown complete")
+
+
 # ── Request Models ────────────────────────────────────────────────────
 
 class AcknowledgeRequest(BaseModel):
@@ -462,6 +470,3 @@ def _emit_receipt(
             svc.create(receipt)
     except Exception as exc:
         logger.debug("Failed to emit receipt %s: %s", action_type.value, exc)
-    identity = resolve_authenticated_identity(request)
-    operator_id = identity.operator_id
-    actor = identity.display_name or identity.operator_id

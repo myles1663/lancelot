@@ -33,6 +33,8 @@ from src.core.api_auth import init_api_auth, require_authenticated_request
 import src.core.auth_api as auth_api
 from types import SimpleNamespace
 
+_ORIGINAL_GET_SOUL_VERSION = metrics_module._get_soul_version
+
 
 # ── Fixtures ─────────────────────────────────────────────────────
 
@@ -482,3 +484,157 @@ class TestServiceNotInitialized:
         tc = TestClient(app)
         resp = tc.get("/api/metrics/summary")
         assert resp.status_code == 503
+
+
+class TestMetricsRuntimeHelpers:
+    def test_shutdown_resets_runtime_references(self, mock_receipt_service):
+        init_metrics_api(mock_receipt_service, data_dir="/tmp/lancelot-data")
+        assert metrics_module._receipt_service is mock_receipt_service
+        assert metrics_module._data_dir == "/tmp/lancelot-data"
+
+        metrics_module.shutdown_metrics_api()
+
+        assert metrics_module._receipt_service is None
+        assert metrics_module._data_dir == "/home/lancelot/data"
+
+    def test_soul_payload_supports_pydantic_v1_v2_and_mapping_objects(self):
+        assert metrics_module._soul_payload(SimpleNamespace(model_dump=lambda: {"version": "v2"})) == {"version": "v2"}
+        assert metrics_module._soul_payload(SimpleNamespace(dict=lambda: {"version": "v1"})) == {"version": "v1"}
+
+        class MappingLike(dict):
+            pass
+
+        assert metrics_module._soul_payload(MappingLike(version="dict")) == {"version": "dict"}
+
+    def test_get_soul_version_hashes_payload_and_falls_back_on_error(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.core.soul.store.load_active_soul",
+            lambda: SimpleNamespace(model_dump=lambda: {"version": "v1", "mission": "test"}),
+        )
+        version = _ORIGINAL_GET_SOUL_VERSION()
+        assert len(version) == 16
+        assert version != "unknown"
+
+        monkeypatch.setattr(
+            "src.core.soul.store.load_active_soul",
+            lambda: (_ for _ in ()).throw(RuntimeError("soul down")),
+        )
+        assert _ORIGINAL_GET_SOUL_VERSION() == "unknown"
+
+    def test_authorize_request_handles_disabled_and_rate_limited_configs(self, monkeypatch):
+        identity = SimpleNamespace(operator_id="op-rate", display_name="Operator", session_id="sess")
+        request = SimpleNamespace()
+        monkeypatch.setattr(metrics_module, "resolve_authenticated_identity", lambda req: identity)
+        monkeypatch.setattr(
+            metrics_module,
+            "load_config",
+            lambda: SimpleNamespace(metrics_api=SimpleNamespace(enabled=False, rate_limit_per_minute=1)),
+        )
+        with pytest.raises(Exception) as disabled:
+            metrics_module._authorize_metrics_request(request)
+        assert disabled.value.status_code == 503
+
+        metrics_module._rate_buckets.clear()
+        monkeypatch.setattr(
+            metrics_module,
+            "load_config",
+            lambda: SimpleNamespace(metrics_api=SimpleNamespace(enabled=True, rate_limit_per_minute=1)),
+        )
+        metrics_module._authorize_metrics_request(request)
+        with pytest.raises(Exception) as limited:
+            metrics_module._authorize_metrics_request(request)
+        assert limited.value.status_code == 429
+
+    def test_metrics_query_receipts_emit_when_enabled_and_fail_softly(self, mock_receipt_service, monkeypatch):
+        created = []
+        init_metrics_api(SimpleNamespace(create=lambda receipt: created.append(receipt)))
+        request = SimpleNamespace()
+        monkeypatch.setattr(
+            metrics_module,
+            "resolve_authenticated_identity",
+            lambda req: SimpleNamespace(operator_id="op-1", session_id="sess-1"),
+        )
+        config = SimpleNamespace(metrics_api=SimpleNamespace(receipt_queries=True))
+
+        metrics_module._emit_metrics_query_receipt(request, "receipt-1", config)
+        assert created[0].metadata == {"query_type": "receipt_detail"}
+        assert created[0].inputs == {"receipt_id": "receipt-1"}
+
+        init_metrics_api(SimpleNamespace(create=lambda receipt: (_ for _ in ()).throw(RuntimeError("write failed"))))
+        metrics_module._emit_metrics_query_receipt(request, "receipt-2", config)
+
+        init_metrics_api(mock_receipt_service)
+
+    def test_runtime_count_helpers_cover_callable_list_and_lifecycle_fallbacks(self, monkeypatch):
+        monkeypatch.setattr(
+            metrics_module.importlib,
+            "import_module",
+            lambda name: SimpleNamespace(
+                _get_pending_approvals_count=lambda: 7,
+            )
+            if name == "src.core.governance_api"
+            else SimpleNamespace(),
+        )
+        assert metrics_module._get_pending_t3_approvals_count() == 7
+
+        def import_runtime(name):
+            if name == "src.hive.runtime":
+                return SimpleNamespace(get_runtime=lambda: SimpleNamespace(active_agents=lambda: ["a", "b"]))
+            return SimpleNamespace()
+
+        monkeypatch.setattr(metrics_module.importlib, "import_module", import_runtime)
+        assert metrics_module._get_active_hive_agents_count() == 2
+
+        def import_lifecycle(name):
+            if name == "src.hive.runtime":
+                return SimpleNamespace(get_runtime=lambda: SimpleNamespace(active_agents=None))
+            if name == "src.hive.api":
+                return SimpleNamespace(_lifecycle=SimpleNamespace(_runtimes={"r1": object(), "r2": object()}))
+            return SimpleNamespace()
+
+        monkeypatch.setattr(metrics_module.importlib, "import_module", import_lifecycle)
+        assert metrics_module._get_active_hive_agents_count() == 2
+
+    def test_remaining_not_initialized_endpoints_return_503(self, app):
+        metrics_module._receipt_service = None
+        tc = TestClient(app)
+
+        assert tc.get("/api/metrics/receipts").status_code == 503
+        assert tc.get("/api/metrics/receipts/receipt-1").status_code == 503
+        assert tc.get("/api/metrics/actions").status_code == 503
+        assert tc.get("/api/metrics/cost").status_code == 503
+        assert tc.get("/api/metrics/trust-ledger").status_code == 503
+
+    def test_webhook_status_reports_live_stats_and_runtime_failures(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "src.observability.webhook_engine.get_webhook_engine",
+            lambda: SimpleNamespace(get_stats=lambda: {"ops": {"delivered": 3}}),
+        )
+
+        response = client.get("/api/metrics/webhooks/status")
+
+        assert response.status_code == 200
+        assert response.json()["data"]["endpoints"]["ops"]["delivered"] == 3
+
+        monkeypatch.setattr(
+            "src.observability.webhook_engine.get_webhook_engine",
+            lambda: None,
+        )
+
+        response = client.get("/api/metrics/webhooks/status")
+
+        assert response.status_code == 200
+        assert response.json()["degraded_reasons"] == ["Webhook engine not initialized"]
+
+        monkeypatch.setattr(
+            "src.observability.webhook_engine.get_webhook_engine",
+            lambda: (_ for _ in ()).throw(RuntimeError("engine down")),
+        )
+
+        response = client.get("/api/metrics/webhooks/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["runtime_degraded"] is True
+        assert body["degraded_reasons"] == ["Webhook engine status unavailable"]
+        assert body["runtime_errors"] == ["engine down"]

@@ -79,6 +79,16 @@ def init_timetravel_api(
     logger.info("Time-Travel Debugging API initialized")
 
 
+def shutdown_timetravel_api() -> None:
+    """Clear Time-Travel runtime dependencies for a hot-toggle shutdown."""
+    global _receipt_service, _soul, _resume_engine, _snapshot_reader
+    _receipt_service = None
+    _soul = None
+    _resume_engine = None
+    _snapshot_reader = None
+    logger.info("Time-Travel Debugging API shutdown complete")
+
+
 def _get_soul() -> Any:
     """Resolve the live Time-Travel Soul."""
     soul = _soul

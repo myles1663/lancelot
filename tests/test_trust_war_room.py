@@ -12,6 +12,7 @@ from src.core.governance.trust_models import (
 )
 from src.core.governance.trust_ledger import TrustLedger
 from src.core.governance.war_room_panel import (
+    render_governance_panel,
     render_trust_panel,
     format_graduation_proposal,
 )
@@ -88,3 +89,127 @@ class TestFormatGraduationProposal:
         assert "T2_CONTROLLED" in text
         assert "T1_REVERSIBLE" in text
         assert "Approve?" in text
+
+
+class _Column:
+    def __init__(self, calls):
+        self.calls = calls
+
+    def metric(self, label, value):
+        self.calls.append(("metric", label, value))
+
+
+class _Streamlit:
+    def __init__(self):
+        self.calls = []
+
+    def header(self, text):
+        self.calls.append(("header", text))
+
+    def subheader(self, text):
+        self.calls.append(("subheader", text))
+
+    def caption(self, text):
+        self.calls.append(("caption", text))
+
+    def info(self, text):
+        self.calls.append(("info", text))
+
+    def warning(self, text):
+        self.calls.append(("warning", text))
+
+    def divider(self):
+        self.calls.append(("divider",))
+
+    def text(self, text):
+        self.calls.append(("text", text))
+
+    def columns(self, count):
+        self.calls.append(("columns", count))
+        return [_Column(self.calls) for _ in range(count)]
+
+
+class _Response:
+    def __init__(self, status_code=200, payload=None):
+        self.status_code = status_code
+        self._payload = payload or {}
+
+    def json(self):
+        return self._payload
+
+
+class TestRenderGovernancePanel:
+    def test_no_streamlit_is_noop(self):
+        assert render_governance_panel(None) is None
+
+    def test_disabled_flag_shows_info(self, monkeypatch):
+        st = _Streamlit()
+        monkeypatch.setitem(__import__("sys").modules, "feature_flags", type("Flags", (), {"FEATURE_RISK_TIERED_GOVERNANCE": False}))
+
+        render_governance_panel(st)
+
+        assert ("header", "Governance Performance") in st.calls
+        assert any(call[0] == "info" and "disabled" in call[1] for call in st.calls)
+
+    def test_successful_stats_render_metrics_and_templates(self, monkeypatch):
+        import sys
+        import types
+
+        st = _Streamlit()
+        payload = {
+            "policy_cache": {
+                "total_entries": 12,
+                "hit_rate": 0.75,
+                "soul_version": "soul-v1",
+            },
+            "async_queue": {"depth": 3, "pending": 2},
+            "intent_templates": {
+                "total": 2,
+                "active": 1,
+                "templates": [
+                    {
+                        "intent_pattern": "send report",
+                        "active": True,
+                        "success_count": 4,
+                        "failure_count": 1,
+                    }
+                ],
+            },
+        }
+        requests = types.SimpleNamespace(get=lambda url, timeout: _Response(payload=payload))
+        monkeypatch.setitem(sys.modules, "feature_flags", types.SimpleNamespace(FEATURE_RISK_TIERED_GOVERNANCE=True))
+        monkeypatch.setitem(sys.modules, "requests", requests)
+
+        render_governance_panel(st, gateway_url="http://gateway")
+
+        assert ("metric", "Cache Entries", 12) in st.calls
+        assert ("metric", "Hit Rate", "75.0%") in st.calls
+        assert ("metric", "Queue Depth", 3) in st.calls
+        assert ("metric", "Total Templates", 2) in st.calls
+        assert any(call == ("text", "send report | Active | S:4 F:1") for call in st.calls)
+
+    def test_gateway_status_and_request_failures_are_displayed(self, monkeypatch):
+        import sys
+        import types
+
+        st = _Streamlit()
+        responses = iter([
+            _Response(status_code=503),
+            _Response(status_code=503),
+            RuntimeError("network down"),
+        ])
+
+        def fake_get(url, timeout):
+            response = next(responses)
+            if isinstance(response, Exception):
+                raise response
+            return response
+
+        monkeypatch.setitem(sys.modules, "feature_flags", types.SimpleNamespace(FEATURE_RISK_TIERED_GOVERNANCE=True))
+        monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace(get=fake_get))
+
+        render_governance_panel(st)
+
+        assert ("warning", "Could not fetch governance stats from gateway.") in st.calls
+        assert ("caption", "Stats unavailable") in st.calls
+        assert ("caption", "Templates disabled or not initialized") in st.calls

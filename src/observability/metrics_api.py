@@ -53,6 +53,14 @@ def init_metrics_api(receipt_service, data_dir: str = "/home/lancelot/data") -> 
     logger.info("Metrics API initialized")
 
 
+def shutdown_metrics_api() -> None:
+    """Clear Metrics API runtime references for hot-toggle shutdown."""
+    global _receipt_service, _data_dir
+    _receipt_service = None
+    _data_dir = "/home/lancelot/data"
+    logger.info("Metrics API shutdown complete")
+
+
 def _soul_payload(soul: Any) -> Dict[str, Any]:
     """Serialize a Soul model across Pydantic versions."""
     if hasattr(soul, "model_dump"):

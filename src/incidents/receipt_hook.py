@@ -41,6 +41,8 @@ def configure(enabled: bool, data_dir: str) -> None:
     _data_dir = data_dir
 
     if not enabled:
+        _trigger_engine = None
+        _store = None
         logger.info("Incident receipt hook disabled")
         return
 

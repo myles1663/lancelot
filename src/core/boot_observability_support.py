@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 
+_mounted_observability_routes: set[int] = set()
+
 
 def init_observability(*, app, main_orchestrator, logger) -> None:
     """Initialize observability APIs, sinks, and receipt bridge wiring."""
@@ -12,7 +14,26 @@ def init_observability(*, app, main_orchestrator, logger) -> None:
     if not FEATURE_OBSERVABILITY:
         return
 
+    mount_observability_routers(app, logger=logger)
+
+    _start_observability_runtime(main_orchestrator=main_orchestrator, logger=logger)
+
+
+def mount_observability_routers(app, *, logger) -> None:
+    """Mount observability routers once; middleware gates disabled routes."""
     from observability.api import router as observability_router
+    from observability.metrics_api import router as metrics_api_router
+
+    app_id = id(app)
+    if app_id in _mounted_observability_routes:
+        return
+    app.include_router(observability_router)
+    app.include_router(metrics_api_router)
+    _mounted_observability_routes.add(app_id)
+    logger.info("Observability routers mounted.")
+
+
+def _start_observability_runtime(*, main_orchestrator, logger) -> dict:
     from observability.config import (
         describe_otel_export_status,
         load_config as load_observability_config,
@@ -20,11 +41,8 @@ def init_observability(*, app, main_orchestrator, logger) -> None:
     from observability.otel_provider import init_otel
     from observability.receipt_bridge import configure_bridge
 
-    app.include_router(observability_router)
-    logger.info("Observability API initialized.")
-
     observability_config = load_observability_config()
-    _init_metrics_api(app=app, logger=logger)
+    metrics_active = _init_metrics_api(logger=logger)
     webhook_bridge_active = _init_webhook_engine(
         config=observability_config,
         main_orchestrator=main_orchestrator,
@@ -60,20 +78,66 @@ def init_observability(*, app, main_orchestrator, logger) -> None:
         webhook_bridge_active,
         incident_bridge_active,
     )
+    return {
+        "metrics_active": metrics_active,
+        "webhook_bridge_active": webhook_bridge_active,
+        "otel_export_active": otel_export_active,
+        "incident_bridge_active": incident_bridge_active,
+        "receipt_bridge_active": receipt_bridge_active,
+    }
 
 
-def _init_metrics_api(*, app, logger) -> None:
-    from observability.metrics_api import router as metrics_api_router, init_metrics_api
+def shutdown_observability(objects=None, *, logger) -> None:
+    """Stop observability sinks while leaving gated routers mounted."""
+    try:
+        from observability.receipt_bridge import configure_bridge
+
+        configure_bridge(enabled=False, otel_enabled=False)
+    except Exception as exc:
+        logger.warning("Receipt bridge shutdown failed: %s", exc)
+
+    try:
+        from observability.webhook_engine import shutdown_webhook_engine
+
+        shutdown_webhook_engine()
+    except Exception as exc:
+        logger.warning("Webhook engine shutdown failed: %s", exc)
+
+    try:
+        from observability.otel_provider import shutdown_otel
+
+        shutdown_otel()
+    except Exception as exc:
+        logger.warning("OTel shutdown failed: %s", exc)
+
+    try:
+        from observability.metrics_api import shutdown_metrics_api
+
+        shutdown_metrics_api()
+    except Exception as exc:
+        logger.warning("Metrics API shutdown failed: %s", exc)
+
+    logger.info("Observability runtime shutdown complete.")
+
+
+def init_observability_runtime(*, main_orchestrator, logger) -> dict:
+    """Start observability runtime sinks for subsystem_manager hot toggles."""
+    return _start_observability_runtime(main_orchestrator=main_orchestrator, logger=logger)
+
+
+def _init_metrics_api(*, logger) -> bool:
+    from observability.metrics_api import init_metrics_api
 
     try:
         from receipts_api import _receipt_service as metrics_receipt_service
 
         if metrics_receipt_service:
             init_metrics_api(metrics_receipt_service, data_dir="/home/lancelot/data")
-            app.include_router(metrics_api_router)
             logger.info("Metrics API initialized.")
+            return True
     except Exception as exc:
         logger.warning("Metrics API initialization failed: %s", exc)
+    return False
 
 
 def _init_webhook_engine(*, config, main_orchestrator, logger) -> bool:

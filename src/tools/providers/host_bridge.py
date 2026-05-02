@@ -336,10 +336,10 @@ class HostBridgeProvider(BaseProvider):
                 "timeout": timeout_s,
             }, timeout=timeout_s + 10)  # Extra margin for network overhead
 
-            stdout, _ = self._bound_output(
+            stdout, stdout_truncated = self._bound_output(
                 result.get("stdout", ""), self.config.max_stdout_chars
             )
-            stderr, _ = self._bound_output(
+            stderr, stderr_truncated = self._bound_output(
                 result.get("stderr", ""), self.config.max_stderr_chars
             )
 
@@ -348,7 +348,7 @@ class HostBridgeProvider(BaseProvider):
                 stdout=stdout,
                 stderr=stderr,
                 duration_ms=result.get("duration_ms", int((time.time() - start_time) * 1000)),
-                truncated=False,
+                truncated=stdout_truncated or stderr_truncated,
                 command=cmd_str,
                 working_dir=cwd,
                 timed_out=result.get("timed_out", False),
@@ -386,8 +386,8 @@ class HostBridgeProvider(BaseProvider):
             return {"error": result.stderr, "exit_code": result.exit_code}
 
         files = {"modified": [], "added": [], "deleted": [], "untracked": []}
-        for line in result.stdout.strip().split("\n"):
-            if not line:
+        for line in result.stdout.splitlines():
+            if not line.strip():
                 continue
             status_code = line[:2]
             filepath = line[3:]

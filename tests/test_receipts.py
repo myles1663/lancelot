@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 
 from receipts import (
     Receipt, ReceiptService, ReceiptStatus, ActionType, CognitionTier,
-    ImmutableReceiptError, create_receipt, get_receipt_service
+    ImmutableReceiptError, ReceiptIntegrityKeyError, create_receipt, get_receipt_service
 )
 
 
@@ -351,6 +351,141 @@ class TestReceiptService:
         monkeypatch.setenv("LANCELOT_RECEIPT_HMAC_KEY", "too-short")
         with pytest.raises(RuntimeError, match="at least 32 bytes"):
             ReceiptService(data_dir=temp_data_dir)
+
+    @pytest.mark.parametrize(
+        ("payload", "message"),
+        [
+            ([], "must contain a JSON object"),
+            ({"version": 999, "algorithm": "hmac-sha256", "key_id": "k", "secret_b64": "x"}, "Unsupported receipt integrity key version"),
+            ({"version": 1, "algorithm": "sha1", "key_id": "k", "secret_b64": "x"}, "Unsupported receipt integrity key algorithm"),
+            ({"version": 1, "algorithm": "hmac-sha256", "key_id": "", "secret_b64": "x"}, "missing a valid key_id"),
+            ({"version": 1, "algorithm": "hmac-sha256", "key_id": "k", "secret_b64": ""}, "missing the signing secret"),
+            ({"version": 1, "algorithm": "hmac-sha256", "key_id": "k", "secret_b64": "not-base64"}, "invalid base64 secret"),
+        ],
+    )
+    def test_receipt_integrity_key_file_rejects_malformed_payloads(self, temp_data_dir, payload, message):
+        key_path = os.path.join(temp_data_dir, ReceiptService.INTEGRITY_KEY_FILENAME)
+        with open(key_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+
+        with pytest.raises(ReceiptIntegrityKeyError, match=message):
+            ReceiptService(data_dir=temp_data_dir)
+
+    def test_receipt_integrity_key_file_rejects_short_decoded_secret(self, temp_data_dir):
+        import base64
+
+        key_path = os.path.join(temp_data_dir, ReceiptService.INTEGRITY_KEY_FILENAME)
+        with open(key_path, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "version": ReceiptService.INTEGRITY_KEY_VERSION,
+                    "algorithm": "hmac-sha256",
+                    "key_id": "short-key",
+                    "secret_b64": base64.b64encode(b"short").decode("ascii"),
+                },
+                handle,
+            )
+
+        with pytest.raises(ReceiptIntegrityKeyError, match="at least 32 bytes"):
+            ReceiptService(data_dir=temp_data_dir)
+
+    def test_receipt_integrity_key_creation_failure_paths(self, temp_data_dir, monkeypatch):
+        monkeypatch.setattr(os, "open", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("permission denied")))
+        with pytest.raises(ReceiptIntegrityKeyError, match="Unable to create"):
+            ReceiptService(data_dir=temp_data_dir)
+
+        monkeypatch.undo()
+        service = ReceiptService(data_dir=temp_data_dir)
+        try:
+            service.close()
+        finally:
+            shutil.rmtree(temp_data_dir, ignore_errors=True)
+
+    def test_receipt_integrity_key_write_failure_removes_partial_file(self, tmp_path, monkeypatch):
+        data_dir = str(tmp_path)
+        original_open = os.open
+        original_fdopen = os.fdopen
+        created_fd = original_open(os.path.join(data_dir, "partial.tmp"), os.O_WRONLY | os.O_CREAT, 0o600)
+        os.close(created_fd)
+
+        def fake_open(path, flags, mode=0o777):
+            return original_open(path, flags, mode)
+
+        class BrokenHandle:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def write(self, data):
+                raise RuntimeError("disk write failed")
+
+        monkeypatch.setattr(os, "open", fake_open)
+        def fake_fdopen(fd, mode):
+            os.close(fd)
+            return BrokenHandle()
+
+        monkeypatch.setattr(os, "fdopen", fake_fdopen)
+
+        with pytest.raises(ReceiptIntegrityKeyError, match="Unable to persist"):
+            ReceiptService(data_dir=data_dir)
+
+        assert not (tmp_path / ReceiptService.INTEGRITY_KEY_FILENAME).exists()
+        monkeypatch.setattr(os, "fdopen", original_fdopen)
+
+    def test_identity_required_receipts_record_governance_write_error(self, service):
+        from src.core.operator_identity import IdentityRequiredError
+
+        receipt = Receipt(
+            action_type=ActionType.T3_APPROVED.value,
+            action_name="approve_sensitive_action",
+            status=ReceiptStatus.SUCCESS.value,
+        )
+
+        with pytest.raises(IdentityRequiredError):
+            service.create(receipt)
+
+        errors = service.search("missing_identity", action_types=[ActionType.GOVERNANCE_WRITE_ERROR.value])
+        assert len(errors) == 1
+        assert errors[0].inputs["attempted_receipt_type"] == ActionType.T3_APPROVED.value
+
+        system_receipt = Receipt(
+            action_type=ActionType.T3_APPROVED.value,
+            action_name="approve_as_system",
+            status=ReceiptStatus.SUCCESS.value,
+            operator_id="SYSTEM",
+        )
+        with pytest.raises(IdentityRequiredError):
+            service.create(system_receipt)
+
+        errors = service.search("system_identity_on_human_action", action_types=[ActionType.GOVERNANCE_WRITE_ERROR.value])
+        assert len(errors) == 1
+
+    def test_update_finalizes_legacy_pending_receipt_without_mutating_original(self, service):
+        pending = Receipt(
+            action_type=ActionType.SYSTEM.value,
+            action_name="legacy_pending",
+            status=ReceiptStatus.PENDING.value,
+        )
+        with service._transaction() as conn:
+            service._insert_receipt(conn, "receipts", pending)
+
+        finalized = Receipt(
+            id=pending.id,
+            action_type=ActionType.SYSTEM.value,
+            action_name="legacy_pending",
+            status=ReceiptStatus.SUCCESS.value,
+            outputs={"result": "ok"},
+            metadata={"source": "test"},
+        )
+
+        stored = service.update(finalized)
+
+        assert stored.id != pending.id
+        assert stored.parent_id == pending.id
+        assert stored.metadata["supersedes_receipt_id"] == pending.id
+        assert stored.metadata["immutability_transition"] == "legacy_pending_finalize"
 
     def test_validate_integrity_chain_quest_scope_uses_global_chain_order(self, service):
         quest_a = str(uuid.uuid4())

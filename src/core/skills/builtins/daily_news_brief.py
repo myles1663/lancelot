@@ -234,7 +234,9 @@ def _parse_atom(root: ET.Element, source: str, cutoff: datetime) -> List[Dict[st
         title = (entry.findtext(f"{_ATOM_NS}title") or entry.findtext("title") or "").strip()
 
         # Atom link is an attribute: <link href="..." />
-        link_el = entry.find(f"{_ATOM_NS}link") or entry.find("link")
+        link_el = entry.find(f"{_ATOM_NS}link")
+        if link_el is None:
+            link_el = entry.find("link")
         link = (link_el.get("href", "") if link_el is not None else "").strip()
 
         pub_str = (entry.findtext(f"{_ATOM_NS}published")

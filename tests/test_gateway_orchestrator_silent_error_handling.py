@@ -22,16 +22,6 @@ def test_resolve_peer_key_logs_warning_and_uses_topology_fallback(caplog):
     assert "Peer registry public key lookup failed for peer-1" in caplog.text
 
 
-def test_shutdown_bal_logs_warning_on_close_failure(caplog):
-    db = MagicMock()
-    db.close.side_effect = RuntimeError("close failed")
-
-    with caplog.at_level(logging.WARNING):
-        gateway._shutdown_bal({"db": db})
-
-    assert "BAL database shutdown failed" in caplog.text
-
-
 def test_shutdown_hive_logs_warning_on_shutdown_failure(caplog):
     lifecycle = MagicMock()
     lifecycle.shutdown.side_effect = RuntimeError("shutdown failed")

@@ -70,18 +70,6 @@ def _init_soul():
         main_orchestrator.soul = None
         return {"soul": None}
 
-    # Apply composable soul overlays if BAL is enabled
-    try:
-        from feature_flags import FEATURE_BAL
-        if FEATURE_BAL:
-            from soul.layers import load_overlays, merge_soul
-            overlays = load_overlays()
-            if overlays:
-                active_soul = merge_soul(active_soul, overlays)
-                logger.info("Soul overlays applied: %s", [o.overlay_name for o in overlays])
-    except Exception as exc:
-            logger.warning("Soul overlay loading failed: %s; using base soul", exc)
-
     main_orchestrator.soul = active_soul
     if getattr(main_orchestrator, "_risk_classifier", None) is not None:
         try:
@@ -438,58 +426,6 @@ def _shutdown_health_monitor(objects):
     if objects.get("monitor"):
         objects["monitor"].stop_monitor()
     logger.info("Health monitor stopped.")
-
-
-def _init_bal():
-    """Initialize Business Automation Layer (BAL) subsystem."""
-    from bal.config import load_bal_config
-    from bal.database import BALDatabase
-    from bal.receipts import emit_bal_receipt
-    from bal.clients.api import init_client_api
-    from bal.clients.repository import ClientRepository
-
-    bal_config = load_bal_config()
-    bal_db = BALDatabase(data_dir=bal_config.bal_data_dir)
-
-    main_orchestrator.set_bal_runtime(config=bal_config, database=bal_db)
-
-    bal_client_repo = ClientRepository(bal_db)
-    init_client_api(bal_client_repo)
-    main_orchestrator.set_bal_runtime(
-        config=bal_config,
-        database=bal_db,
-        client_repo=bal_client_repo,
-    )
-    logger.info("BAL Client Manager API initialized.")
-
-    emit_bal_receipt(
-        event_type="client",
-        action_name="bal_startup",
-        inputs={
-            "phase": "2_client_manager",
-            "intake_enabled": bal_config.bal_intake,
-            "repurpose_enabled": bal_config.bal_repurpose,
-            "delivery_enabled": bal_config.bal_delivery,
-            "billing_enabled": bal_config.bal_billing,
-        },
-    )
-    logger.info(
-        "BAL initialized: intake=%s, repurpose=%s, delivery=%s, billing=%s",
-        bal_config.bal_intake, bal_config.bal_repurpose,
-        bal_config.bal_delivery, bal_config.bal_billing,
-    )
-    return {"config": bal_config, "db": bal_db, "repo": bal_client_repo}
-
-
-def _shutdown_bal(objects):
-    """Shut down BAL subsystem."""
-    if objects.get("db"):
-        try:
-            objects["db"].close()
-        except Exception as exc:
-            logger.warning("BAL database shutdown failed: %s", exc)
-    main_orchestrator.set_bal_runtime(config=None, database=None, client_repo=None)
-    logger.info("BAL shut down.")
 
 
 # Tool Fabric provider subsystems
@@ -1505,7 +1441,7 @@ def _bootstrap_model_router() -> bool:
 
 init_memory, shutdown_memory, init_soul, shutdown_soul = _init_memory, _shutdown_memory, _init_soul, _shutdown_soul
 init_skills, shutdown_skills, init_scheduler, shutdown_scheduler = _init_skills, _shutdown_skills, _init_scheduler, _shutdown_scheduler
-init_health_monitor, shutdown_health_monitor, init_bal, shutdown_bal = _init_health_monitor, _shutdown_health_monitor, _init_bal, _shutdown_bal
+init_health_monitor, shutdown_health_monitor = _init_health_monitor, _shutdown_health_monitor
 init_host_bridge, shutdown_host_bridge, init_uab, shutdown_uab = _init_host_bridge, _shutdown_host_bridge, _init_uab, _shutdown_uab
 init_hive, shutdown_hive, resolve_peer_key = _init_hive, _shutdown_hive, _resolve_peer_key
 init_federation, shutdown_federation = _init_federation, _shutdown_federation

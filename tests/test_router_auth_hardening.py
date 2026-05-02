@@ -32,7 +32,6 @@ ROUTE_CASES = [
     ("src.compliance.api", "/api/compliance/history"),
     ("src.core.update_api", "/api/updates/status"),
     ("src.core.actioncard_api", "/api/actioncards/"),
-    ("src.core.bal.clients.api", "/api/v1/clients"),
     ("src.hive.api", "/api/hive/status"),
     ("src.federation.api", "/api/federation/status"),
     ("src.federation.graph_api", "/api/federation/graph/topologies/active"),

@@ -7,6 +7,7 @@ import sys
 import hashlib
 import hmac
 import time
+import types
 import uuid
 
 import bcrypt
@@ -15,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 import src.core.auth_api as auth_module
@@ -450,6 +451,66 @@ class TestResetPassword:
         response = await reset_password(request)
         assert response.status_code == 503
 
+    @patch("src.core.auth_api._get_warroom_password_reset_code")
+    @patch("src.core.auth_api._get_warroom_username", return_value="admin")
+    @pytest.mark.asyncio
+    async def test_reset_password_rejects_bad_reset_code(self, mock_user, mock_reset, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "local")
+        mock_reset.return_value = bcrypt.hashpw(
+            b"good-reset-code",
+            bcrypt.gensalt(),
+        ).decode("utf-8")
+        audit = MagicMock()
+        auth_module._audit_logger = audit
+
+        request = _make_mock_request(
+            json_data={
+                "username": "admin",
+                "reset_code": "bad-code",
+                "new_password": "new-password-123",
+            },
+        )
+
+        response = await reset_password(request)
+
+        assert response.status_code == 403
+        audit.log_event.assert_called_once()
+        assert audit.log_event.call_args.args[0] == "AUTH_PASSWORD_RESET_FAILED"
+        auth_module._audit_logger = None
+
+    @pytest.mark.asyncio
+    async def test_reset_password_disabled_in_oidc_mode(self, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "oidc")
+        request = _make_mock_request(
+            json_data={
+                "username": "admin",
+                "reset_code": "reset",
+                "new_password": "new-password-123",
+            },
+        )
+
+        response = await reset_password(request)
+
+        assert response.status_code == 400
+
+    @patch("src.core.auth_api._get_warroom_password_reset_code", return_value="reset-code")
+    @patch("src.core.auth_api._get_warroom_username", return_value="admin")
+    @pytest.mark.asyncio
+    async def test_reset_password_rejects_short_new_password(self, mock_user, mock_reset, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "local")
+        request = _make_mock_request(
+            json_data={
+                "username": "admin",
+                "reset_code": "reset-code",
+                "new_password": "short",
+            },
+        )
+
+        response = await reset_password(request)
+
+        assert response.status_code == 400
+        assert "at least 8" in response.body.decode("utf-8")
+
 
 # ── validate_token endpoint ──────────────────────────────────────
 
@@ -493,6 +554,7 @@ class TestValidateToken:
     async def test_no_bearer_prefix(self):
         request = MagicMock()
         request.headers = {"authorization": "Basic abc123"}
+        request.cookies = {}
         response = await validate_token(request)
         assert response.status_code == 401
 
@@ -623,6 +685,23 @@ class TestResolveOperatorIdentity:
         resolve_operator_identity(request)
         assert "dead-token" not in auth_module._sessions
 
+    def test_resolve_authenticated_identity_prefers_session(self):
+        identity = _insert_session("session-token", username="browser-user")
+        request = _make_mock_request(cookie_token="session-token")
+
+        result = auth_module.resolve_authenticated_identity(request)
+
+        assert result is identity
+
+    def test_resolve_authenticated_identity_falls_back_to_api_key(self, monkeypatch):
+        monkeypatch.setenv("LANCELOT_OPERATOR_NAME", "api-operator")
+        request = _make_mock_request()
+
+        result = auth_module.resolve_authenticated_identity(request)
+
+        assert result.display_name == "api-operator"
+        assert result.auth_method == "api_key"
+
 
 # ── get_api_key_identity ─────────────────────────────────────────
 
@@ -700,6 +779,99 @@ class TestCleanupExpired:
 
     def test_no_sessions_no_error(self):
         _cleanup_expired()  # Should not raise
+
+
+class TestAuthHelpers:
+
+    def setup_method(self):
+        auth_module._sessions.clear()
+        auth_module._login_failures.clear()
+        auth_module._oidc_pending.clear()
+        auth_module._oidc_exchange_codes.clear()
+
+    @pytest.mark.asyncio
+    async def test_parse_request_model_rejects_invalid_json(self):
+        request = MagicMock()
+        request.json = AsyncMock(side_effect=ValueError("invalid"))
+
+        with pytest.raises(HTTPException) as exc:
+            await auth_module._parse_request_model(request, auth_module.LoginRequest)
+
+        assert exc.value.status_code == 422
+        assert exc.value.detail == "Request body must be valid JSON"
+
+    def test_auth_provider_infers_oidc_from_config(self, monkeypatch):
+        monkeypatch.delenv("LANCELOT_AUTH_PROVIDER", raising=False)
+        monkeypatch.setenv("OIDC_ISSUER_URL", "https://issuer.example/")
+        monkeypatch.setenv("OIDC_CLIENT_ID", "client-id")
+
+        assert auth_module._get_auth_provider() == "oidc"
+
+    def test_oidc_claim_profile_handles_string_and_unknown_groups(self, monkeypatch):
+        monkeypatch.setenv("OIDC_USERNAME_CLAIM", "user_name")
+        monkeypatch.setenv("OIDC_DISPLAY_NAME_CLAIM", "display")
+        monkeypatch.setenv("OIDC_GROUPS_CLAIM", "roles")
+
+        username, display_name, groups = auth_module._extract_claims_profile(
+            {"user_name": "arthur", "display": "Arthur", "roles": "operators"}
+        )
+        fallback = auth_module._extract_claims_profile({"roles": {"bad": "shape"}})
+
+        assert (username, display_name, groups) == ("arthur", "Arthur", ["operators"])
+        assert fallback == ("enterprise-user", "enterprise-user", [])
+
+    def test_require_operator_capability_allows_and_denies(self):
+        _insert_session("limited-session", capabilities={"warroom.login"})
+        allowed = _make_mock_request(cookie_token="limited-session")
+        denied = _make_mock_request(cookie_token="limited-session")
+
+        auth_module.require_operator_capability("warroom.login")(allowed)
+        with pytest.raises(HTTPException) as exc:
+            auth_module.require_operator_capability("platform.admin")(denied)
+
+        assert exc.value.status_code == 403
+
+    def test_verify_warroom_session_token_handles_all_states(self):
+        _insert_session("valid-token", expires_in=60)
+        _insert_session("expired-token", expires_in=-1)
+
+        assert auth_module.verify_warroom_session_token("valid-token") is True
+        assert auth_module.verify_warroom_session_token("missing-token") is False
+        assert auth_module.verify_warroom_session_token("expired-token") is False
+        assert "expired-token" not in auth_module._sessions
+
+    def test_cleanup_expired_oidc_state_removes_stale_records(self):
+        now = time.time()
+        auth_module._oidc_pending.update(
+            {
+                "fresh-state": {"created_at": now},
+                "stale-state": {"created_at": now - auth_module._OIDC_STATE_TTL_S - 1},
+            }
+        )
+        auth_module._oidc_exchange_codes.update(
+            {
+                "fresh-code": {"expires_at": now + 60},
+                "stale-code": {"expires_at": now - 1},
+            }
+        )
+
+        with patch("src.core.auth_api._save_auth_state") as save_state:
+            auth_module._cleanup_expired_oidc_state(now)
+
+        assert set(auth_module._oidc_pending) == {"fresh-state"}
+        assert set(auth_module._oidc_exchange_codes) == {"fresh-code"}
+        save_state.assert_called_once()
+
+    def test_cookie_secure_env_and_request_fallbacks(self, monkeypatch):
+        request = _make_mock_request(scheme="https")
+        monkeypatch.delenv("WARROOM_SESSION_COOKIE_SECURE", raising=False)
+        assert auth_module._session_cookie_secure(request) is True
+
+        monkeypatch.setenv("WARROOM_SESSION_COOKIE_SECURE", "false")
+        assert auth_module._session_cookie_secure(request) is False
+
+        monkeypatch.setenv("WARROOM_SESSION_COOKIE_SECURE", "true")
+        assert auth_module._session_cookie_secure(request) is True
 
 
 class TestAuthStatePersistence:
@@ -910,3 +1082,403 @@ class TestStrictRequestBodies:
         assert response.status_code == 422
         assert "extra_forbidden" in response.text
         mock_persist.assert_not_called()
+
+
+class TestOidcRoutes:
+
+    def setup_method(self):
+        auth_module._sessions.clear()
+        auth_module._oidc_pending.clear()
+        auth_module._oidc_exchange_codes.clear()
+
+    def _client(self):
+        app = FastAPI()
+        app.include_router(auth_module.router)
+        return TestClient(app, follow_redirects=False)
+
+    def test_oidc_login_disabled_in_local_mode(self, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "local")
+        client = self._client()
+
+        response = client.get("/auth/oidc/login")
+
+        assert response.status_code == 400
+
+    def test_oidc_login_redirects_to_authorization_endpoint(self, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "oidc")
+        client = self._client()
+
+        with patch("src.core.auth_api._get_oidc_metadata", return_value={"authorization_endpoint": "https://idp.example/auth"}), \
+                patch("src.core.auth_api._build_oidc_authorize_url", return_value=("https://idp.example/auth?state=s1", "s1")):
+            response = client.get("/auth/oidc/login")
+
+        assert response.status_code == 302
+        assert response.headers["location"] == "https://idp.example/auth?state=s1"
+
+    def test_oidc_login_reports_initialization_error(self, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "oidc")
+        client = self._client()
+
+        with patch("src.core.auth_api._get_oidc_metadata", side_effect=RuntimeError("missing config")):
+            response = client.get("/auth/oidc/login")
+
+        assert response.status_code == 503
+        assert "missing config" in response.text
+
+    def test_oidc_callback_disabled_and_missing_code_paths(self, monkeypatch):
+        client = self._client()
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "local")
+        assert client.get("/auth/oidc/callback").status_code == 400
+
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "oidc")
+        response = client.get("/auth/oidc/callback?state=s1")
+
+        assert response.status_code == 400
+        assert "Missing OIDC code or state" in response.text
+
+    def test_oidc_callback_redirects_provider_error(self, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "oidc")
+        client = self._client()
+
+        response = client.get("/auth/oidc/callback?error=access_denied&error_description=Denied")
+
+        assert response.status_code == 302
+        assert response.headers["location"] == "/war-room/login/callback#error=Denied"
+
+    def test_oidc_callback_redirects_success_and_denial(self, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "oidc")
+        client = self._client()
+
+        async def successful_auth(request, code, state):
+            return {"exchange_code": "exchange-success"}
+
+        with patch("src.core.auth_api._complete_oidc_auth", side_effect=successful_auth):
+            success = client.get("/auth/oidc/callback?code=c1&state=s1")
+
+        with patch("src.core.auth_api._complete_oidc_auth", side_effect=PermissionError("denied")):
+            denied = client.get("/auth/oidc/callback?code=c1&state=s1")
+
+        assert success.status_code == 302
+        assert success.headers["location"] == "/war-room/login/callback#exchange_code=exchange-success"
+        assert denied.status_code == 302
+        assert denied.headers["location"] == "/war-room/login/callback#error=access_denied"
+
+    def test_oidc_callback_redirects_general_failure(self, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "oidc")
+        client = self._client()
+
+        with patch("src.core.auth_api._complete_oidc_auth", side_effect=RuntimeError("token endpoint down")):
+            response = client.get("/auth/oidc/callback?code=c1&state=s1")
+
+        assert response.status_code == 302
+        assert response.headers["location"] == "/war-room/login/callback#error=oidc_callback_failed"
+
+    def test_oidc_exchange_success_and_missing_code_paths(self, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "oidc")
+        client = self._client()
+        auth_module._oidc_exchange_codes["exchange-good"] = {
+            "token": "oidc-token",
+            "expires_in": 120,
+            "username": "Arthur",
+            "operator_id": "op-arthur",
+            "session_id": "session-1",
+            "expires_at": time.time() + 60,
+        }
+
+        success = client.post("/auth/oidc/exchange", json={"exchange_code": "exchange-good"})
+        missing = client.post("/auth/oidc/exchange", json={"exchange_code": "missing"})
+
+        assert success.status_code == 200
+        assert success.json()["username"] == "Arthur"
+        assert "exchange-good" not in auth_module._oidc_exchange_codes
+        assert missing.status_code == 400
+
+    def test_oidc_exchange_disabled_in_local_mode(self, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "local")
+        client = self._client()
+
+        response = client.post("/auth/oidc/exchange", json={"exchange_code": "exchange"})
+
+        assert response.status_code == 400
+
+
+class TestChangePassword:
+
+    def setup_method(self):
+        auth_module._sessions.clear()
+        auth_module._audit_logger = None
+
+    @patch("src.core.auth_api._persist_warroom_password_secret")
+    @patch("src.core.auth_api._get_warroom_password", return_value="current-pass")
+    @pytest.mark.asyncio
+    async def test_change_password_success_hashes_and_audits(self, mock_pass, mock_persist, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "local")
+        audit = MagicMock()
+        auth_module._audit_logger = audit
+        _insert_session("change-token", username="admin", capabilities={"warroom.login"})
+        request = _make_mock_request(
+            cookie_token="change-token",
+            json_data={"current_password": "current-pass", "new_password": "next-password"},
+        )
+
+        response = await auth_module.change_password(request)
+
+        assert response["status"] == "ok"
+        mock_persist.assert_called_once()
+        assert mock_persist.call_args.args[0].startswith("$2")
+        audit.log_event.assert_called_once()
+        assert audit.log_event.call_args.args[0] == "AUTH_PASSWORD_CHANGED"
+
+    @pytest.mark.asyncio
+    async def test_change_password_disabled_in_oidc_mode(self, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "oidc")
+        request = _make_mock_request(json_data={"current_password": "current", "new_password": "next-password"})
+
+        response = await auth_module.change_password(request)
+
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_change_password_requires_active_session(self, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "local")
+        _insert_session("expired-change-token", username="admin", expires_in=-1)
+
+        no_token = await auth_module.change_password(
+            _make_mock_request(json_data={"current_password": "current", "new_password": "next-password"})
+        )
+        expired = await auth_module.change_password(
+            _make_mock_request(
+                cookie_token="expired-change-token",
+                json_data={"current_password": "current", "new_password": "next-password"},
+            )
+        )
+
+        assert no_token.status_code == 401
+        assert expired.status_code == 401
+
+    @patch("src.core.auth_api._get_warroom_password", return_value="current-pass")
+    @pytest.mark.asyncio
+    async def test_change_password_rejects_short_and_wrong_current_password(self, mock_pass, monkeypatch):
+        monkeypatch.setenv("LANCELOT_AUTH_PROVIDER", "local")
+        audit = MagicMock()
+        auth_module._audit_logger = audit
+        _insert_session("change-token", username="admin", capabilities={"warroom.login"})
+
+        short = await auth_module.change_password(
+            _make_mock_request(
+                cookie_token="change-token",
+                json_data={"current_password": "current-pass", "new_password": "short"},
+            )
+        )
+        wrong = await auth_module.change_password(
+            _make_mock_request(
+                cookie_token="change-token",
+                json_data={"current_password": "wrong-pass", "new_password": "next-password"},
+            )
+        )
+
+        assert short.status_code == 400
+        assert wrong.status_code == 403
+        assert audit.log_event.call_args.args[0] == "AUTH_PASSWORD_CHANGE_FAILED"
+
+
+class TestAuthStateAndOidcRuntime:
+
+    def setup_method(self):
+        auth_module._sessions.clear()
+        auth_module._oidc_pending.clear()
+        auth_module._oidc_exchange_codes.clear()
+
+    def teardown_method(self):
+        auth_module._sessions.clear()
+        auth_module._oidc_pending.clear()
+        auth_module._oidc_exchange_codes.clear()
+
+    def test_encrypted_auth_state_round_trip_preserves_operator_identity(self, tmp_path, monkeypatch):
+        state_file = tmp_path / "auth_state.json"
+        key_file = tmp_path / "auth_state.key"
+        monkeypatch.setenv("LANCELOT_AUTH_STATE_FILE", str(state_file))
+        monkeypatch.setenv("LANCELOT_AUTH_STATE_KEY_FILE", str(key_file))
+        monkeypatch.delenv("LANCELOT_AUTH_STATE_ENCRYPTION_KEY", raising=False)
+
+        identity = _insert_session("persisted-token", username="admin", capabilities={"warroom.login", "soul.admin"})
+        auth_module._oidc_pending["state-1"] = {"created_at": time.time(), "nonce": "n1"}
+        auth_module._oidc_exchange_codes["exchange-1"] = {"expires_at": time.time() + 60, "token": "oidc-token"}
+
+        auth_module._save_auth_state()
+        raw = json.loads(state_file.read_text(encoding="utf-8"))
+        assert raw["encrypted"] is True
+        assert raw["ciphertext"]
+
+        auth_module._sessions.clear()
+        auth_module._oidc_pending.clear()
+        auth_module._oidc_exchange_codes.clear()
+        auth_module._load_auth_state()
+
+        restored = auth_module._sessions["persisted-token"]
+        assert restored["operator_identity"].operator_id == identity.operator_id
+        assert restored["capabilities"] == ["soul.admin", "warroom.login"]
+        assert auth_module._oidc_pending["state-1"]["nonce"] == "n1"
+        assert auth_module._oidc_exchange_codes["exchange-1"]["token"] == "oidc-token"
+
+    def test_auth_state_helpers_handle_configured_keys_and_bad_payloads(self, tmp_path, monkeypatch):
+        configured_key = auth_module.Fernet.generate_key().decode("utf-8")
+        monkeypatch.setenv("LANCELOT_AUTH_STATE_ENCRYPTION_KEY", configured_key)
+        assert auth_module._load_or_create_auth_state_key() == configured_key.encode("utf-8")
+
+        monkeypatch.delenv("LANCELOT_AUTH_STATE_ENCRYPTION_KEY", raising=False)
+        key_file = tmp_path / "existing.key"
+        key_file.write_bytes(auth_module.Fernet.generate_key())
+        monkeypatch.setenv("LANCELOT_AUTH_STATE_KEY_FILE", str(key_file))
+        assert auth_module._load_or_create_auth_state_key() == key_file.read_bytes()
+
+        assert auth_module._deserialize_auth_state_payload("") == {}
+        assert auth_module._deserialize_auth_state_payload(json.dumps(["not", "dict"])) == {}
+
+        wrong_ciphertext = auth_module.Fernet(auth_module.Fernet.generate_key()).encrypt(b"{}").decode("utf-8")
+        bad_envelope = json.dumps({"encrypted": True, "ciphertext": wrong_ciphertext})
+        monkeypatch.setenv("LANCELOT_AUTH_STATE_ENCRYPTION_KEY", auth_module.Fernet.generate_key().decode("utf-8"))
+        with pytest.raises(RuntimeError, match="could not be decrypted"):
+            auth_module._deserialize_auth_state_payload(bad_envelope)
+
+    def test_secret_cache_paths_and_persist_fallbacks(self, monkeypatch):
+        fake_secret_cache = types.SimpleNamespace(
+            get=lambda key, default="": {"WARROOM_USERNAME": "vault-user"}.get(key, default),
+            is_bootstrapped=lambda: False,
+            set_cached=MagicMock(),
+        )
+        monkeypatch.setitem(sys.modules, "secret_cache", fake_secret_cache)
+        assert auth_module._get_warroom_username() == "vault-user"
+
+        monkeypatch.setenv("WARROOM_PASSWORD", "env-pass")
+        fake_secret_cache.get = MagicMock(side_effect=RuntimeError("cache offline"))
+        assert auth_module._get_warroom_password() == "env-pass"
+
+        fake_secret_cache.is_bootstrapped = lambda: False
+        monkeypatch.setenv("WARROOM_PASSWORD_RESET_CODE", "")
+        auth_module._persist_warroom_password_reset_code_secret("reset-hash")
+        assert os.environ["WARROOM_PASSWORD_RESET_CODE"] == "reset-hash"
+
+    def test_oidc_config_metadata_authorize_url_and_claim_profiles(self, monkeypatch):
+        monkeypatch.setenv("OIDC_ISSUER_URL", "https://idp.example/")
+        monkeypatch.setenv("OIDC_CLIENT_ID", "client-1")
+        monkeypatch.setenv("OIDC_CLIENT_SECRET", "secret-1")
+        monkeypatch.setenv("OIDC_SCOPES", "openid email")
+        monkeypatch.setenv("OIDC_ALLOWED_GROUPS", "engineering")
+        monkeypatch.setenv("OIDC_ADMIN_GROUPS", "admins")
+        request = _make_mock_request()
+        request.url_for = MagicMock(return_value="https://lancelot.example/auth/oidc/callback")
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "authorization_endpoint": "https://idp.example/auth",
+                    "token_endpoint": "https://idp.example/token",
+                }
+
+        fake_httpx = types.SimpleNamespace(get=MagicMock(return_value=FakeResponse()))
+        monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+        monkeypatch.setattr(auth_module, "assert_url_allowed", lambda url, component=None: url)
+        monkeypatch.setattr(auth_module, "_save_auth_state", lambda: None)
+
+        metadata = auth_module._get_oidc_metadata()
+        authorize_url, state = auth_module._build_oidc_authorize_url(metadata, request)
+
+        assert fake_httpx.get.call_args.args[0] == "https://idp.example/.well-known/openid-configuration"
+        assert "client_id=client-1" in authorize_url
+        assert "code_challenge_method=S256" in authorize_url
+        assert state in auth_module._oidc_pending
+        assert auth_module._extract_claims_profile({"sub": "sub-1", "groups": "engineering"}) == (
+            "sub-1",
+            "sub-1",
+            ["engineering"],
+        )
+        assert auth_module._extract_claims_profile({"email": "a@example.com", "groups": 123}) == (
+            "a@example.com",
+            "a@example.com",
+            [],
+        )
+        assert "platform.admin" in auth_module._capabilities_for_oidc_groups(["admins"])
+
+    @pytest.mark.asyncio
+    async def test_complete_oidc_auth_exchanges_code_fetches_userinfo_and_issues_exchange_code(self, monkeypatch):
+        monkeypatch.setenv("OIDC_ISSUER_URL", "https://idp.example")
+        monkeypatch.setenv("OIDC_CLIENT_ID", "client-1")
+        monkeypatch.setenv("OIDC_CLIENT_SECRET", "secret-1")
+        monkeypatch.setenv("OIDC_ALLOWED_GROUPS", "engineering")
+        monkeypatch.setenv("OIDC_ADMIN_GROUPS", "engineering")
+        monkeypatch.setattr(auth_module, "assert_url_allowed", lambda url, component=None: url)
+        monkeypatch.setattr(auth_module, "_save_auth_state", lambda: None)
+        request = _make_mock_request(client_host="10.0.0.10")
+
+        auth_module._oidc_pending["state-good"] = {
+            "redirect_uri": "https://lancelot.example/auth/oidc/callback",
+            "code_verifier": "verifier-1",
+            "created_at": time.time(),
+        }
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        post = MagicMock(return_value=FakeResponse({"access_token": "access-1"}))
+        get = MagicMock(return_value=FakeResponse({
+            "preferred_username": "arthur",
+            "name": "Arthur",
+            "sub": "subject-1",
+            "groups": ["engineering"],
+        }))
+        monkeypatch.setitem(sys.modules, "httpx", types.SimpleNamespace(post=post, get=get))
+        monkeypatch.setattr(auth_module, "_get_oidc_metadata", lambda: {
+            "token_endpoint": "https://idp.example/token",
+            "userinfo_endpoint": "https://idp.example/userinfo",
+        })
+
+        result = await auth_module._complete_oidc_auth(request, code="code-1", state="state-good")
+
+        assert result["username"] == "Arthur"
+        assert result["exchange_code"] in auth_module._oidc_exchange_codes
+        session = auth_module._oidc_exchange_codes[result["exchange_code"]]
+        assert session["username"] == "Arthur"
+        stored_session = auth_module._sessions[session["token"]]
+        assert "platform.admin" in stored_session["capabilities"]
+        assert post.call_args.kwargs["data"]["code_verifier"] == "verifier-1"
+        assert get.call_args.kwargs["headers"] == {"Authorization": "Bearer access-1"}
+
+    @pytest.mark.asyncio
+    async def test_complete_oidc_auth_rejects_missing_state_missing_claims_and_group_denial(self, monkeypatch):
+        monkeypatch.setenv("OIDC_ALLOWED_GROUPS", "engineering")
+        monkeypatch.setattr(auth_module, "_save_auth_state", lambda: None)
+        with pytest.raises(ValueError, match="missing or expired"):
+            await auth_module._complete_oidc_auth(_make_mock_request(), code="c1", state="missing")
+
+        auth_module._oidc_pending["state-empty-claims"] = {
+            "redirect_uri": "https://lancelot.example/cb",
+            "code_verifier": "verifier",
+            "created_at": time.time(),
+        }
+        monkeypatch.setattr(auth_module, "_get_oidc_metadata", lambda: {"token_endpoint": "https://idp.example/token"})
+        monkeypatch.setattr(auth_module, "assert_url_allowed", lambda url, component=None: url)
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"access_token": "access-1"}
+
+        monkeypatch.setitem(sys.modules, "httpx", types.SimpleNamespace(post=MagicMock(return_value=FakeResponse())))
+        with pytest.raises(RuntimeError, match="userinfo endpoint did not return claims"):
+            await auth_module._complete_oidc_auth(_make_mock_request(), code="c1", state="state-empty-claims")
+
+        with pytest.raises(PermissionError, match="allowed enterprise group"):
+            auth_module._enforce_allowed_groups(["sales"])

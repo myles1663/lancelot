@@ -53,7 +53,6 @@ def _client_for_router(module_name: str):
         ("src.federation.graph_api", "post", "/api/federation/graph/topologies", {"topology_name": "Denied"}),
         ("src.hive.api", "get", "/api/hive/status", None),
         ("src.compliance.api", "get", "/api/compliance/history", None),
-        ("src.core.bal.clients.api", "get", "/api/v1/clients", None),
     ],
 )
 def test_additional_admin_routers_require_capability(module_name, method, path, json_body):

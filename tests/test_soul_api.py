@@ -5,6 +5,7 @@ Tests for src.core.soul.api — Soul activation endpoints (Prompt 5 / A5).
 import os
 import pytest
 import yaml
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.core import api_auth
+from src.core.soul import api as soul_api_module
 from src.core.operator_identity import OperatorIdentity
 from src.core.soul.api import (
     router,
@@ -161,6 +163,50 @@ class TestSoulStatus:
         data = resp.json()
         assert len(data["pending_proposals"]) == 1
 
+    def test_status_and_content_return_safe_errors_when_store_fails(self, client, monkeypatch):
+        c, _ = client
+        monkeypatch.setattr(soul_api_module, "get_active_version", lambda soul_dir: (_ for _ in ()).throw(soul_api_module.SoulStoreError("active missing")))
+
+        status = c.get("/soul/status", headers=_owner_headers())
+        assert status.status_code == 500
+        assert status.json()["error"] == "active missing"
+
+        monkeypatch.setattr(
+            "src.core.soul.store.load_active_soul",
+            lambda soul_dir: (_ for _ in ()).throw(soul_api_module.SoulStoreError("soul unreadable")),
+        )
+        content = c.get("/soul/content", headers=_owner_headers())
+        assert content.status_code == 500
+        assert content.json()["error"] == "soul unreadable"
+
+    def test_active_overlays_fail_closed_and_merged_content_path(self, client, monkeypatch):
+        c, _ = client
+        monkeypatch.setattr(
+            "src.core.soul.layers.load_overlays",
+            lambda soul_dir: (_ for _ in ()).throw(RuntimeError("overlay bad")),
+        )
+        assert soul_api_module._get_active_overlays() == []
+
+        overlay = SimpleNamespace(
+            overlay_name="enterprise",
+            feature_flag="FEATURE_ENTERPRISE",
+            description="Enterprise controls",
+            risk_rules=[1],
+            tone_invariants=[1, 2],
+            memory_ethics=[1],
+            autonomy_posture=SimpleNamespace(allowed_autonomous=["read"], requires_approval=["write"]),
+        )
+        monkeypatch.setattr("src.core.soul.layers.load_overlays", lambda soul_dir: [overlay])
+        monkeypatch.setattr(
+            "src.core.soul.layers.merge_soul",
+            lambda base_soul, overlays: SimpleNamespace(model_dump=lambda: {"version": "merged"}, version="merged"),
+        )
+        content = c.get("/soul/content", headers=_owner_headers())
+
+        assert content.status_code == 200
+        assert content.json()["soul"] == {"version": "merged"}
+        assert content.json()["active_overlays"][0]["autonomy_additions"] == 2
+
 
 class TestProposeAmendment:
 
@@ -191,6 +237,64 @@ class TestProposeAmendment:
 
         assert resp.status_code == 422
         assert "extra_forbidden" in resp.text
+
+    def test_propose_rejects_empty_yaml_critical_lint_and_actioncard_failures(self, client, monkeypatch):
+        c, _ = client
+
+        empty = c.post("/soul/propose", headers=_owner_headers(), json={"proposed_yaml": "  "})
+        assert empty.status_code == 400
+
+        monkeypatch.setattr(
+            soul_api_module,
+            "lint",
+            lambda soul: [SimpleNamespace(rule="critical_rule", severity=SimpleNamespace(value="critical"), message="stop")],
+        )
+        critical = c.post(
+            "/soul/propose",
+            headers=_owner_headers(),
+            json={"proposed_yaml": yaml.dump(_soul_dict("v2"))},
+        )
+        assert critical.status_code == 422
+        assert critical.json()["issues"][0]["severity"] == "critical"
+
+        monkeypatch.setattr(soul_api_module, "lint", lambda soul: [])
+        soul_api_module.init_soul_actioncards(
+            SimpleNamespace(from_soul_proposal=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("card failed")))
+        )
+        ok = c.post(
+            "/soul/propose",
+            headers=_owner_headers(),
+            json={"proposed_yaml": yaml.dump(_soul_dict("v3"))},
+        )
+        assert ok.status_code == 200
+        assert ok.json()["status"] == "pending"
+        soul_api_module.init_soul_actioncards(None)
+
+    @pytest.mark.asyncio
+    async def test_parse_request_model_rejects_invalid_json(self):
+        request = SimpleNamespace(json=lambda: (_ for _ in ()).throw(ValueError("bad json")))
+
+        with pytest.raises(Exception) as exc:
+            await soul_api_module._parse_request_model(request, soul_api_module.ProposeAmendmentRequest)
+
+        assert exc.value.status_code == 422
+
+    def test_propose_and_mutation_endpoints_require_soul_admin_capability(self, client, monkeypatch):
+        c, soul_dir = client
+        monkeypatch.setattr(soul_api_module, "_verify_owner", lambda request: False)
+
+        propose = c.post(
+            "/soul/propose",
+            headers=_owner_headers(),
+            json={"proposed_yaml": yaml.dump(_soul_dict("v2"))},
+        )
+        assert propose.status_code == 403
+
+        p = create_proposal("v1", yaml.dump(_soul_dict("v2")), soul_dir=soul_dir)
+        approve = c.post(f"/soul/proposals/{p.id}/approve", headers=_owner_headers())
+        activate = c.post(f"/soul/proposals/{p.id}/activate", headers=_owner_headers())
+        assert approve.status_code == 403
+        assert activate.status_code == 403
 
 
 # ===================================================================
@@ -250,6 +354,19 @@ class TestApproveProposal:
         assert result["status"] == "denied"
         proposal = next(item for item in list_proposals(soul_dir) if item.id == p.id)
         assert proposal.status == ProposalStatus.REJECTED
+
+    def test_direct_reject_missing_and_non_pending_proposals_are_rejected(self, client):
+        _, soul_dir = client
+        with pytest.raises(Exception) as missing:
+            _reject_proposal_direct("missing", actor="Arthur")
+        assert missing.value.status_code == 404
+
+        proposed_yaml = yaml.dump(_soul_dict("v2"))
+        p = create_proposal("v1", proposed_yaml, soul_dir=soul_dir)
+        _approve_proposal_direct(p.id, actor="Arthur")
+        with pytest.raises(Exception) as conflict:
+            _reject_proposal_direct(p.id, actor="Arthur")
+        assert conflict.value.status_code == 409
 
 
 # ===================================================================
@@ -355,6 +472,28 @@ class TestActivateProposal:
         resp = c.post(f"/soul/proposals/{p.id}/activate", headers=_owner_headers())
         assert resp.status_code == 500
         assert get_active_version(soul_dir) == "v1"
+
+    def test_activation_rejects_missing_yaml_and_invalid_yaml(self, client):
+        c, soul_dir = client
+        p = create_proposal("v1", yaml.dump(_soul_dict("v2")), soul_dir=soul_dir)
+        proposals = list_proposals(soul_dir)
+        for item in proposals:
+            if item.id == p.id:
+                item.status = ProposalStatus.APPROVED
+                item.proposed_yaml = ""
+        save_proposals(proposals, soul_dir)
+        missing_yaml = c.post(f"/soul/proposals/{p.id}/activate", headers=_owner_headers())
+        assert missing_yaml.status_code == 400
+
+        bad = create_proposal("v1", yaml.dump(_soul_dict("v3")), soul_dir=soul_dir)
+        proposals = list_proposals(soul_dir)
+        for item in proposals:
+            if item.id == bad.id:
+                item.status = ProposalStatus.APPROVED
+                item.proposed_yaml = "not: [valid"
+        save_proposals(proposals, soul_dir)
+        invalid_yaml = c.post(f"/soul/proposals/{bad.id}/activate", headers=_owner_headers())
+        assert invalid_yaml.status_code == 422
 
 
 # ===================================================================

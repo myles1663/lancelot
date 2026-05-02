@@ -390,3 +390,72 @@ class TestDisabledPanel:
         assert panel.get_quarantine_queue() == {"core_blocks": [], "items": []}
         assert panel.get_recent_commits() == []
         assert panel.search_memory("test") == []
+
+
+class TestMemoryPanelRuntimeFailurePaths:
+    """Panel methods fail closed when a backing store is temporarily unavailable."""
+
+    def test_runtime_dependency_errors_return_empty_safe_shapes(self, monkeypatch):
+        monkeypatch.setattr(feature_flags, "FEATURE_MEMORY_VNEXT", True, raising=False)
+
+        class FailingCoreStore:
+            def get_all_blocks(self):
+                raise RuntimeError("core down")
+
+            def total_tokens(self):
+                raise RuntimeError("budget down")
+
+            def validate_budgets(self):
+                raise AssertionError("not reached")
+
+        class FailingStoreManager:
+            def get_store(self, tier):
+                raise RuntimeError("store down")
+
+        class FailingQuarantine:
+            def list_quarantined_core_blocks(self):
+                raise RuntimeError("quarantine down")
+
+        class FailingCommits:
+            def list_commits(self, limit=10):
+                raise RuntimeError("commits down")
+
+        class FailingIndex:
+            def search(self, **kwargs):
+                raise RuntimeError("index down")
+
+        panel = MemoryPanel(
+            core_store=FailingCoreStore(),
+            store_manager=FailingStoreManager(),
+            commit_manager=FailingCommits(),
+            quarantine_manager=FailingQuarantine(),
+            memory_index=FailingIndex(),
+        )
+
+        assert panel.get_core_blocks_summary() == []
+        assert panel.get_tier_statistics() == {}
+        assert panel.get_quarantine_queue() == {"core_blocks": [], "items": [], "total_count": 0}
+        assert panel.get_recent_commits() == []
+        assert panel.search_memory("receipts") == []
+        assert panel.get_budget_status() == {}
+        assert "not-a-real-block" in panel.approve_quarantined("core:not-a-real-block", "admin")["error"]
+        assert "not-a-real-block" in panel.reject_quarantined("core:not-a-real-block", "admin")["error"]
+
+    def test_item_actions_try_all_tiers_until_success(self, monkeypatch):
+        monkeypatch.setattr(feature_flags, "FEATURE_MEMORY_VNEXT", True, raising=False)
+        calls = []
+        quarantine = type(
+            "Quarantine",
+            (),
+            {
+                "approve_item": lambda self, item_id, tier, approver: calls.append(("approve", tier)) or tier == "episodic",
+                "reject_item": lambda self, item_id, tier, rejector: calls.append(("reject", tier)) or tier == "archival",
+            },
+        )()
+        panel = MemoryPanel(core_store=object(), quarantine_manager=quarantine)
+
+        assert panel.approve_quarantined("item-1", "admin")["status"] == "approved"
+        assert panel.reject_quarantined("item-2", "admin")["status"] == "rejected"
+        assert ("approve", "working") in calls
+        assert ("approve", "episodic") in calls
+        assert ("reject", "archival") in calls

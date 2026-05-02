@@ -117,6 +117,24 @@ def init_a2a_server(
     logger.info("A2A inbound server initialized")
 
 
+def shutdown_a2a_server() -> None:
+    """Clear A2A inbound server runtime references for hot-toggle shutdown."""
+    global _soul, _receipt_service, _registry, _inbound_pipeline
+    global _agent_card_generator, _task_executor, _task_store_file
+    try:
+        _save_task_state()
+    except Exception as exc:
+        logger.warning("Failed to persist A2A task state during shutdown: %s", exc)
+    _soul = None
+    _receipt_service = None
+    _registry = None
+    _inbound_pipeline = None
+    _agent_card_generator = None
+    _task_executor = None
+    _task_store_file = None
+    logger.info("A2A inbound server shutdown complete")
+
+
 def _check_a2a_kill_switch() -> bool:
     """Check if A2A is active (both feature flag and runtime kill switch)."""
     try:

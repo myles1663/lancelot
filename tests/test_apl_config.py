@@ -16,10 +16,14 @@ from src.core.governance.approval_learning.config import (
 
 
 class TestFeatureFlag:
-    def test_defaults_false(self):
+    def test_defaults_true(self):
         from src.core import feature_flags
+        os.environ.pop("FEATURE_APPROVAL_LEARNING", None)
+        old_persisted = feature_flags.persisted_flag_state_snapshot()
+        feature_flags.clear_persisted_flag_state("FEATURE_APPROVAL_LEARNING")
         feature_flags.reload_flags()
-        assert feature_flags.FEATURE_APPROVAL_LEARNING is False
+        assert feature_flags.FEATURE_APPROVAL_LEARNING is True
+        feature_flags.replace_persisted_flag_state(old_persisted)
 
     def test_env_true(self):
         from src.core import feature_flags

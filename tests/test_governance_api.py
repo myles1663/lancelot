@@ -391,3 +391,164 @@ def test_deny_endpoint_rejects_unexpected_fields(monkeypatch):
     )
 
     assert response.status_code == 422
+
+
+def _identity():
+    return OperatorIdentity(
+        operator_id="op-arthur",
+        display_name="Arthur",
+        session_id="session-1",
+        session_started_at="2026-04-19T00:00:00Z",
+        auth_method="local",
+        ip_address="127.0.0.1",
+    )
+
+
+def _proposal(proposal_id="grad-1"):
+    return SimpleNamespace(
+        id=proposal_id,
+        capability="connector.email.send",
+        scope="workspace",
+        current_tier=3,
+        proposed_tier=2,
+        consecutive_successes=50,
+        status="pending",
+        created_at="2026-04-19T00:00:00Z",
+    )
+
+
+def _rule(rule_id="rule-1"):
+    return SimpleNamespace(
+        id=rule_id,
+        name="routine rule",
+        description="Routine approvals",
+        pattern_type="capability",
+        status="proposed",
+        created_at="2026-04-19T00:00:00Z",
+    )
+
+
+def test_direct_approve_graduation_apl_and_deny_sentry(monkeypatch):
+    trust = _FakeTrustLedger([_proposal()])
+    rules = _FakeRuleEngine([_rule()])
+    sentry = _FakeSentry(
+        {"sentry-1": {"tool": "mcp.lookup", "params": {"query": "status"}, "status": "PENDING"}}
+    )
+    decisions = _FakeDecisionLog()
+    governance_api.init_governance_api(
+        trust_ledger=trust,
+        rule_engine=rules,
+        decision_log=decisions,
+        mcp_sentry=sentry,
+    )
+    emitted = []
+    monkeypatch.setattr(
+        "src.core.governance_receipts.emit_governance_receipt_for_identity",
+        lambda identity, action_type, action_name, inputs=None, **kwargs: emitted.append(
+            (action_type.value, action_name, inputs)
+        ),
+    )
+
+    grad = governance_api._approve_item_direct("grad-1", reason="Enough proof", identity=_identity())
+    rule = governance_api._approve_item_direct("rule-1", reason="Safe pattern", identity=_identity())
+    denied = governance_api._deny_item_direct("sentry-1", reason="Too risky", identity=_identity())
+
+    assert grad == {"status": "approved", "id": "grad-1", "type": "graduation"}
+    assert rule == {"status": "approved", "id": "rule-1", "type": "apl_rule"}
+    assert denied == {"status": "denied", "id": "sentry-1", "type": "sentry"}
+    assert trust.applied == [("grad-1", True, "Enough proof")]
+    assert rules.activated == ["rule-1"]
+    assert sentry.denied == ["sentry-1"]
+    assert decisions.logged and decisions.logged[-1][1] == "denied"
+    assert governance_api._approve_item_direct("missing", identity=_identity()) is None
+    assert governance_api._deny_item_direct("missing", identity=_identity()) is None
+    assert ("mcp_t3_rejected", "deny_sentry", {"approval_id": "sentry-1", "tool": "mcp.lookup", "reason": "Too risky"}) in emitted
+
+
+def test_approve_and_deny_endpoints_cover_graduation_and_apl(monkeypatch):
+    trust = _FakeTrustLedger([_proposal("grad-approve"), _proposal("grad-deny")])
+    rules = _FakeRuleEngine([_rule("rule-approve"), _rule("rule-deny")])
+    governance_api.init_governance_api(trust_ledger=trust, rule_engine=rules)
+    emitted = []
+    monkeypatch.setattr(
+        "src.core.governance_receipts.emit_governance_receipt",
+        lambda request, action_type, action_name, inputs=None, **kwargs: emitted.append(
+            (action_type.value, action_name, inputs)
+        ),
+    )
+
+    client = _client()
+    grad_approve = client.post("/api/governance/approvals/grad-approve/approve").json()
+    rule_approve = client.post("/api/governance/approvals/rule-approve/approve").json()
+    grad_deny = client.post("/api/governance/approvals/grad-deny/deny").json()
+    rule_deny = client.post("/api/governance/approvals/rule-deny/deny").json()
+
+    assert grad_approve["type"] == "graduation"
+    assert rule_approve["type"] == "apl_rule"
+    assert grad_deny["type"] == "graduation"
+    assert rule_deny["type"] == "apl_rule"
+    assert ("grad-approve", True, "Approved via War Room") in trust.applied
+    assert ("grad-deny", False, "Denied via War Room") in trust.applied
+    assert rules.activated == ["rule-approve"]
+    assert rules.declined == [("rule-deny", "Denied via War Room")]
+    assert {entry[0] for entry in emitted} >= {
+        "t3_approved",
+        "apl_rule_approved",
+        "t3_rejected",
+        "apl_rule_rejected",
+    }
+
+
+def test_deny_endpoint_denies_sentry_and_emits_receipt(monkeypatch):
+    sentry = _FakeSentry(
+        {"sentry-1": {"tool": "mcp.lookup", "params": {"query": "status"}, "status": "PENDING"}}
+    )
+    decisions = _FakeDecisionLog()
+    governance_api.init_governance_api(decision_log=decisions, mcp_sentry=sentry)
+    emitted = []
+    monkeypatch.setattr(
+        "src.core.governance_receipts.emit_governance_receipt",
+        lambda request, action_type, action_name, inputs=None, **kwargs: emitted.append(
+            (action_type.value, action_name, inputs)
+        ),
+    )
+
+    client = _client()
+    response = client.post("/api/governance/approvals/sentry-1/deny", json={"reason": "No"})
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "denied", "id": "sentry-1", "type": "sentry"}
+    assert decisions.logged and decisions.logged[0][1] == "denied"
+    assert emitted == [("mcp_t3_rejected", "deny_sentry", {"approval_id": "sentry-1", "tool": "mcp.lookup", "reason": "No"})]
+
+
+def test_governance_error_containment_paths(monkeypatch):
+    governance_api.init_governance_api(trust_ledger=object())
+    monkeypatch.setattr(
+        "governance.war_room_panel.render_trust_panel",
+        lambda _ledger: (_ for _ in ()).throw(RuntimeError("panel failed")),
+    )
+    client = _client()
+    assert client.get("/api/governance/stats").status_code == 500
+
+    class _BrokenDecisions(_FakeDecisionLog):
+        def get_recent(self, limit):
+            raise RuntimeError("decision log failed")
+
+    governance_api.init_governance_api(decision_log=_BrokenDecisions())
+    assert client.get("/api/governance/decisions").status_code == 500
+
+    class _BrokenSentry(_FakeSentry):
+        def cleanup_expired(self):
+            raise RuntimeError("cleanup failed")
+
+    governance_api.init_governance_api(mcp_sentry=_BrokenSentry())
+    assert client.get("/api/governance/approvals").status_code == 500
+
+    governance_api.init_governance_api(mcp_sentry=_FakeSentry({"sentry-1": {"tool": "mcp.lookup"}}))
+    monkeypatch.setattr(
+        "src.core.governance_receipts.emit_governance_receipt",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("receipt failed")),
+    )
+    assert client.post("/api/governance/approvals/sentry-1/approve").status_code == 500
+    assert client.post("/api/governance/approvals/sentry-1/deny").status_code == 500

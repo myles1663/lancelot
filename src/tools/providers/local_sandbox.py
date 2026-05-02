@@ -607,7 +607,7 @@ class LocalSandboxProvider(BaseProvider):
 
         # Parse porcelain output
         files = {"modified": [], "added": [], "deleted": [], "untracked": []}
-        for line in result.stdout.strip().split("\n"):
+        for line in result.stdout.splitlines():
             if not line:
                 continue
             status = line[:2]

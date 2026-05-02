@@ -81,7 +81,6 @@ STRICT_REQUEST_MODELS = [
     ("src.federation.graph_api", "AddEdgeRequest"),
     ("src.federation.graph_api", "AcknowledgeYellowRequest"),
     ("src.federation.graph_api", "UpdateContractRequest"),
-    ("src.core.bal.clients.api", "PauseRequest"),
     ("src.core.connectors_api", "BackendSetRequest"),
     ("src.core.scheduler_api", "JobTimezoneRequest"),
     ("src.core.soul.api", "ProposeAmendmentRequest"),
