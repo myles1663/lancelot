@@ -281,6 +281,144 @@ def test_large_text_uses_role_cascade_before_chunking():
     local_model.redact.assert_not_called()
 
 
+def test_payload_scrubbing_audit_recurses_lists_dicts_and_passthrough_keys():
+    scrubber = LocalPIIScrubber(local_model=MagicMock())
+    payload = {
+        "role": "user",
+        "content": ["Email alice@example.com", {"note": "Phone 415-555-1212"}],
+        "count": 3,
+    }
+
+    scrubbed, events = scrubber.scrub_payload_with_audit(payload)
+
+    assert scrubbed["role"] == "user"
+    assert scrubbed["content"][0] == "Email [EMAIL]"
+    assert scrubbed["content"][1]["note"] == "Phone [PHONE]"
+    assert scrubbed["count"] == 3
+    assert [event.path for event in events] == ["root.content[0]", "root.content[1].note"]
+
+
+def test_payload_scrubbing_wraps_path_when_required_policy_blocks():
+    update_model_usage_policy(frontier_scrub_mode=FRONTIER_SCRUB_REQUIRED)
+    scrubber = LocalPIIScrubber(model_router=MagicMock())
+    scrubber.model_router.route.return_value = _router_result(executed=False, error="offline")
+
+    with pytest.raises(PIIScrubPayloadError) as exc:
+        scrubber.scrub_payload_with_audit({"message": "no private data"})
+
+    assert exc.value.path == "root.message"
+
+
+def test_role_cascade_no_regions_no_candidates_and_segment_failure_paths():
+    class NoCandidateRoles:
+        def find_pii_regions(self, text, **kwargs):
+            raise AssertionError("finder should be skipped for empty narrowed input")
+
+    scrubber = LocalPIIScrubber(local_model_roles=NoCandidateRoles())
+    result, reason = scrubber._scrub_via_role_cascade(
+        "",
+        original="",
+        detected_categories=(),
+        pre_scrubbed=True,
+        pre_scrub_source="deterministic_local",
+    )
+    assert reason == ""
+    assert result.source == "scrub_cascade_no_candidates"
+
+    class NoRegionRoles:
+        def find_pii_regions(self, text, **kwargs):
+            return []
+
+    text = "Customer success Myles Hamilton\nplain line"
+    result, reason = LocalPIIScrubber(local_model_roles=NoRegionRoles())._scrub_via_role_cascade(
+        text,
+        original=text,
+        detected_categories=(),
+        pre_scrubbed=False,
+        pre_scrub_source=None,
+    )
+    assert result.source == "scrub_cascade_no_regions"
+    assert reason == ""
+
+    class FailingVerifier:
+        def find_pii_regions(self, text, **kwargs):
+            return [ScrubRegion(start_line=1, end_line=1, label="name", confidence=0.9)]
+
+        def redact_segment(self, *args, **kwargs):
+            raise RuntimeError("verifier failed")
+
+    result, reason = LocalPIIScrubber(local_model_roles=FailingVerifier())._scrub_via_role_cascade(
+        "Customer Myles Hamilton",
+        original="Customer Myles Hamilton",
+        detected_categories=("name",),
+        pre_scrubbed=False,
+        pre_scrub_source=None,
+    )
+    assert result is None
+    assert "segment verifier failed" in reason
+
+
+def test_region_finder_budget_windowing_and_region_helpers():
+    class LegacyRoles:
+        def __init__(self):
+            self.calls = []
+
+        def config_for(self, _role):
+            return SimpleNamespace(max_input_chars=20)
+
+        def find_pii_regions(self, text):
+            self.calls.append(text)
+            return [ScrubRegion(start_line=1, end_line=1, label="email", confidence=0.5)]
+
+    roles = LegacyRoles()
+    scrubber = LocalPIIScrubber(local_model_roles=roles)
+    regions, stage, reason = scrubber._find_pii_regions_with_budget(
+        roles,
+        "one\ntwo\nthree\nfour\nfive\nsix",
+        line_count=3,
+        text_is_numbered=False,
+    )
+    assert stage == "scrub_region_finder_chunked"
+    assert reason == ""
+    assert regions[0].label == "email"
+
+    chunks, reason = scrubber._split_region_finder_windows("x" * 30, max_chars=10, text_is_numbered=False)
+    assert chunks == []
+    assert "exceeds configured" in reason
+
+    deduped = scrubber._dedupe_regions([
+        ScrubRegion(start_line=1, end_line=1, label="email", confidence=0.1),
+        ScrubRegion(start_line=1, end_line=1, label="email", confidence=0.9),
+    ])
+    assert deduped[0].confidence == 0.9
+    assert scrubber._preserve_trailing_newline("a\r\n", "b") == "b\r\n"
+    assert scrubber._preserve_trailing_newline("a\n", "b") == "b\n"
+    assert scrubber._region_context(["a\n", "b\n", "c\n"], 1, 2) == "a\nb\nc\n"
+
+
+def test_router_and_local_model_failure_details_are_returned():
+    router = MagicMock()
+    router.route.return_value = _router_result(executed=True, output="")
+    scrubber = LocalPIIScrubber(model_router=router)
+    assert scrubber._scrub_via_router("hello") == (None, "Local redaction router returned empty output")
+
+    router.route.return_value = _router_result(executed=False, error="route denied")
+    assert scrubber._scrub_via_router("hello") == (None, "route denied")
+
+    local_model = MagicMock()
+    local_model.is_healthy.return_value = False
+    scrubber = LocalPIIScrubber(local_model=local_model)
+    assert scrubber._scrub_via_local_model("hello") == (
+        None,
+        "Local model health check failed for scrubbing",
+    )
+
+    local_model.is_healthy.return_value = True
+    local_model.redact.return_value = ""
+    assert scrubber._scrub_via_local_model("hello") == (
+        None,
+        "Local model returned empty redaction output",
+    )
 def test_oversized_region_finder_input_uses_bounded_windows(monkeypatch):
     import src.core.frontier_scrubber as frontier_scrubber
 

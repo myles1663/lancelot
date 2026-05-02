@@ -107,3 +107,107 @@ def test_install_response_includes_validated_capabilities():
 
     assert response.status_code == 200
     assert response.json()["validated_capabilities"] == ["tool.read_input", "tool.write_output"]
+
+
+def test_list_proposals_and_skills_success_paths():
+    proposal = SimpleNamespace(
+        id="proposal-1",
+        name="demo_skill",
+        description="demo",
+        permissions=["read"],
+        risk="low",
+        source="first-party",
+        target_domains=[],
+        credential_keys=[],
+        approved_capabilities=[],
+        status=SimpleNamespace(value="pending"),
+        pipeline_passed=True,
+        pipeline_failed_at_stage=None,
+        created_at="now",
+        approved_by=None,
+    )
+    skill = SimpleNamespace(
+        name="demo_skill",
+        version="1.0.0",
+        enabled=True,
+        ownership=SimpleNamespace(value="system"),
+    )
+
+    skills_api.init_skills_api(
+        factory=SimpleNamespace(list_proposals=lambda: [proposal]),
+        registry=SimpleNamespace(list_skills=lambda: [skill]),
+        executor=object(),
+    )
+
+    client = _client()
+
+    proposals = client.get("/api/skills/proposals").json()
+    skills = client.get("/api/skills").json()
+
+    assert proposals["total"] == 1
+    assert proposals["proposals"][0]["status"] == "pending"
+    assert skills == {
+        "skills": [
+            {
+                "name": "demo_skill",
+                "version": "1.0.0",
+                "enabled": True,
+                "ownership": "system",
+            }
+        ],
+        "total": 1,
+    }
+
+
+def test_approve_reject_and_install_error_paths(monkeypatch):
+    class Factory:
+        def approve_proposal(self, proposal_id, approved_by):
+            assert approved_by == "Arthur"
+            return SimpleNamespace(id=proposal_id, name="demo", approved_by=approved_by, approved_at="now")
+
+        def reject_proposal(self, proposal_id, reason=None):
+            assert reason == "unsafe"
+            return SimpleNamespace(id=proposal_id, name="demo", rejected_reason=reason)
+
+        def install_proposal(self, proposal_id, registry):
+            raise RuntimeError("install failed")
+
+    skills_api.init_skills_api(factory=Factory(), registry=object(), executor=object())
+    client = _client()
+
+    approved = client.post("/api/skills/proposals/proposal-1/approve", json={})
+    rejected = client.post("/api/skills/proposals/proposal-1/reject", json={"reason": "unsafe"})
+    install_failed = client.post("/api/skills/proposals/proposal-1/install")
+
+    assert approved.status_code == 200
+    assert approved.json()["approved_by"] == "Arthur"
+    assert rejected.status_code == 200
+    assert rejected.json()["rejected_reason"] == "unsafe"
+    assert install_failed.status_code == 400
+    assert "install failed" in install_failed.json()["detail"]
+
+
+def test_uninitialized_and_not_found_paths():
+    client = _client()
+    skills_api.init_skills_api(factory=None, registry=None, executor=None)
+
+    assert client.get("/api/skills/proposals").status_code == 503
+    assert client.get("/api/skills/proposals/missing").status_code == 503
+    assert client.post("/api/skills/proposals/missing/approve").status_code == 503
+    assert client.post("/api/skills/proposals/missing/reject").status_code == 503
+    assert client.post("/api/skills/proposals/missing/install").status_code == 503
+    assert client.get("/api/skills").status_code == 503
+
+    skills_api.init_skills_api(
+        factory=SimpleNamespace(
+            get_proposal=lambda proposal_id: None,
+            approve_proposal=lambda proposal_id, approved_by: (_ for _ in ()).throw(RuntimeError("bad approve")),
+            reject_proposal=lambda proposal_id, reason=None: (_ for _ in ()).throw(RuntimeError("bad reject")),
+        ),
+        registry=SimpleNamespace(list_skills=lambda: []),
+        executor=object(),
+    )
+
+    assert client.get("/api/skills/proposals/missing").status_code == 404
+    assert client.post("/api/skills/proposals/missing/approve").status_code == 400
+    assert client.post("/api/skills/proposals/missing/reject").status_code == 400

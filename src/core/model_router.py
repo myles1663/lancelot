@@ -2,12 +2,12 @@
 Model router for lane selection and escalation.
 
 Single-owner module that routes tasks to the appropriate lane:
-  1. local_redaction  â€” local redaction lane
-  2. local_utility    â€” classify, extract, summarize, rag_rewrite
-  3. flagship_fast    â€” orchestration, tool calls, retries
-  4. flagship_deep    â€” planning, high-risk decisions
+  1. local_redaction  - local redaction lane
+  2. local_utility    - classify, extract, summarize, rag_rewrite
+  3. flagship_fast    - orchestration, tool calls, retries
+  4. flagship_deep    - planning, high-risk decisions
 
-Escalation from fast â†’ deep is triggered by:
+Escalation from fast to deep is triggered by:
   - Task type (plan, analyze, decide, architect, review)
   - Risk keywords in the input text
   - Fast lane failure (automatic retry on deep)
@@ -15,11 +15,11 @@ Escalation from fast â†’ deep is triggered by:
 All routing decisions are logged and exposed to the War Room.
 
 Public API:
-    RouterDecision      â€” immutable record of a routing decision
+    RouterDecision      - immutable record of a routing decision
     ModelRouter(registry, local_client, flagship_client)
-    router.route(task_type, text, **kwargs) â†’ RouterResult
-    router.recent_decisions  â†’ list[RouterDecision]
-    router.stats             â†’ dict
+    router.route(task_type, text, **kwargs) -> RouterResult
+    router.recent_decisions  -> list[RouterDecision]
+    router.stats             -> dict
 """
 
 import logging
@@ -202,7 +202,7 @@ class ModelRouter:
         if task_type in _DEEP_TASK_TYPES:
             return (
                 "flagship_deep",
-                f"'{task_type}' requires deep reasoning â€” escalated to deep lane",
+                f"'{task_type}' requires deep reasoning - escalated to deep lane",
             )
 
         # Escalation: risk keywords in input
@@ -210,7 +210,7 @@ class ModelRouter:
         if risk_word:
             return (
                 "flagship_deep",
-                f"Risk keyword '{risk_word}' detected â€” escalated to deep lane",
+                f"Risk keyword '{risk_word}' detected - escalated to deep lane",
             )
 
         # Default to flagship fast lane
@@ -637,7 +637,7 @@ class ModelRouter:
         self._decisions.append(decision)
         self._usage.record(decision)
         logger.info(
-            "Router decision: %s â†’ %s (%s) [%.1fms]",
+            "Router decision: %s -> %s (%s) [%.1fms]",
             decision.task_type,
             decision.lane,
             "ok" if decision.success else "fail",

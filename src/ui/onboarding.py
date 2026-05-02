@@ -225,7 +225,7 @@ class OnboardingOrchestrator:
             return val
         if os.path.exists(self.env_file):
             try:
-                with open(self.env_file, "r") as f:
+                with open(self.env_file, "r", encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
                         if line.startswith(f"{key}="):
@@ -323,7 +323,7 @@ class OnboardingOrchestrator:
 
         update_process_env = os.path.abspath(self.env_file) == os.path.abspath(".env")
         try:
-            with open(self.env_file, "a") as f:
+            with open(self.env_file, "a", encoding="utf-8") as f:
                 if section_comment:
                     f.write(f"\n# {section_comment}\n")
                 for key, val in to_write.items():
@@ -345,7 +345,7 @@ class OnboardingOrchestrator:
     def _bond_identity(self, user: str) -> str:
         """Creates USER.md and bonds identity."""
         try:
-            with open(self.user_file, "w") as f:
+            with open(self.user_file, "w", encoding="utf-8") as f:
                 f.write(f"# User Profile\n- Name: {user}\n- Role: Commander\n- Bonded: True")
 
             self.state = "FLAGSHIP_SELECTION"
@@ -936,7 +936,7 @@ class OnboardingOrchestrator:
         # Create restart flag
         flags_dir = os.path.join(self.data_dir, "FLAGS")
         os.makedirs(flags_dir, exist_ok=True)
-        with open(os.path.join(flags_dir, "RESTART_REQUIRED"), "w") as f:
+        with open(os.path.join(flags_dir, "RESTART_REQUIRED"), "w", encoding="utf-8") as f:
             f.write("CONFIG_UPDATED")
 
         # Advance to FINAL_CHECKS
@@ -1096,7 +1096,7 @@ class OnboardingOrchestrator:
 
                 flags_dir = os.path.join(self.data_dir, "FLAGS")
                 os.makedirs(flags_dir, exist_ok=True)
-                with open(os.path.join(flags_dir, "RESTART_REQUIRED"), "w") as f:
+                with open(os.path.join(flags_dir, "RESTART_REQUIRED"), "w", encoding="utf-8") as f:
                     f.write("CONFIG_UPDATED")
 
                 self.state = "FINAL_CHECKS"
@@ -1395,7 +1395,7 @@ class OnboardingOrchestrator:
 
         flags_dir = os.path.join(self.data_dir, "FLAGS")
         os.makedirs(flags_dir, exist_ok=True)
-        with open(os.path.join(flags_dir, "RESTART_REQUIRED"), "w") as f:
+        with open(os.path.join(flags_dir, "RESTART_REQUIRED"), "w", encoding="utf-8") as f:
             f.write("ONBOARDING_COMPLETE")
 
         return msg
@@ -1403,7 +1403,7 @@ class OnboardingOrchestrator:
     def _complete_onboarding(self):
         """Marks onboarding as complete in USER.md."""
         try:
-            with open(self.user_file, "a") as f:
+            with open(self.user_file, "a", encoding="utf-8") as f:
                 f.write("\n- OnboardingComplete: True")
             self.state = "READY"
         except Exception as exc:

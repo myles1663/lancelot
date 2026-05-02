@@ -1,4 +1,4 @@
-# Lancelot — A Governed Autonomous System
+# Lancelot - A Governed Autonomous System
 # Copyright (c) 2026 Myles Russell Hamilton
 # Licensed under BUSL-1.1. See LICENSE for details.
 # Patent Pending: US Provisional Application #63/982,183
@@ -10,56 +10,56 @@ Each flag controls whether a subsystem is active. When disabled,
 the system boots without that subsystem.
 
 Core subsystem environment variables:
-    FEATURE_SOUL           — default: true
-    FEATURE_SKILLS         — default: true
-    FEATURE_HEALTH_MONITOR — default: true
-    FEATURE_SCHEDULER      — default: true
-    FEATURE_MEMORY_VNEXT   — default: false (structured memory subsystem)
+    FEATURE_SOUL           - default: true
+    FEATURE_SKILLS         - default: true
+    FEATURE_HEALTH_MONITOR - default: true
+    FEATURE_SCHEDULER      - default: true
+    FEATURE_MEMORY_VNEXT   - default: true (structured memory subsystem)
 
 Tool Fabric Environment variables:
-    FEATURE_TOOLS_FABRIC         — default: true (global enable)
-    FEATURE_TOOLS_CLI_PROVIDERS  — default: false (optional CLI adapters)
-    FEATURE_TOOLS_ANTIGRAVITY    — default: false (Antigravity providers)
-    FEATURE_TOOLS_NETWORK        — default: false (network access in sandbox)
-    FEATURE_TOOLS_HOST_EXECUTION — default: false (container Linux access)
-    FEATURE_TOOLS_HOST_BRIDGE    — default: false (DANGEROUS: real host OS bridge)
+    FEATURE_TOOLS_FABRIC         - default: true (global enable)
+    FEATURE_TOOLS_CLI_PROVIDERS  - default: false (optional CLI adapters)
+    FEATURE_TOOLS_ANTIGRAVITY    - default: false (Antigravity providers)
+    FEATURE_TOOLS_NETWORK        - default: false (network access in sandbox)
+    FEATURE_TOOLS_HOST_EXECUTION - default: false (container Linux access)
+    FEATURE_TOOLS_HOST_BRIDGE    - default: false (DANGEROUS: real host OS bridge)
 
 Governance environment variables:
-    FEATURE_RISK_TIERED_GOVERNANCE — default: false (master switch)
-    FEATURE_POLICY_CACHE           — default: false (boot-time policy compilation)
-    FEATURE_ASYNC_VERIFICATION     — default: false (async verify for T1 actions)
-    FEATURE_INTENT_TEMPLATES       — default: false (cached plan templates)
-    FEATURE_BATCH_RECEIPTS         — default: false (batched receipt emission)
+    FEATURE_RISK_TIERED_GOVERNANCE - default: true (master switch)
+    FEATURE_POLICY_CACHE           - default: true (boot-time policy compilation)
+    FEATURE_ASYNC_VERIFICATION     - default: true (async verify for T1 actions)
+    FEATURE_INTENT_TEMPLATES       - default: true (cached plan templates)
+    FEATURE_BATCH_RECEIPTS         - default: false (batched receipt emission)
 
 Capability Upgrade Environment variables:
-    FEATURE_CONNECTORS               — default: false (external connector system)
-    FEATURE_TRUST_LEDGER             — default: false (progressive tier relaxation)
-    FEATURE_SKILL_SECURITY_PIPELINE  — default: false (6-stage skill security)
+    FEATURE_CONNECTORS               - default: true (external connector system)
+    FEATURE_TRUST_LEDGER             - default: true (progressive tier relaxation)
+    FEATURE_SKILL_SECURITY_PIPELINE  - default: true (6-stage skill security)
 
 Approval Pattern Learning Environment variables:
-    FEATURE_APPROVAL_LEARNING        — default: false (APL: learn owner decision patterns)
+    FEATURE_APPROVAL_LEARNING        - default: true (APL: learn owner decision patterns)
 
 Response hygiene environment variables:
-    FEATURE_STRUCTURED_OUTPUT        — default: false (JSON schema output mode with receipt verification)
-    FEATURE_CLAIM_VERIFICATION       — default: false (cross-reference response claims vs tool receipts)
-    FEATURE_UNIFIED_CLASSIFICATION   — default: false (single LLM call intent classification)
+    FEATURE_STRUCTURED_OUTPUT        - default: true (JSON schema output mode with receipt verification)
+    FEATURE_CLAIM_VERIFICATION       - default: true (cross-reference response claims vs tool receipts)
+    FEATURE_UNIFIED_CLASSIFICATION   - default: true (single LLM call intent classification)
 
 Competitive intelligence environment variables:
-    FEATURE_GITHUB_SEARCH            — default: true (GitHub API skill for structured repo/commit/issue data)
-    FEATURE_COMPETITIVE_SCAN         — default: false (episodic memory storage for competitive scan diffing)
+    FEATURE_GITHUB_SEARCH            - default: true (GitHub API skill for structured repo/commit/issue data)
+    FEATURE_COMPETITIVE_SCAN         - default: false (episodic memory storage for competitive scan diffing)
 
 Deep reasoning environment variables:
-    FEATURE_DEEP_REASONING_LOOP      — default: false (deep reasoning pass before agentic execution)
+    FEATURE_DEEP_REASONING_LOOP      - default: false (deep reasoning pass before agentic execution)
 
 Google OAuth environment variables:
-    FEATURE_GOOGLE_OAUTH             — default: false (Google OAuth 2.0 for Gmail + Calendar)
+    FEATURE_GOOGLE_OAUTH             - default: false (Google OAuth 2.0 for Gmail + Calendar)
 
 Federation Environment variables:
-    FEATURE_FEDERATION               — default: false (multi-instance federation layer)
-    FEATURE_FEDERATION_DASHBOARD     — default: false (fleet dashboard UI/API)
+    FEATURE_FEDERATION               - default: false (multi-instance federation layer)
+    FEATURE_FEDERATION_DASHBOARD     - default: false (fleet dashboard UI/API)
 
 MCP (Model Context Protocol) Environment variables:
-    FEATURE_MCP                      — default: false (master kill switch for all MCP invocations)
+    FEATURE_MCP                      - default: false (master kill switch for all MCP invocations)
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ _self_module = sys.modules[__name__]
 sys.modules.setdefault("feature_flags", _self_module)
 sys.modules.setdefault("src.core.feature_flags", _self_module)
 
-# Persistent flag state file — survives container restarts via Docker volume.
+# Persistent flag state file - survives container restarts via Docker volume.
 # Uses .flag_state.json (dotfile) to avoid being picked up by the librarian.
 _FLAG_STATE_PATH = Path(os.environ.get(
     "LANCELOT_FLAG_STATE_PATH",
@@ -156,7 +156,7 @@ def _env_bool(key: str, default: bool = True) -> bool:
     """Read a boolean from env, with persisted state taking priority.
 
     Priority order:
-    1. Persisted state file (flag_state.json) — written by War Room toggles
+    1. Persisted state file (flag_state.json) - written by War Room toggles
     2. Environment variable (.env / docker-compose)
     3. Hardcoded default
     """
@@ -174,7 +174,7 @@ FEATURE_SOUL: bool = _env_bool("FEATURE_SOUL")
 FEATURE_SKILLS: bool = _env_bool("FEATURE_SKILLS")
 FEATURE_HEALTH_MONITOR: bool = _env_bool("FEATURE_HEALTH_MONITOR")
 FEATURE_SCHEDULER: bool = _env_bool("FEATURE_SCHEDULER")
-FEATURE_MEMORY_VNEXT: bool = _env_bool("FEATURE_MEMORY_VNEXT", default=False)
+FEATURE_MEMORY_VNEXT: bool = _env_bool("FEATURE_MEMORY_VNEXT")
 
 # Tool Fabric flags
 FEATURE_TOOLS_FABRIC: bool = _env_bool("FEATURE_TOOLS_FABRIC")
@@ -194,33 +194,30 @@ FEATURE_NETWORK_ALLOWLIST: bool = _env_bool("FEATURE_NETWORK_ALLOWLIST")
 FEATURE_VOICE_NOTES: bool = _env_bool("FEATURE_VOICE_NOTES")
 
 # Agentic tool loop flags
-FEATURE_AGENTIC_LOOP: bool = _env_bool("FEATURE_AGENTIC_LOOP", default=False)
+FEATURE_AGENTIC_LOOP: bool = _env_bool("FEATURE_AGENTIC_LOOP")
 
 # Local agentic routing flags
-FEATURE_LOCAL_AGENTIC: bool = _env_bool("FEATURE_LOCAL_AGENTIC", default=False)
+FEATURE_LOCAL_AGENTIC: bool = _env_bool("FEATURE_LOCAL_AGENTIC")
 
 # Risk-tiered governance flags
-FEATURE_RISK_TIERED_GOVERNANCE: bool = _env_bool("FEATURE_RISK_TIERED_GOVERNANCE", default=False)
-FEATURE_POLICY_CACHE: bool = _env_bool("FEATURE_POLICY_CACHE", default=False)
-FEATURE_ASYNC_VERIFICATION: bool = _env_bool("FEATURE_ASYNC_VERIFICATION", default=False)
-FEATURE_INTENT_TEMPLATES: bool = _env_bool("FEATURE_INTENT_TEMPLATES", default=False)
+FEATURE_RISK_TIERED_GOVERNANCE: bool = _env_bool("FEATURE_RISK_TIERED_GOVERNANCE")
+FEATURE_POLICY_CACHE: bool = _env_bool("FEATURE_POLICY_CACHE")
+FEATURE_ASYNC_VERIFICATION: bool = _env_bool("FEATURE_ASYNC_VERIFICATION")
+FEATURE_INTENT_TEMPLATES: bool = _env_bool("FEATURE_INTENT_TEMPLATES")
 FEATURE_BATCH_RECEIPTS: bool = _env_bool("FEATURE_BATCH_RECEIPTS", default=False)
 
 # Capability Upgrade flags
-FEATURE_CONNECTORS: bool = _env_bool("FEATURE_CONNECTORS", default=False)
-FEATURE_TRUST_LEDGER: bool = _env_bool("FEATURE_TRUST_LEDGER", default=False)
-FEATURE_SKILL_SECURITY_PIPELINE: bool = _env_bool("FEATURE_SKILL_SECURITY_PIPELINE", default=False)
+FEATURE_CONNECTORS: bool = _env_bool("FEATURE_CONNECTORS")
+FEATURE_TRUST_LEDGER: bool = _env_bool("FEATURE_TRUST_LEDGER")
+FEATURE_SKILL_SECURITY_PIPELINE: bool = _env_bool("FEATURE_SKILL_SECURITY_PIPELINE")
 
 # Approval Pattern Learning flags
-FEATURE_APPROVAL_LEARNING: bool = _env_bool("FEATURE_APPROVAL_LEARNING", default=False)
-
-# Business Automation Layer flags
-FEATURE_BAL: bool = _env_bool("FEATURE_BAL", default=False)
+FEATURE_APPROVAL_LEARNING: bool = _env_bool("FEATURE_APPROVAL_LEARNING")
 
 # Response hygiene flags
-FEATURE_STRUCTURED_OUTPUT: bool = _env_bool("FEATURE_STRUCTURED_OUTPUT", default=False)       # JSON schema output + receipt verification — eliminates narration/hallucination at format level
-FEATURE_CLAIM_VERIFICATION: bool = _env_bool("FEATURE_CLAIM_VERIFICATION", default=False)     # Cross-reference response text claims against tool receipts — neutralize unverified claims
-FEATURE_UNIFIED_CLASSIFICATION: bool = _env_bool("FEATURE_UNIFIED_CLASSIFICATION", default=False)  # Single LLM call replaces 7-function keyword heuristic chain for intent routing
+FEATURE_STRUCTURED_OUTPUT: bool = _env_bool("FEATURE_STRUCTURED_OUTPUT")       # JSON schema output + receipt verification - eliminates narration/hallucination at format level
+FEATURE_CLAIM_VERIFICATION: bool = _env_bool("FEATURE_CLAIM_VERIFICATION")     # Cross-reference response text claims against tool receipts - neutralize unverified claims
+FEATURE_UNIFIED_CLASSIFICATION: bool = _env_bool("FEATURE_UNIFIED_CLASSIFICATION")  # Single LLM call replaces 7-function keyword heuristic chain for intent routing
 
 # Competitive intelligence flags
 FEATURE_GITHUB_SEARCH: bool = _env_bool("FEATURE_GITHUB_SEARCH", default=True)           # GitHub API skill for repos, commits, issues, releases with source URLs
@@ -233,48 +230,40 @@ FEATURE_DEEP_REASONING_LOOP: bool = _env_bool("FEATURE_DEEP_REASONING_LOOP", def
 FEATURE_GOOGLE_OAUTH: bool = _env_bool("FEATURE_GOOGLE_OAUTH", default=False)  # OAuth 2.0 Authorization Code + PKCE for Gmail and Google Calendar
 
 # Tool flow streaming and ActionCards
-FEATURE_TOOL_FLOW_STREAMING: bool = _env_bool("FEATURE_TOOL_FLOW_STREAMING", default=False)  # Real-time tool execution progress events via EventBus
-FEATURE_ACTION_CARDS: bool = _env_bool("FEATURE_ACTION_CARDS", default=False)  # Channel-agnostic interactive buttons for approvals and actions
+FEATURE_TOOL_FLOW_STREAMING: bool = _env_bool("FEATURE_TOOL_FLOW_STREAMING")  # Real-time tool execution progress events via EventBus
+FEATURE_ACTION_CARDS: bool = _env_bool("FEATURE_ACTION_CARDS")  # Channel-agnostic interactive buttons for approvals and actions
 
-# HIVE Agent Mesh — ephemeral sub-agent architecture
+# HIVE Agent Mesh - ephemeral sub-agent architecture
 FEATURE_HIVE: bool = _env_bool("FEATURE_HIVE", default=False)  # Master switch for HIVE Agent Mesh subsystem
 FEATURE_HIVE_UAB: bool = _env_bool("FEATURE_HIVE_UAB", default=False)  # Enable UAB bridge for HIVE sub-agents
 
-# Vault-backed secret management — secrets in encrypted vault instead of os.environ
+# Vault-backed secret management - secrets in encrypted vault instead of os.environ
 FEATURE_VAULT_SECRETS: bool = _env_bool("FEATURE_VAULT_SECRETS", default=True)  # Vault-backed secret cache (rollback: false = os.getenv fallback)
 
-# Federation — multi-instance coordination
+# Federation - multi-instance coordination
 FEATURE_FEDERATION: bool = _env_bool("FEATURE_FEDERATION", default=False)  # Master switch for Federation subsystem (Governance API, heartbeat, identity)
 FEATURE_FEDERATION_DASHBOARD: bool = _env_bool("FEATURE_FEDERATION_DASHBOARD", default=False)  # Operator fleet dashboard above per-instance War Rooms
 
-# MCP (Model Context Protocol) — governed tool proxy
+# MCP (Model Context Protocol) - governed tool proxy
 FEATURE_MCP: bool = _env_bool("FEATURE_MCP", default=False)  # Master kill switch for all MCP tool invocations
 
-# Observability — OTel export, webhooks, metrics API
+# Observability - OTel export, webhooks, metrics API
 FEATURE_OBSERVABILITY: bool = _env_bool("FEATURE_OBSERVABILITY", default=False)  # Master switch for observability subsystem
 
-# Time-Travel Debugging — governed fork/replay of quest histories
+# Time-Travel Debugging - governed fork/replay of quest histories
 FEATURE_TIME_TRAVEL: bool = _env_bool("FEATURE_TIME_TRAVEL", default=False)  # Master switch for time-travel debugging subsystem
 
-# A2A Protocol — governed agent-to-agent interoperability
+# A2A Protocol - governed agent-to-agent interoperability
 FEATURE_A2A: bool = _env_bool("FEATURE_A2A", default=False)  # Master switch for A2A protocol subsystem (inbound + outbound)
 
-# Incident Response Playbooks — structured response protocols for governance events
+# Incident Response Playbooks - structured response protocols for governance events
 FEATURE_INCIDENT_RESPONSE: bool = _env_bool("FEATURE_INCIDENT_RESPONSE", default=False)  # Master switch for incident response playbook engine
 
 
-# Boot-wired subsystems are route-gated when disabled, but enabling them from an
-# off-at-boot state still requires startup wiring that only happens during boot.
-RESTART_REQUIRED_FLAGS = frozenset({
-    "FEATURE_GOOGLE_OAUTH",
-    "FEATURE_TOOL_FLOW_STREAMING",
-    "FEATURE_ACTION_CARDS",
-    "FEATURE_MCP",
-    "FEATURE_OBSERVABILITY",
-    "FEATURE_TIME_TRAVEL",
-    "FEATURE_A2A",
-    "FEATURE_INCIDENT_RESPONSE",
-})
+# Restart-required flags are exceptional. Optional subsystem surfaces are
+# registered with SubsystemManager so War Room toggles can start/stop them at
+# runtime while middleware gates routes when disabled.
+RESTART_REQUIRED_FLAGS = frozenset()
 
 
 def toggle_flag(name: str) -> bool:
@@ -329,7 +318,6 @@ def reload_flags() -> None:
     global FEATURE_ASYNC_VERIFICATION, FEATURE_INTENT_TEMPLATES, FEATURE_BATCH_RECEIPTS
     global FEATURE_CONNECTORS, FEATURE_TRUST_LEDGER, FEATURE_SKILL_SECURITY_PIPELINE
     global FEATURE_APPROVAL_LEARNING
-    global FEATURE_BAL
     global FEATURE_STRUCTURED_OUTPUT, FEATURE_CLAIM_VERIFICATION, FEATURE_UNIFIED_CLASSIFICATION
     global FEATURE_GITHUB_SEARCH, FEATURE_COMPETITIVE_SCAN
     global FEATURE_DEEP_REASONING_LOOP
@@ -348,7 +336,7 @@ def reload_flags() -> None:
     FEATURE_SKILLS = _env_bool("FEATURE_SKILLS")
     FEATURE_HEALTH_MONITOR = _env_bool("FEATURE_HEALTH_MONITOR")
     FEATURE_SCHEDULER = _env_bool("FEATURE_SCHEDULER")
-    FEATURE_MEMORY_VNEXT = _env_bool("FEATURE_MEMORY_VNEXT", default=False)
+    FEATURE_MEMORY_VNEXT = _env_bool("FEATURE_MEMORY_VNEXT")
 
     # Tool Fabric flags
     FEATURE_TOOLS_FABRIC = _env_bool("FEATURE_TOOLS_FABRIC")
@@ -368,33 +356,30 @@ def reload_flags() -> None:
     FEATURE_VOICE_NOTES = _env_bool("FEATURE_VOICE_NOTES")
 
     # Agentic tool loop flags
-    FEATURE_AGENTIC_LOOP = _env_bool("FEATURE_AGENTIC_LOOP", default=False)
+    FEATURE_AGENTIC_LOOP = _env_bool("FEATURE_AGENTIC_LOOP")
 
     # Local agentic routing flags
-    FEATURE_LOCAL_AGENTIC = _env_bool("FEATURE_LOCAL_AGENTIC", default=False)
+    FEATURE_LOCAL_AGENTIC = _env_bool("FEATURE_LOCAL_AGENTIC")
 
     # Risk-tiered governance flags
-    FEATURE_RISK_TIERED_GOVERNANCE = _env_bool("FEATURE_RISK_TIERED_GOVERNANCE", default=False)
-    FEATURE_POLICY_CACHE = _env_bool("FEATURE_POLICY_CACHE", default=False)
-    FEATURE_ASYNC_VERIFICATION = _env_bool("FEATURE_ASYNC_VERIFICATION", default=False)
-    FEATURE_INTENT_TEMPLATES = _env_bool("FEATURE_INTENT_TEMPLATES", default=False)
+    FEATURE_RISK_TIERED_GOVERNANCE = _env_bool("FEATURE_RISK_TIERED_GOVERNANCE")
+    FEATURE_POLICY_CACHE = _env_bool("FEATURE_POLICY_CACHE")
+    FEATURE_ASYNC_VERIFICATION = _env_bool("FEATURE_ASYNC_VERIFICATION")
+    FEATURE_INTENT_TEMPLATES = _env_bool("FEATURE_INTENT_TEMPLATES")
     FEATURE_BATCH_RECEIPTS = _env_bool("FEATURE_BATCH_RECEIPTS", default=False)
 
     # Capability Upgrade flags
-    FEATURE_CONNECTORS = _env_bool("FEATURE_CONNECTORS", default=False)
-    FEATURE_TRUST_LEDGER = _env_bool("FEATURE_TRUST_LEDGER", default=False)
-    FEATURE_SKILL_SECURITY_PIPELINE = _env_bool("FEATURE_SKILL_SECURITY_PIPELINE", default=False)
+    FEATURE_CONNECTORS = _env_bool("FEATURE_CONNECTORS")
+    FEATURE_TRUST_LEDGER = _env_bool("FEATURE_TRUST_LEDGER")
+    FEATURE_SKILL_SECURITY_PIPELINE = _env_bool("FEATURE_SKILL_SECURITY_PIPELINE")
 
     # Approval Pattern Learning flags
-    FEATURE_APPROVAL_LEARNING = _env_bool("FEATURE_APPROVAL_LEARNING", default=False)
-
-    # Business Automation Layer flags
-    FEATURE_BAL = _env_bool("FEATURE_BAL", default=False)
+    FEATURE_APPROVAL_LEARNING = _env_bool("FEATURE_APPROVAL_LEARNING")
 
     # Response hygiene
-    FEATURE_STRUCTURED_OUTPUT = _env_bool("FEATURE_STRUCTURED_OUTPUT", default=False)
-    FEATURE_CLAIM_VERIFICATION = _env_bool("FEATURE_CLAIM_VERIFICATION", default=False)
-    FEATURE_UNIFIED_CLASSIFICATION = _env_bool("FEATURE_UNIFIED_CLASSIFICATION", default=False)
+    FEATURE_STRUCTURED_OUTPUT = _env_bool("FEATURE_STRUCTURED_OUTPUT")
+    FEATURE_CLAIM_VERIFICATION = _env_bool("FEATURE_CLAIM_VERIFICATION")
+    FEATURE_UNIFIED_CLASSIFICATION = _env_bool("FEATURE_UNIFIED_CLASSIFICATION")
 
     # Competitive intelligence
     FEATURE_GITHUB_SEARCH = _env_bool("FEATURE_GITHUB_SEARCH", default=True)
@@ -407,8 +392,8 @@ def reload_flags() -> None:
     FEATURE_GOOGLE_OAUTH = _env_bool("FEATURE_GOOGLE_OAUTH", default=False)
 
     # Tool flow streaming and ActionCards
-    FEATURE_TOOL_FLOW_STREAMING = _env_bool("FEATURE_TOOL_FLOW_STREAMING", default=False)
-    FEATURE_ACTION_CARDS = _env_bool("FEATURE_ACTION_CARDS", default=False)
+    FEATURE_TOOL_FLOW_STREAMING = _env_bool("FEATURE_TOOL_FLOW_STREAMING")
+    FEATURE_ACTION_CARDS = _env_bool("FEATURE_ACTION_CARDS")
 
     # HIVE Agent Mesh
     FEATURE_HIVE = _env_bool("FEATURE_HIVE", default=False)
@@ -485,10 +470,6 @@ def log_feature_flags() -> None:
     logger.info(
         "Approval Pattern Learning flags: APPROVAL_LEARNING=%s",
         FEATURE_APPROVAL_LEARNING,
-    )
-    logger.info(
-        "Business Automation Layer flags: BAL=%s",
-        FEATURE_BAL,
     )
     logger.info(
         "Response hygiene flags: STRUCTURED_OUTPUT=%s, CLAIM_VERIFICATION=%s, UNIFIED_CLASSIFICATION=%s",

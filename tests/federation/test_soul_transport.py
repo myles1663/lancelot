@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import yaml
+import types
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from src.core.soul.store import Soul
 from src.federation.identity import generate_identity
-from src.federation.soul_propagation import SoulPropagationEngine
+from src.federation.soul_propagation import InstancePropState, PropagationTier, SoulPropagationEngine
 from src.federation.soul_compat import hash_soul
 from src.federation.soul_transport import SoulTransport
 from src.federation.topology import TopologyRegistry
@@ -137,6 +140,29 @@ class _BroadcastStubTransport:
         )()
 
 
+@pytest.mark.asyncio
+async def test_push_with_no_targets_returns_empty_handshake(root_identity, runtime_soul, soul_dir):
+    empty_topology = TopologyRegistry(self_instance_id=root_identity.instance_id)
+    transport = SoulTransport(
+        identity=root_identity,
+        transport=_BroadcastStubTransport({}),
+        topology=empty_topology,
+        current_soul_provider=lambda: runtime_soul,
+        soul_dir=soul_dir,
+    )
+
+    result = await transport.push_soul_update(
+        soul_document=_valid_soul_dict("v2"),
+        soul_hash="hash-v2",
+        tier="T2",
+        reason="no peers",
+    )
+
+    assert result["delivered"] == 0
+    assert result["handshake"]["total_peers"] == 0
+    assert result["handshake"]["all_acknowledged"] is False
+
+
 class TestHandleSoulPush:
     def test_valid_push_accepted_and_applied(self, child_identity, root_identity, soul_dir):
         applied = []
@@ -249,6 +275,198 @@ class TestHandleSoulPush:
         assert result["accepted"] is False
         assert "root-authority" in result["error"]
         assert applied == []
+
+
+@pytest.mark.asyncio
+async def test_transport_fetch_handshake_and_runtime_helper_edges(root_identity, topology, runtime_soul, soul_dir):
+    class FailingTransport:
+        async def send(self, **kwargs):
+            return type("Result", (), {"success": False, "body": {}, "error": "timeout", "status_code": 504})()
+
+    transport = SoulTransport(
+        identity=root_identity,
+        transport=FailingTransport(),
+        topology=topology,
+        current_soul_provider=lambda: runtime_soul,
+        soul_dir=soul_dir,
+    )
+
+    assert await transport.fetch_soul_from_peer("http://peer", "peer-1") == {"error": "timeout"}
+    assert (await transport.perform_handshake("http://peer", "peer-1"))["error"] == "timeout"
+    assert transport._parse_tier("unknown") == PropagationTier.T1_MINOR
+    assert transport._event_to_dict(None) == {}
+    assert transport._event_to_dict(types.SimpleNamespace(to_dict=lambda: (_ for _ in ()).throw(RuntimeError("bad")))) == {}
+    assert SoulTransport.parse_timestamp("not-a-date") is None
+    assert transport.get_local_soul_hash() == hash_soul(runtime_soul)
+    assert transport.get_consistency_state() == "synchronized"
+    assert transport.get_active_propagations() == []
+
+    no_soul = SoulTransport(
+        identity=root_identity,
+        transport=FailingTransport(),
+        topology=topology,
+        current_soul_provider=lambda: None,
+        soul_dir=soul_dir,
+    )
+    no_soul._soul_dir = "__missing_soul_dir__"
+    fetched = no_soul.handle_soul_fetch()
+    assert fetched["error"] == "No active runtime Soul available"
+    assert no_soul.handle_handshake({"remote_soul_document": _valid_soul_dict()})["error"] == "No local runtime Soul available"
+    assert no_soul.get_local_soul_hash() == ""
+
+    missing_doc = transport.handle_handshake({"remote_soul_hash": "hash", "remote_instance_id": "peer-1"})
+    assert missing_doc["error"] == "Handshake payload missing remote_soul_document"
+    bad_hash = transport.handle_handshake({
+        "remote_soul_document": _valid_soul_dict("v2"),
+        "remote_soul_hash": "wrong",
+        "remote_instance_id": "peer-1",
+    })
+    assert bad_hash["error"] == "Remote Soul hash mismatch"
+
+
+@pytest.mark.asyncio
+async def test_t2_pause_failure_marks_handshake_and_resumes_local_fallback(child_identity, root_identity, soul_dir):
+    child_topo = TopologyRegistry(self_instance_id=root_identity.instance_id)
+    child_topo.register_peer(
+        instance_id=child_identity.instance_id,
+        fingerprint=child_identity.fingerprint,
+        public_key_hex=child_identity.public_key_hex(),
+        address="http://child:8000",
+        role="child",
+    )
+
+    pause_failure = type(
+        "Result",
+        (),
+        {"success": False, "error": "governance approval denied", "latency_ms": 1, "body": {}, "status_code": 403},
+    )()
+    transport = _BroadcastStubTransport({child_identity.instance_id: pause_failure})
+    local_pause_calls = []
+    soul_transport = SoulTransport(
+        identity=root_identity,
+        transport=transport,
+        topology=child_topo,
+        current_soul_provider=lambda: Soul(**_valid_soul_dict("v1")),
+        local_pause_handler=lambda reason: local_pause_calls.append(reason),
+        soul_dir=soul_dir,
+    )
+
+    result = await soul_transport.push_soul_update(
+        soul_document=_valid_soul_dict("v2"),
+        soul_hash=hash_soul(Soul(**_valid_soul_dict("v2"))),
+        tier="T2",
+        reason="governed update",
+    )
+
+    assert result["delivered"] == 0
+    assert result["handshake"]["denied"] == 1
+    assert "governed update" in local_pause_calls[0]
+    assert transport.calls == ["/api/federation/pause"]
+
+
+@pytest.mark.asyncio
+async def test_confirmation_rejects_invalid_events_and_resumes_when_all_confirmed(
+    child_identity,
+    root_identity,
+    topology,
+    runtime_soul,
+    soul_dir,
+):
+    class Engine:
+        def __init__(self):
+            self.resume_recorded = []
+            self.event = types.SimpleNamespace(
+                event_id="ev-1",
+                tier=PropagationTier.T3_CRITICAL,
+                reason="critical",
+                instances=[
+                    types.SimpleNamespace(instance_id=root_identity.instance_id, state=InstancePropState.CONFIRMED),
+                    types.SimpleNamespace(instance_id=child_identity.instance_id, state=InstancePropState.ACTIVATED),
+                ],
+                to_dict=lambda: {"event_id": "ev-1"},
+            )
+            self.consistency_state = types.SimpleNamespace(value="divergent")
+
+        def get_event(self, event_id):
+            return self.event if event_id == "ev-1" else None
+
+        def record_confirmation(self, event_id, confirmer_id):
+            if confirmer_id == "bad":
+                return False
+            for instance in self.event.instances:
+                if instance.instance_id == confirmer_id:
+                    instance.state = InstancePropState.CONFIRMED
+            return True
+
+        def record_resume(self, event_id, instance_id):
+            self.resume_recorded.append((event_id, instance_id))
+
+        def complete_confirmed_event(self, event_id):
+            self.completed = event_id
+
+        def get_active_events(self):
+            return [self.event]
+
+    success = type("Result", (), {"success": True, "error": "", "body": {}, "status_code": 200, "latency_ms": 1})()
+    transport = _BroadcastStubTransport({child_identity.instance_id: success})
+    resumes = []
+    engine = Engine()
+    soul_transport = SoulTransport(
+        identity=root_identity,
+        transport=transport,
+        topology=topology,
+        current_soul_provider=lambda: runtime_soul,
+        local_resume_handler=lambda reason: resumes.append(reason),
+        soul_dir=soul_dir,
+    )
+    soul_transport._propagation_engine = engine
+
+    assert (await soul_transport.handle_soul_confirmation({}))["error"] == "Missing required field: event_id"
+    assert (await soul_transport.handle_soul_confirmation({"event_id": "missing", "instance_id": "x"}))["error"].startswith("Unknown")
+    engine.event.tier = PropagationTier.T2_SIGNIFICANT
+    assert "only valid for T3" in (await soul_transport.handle_soul_confirmation({"event_id": "ev-1", "instance_id": child_identity.instance_id}))["error"]
+    engine.event.tier = PropagationTier.T3_CRITICAL
+    assert "does not match" in (await soul_transport.handle_soul_confirmation(
+        {"event_id": "ev-1", "instance_id": "other"},
+        authenticated_instance_id=child_identity.instance_id,
+    ))["error"]
+    assert "Unable to record" in (await soul_transport.handle_soul_confirmation({"event_id": "ev-1", "instance_id": "bad"}))["error"]
+
+    accepted = await soul_transport.handle_soul_confirmation({"event_id": "ev-1", "instance_id": child_identity.instance_id})
+    assert accepted["accepted"] is True
+    assert accepted["all_confirmed"] is True
+    assert transport.calls[-1] == "/api/federation/resume"
+    assert resumes and "critical" in resumes[0]
+    assert engine.completed == "ev-1"
+
+
+def test_finalize_stale_propagations_records_timeout(root_identity, topology, runtime_soul, soul_dir):
+    event = types.SimpleNamespace(
+        event_id="ev-stale",
+        initiated_at=(datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat(),
+        timeout_seconds=1,
+        instances=[
+            types.SimpleNamespace(instance_id="peer-1", state=InstancePropState.PENDING),
+        ],
+    )
+    rejections = []
+    engine = types.SimpleNamespace(
+        get_active_events=lambda: [event],
+        record_rejection=lambda event_id, instance_id, reason: rejections.append((event_id, instance_id, reason)),
+        consistency_state=types.SimpleNamespace(value="synchronized"),
+    )
+    transport = SoulTransport(
+        identity=root_identity,
+        transport=None,
+        topology=topology,
+        current_soul_provider=lambda: runtime_soul,
+        soul_dir=soul_dir,
+    )
+    transport._propagation_engine = engine
+
+    assert transport.get_consistency_state() == "synchronized"
+    transport._finalize_stale_propagations()
+    assert rejections[0][0] == "ev-stale"
 
     def test_push_from_unknown_rejected(self, transport_obj):
         result = transport_obj.handle_soul_push(

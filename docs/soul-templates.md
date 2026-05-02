@@ -83,12 +83,6 @@ load time and cannot appear in the template browser.
 | 3  | `scheduling_no_autonomous_irreversible`| Always      |
 | 4  | `approval_channels_required`           | Always      |
 | 5  | `memory_ethics_required`               | Always      |
-| 6  | `bal_billing_requires_approval`        | Conditional |
-| 7  | `bal_no_spam`                          | Conditional |
-
-Conditional invariants (6–7) are enforced only when the template's Soul
-document includes BAL (Business Action Layer) billing or messaging
-permissions.
 
 ---
 

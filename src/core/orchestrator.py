@@ -293,11 +293,6 @@ class LancelotOrchestrator:
     def attach_connector_registry(self, registry) -> None:
         self._connector_registry = registry
 
-    def set_bal_runtime(self, *, config=None, database=None, client_repo=None) -> None:
-        self._bal_config = config
-        self._bal_db = database
-        self._bal_client_repo = client_repo
-
     @property
     def active_provider_name(self) -> str:
         return getattr(self, "_provider_name", "")

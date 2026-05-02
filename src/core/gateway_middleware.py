@@ -9,7 +9,6 @@ SUBSYSTEM_GATES = (
     ("/memory", "FEATURE_MEMORY_VNEXT"),
     ("/soul", "FEATURE_SOUL"),
     ("/api/scheduler", "FEATURE_SCHEDULER"),
-    ("/api/v1/clients", "FEATURE_BAL"),
     ("/api/hive", "FEATURE_HIVE"),
     ("/api/federation", "FEATURE_FEDERATION"),
     ("/api/mcp", "FEATURE_MCP"),

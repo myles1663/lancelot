@@ -4,7 +4,7 @@ Operational readiness guidance for deploying Lancelot in a controlled enterprise
 
 This document is not a marketing checklist. It is the operator-facing source of truth for what must be configured, verified, and exercised before you treat an instance as production-ready.
 
-**Applies to:** current private-dev runtime after the enterprise hardening pass
+**Applies to:** current runtime and deployment profiles
 
 ---
 

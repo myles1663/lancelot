@@ -1,181 +1,186 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 850" font-family="Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 820" role="img" aria-labelledby="title desc">
+  <title id="title">Lancelot System Architecture</title>
+  <desc id="desc">A current-state architecture diagram showing operator entry points, gateway orchestration, governance controls, model routing, execution providers, and evidence systems.</desc>
+
   <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-      <polygon points="0 0, 10 3.5, 0 7" fill="#555"/>
+    <style>
+      text { font-family: Inter, Segoe UI, Arial, sans-serif; fill: #172033; }
+      .title { font-size: 25px; font-weight: 760; }
+      .subtitle { font-size: 13px; fill: #667085; }
+      .band-title { font-size: 13px; font-weight: 760; letter-spacing: .08em; text-transform: uppercase; fill: #344054; }
+      .box-title { font-size: 14px; font-weight: 760; fill: #101828; }
+      .small { font-size: 11px; fill: #475467; }
+      .tiny { font-size: 10px; fill: #667085; }
+      .label { font-size: 10px; font-weight: 700; fill: #344054; }
+      .pill { font-size: 10px; font-weight: 700; fill: #344054; }
+      .outer { fill: #f8fafc; stroke: #d0d5dd; stroke-width: 1.2; }
+      .surface { fill: #eef4ff; stroke: #84adff; }
+      .runtime { fill: #f0fdf4; stroke: #86efac; }
+      .governance { fill: #fff7ed; stroke: #fdba74; }
+      .model { fill: #f5f3ff; stroke: #c4b5fd; }
+      .execution { fill: #ecfeff; stroke: #67e8f9; }
+      .evidence { fill: #fef2f2; stroke: #fca5a5; }
+      .feature { fill: #ffffff; stroke: #cbd5e1; stroke-dasharray: 6 5; }
+      .arrow { stroke: #475467; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .soft-arrow { stroke: #98a2b3; stroke-width: 1.5; fill: none; marker-end: url(#soft-arrow); }
+      .receipt-arrow { stroke: #dc2626; stroke-width: 1.6; fill: none; marker-end: url(#receipt-arrow); stroke-dasharray: 5 5; }
+    </style>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#475467"/>
     </marker>
+    <marker id="soft-arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#98a2b3"/>
+    </marker>
+    <marker id="receipt-arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#dc2626"/>
+    </marker>
+    <filter id="shadow" x="-12%" y="-12%" width="124%" height="124%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity=".09"/>
+    </filter>
   </defs>
 
-  <!-- Title -->
-  <text x="550" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="#1a1a2e">Figure 1: Lancelot GAS — System Architecture</text>
-  <text x="550" y="50" text-anchor="middle" font-size="11" fill="#666">Governed Autonomous System — Subsystem Relationships and Data Flows</text>
+  <rect x="0" y="0" width="1200" height="820" fill="#ffffff"/>
 
-  <!-- War Room (top bar) -->
-  <rect x="50" y="70" width="1000" height="60" rx="6" fill="#1a1a2e" stroke="#333" stroke-width="2"/>
-  <text x="550" y="95" text-anchor="middle" font-size="14" font-weight="bold" fill="#4ade80">WAR ROOM — Operator Dashboard</text>
-  <text x="550" y="115" text-anchor="middle" font-size="10" fill="#aaa">Governance Metrics | Trust Panels | Kill Switches | Soul Inspector | Receipt Explorer | Cost Tracker</text>
+  <text x="600" y="42" text-anchor="middle" class="title">Lancelot System Architecture</text>
+  <text x="600" y="66" text-anchor="middle" class="subtitle">Governed agent runtime with policy gates, approvals, scoped execution, and immutable receipts</text>
 
-  <!-- Row 1: Soul, Planner/Executor/Verifier, Receipts -->
-  <rect x="50" y="160" width="220" height="120" rx="6" fill="#f0f4ff" stroke="#4a6fa5" stroke-width="2"/>
-  <text x="160" y="185" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a1a2e">SOUL</text>
-  <line x1="80" y1="195" x2="240" y2="195" stroke="#4a6fa5" stroke-width="1"/>
-  <text x="160" y="215" text-anchor="middle" font-size="10" fill="#444">Constitutional</text>
-  <text x="160" y="230" text-anchor="middle" font-size="10" fill="#444">Governance</text>
-  <text x="160" y="250" text-anchor="middle" font-size="10" fill="#444">Versioned | Immutable</text>
-  <text x="160" y="265" text-anchor="middle" font-size="10" fill="#444">Crusader Override</text>
+  <rect x="34" y="92" width="1132" height="672" rx="18" class="outer"/>
 
-  <rect x="310" y="160" width="300" height="120" rx="6" fill="#f0fff4" stroke="#2d8a4e" stroke-width="2"/>
-  <text x="460" y="185" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a1a2e">AUTONOMY LOOP</text>
-  <line x1="340" y1="195" x2="580" y2="195" stroke="#2d8a4e" stroke-width="1"/>
-  <text x="370" y="220" text-anchor="middle" font-size="11" fill="#2d8a4e" font-weight="bold">PLAN</text>
-  <text x="460" y="220" text-anchor="middle" font-size="11" fill="#2d8a4e" font-weight="bold">EXECUTE</text>
-  <text x="550" y="220" text-anchor="middle" font-size="11" fill="#2d8a4e" font-weight="bold">VERIFY</text>
-  <path d="M395 215 L425 215" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <path d="M492 215 L515 215" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="460" y="250" text-anchor="middle" font-size="10" fill="#444">Soul-constrained planning</text>
-  <text x="460" y="265" text-anchor="middle" font-size="10" fill="#444">Sandboxed, capability-gated execution</text>
+  <text x="70" y="126" class="band-title">Operator Surfaces</text>
+  <rect x="58" y="144" width="185" height="84" rx="10" class="surface" filter="url(#shadow)"/>
+  <text x="150" y="171" text-anchor="middle" class="box-title">War Room</text>
+  <text x="150" y="192" text-anchor="middle" class="small">Command Center</text>
+  <text x="150" y="208" text-anchor="middle" class="small">Receipts, Trust, Health</text>
 
-  <rect x="650" y="160" width="220" height="120" rx="6" fill="#fff8f0" stroke="#c4762b" stroke-width="2"/>
-  <text x="760" y="185" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a1a2e">RECEIPTS</text>
-  <line x1="680" y1="195" x2="840" y2="195" stroke="#c4762b" stroke-width="1"/>
-  <text x="760" y="215" text-anchor="middle" font-size="10" fill="#444">Immutable Audit Log</text>
-  <text x="760" y="230" text-anchor="middle" font-size="10" fill="#444">Every Action Recorded</text>
-  <text x="760" y="250" text-anchor="middle" font-size="10" fill="#444">T0: Batch Receipts</text>
-  <text x="760" y="265" text-anchor="middle" font-size="10" fill="#444">T1+: Individual Receipts</text>
+  <rect x="58" y="244" width="185" height="84" rx="10" class="surface" filter="url(#shadow)"/>
+  <text x="150" y="271" text-anchor="middle" class="box-title">APIs and Ingress</text>
+  <text x="150" y="292" text-anchor="middle" class="small">REST, WebSocket</text>
+  <text x="150" y="308" text-anchor="middle" class="small">CLI, Telegram, Scheduler</text>
 
-  <!-- Arrows Row 1 -->
-  <path d="M270 220 L308 220" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <path d="M610 220 L648 220" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="315" y="126" class="band-title">Runtime Boundary</text>
+  <rect x="290" y="144" width="210" height="84" rx="10" class="runtime" filter="url(#shadow)"/>
+  <text x="395" y="171" text-anchor="middle" class="box-title">Gateway</text>
+  <text x="395" y="192" text-anchor="middle" class="small">Auth, rate limits, input gates</text>
+  <text x="395" y="208" text-anchor="middle" class="small">Health and readiness</text>
 
-  <!-- Row 2: Risk Pipeline, Connectors, Trust Ledger -->
-  <rect x="50" y="310" width="220" height="120" rx="6" fill="#fef0f0" stroke="#a54a4a" stroke-width="2"/>
-  <text x="160" y="335" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a1a2e">RISK-TIERED PIPELINE</text>
-  <line x1="80" y1="345" x2="240" y2="345" stroke="#a54a4a" stroke-width="1"/>
-  <rect x="70" y="355" width="40" height="20" rx="3" fill="#d4edda"/>
-  <text x="90" y="369" text-anchor="middle" font-size="9" font-weight="bold" fill="#155724">T0</text>
-  <rect x="115" y="355" width="40" height="20" rx="3" fill="#fff3cd"/>
-  <text x="135" y="369" text-anchor="middle" font-size="9" font-weight="bold" fill="#856404">T1</text>
-  <rect x="160" y="355" width="40" height="20" rx="3" fill="#ffeeba"/>
-  <text x="180" y="369" text-anchor="middle" font-size="9" font-weight="bold" fill="#856404">T2</text>
-  <rect x="205" y="355" width="40" height="20" rx="3" fill="#f8d7da"/>
-  <text x="225" y="369" text-anchor="middle" font-size="9" font-weight="bold" fill="#721c24">T3</text>
-  <text x="160" y="400" text-anchor="middle" font-size="10" fill="#444">Proportional Governance</text>
-  <text x="160" y="415" text-anchor="middle" font-size="10" fill="#444">Soul-enforced Ceilings</text>
+  <rect x="290" y="244" width="210" height="84" rx="10" class="runtime" filter="url(#shadow)"/>
+  <text x="395" y="271" text-anchor="middle" class="box-title">Orchestrator</text>
+  <text x="395" y="292" text-anchor="middle" class="small">Intent, plans, tool loop</text>
+  <text x="395" y="308" text-anchor="middle" class="small">Async work ledger</text>
 
-  <rect x="310" y="310" width="300" height="120" rx="6" fill="#f5f0ff" stroke="#6a4fa5" stroke-width="2"/>
-  <text x="460" y="335" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a1a2e">GOVERNED CONNECTORS</text>
-  <line x1="340" y1="345" x2="580" y2="345" stroke="#6a4fa5" stroke-width="1"/>
-  <text x="370" y="365" text-anchor="middle" font-size="10" fill="#444">Email</text>
-  <text x="420" y="365" text-anchor="middle" font-size="10" fill="#444">Slack</text>
-  <text x="475" y="365" text-anchor="middle" font-size="10" fill="#444">Calendar</text>
-  <text x="540" y="365" text-anchor="middle" font-size="10" fill="#444">REST</text>
-  <text x="460" y="390" text-anchor="middle" font-size="10" fill="#6a4fa5" font-weight="bold">Governed Connector Proxy</text>
-  <text x="460" y="405" text-anchor="middle" font-size="10" fill="#444">Request Spec → Proxy → Execute</text>
-  <text x="460" y="420" text-anchor="middle" font-size="10" fill="#444">Credential Vault (Encrypted)</text>
+  <rect x="290" y="344" width="210" height="84" rx="10" class="runtime" filter="url(#shadow)"/>
+  <text x="395" y="371" text-anchor="middle" class="box-title">Response Governor</text>
+  <text x="395" y="392" text-anchor="middle" class="small">Output gate</text>
+  <text x="395" y="408" text-anchor="middle" class="small">Progress honesty checks</text>
 
-  <rect x="650" y="310" width="220" height="120" rx="6" fill="#f0fff8" stroke="#2d8a6e" stroke-width="2"/>
-  <text x="760" y="335" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a1a2e">TRUST LEDGER</text>
-  <line x1="680" y1="345" x2="840" y2="345" stroke="#2d8a6e" stroke-width="1"/>
-  <text x="760" y="365" text-anchor="middle" font-size="10" fill="#444">Progressive Trust</text>
-  <text x="760" y="380" text-anchor="middle" font-size="10" fill="#444">Graduation ↑</text>
-  <text x="760" y="395" text-anchor="middle" font-size="10" fill="#444">Revocation ↓</text>
-  <text x="760" y="415" text-anchor="middle" font-size="10" fill="#444">Soul Ceiling Enforcement</text>
+  <text x="560" y="126" class="band-title">Governance Control Plane</text>
+  <rect x="530" y="144" width="250" height="128" rx="10" class="governance" filter="url(#shadow)"/>
+  <text x="655" y="171" text-anchor="middle" class="box-title">Policy Decision Stack</text>
+  <text x="655" y="195" text-anchor="middle" class="small">Soul constraints and overlays</text>
+  <text x="655" y="212" text-anchor="middle" class="small">Risk tiers T0-T3</text>
+  <text x="655" y="229" text-anchor="middle" class="small">Approvals and ActionCards</text>
+  <text x="655" y="246" text-anchor="middle" class="small">Kill switches and network allowlist</text>
 
-  <!-- Arrows Row 1→2 -->
-  <path d="M160 280 L160 308" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <path d="M460 280 L460 308" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <path d="M760 280 L760 308" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="530" y="294" width="250" height="84" rx="10" class="governance" filter="url(#shadow)"/>
+  <text x="655" y="321" text-anchor="middle" class="box-title">Trust and Capability State</text>
+  <text x="655" y="342" text-anchor="middle" class="small">Trust Ledger graduation</text>
+  <text x="655" y="358" text-anchor="middle" class="small">Capability ceilings and revocation</text>
 
-  <!-- Row 3: Memory, Tool Fabric, Skill Security -->
-  <rect x="50" y="460" width="220" height="120" rx="6" fill="#f0f8ff" stroke="#4a8fa5" stroke-width="2"/>
-  <text x="160" y="485" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a1a2e">MEMORY vNEXT</text>
-  <line x1="80" y1="495" x2="240" y2="495" stroke="#4a8fa5" stroke-width="1"/>
-  <text x="160" y="515" text-anchor="middle" font-size="10" fill="#444">Core | Working</text>
-  <text x="160" y="530" text-anchor="middle" font-size="10" fill="#444">Episodic | Archival</text>
-  <text x="160" y="550" text-anchor="middle" font-size="10" fill="#444">Atomic, Auditable</text>
-  <text x="160" y="565" text-anchor="middle" font-size="10" fill="#444">Reversible Edits</text>
+  <rect x="530" y="400" width="250" height="84" rx="10" class="governance" filter="url(#shadow)"/>
+  <text x="655" y="427" text-anchor="middle" class="box-title">Frontier Privacy Boundary</text>
+  <text x="655" y="448" text-anchor="middle" class="small">Deterministic PII pre-scrub</text>
+  <text x="655" y="464" text-anchor="middle" class="small">Local verifier before egress</text>
 
-  <rect x="310" y="460" width="300" height="120" rx="6" fill="#fff0f8" stroke="#a54a8f" stroke-width="2"/>
-  <text x="460" y="485" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a1a2e">TOOL FABRIC</text>
-  <line x1="340" y1="495" x2="580" y2="495" stroke="#a54a8f" stroke-width="1"/>
-  <text x="460" y="515" text-anchor="middle" font-size="10" fill="#444">Sandboxed Execution</text>
-  <text x="460" y="530" text-anchor="middle" font-size="10" fill="#444">Policy-Gated</text>
-  <text x="460" y="550" text-anchor="middle" font-size="10" fill="#444">Capability Enforcement</text>
-  <text x="460" y="565" text-anchor="middle" font-size="10" fill="#444">Network Allowlist</text>
+  <text x="842" y="126" class="band-title">Model and Execution Planes</text>
+  <rect x="820" y="144" width="145" height="84" rx="10" class="model" filter="url(#shadow)"/>
+  <text x="892" y="171" text-anchor="middle" class="box-title">Model Router</text>
+  <text x="892" y="192" text-anchor="middle" class="small">Local utility</text>
+  <text x="892" y="208" text-anchor="middle" class="small">Fast and deep lanes</text>
 
-  <rect x="650" y="460" width="220" height="120" rx="6" fill="#fffff0" stroke="#8a8a2d" stroke-width="2"/>
-  <text x="760" y="485" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a1a2e">SKILL SECURITY</text>
-  <line x1="680" y1="495" x2="840" y2="495" stroke="#8a8a2d" stroke-width="1"/>
-  <text x="760" y="515" text-anchor="middle" font-size="10" fill="#444">6-Stage Pipeline:</text>
-  <text x="760" y="530" text-anchor="middle" font-size="10" fill="#444">Manifest → Static</text>
-  <text x="760" y="545" text-anchor="middle" font-size="10" fill="#444">→ Sandbox → Enforce</text>
-  <text x="760" y="560" text-anchor="middle" font-size="10" fill="#444">→ Approve → Install</text>
+  <rect x="982" y="144" width="145" height="84" rx="10" class="model" filter="url(#shadow)"/>
+  <text x="1054" y="171" text-anchor="middle" class="box-title">Model Providers</text>
+  <text x="1054" y="192" text-anchor="middle" class="small">Local LLM roles</text>
+  <text x="1054" y="208" text-anchor="middle" class="small">Frontier SDK/API</text>
 
-  <!-- Arrows Row 2→3 -->
-  <path d="M160 430 L160 458" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <path d="M460 430 L460 458" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <path d="M760 430 L760 458" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="820" y="260" width="145" height="92" rx="10" class="execution" filter="url(#shadow)"/>
+  <text x="892" y="287" text-anchor="middle" class="box-title">Tools</text>
+  <text x="892" y="309" text-anchor="middle" class="small">Command runner</text>
+  <text x="892" y="325" text-anchor="middle" class="small">File ops, skills</text>
 
-  <!-- Row 4: Scheduler, Plan Artifact, APL -->
-  <rect x="50" y="610" width="220" height="100" rx="6" fill="#f8f8f8" stroke="#888" stroke-width="2"/>
-  <text x="160" y="635" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a1a2e">SCHEDULER</text>
-  <line x1="80" y1="645" x2="240" y2="645" stroke="#888" stroke-width="1"/>
-  <text x="160" y="665" text-anchor="middle" font-size="10" fill="#444">Gated Automation</text>
-  <text x="160" y="680" text-anchor="middle" font-size="10" fill="#444">Auditable Scheduling</text>
-  <text x="160" y="695" text-anchor="middle" font-size="10" fill="#444">Governance-Aware</text>
+  <rect x="982" y="260" width="145" height="92" rx="10" class="execution" filter="url(#shadow)"/>
+  <text x="1054" y="287" text-anchor="middle" class="box-title">Connectors</text>
+  <text x="1054" y="309" text-anchor="middle" class="small">Email, Slack, REST</text>
+  <text x="1054" y="325" text-anchor="middle" class="small">Vault-backed credentials</text>
 
-  <rect x="310" y="610" width="300" height="100" rx="6" fill="#f0fff0" stroke="#4a9a4a" stroke-width="2"/>
-  <text x="460" y="635" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a1a2e">PLAN ARTIFACT</text>
-  <line x1="340" y1="645" x2="580" y2="645" stroke="#4a9a4a" stroke-width="1"/>
-  <text x="460" y="665" text-anchor="middle" font-size="10" fill="#444">Honest Completion Semantics</text>
-  <text x="460" y="680" text-anchor="middle" font-size="10" fill="#444">Verified Progress Tracking</text>
-  <text x="460" y="695" text-anchor="middle" font-size="10" fill="#444">No Simulated Progress</text>
+  <rect x="820" y="384" width="145" height="92" rx="10" class="execution" filter="url(#shadow)"/>
+  <text x="892" y="411" text-anchor="middle" class="box-title">UAB</text>
+  <text x="892" y="433" text-anchor="middle" class="small">Desktop control</text>
+  <text x="892" y="449" text-anchor="middle" class="small">Route fallback and risk</text>
 
-  <rect x="650" y="610" width="220" height="100" rx="6" fill="#fff0ff" stroke="#8a4a8a" stroke-width="2"/>
-  <text x="760" y="635" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a1a2e">APL</text>
-  <line x1="680" y1="645" x2="840" y2="645" stroke="#8a4a8a" stroke-width="1"/>
-  <text x="760" y="665" text-anchor="middle" font-size="10" fill="#444">Approval Pattern Learning</text>
-  <text x="760" y="680" text-anchor="middle" font-size="10" fill="#444">Delegation Habits</text>
-  <text x="760" y="695" text-anchor="middle" font-size="10" fill="#444">Expiring Automation Rules</text>
+  <rect x="982" y="384" width="145" height="92" rx="10" class="feature" filter="url(#shadow)"/>
+  <text x="1054" y="411" text-anchor="middle" class="box-title">Feature-Gated</text>
+  <text x="1054" y="433" text-anchor="middle" class="small">HIVE, A2A, MCP</text>
+  <text x="1054" y="449" text-anchor="middle" class="small">Federation, Time Travel</text>
 
-  <!-- Arrows Row 3→4 -->
-  <path d="M160 580 L160 608" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <path d="M460 580 L460 608" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <path d="M760 580 L760 608" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="70" y="536" class="band-title">Evidence and Operations Plane</text>
+  <rect x="58" y="556" width="206" height="94" rx="10" class="evidence" filter="url(#shadow)"/>
+  <text x="161" y="584" text-anchor="middle" class="box-title">Receipts</text>
+  <text x="161" y="606" text-anchor="middle" class="small">SQLite integrity chain</text>
+  <text x="161" y="622" text-anchor="middle" class="small">Tamper detection</text>
+  <text x="161" y="638" text-anchor="middle" class="small">Lineage and replay proof</text>
 
-  <!-- Cross-cutting connections -->
-  <!-- Soul → Risk Pipeline -->
-  <path d="M160 280 L160 290 Q160 300 170 300 L270 370" stroke="#4a6fa5" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>
-  <!-- Trust Ledger → Risk Pipeline -->
-  <path d="M650 370 L610 370 Q600 370 590 370 L270 370" stroke="#2d8a6e" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>
+  <rect x="292" y="556" width="206" height="94" rx="10" class="evidence" filter="url(#shadow)"/>
+  <text x="395" y="584" text-anchor="middle" class="box-title">Observability</text>
+  <text x="395" y="606" text-anchor="middle" class="small">Health, readiness, events</text>
+  <text x="395" y="622" text-anchor="middle" class="small">OTel spans and metrics</text>
+  <text x="395" y="638" text-anchor="middle" class="small">Incident runbooks</text>
 
-  <!-- Kill Switches label -->
-  <rect x="900" y="160" width="150" height="270" rx="6" fill="#2d1a3e" stroke="#6a4fa5" stroke-width="2"/>
-  <text x="975" y="185" text-anchor="middle" font-size="12" font-weight="bold" fill="#c4b5fd">KILL</text>
-  <text x="975" y="200" text-anchor="middle" font-size="12" font-weight="bold" fill="#c4b5fd">SWITCHES</text>
-  <line x1="920" y1="210" x2="1030" y2="210" stroke="#6a4fa5" stroke-width="1"/>
-  <text x="975" y="230" text-anchor="middle" font-size="9" fill="#ddd">Every subsystem</text>
-  <text x="975" y="245" text-anchor="middle" font-size="9" fill="#ddd">independently</text>
-  <text x="975" y="260" text-anchor="middle" font-size="9" fill="#ddd">toggleable</text>
-  <text x="975" y="285" text-anchor="middle" font-size="9" fill="#c4b5fd">Dependencies</text>
-  <text x="975" y="300" text-anchor="middle" font-size="9" fill="#c4b5fd">Resolved</text>
-  <text x="975" y="325" text-anchor="middle" font-size="9" fill="#c4b5fd">Conflicts</text>
-  <text x="975" y="340" text-anchor="middle" font-size="9" fill="#c4b5fd">Detected</text>
-  <text x="975" y="370" text-anchor="middle" font-size="9" fill="#4ade80">CRUSADER</text>
-  <text x="975" y="385" text-anchor="middle" font-size="9" fill="#4ade80">MODE</text>
-  <text x="975" y="400" text-anchor="middle" font-size="9" fill="#ddd">One-click posture</text>
-  <text x="975" y="415" text-anchor="middle" font-size="9" fill="#ddd">transformation</text>
+  <rect x="526" y="556" width="206" height="94" rx="10" class="evidence" filter="url(#shadow)"/>
+  <text x="629" y="584" text-anchor="middle" class="box-title">Compliance Exports</text>
+  <text x="629" y="606" text-anchor="middle" class="small">Audit bundles</text>
+  <text x="629" y="622" text-anchor="middle" class="small">Chain verification</text>
+  <text x="629" y="638" text-anchor="middle" class="small">Redacted reports</text>
 
-  <!-- Dotted lines from Kill Switches to subsystems -->
-  <path d="M900 250 L870 220" stroke="#6a4fa5" stroke-width="1" stroke-dasharray="3,3" opacity="0.4"/>
-  <path d="M900 300 L870 370" stroke="#6a4fa5" stroke-width="1" stroke-dasharray="3,3" opacity="0.4"/>
-  <path d="M900 350 L870 520" stroke="#6a4fa5" stroke-width="1" stroke-dasharray="3,3" opacity="0.4"/>
+  <rect x="760" y="556" width="170" height="94" rx="10" class="evidence" filter="url(#shadow)"/>
+  <text x="845" y="584" text-anchor="middle" class="box-title">Runtime Data</text>
+  <text x="845" y="606" text-anchor="middle" class="small">Memory and context</text>
+  <text x="845" y="622" text-anchor="middle" class="small">ActionCards</text>
+  <text x="845" y="638" text-anchor="middle" class="small">Work state</text>
 
-  <!-- Bottom legend -->
-  <rect x="50" y="740" width="1000" height="80" rx="6" fill="#f8f8f8" stroke="#ccc" stroke-width="1"/>
-  <text x="550" y="760" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">Design Principles (Enforced in Code)</text>
-  <text x="200" y="785" text-anchor="middle" font-size="9" fill="#555">Governance over Convenience</text>
-  <text x="400" y="785" text-anchor="middle" font-size="9" fill="#555">Verification over Speed</text>
-  <text x="600" y="785" text-anchor="middle" font-size="9" fill="#555">Receipts over "Trust Me"</text>
-  <text x="800" y="785" text-anchor="middle" font-size="9" fill="#555">Reversibility over Irreversibility</text>
-  <text x="550" y="808" text-anchor="middle" font-size="9" fill="#555">Deterministic Context over Retrieval Vibes</text>
+  <rect x="958" y="556" width="170" height="94" rx="10" class="evidence" filter="url(#shadow)"/>
+  <text x="1043" y="584" text-anchor="middle" class="box-title">Operator Review</text>
+  <text x="1043" y="606" text-anchor="middle" class="small">Pending approvals</text>
+  <text x="1043" y="622" text-anchor="middle" class="small">Trust proposals</text>
+  <text x="1043" y="638" text-anchor="middle" class="small">Kill-switch actions</text>
+
+  <rect x="58" y="688" width="1070" height="44" rx="10" fill="#ffffff" stroke="#d0d5dd"/>
+  <text x="593" y="715" text-anchor="middle" class="small">Default posture: local-first, source-available, feature-gated subsystems, and auditable execution before broad autonomy.</text>
+
+  <path d="M243 186 H289" class="arrow"/>
+  <path d="M243 286 H289" class="arrow"/>
+  <path d="M395 228 V243" class="arrow"/>
+  <path d="M395 328 V343" class="arrow"/>
+  <path d="M500 286 H529" class="arrow"/>
+  <path d="M500 386 C520 386 520 238 529 238" class="soft-arrow"/>
+  <path d="M780 205 H819" class="arrow"/>
+  <path d="M965 186 H981" class="arrow"/>
+  <path d="M780 336 C800 336 800 306 819 306" class="arrow"/>
+  <path d="M780 336 C800 336 800 430 819 430" class="arrow"/>
+  <path d="M965 306 H981" class="arrow"/>
+  <path d="M965 430 H981" class="arrow"/>
+  <path d="M892 228 V259" class="soft-arrow"/>
+  <path d="M1054 228 V259" class="soft-arrow"/>
+  <path d="M655 484 V540 C655 548 645 548 629 555" class="receipt-arrow"/>
+  <path d="M395 428 V540 C395 548 380 548 395 555" class="receipt-arrow"/>
+  <path d="M892 476 V520 C892 540 850 540 845 555" class="receipt-arrow"/>
+  <path d="M1054 476 V520 C1054 540 1043 540 1043 555" class="receipt-arrow"/>
+  <path d="M161 556 C161 514 260 502 351 430" class="soft-arrow"/>
+  <path d="M1043 556 C1043 520 1043 500 1043 476" class="soft-arrow"/>
+
+  <rect x="78" y="736" width="12" height="12" rx="2" class="governance"/>
+  <text x="96" y="746" class="tiny">Governance decisions are on the critical path before execution.</text>
+  <rect x="396" y="736" width="12" height="12" rx="2" class="evidence"/>
+  <text x="414" y="746" class="tiny">Receipt arrows indicate evidence written from runtime and execution paths.</text>
+  <rect x="760" y="736" width="12" height="12" rx="2" class="feature"/>
+  <text x="778" y="746" class="tiny">Dashed boxes are feature-gated or deployment-dependent subsystems.</text>
 </svg>

@@ -326,12 +326,6 @@ async def boot(app, config):
             logger.warning("Health API router mount failed: %s", e)
     
         try:
-            from bal.clients.api import router as bal_client_router
-            app.include_router(bal_client_router)
-        except Exception as e:
-            logger.warning("BAL Client API router mount failed: %s", e)
-    
-        try:
             from src.hive.api import router as hive_router
             app.include_router(hive_router)
         except Exception as e:
@@ -354,14 +348,46 @@ async def boot(app, config):
             app.include_router(mcp_router)
         except Exception as e:
             logger.warning("MCP API router mount failed: %s", e)
+
+        try:
+            from actioncard_api import router as actioncard_router
+            app.include_router(actioncard_router)
+        except Exception as e:
+            logger.warning("ActionCard API router mount failed: %s", e)
+
+        try:
+            from boot_observability_support import mount_observability_routers
+            mount_observability_routers(app, logger=logger)
+        except Exception as e:
+            logger.warning("Observability router mount failed: %s", e)
+
+        try:
+            from timetravel.api import router as timetravel_router
+            app.include_router(timetravel_router)
+        except Exception as e:
+            logger.warning("Time-Travel API router mount failed: %s", e)
+
+        try:
+            from a2a.server import a2a_server_router
+            from a2a.api import router as a2a_api_router
+            app.include_router(a2a_server_router)
+            app.include_router(a2a_api_router)
+        except Exception as e:
+            logger.warning("A2A API router mount failed: %s", e)
+
+        try:
+            from src.incidents.api import router as incidents_router
+            from src.incidents.playbook_api import router as playbook_router
+            app.include_router(incidents_router)
+            app.include_router(playbook_router)
+        except Exception as e:
+            logger.warning("Incident Response API router mount failed: %s", e)
     
         subsystem_manager.register("memory", "FEATURE_MEMORY_VNEXT", _init_memory, _shutdown_memory, ["/memory"])
         subsystem_manager.register("soul", "FEATURE_SOUL", _init_soul, _shutdown_soul, ["/soul"])
         subsystem_manager.register("skills", "FEATURE_SKILLS", _init_skills, _shutdown_skills, [])
         subsystem_manager.register("scheduler", "FEATURE_SCHEDULER", _init_scheduler, _shutdown_scheduler, ["/api/scheduler"])
         subsystem_manager.register("health_monitor", "FEATURE_HEALTH_MONITOR", _init_health_monitor, _shutdown_health_monitor, ["/health"])
-        subsystem_manager.register("bal", "FEATURE_BAL", _init_bal, _shutdown_bal, ["/api/v1/clients"])
-    
         subsystem_manager.register("host_bridge", "FEATURE_TOOLS_HOST_BRIDGE", _init_host_bridge, _shutdown_host_bridge, [])
         subsystem_manager.register("uab_bridge", "FEATURE_TOOLS_UAB", _init_uab, _shutdown_uab, [])
         subsystem_manager.register("hive", "FEATURE_HIVE", _init_hive, _shutdown_hive, ["/api/hive"])
@@ -369,7 +395,7 @@ async def boot(app, config):
     
         from feature_flags import (
             FEATURE_MEMORY_VNEXT, FEATURE_SOUL, FEATURE_SKILLS,
-            FEATURE_SCHEDULER, FEATURE_HEALTH_MONITOR, FEATURE_BAL,
+            FEATURE_SCHEDULER, FEATURE_HEALTH_MONITOR,
             FEATURE_TOOLS_HOST_BRIDGE, FEATURE_TOOLS_UAB, FEATURE_HIVE,
             FEATURE_FEDERATION,
         )
@@ -470,14 +496,6 @@ async def boot(app, config):
                     availability_exc,
                 )
             logger.warning("Local model client initialization failed: %s", e)
-    
-        if FEATURE_BAL:
-            try:
-                subsystem_manager.start("bal")
-            except Exception as e:
-                logger.warning("BAL initialization failed: %s", e)
-        else:
-            logger.info("BAL disabled by feature flag.")
     
         try:
             from src.core.control_plane import init_control_plane, set_runtime_control_hooks
@@ -761,7 +779,6 @@ async def boot(app, config):
                     logger.debug("Skills handler not available for ActionCards: %s", _e)
     
                 init_actioncard_api(_ac_store, _ac_resolver)
-                app.include_router(actioncard_router)
     
                 app.state.actioncard_store = _ac_store
                 app.state.actioncard_factory = _ac_factory
@@ -784,10 +801,227 @@ async def boot(app, config):
                 logger.info("ActionCards disabled by feature flag")
         except Exception as e:
             logger.warning("ToolFlow/ActionCards initialization failed: %s", e)
+
+        def _init_toolflow_streaming():
+            from event_bus import event_bus as _event_bus
+            from toolflow.emitter import ToolFlowEmitter
+
+            emitter = ToolFlowEmitter(event_bus=_event_bus, enabled=True)
+            main_orchestrator.toolflow_emitter = emitter
+            logger.info("ToolFlow streaming hot-started.")
+            return {"emitter": emitter}
+
+        def _shutdown_toolflow_streaming(objects):
+            emitter = objects.get("emitter") or getattr(main_orchestrator, "toolflow_emitter", None)
+            if emitter is not None and hasattr(emitter, "enabled"):
+                emitter.enabled = False
+            main_orchestrator.toolflow_emitter = None
+            logger.info("ToolFlow streaming stopped.")
+
+        def _wire_actioncard_telegram_runtime(*, store, resolver):
+            if not telegram_bot:
+                return
+            from event_bus import event_bus as _event_bus
+
+            if not getattr(telegram_bot, "_actioncard_event_bridge_wired", False):
+                _event_bus.subscribe("actioncard_presented", telegram_bot.handle_actioncard_event)
+                _event_bus.subscribe("actioncard_resolved", telegram_bot.handle_actioncard_resolved_event)
+                telegram_bot._actioncard_event_bridge_wired = True
+            telegram_bot.attach_actioncard_runtime(resolver=resolver, store=store)
+
+        def _init_actioncards():
+            from actioncard.store import ActionCardStore
+            from actioncard.factory import ActionCardFactory
+            from actioncard.resolver import ActionCardResolver
+            from actioncard_api import init_actioncard_api
+            from event_bus import event_bus as _event_bus
+
+            card_store = ActionCardStore(data_dir=main_orchestrator.data_dir)
+            card_factory = ActionCardFactory(card_store=card_store, event_bus=_event_bus)
+            card_resolver = ActionCardResolver(
+                card_store=card_store,
+                event_bus=_event_bus,
+                receipt_service=main_orchestrator.receipt_service,
+            )
+
+            try:
+                from governance_api import _approve_item_direct, _deny_item_direct
+                from src.core.operator_identity import OperatorIdentity
+
+                def _gov_handler(item_id, button_id, **context):
+                    identity = OperatorIdentity(
+                        operator_id=context.get("operator_id", "") or "",
+                        display_name=context.get("actor", "") or "",
+                        session_id=context.get("session_id", "") or "",
+                    )
+                    identity_arg = identity if identity.operator_id and identity.display_name else None
+                    if button_id == "approve":
+                        result = _approve_item_direct(
+                            item_id,
+                            reason="Approved via ActionCard",
+                            identity=identity_arg,
+                        )
+                        return result or {"status": "error", "message": f"Approval item {item_id} not found"}
+                    if button_id in ("deny", "reject"):
+                        result = _deny_item_direct(
+                            item_id,
+                            reason="Denied via ActionCard",
+                            identity=identity_arg,
+                        )
+                        return result or {"status": "error", "message": f"Approval item {item_id} not found"}
+                    return {"status": "error", "message": f"Unknown button: {button_id}"}
+
+                card_resolver.register_handler("governance", _gov_handler)
+            except Exception as exc:
+                logger.debug("Governance handler not available for ActionCards: %s", exc)
+
+            try:
+                if main_orchestrator.job_executor:
+                    def _sched_handler(job_id, button_id, **context):
+                        if button_id == "approve":
+                            ok = main_orchestrator.job_executor.approve_job(
+                                job_id,
+                                operator_id=context.get("operator_id", "") or "",
+                                session_id=context.get("session_id", "") or "",
+                                actor=context.get("actor", "") or "",
+                            )
+                            return {
+                                "status": "approved" if ok else "error",
+                                "message": "Approved" if ok else "Not pending",
+                            }
+                        return {"status": "denied", "message": "Denied"}
+                    card_resolver.register_handler("scheduler", _sched_handler)
+            except Exception as exc:
+                logger.debug("Scheduler handler not available for ActionCards: %s", exc)
+
+            try:
+                from soul.api import _approve_proposal_direct, _reject_proposal_direct
+
+                def _soul_handler(proposal_id, button_id, **context):
+                    actor = context.get("actor", "") or context.get("operator_id", "") or "operator"
+                    if button_id == "approve":
+                        result = _approve_proposal_direct(proposal_id, actor=actor)
+                        result["message"] = f"Soul proposal {proposal_id} approved via ActionCard"
+                        return result
+                    if button_id in ("deny", "reject"):
+                        result = _reject_proposal_direct(proposal_id, actor=actor)
+                        result["message"] = f"Soul proposal {proposal_id} denied via ActionCard"
+                        return result
+                    return {"status": "error", "message": f"Unknown button: {button_id}"}
+
+                card_resolver.register_handler("soul", _soul_handler)
+            except Exception as exc:
+                logger.debug("Soul handler not available for ActionCards: %s", exc)
+
+            try:
+                def _skills_handler(proposal_id, button_id, **context):
+                    actor = context.get("actor", "") or context.get("operator_id", "") or "operator"
+                    if button_id == "approve":
+                        if main_orchestrator.skill_factory:
+                            main_orchestrator.skill_factory.approve_proposal(
+                                proposal_id,
+                                approved_by=actor,
+                            )
+                            return {"status": "approved", "message": f"Skill proposal {proposal_id} approved"}
+                        return {"status": "error", "message": "Skill factory not available"}
+                    if button_id in ("reject", "deny"):
+                        if main_orchestrator.skill_factory:
+                            main_orchestrator.skill_factory.reject_proposal(proposal_id)
+                            return {"status": "denied", "message": f"Skill proposal {proposal_id} rejected"}
+                        return {"status": "error", "message": "Skill factory not available"}
+                    return {"status": "error", "message": f"Unknown button: {button_id}"}
+                card_resolver.register_handler("skills", _skills_handler)
+            except Exception as exc:
+                logger.debug("Skills handler not available for ActionCards: %s", exc)
+
+            init_actioncard_api(card_store, card_resolver)
+            app.state.actioncard_store = card_store
+            app.state.actioncard_factory = card_factory
+            app.state.actioncard_resolver = card_resolver
+            main_orchestrator.actioncard_factory = card_factory
+
+            try:
+                from soul.api import init_soul_actioncards
+
+                init_soul_actioncards(card_factory)
+            except Exception as exc:
+                logger.debug("Soul ActionCard wiring skipped: %s", exc)
+            try:
+                if main_orchestrator.skill_factory:
+                    main_orchestrator.skill_factory.actioncard_factory = card_factory
+            except Exception as exc:
+                logger.debug("Skills ActionCard wiring skipped: %s", exc)
+
+            try:
+                _wire_actioncard_telegram_runtime(store=card_store, resolver=card_resolver)
+            except Exception as exc:
+                logger.warning("Telegram ActionCard runtime wiring failed: %s", exc)
+
+            logger.info("ActionCards hot-started.")
+            return {
+                "store": card_store,
+                "factory": card_factory,
+                "resolver": card_resolver,
+            }
+
+        def _shutdown_actioncards(objects):
+            from actioncard_api import shutdown_actioncard_api
+
+            shutdown_actioncard_api()
+            for attr in ("actioncard_store", "actioncard_factory", "actioncard_resolver"):
+                if hasattr(app.state, attr):
+                    delattr(app.state, attr)
+            main_orchestrator.actioncard_factory = None
+            try:
+                if main_orchestrator.skill_factory:
+                    main_orchestrator.skill_factory.actioncard_factory = None
+            except Exception as exc:
+                logger.debug("Skills ActionCard unwiring skipped: %s", exc)
+            try:
+                if telegram_bot:
+                    telegram_bot.attach_actioncard_runtime(resolver=None, store=None)
+            except Exception as exc:
+                logger.debug("Telegram ActionCard runtime detach skipped: %s", exc)
+            logger.info("ActionCards stopped.")
+
+        subsystem_manager.register(
+            "toolflow_streaming",
+            "FEATURE_TOOL_FLOW_STREAMING",
+            _init_toolflow_streaming,
+            _shutdown_toolflow_streaming,
+            [],
+        )
+        subsystem_manager.register(
+            "actioncards",
+            "FEATURE_ACTION_CARDS",
+            _init_actioncards,
+            _shutdown_actioncards,
+            ["/api/actioncards"],
+        )
+        try:
+            from feature_flags import FEATURE_TOOL_FLOW_STREAMING, FEATURE_ACTION_CARDS
+
+            if FEATURE_TOOL_FLOW_STREAMING:
+                entry = subsystem_manager.get("toolflow_streaming")
+                if entry and not entry.running:
+                    entry.objects = {"emitter": getattr(main_orchestrator, "toolflow_emitter", None)}
+                    entry.running = True
+            if FEATURE_ACTION_CARDS:
+                entry = subsystem_manager.get("actioncards")
+                if entry and not entry.running:
+                    entry.objects = {
+                        "store": getattr(app.state, "actioncard_store", None),
+                        "factory": getattr(app.state, "actioncard_factory", None),
+                        "resolver": getattr(app.state, "actioncard_resolver", None),
+                    }
+                    entry.running = True
+        except Exception as exc:
+            logger.warning("ToolFlow/ActionCard lifecycle registration failed: %s", exc)
     
         # Always mount the management API so War Room can list/configure connectors.
         # Connector registration in the runtime registry is gated by FEATURE_CONNECTORS.
         _connector_vault_error = None
+        _connector_vault = None
         try:
             from connectors.registry import ConnectorRegistry
             from connectors.base import ConnectorStatus
@@ -903,7 +1137,8 @@ async def boot(app, config):
     
         try:
             from feature_flags import FEATURE_MCP
-            if FEATURE_MCP:
+
+            def _init_mcp_subsystem():
                 from src.mcp.api import init_mcp_api
                 from src.mcp.argument_screen import MCPArgumentScreener
                 from src.mcp.network_policy import MCPNetworkPolicy
@@ -958,6 +1193,29 @@ async def boot(app, config):
                     receipt_service=_mcp_receipt_service,
                 )
                 logger.info("MCP subsystem initialized.")
+                return {
+                    "registry": _mcp_registry,
+                    "evaluator": _mcp_evaluator,
+                    "proxy": _mcp_proxy,
+                    "vault": _mcp_vault,
+                    "network_policy": _mcp_network_policy,
+                    "receipt_service": _mcp_receipt_service,
+                }
+
+            def _shutdown_mcp_subsystem(objects):
+                from src.mcp.api import shutdown_mcp_api
+
+                shutdown_mcp_api()
+
+            subsystem_manager.register(
+                "mcp",
+                "FEATURE_MCP",
+                _init_mcp_subsystem,
+                _shutdown_mcp_subsystem,
+                ["/api/mcp"],
+            )
+            if FEATURE_MCP:
+                subsystem_manager.start("mcp")
         except Exception as e:
             logger.warning(f"MCP initialization failed: {e}")
     
@@ -1036,13 +1294,34 @@ async def boot(app, config):
         try:
             from google_oauth_manager import GoogleOAuthManager, set_google_oauth_manager
             from feature_flags import FEATURE_GOOGLE_OAUTH
-            if FEATURE_GOOGLE_OAUTH and '_connector_vault' in dir() and _connector_vault:
+
+            def _init_google_oauth_subsystem():
+                if '_connector_vault' not in dir() or not _connector_vault:
+                    raise RuntimeError("Connector vault not available for Google OAuth")
                 _google_mgr = GoogleOAuthManager(vault=_connector_vault)
                 set_google_oauth_manager(_google_mgr)
                 if _google_mgr.recover_from_vault():
                     logger.info("Google OAuth tokens recovered on startup.")
                 else:
                     logger.info("Google OAuth: no existing tokens, awaiting user setup.")
+                return {"manager": _google_mgr}
+
+            def _shutdown_google_oauth_subsystem(objects):
+                manager = objects.get("manager")
+                if manager is not None and hasattr(manager, "stop_background_refresh"):
+                    manager.stop_background_refresh()
+                set_google_oauth_manager(None)
+                logger.info("Google OAuth manager stopped.")
+
+            subsystem_manager.register(
+                "google_oauth",
+                "FEATURE_GOOGLE_OAUTH",
+                _init_google_oauth_subsystem,
+                _shutdown_google_oauth_subsystem,
+                [],
+            )
+            if FEATURE_GOOGLE_OAUTH:
+                subsystem_manager.start("google_oauth")
             else:
                 logger.info("Google OAuth disabled (FEATURE_GOOGLE_OAUTH=%s).", FEATURE_GOOGLE_OAUTH)
         except Exception as e:
@@ -1143,11 +1422,7 @@ async def boot(app, config):
     
             # Wire ActionCard events to Telegram
             if FEATURE_ACTION_CARDS and telegram_bot:
-                _tg_event_bus.subscribe("actioncard_presented", telegram_bot.handle_actioncard_event)
-                _tg_event_bus.subscribe("actioncard_resolved", telegram_bot.handle_actioncard_resolved_event)
-
-                # Inject resolver and store references for callback handling
-                telegram_bot.attach_actioncard_runtime(
+                _wire_actioncard_telegram_runtime(
                     resolver=getattr(app.state, "actioncard_resolver", None),
                     store=getattr(app.state, "actioncard_store", None),
                 )
@@ -1193,9 +1468,30 @@ async def boot(app, config):
             logger.info("SIGHUP handler registered for secret rotation.")
     
         try:
-            from boot_observability_support import init_observability
+            from boot_observability_support import (
+                init_observability_runtime,
+                shutdown_observability,
+            )
+            from feature_flags import FEATURE_OBSERVABILITY
 
-            init_observability(app=app, main_orchestrator=main_orchestrator, logger=logger)
+            def _init_observability_subsystem():
+                return init_observability_runtime(
+                    main_orchestrator=main_orchestrator,
+                    logger=logger,
+                )
+
+            def _shutdown_observability_subsystem(objects):
+                shutdown_observability(objects, logger=logger)
+
+            subsystem_manager.register(
+                "observability",
+                "FEATURE_OBSERVABILITY",
+                _init_observability_subsystem,
+                _shutdown_observability_subsystem,
+                ["/api/observability", "/api/metrics"],
+            )
+            if FEATURE_OBSERVABILITY:
+                subsystem_manager.start("observability")
         except Exception as e:
             logger.warning(f"Observability initialization failed: {e}")
     
@@ -1205,8 +1501,7 @@ async def boot(app, config):
         try:
             from feature_flags import FEATURE_TIME_TRAVEL
             if FEATURE_TIME_TRAVEL:
-                from timetravel.api import router as timetravel_router, init_timetravel_api
-                app.include_router(timetravel_router)
+                from timetravel.api import init_timetravel_api
     
                 # Initialize with receipt service and live Soul provider
                 _tt_soul = lambda: getattr(main_orchestrator, "soul", None)
@@ -1278,14 +1573,105 @@ async def boot(app, config):
                     logger.warning("Time-Travel: receipt service unavailable")
         except Exception as e:
             logger.warning(f"Time-Travel initialization failed: {e}")
+
+        def _init_timetravel_subsystem():
+            from timetravel.api import init_timetravel_api
+
+            receipt_service = getattr(main_orchestrator, "receipt_service", None)
+            if receipt_service is None:
+                raise RuntimeError("Time-Travel requires receipt service")
+
+            tt_soul = lambda: getattr(main_orchestrator, "soul", None)
+
+            def _apply_timetravel_modifications(graph_dict, modifications):
+                for field_path, value in (modifications or {}).items():
+                    parts = str(field_path).split(".")
+                    cursor = graph_dict
+                    for raw_part in parts[:-1]:
+                        part = int(raw_part) if isinstance(cursor, list) and raw_part.isdigit() else raw_part
+                        cursor = cursor[part]
+                    leaf = parts[-1]
+                    leaf_key = int(leaf) if isinstance(cursor, list) and leaf.isdigit() else leaf
+                    cursor[leaf_key] = value
+                return graph_dict
+
+            def _execute_timetravel_quest(*, mode, source_quest_id, new_quest_id, modifications, operator_id, session_id):
+                from datetime import datetime, timezone
+                from src.core.tasking.schema import TaskGraph, TaskRun
+
+                source_run = main_orchestrator.task_store.get_run_by_quest_id(source_quest_id)
+                if source_run is None:
+                    raise RuntimeError(f"Source quest is not replayable by TaskRun: {source_quest_id}")
+                source_graph = main_orchestrator.task_store.get_graph(source_run.task_graph_id)
+                if source_graph is None:
+                    raise RuntimeError(
+                        f"TaskGraph not found for source quest {source_quest_id}: {source_run.task_graph_id}"
+                    )
+                cloned_graph = source_graph.to_dict()
+                cloned_graph["id"] = str(uuid.uuid4())
+                cloned_graph["created_at"] = datetime.now(timezone.utc).isoformat()
+                cloned_graph["session_id"] = session_id or source_graph.session_id or source_run.session_id
+                if mode == "fork" and modifications:
+                    cloned_graph = _apply_timetravel_modifications(cloned_graph, modifications)
+                replay_graph = TaskGraph.from_dict(cloned_graph)
+                main_orchestrator.task_store.save_graph(replay_graph)
+                replay_run = TaskRun(
+                    task_graph_id=replay_graph.id,
+                    execution_token_id=source_run.execution_token_id,
+                    session_id=session_id or source_run.session_id,
+                    operator_id=operator_id or source_run.operator_id,
+                    quest_id=new_quest_id,
+                )
+                main_orchestrator.task_store.create_run(replay_run)
+                result = main_orchestrator.task_runner.run(replay_run.id)
+                return {
+                    "run_id": replay_run.id,
+                    "task_graph_id": replay_graph.id,
+                    "status": result.status,
+                    "step_count": len(result.step_results),
+                }
+
+            init_timetravel_api(
+                receipt_service=receipt_service,
+                soul=tt_soul,
+                soul_dir=None,
+                quest_executor=_execute_timetravel_quest,
+                trust_ledger=getattr(main_orchestrator, "trust_ledger", None),
+                data_dir=main_orchestrator.data_dir,
+            )
+            logger.info("Time-Travel subsystem hot-started.")
+            return {"receipt_service": receipt_service}
+
+        def _shutdown_timetravel_subsystem(objects):
+            from timetravel.api import shutdown_timetravel_api
+
+            shutdown_timetravel_api()
+
+        subsystem_manager.register(
+            "time_travel",
+            "FEATURE_TIME_TRAVEL",
+            _init_timetravel_subsystem,
+            _shutdown_timetravel_subsystem,
+            ["/api/timetravel"],
+        )
+        try:
+            from feature_flags import FEATURE_TIME_TRAVEL
+
+            if FEATURE_TIME_TRAVEL:
+                entry = subsystem_manager.get("time_travel")
+                if entry and not entry.running:
+                    entry.objects = {"receipt_service": _optional_receipt_service}
+                    entry.running = True
+        except Exception as exc:
+            logger.warning("Time-Travel lifecycle registration failed: %s", exc)
     
         # A2A protocol
         try:
             from feature_flags import FEATURE_A2A
             if FEATURE_A2A:
                 from a2a.registry import A2ARegistry
-                from a2a.server import a2a_server_router, init_a2a_server
-                from a2a.api import router as a2a_api_router, init_a2a_api
+                from a2a.server import init_a2a_server
+                from a2a.api import init_a2a_api
                 from a2a.inbound_pipeline import InboundPipeline
                 from a2a.outbound_pipeline import OutboundPipeline
                 from a2a.client import A2AClient
@@ -1371,36 +1757,208 @@ async def boot(app, config):
                     task_executor=_execute_inbound_a2a_task,
                     data_dir="/home/lancelot/data",
                 )
-                app.include_router(a2a_server_router)
     
                 # Mount management API
                 init_a2a_api(_a2a_registry, _optional_receipt_service, _a2a_soul_provider, _a2a_outbound, _a2a_client)
-                app.include_router(a2a_api_router)
     
                 logger.info("FEATURE_A2A enabled; protocol at /a2a/, management at /api/a2a/")
         except Exception as e:
             logger.warning(f"A2A initialization failed: {e}")
+
+        def _init_a2a_subsystem():
+            from a2a.registry import A2ARegistry
+            from a2a.server import init_a2a_server
+            from a2a.api import init_a2a_api
+            from a2a.inbound_pipeline import InboundPipeline
+            from a2a.outbound_pipeline import OutboundPipeline
+            from a2a.client import A2AClient
+            from a2a.types import A2AArtifact, A2AMessagePart
+
+            receipt_service = getattr(main_orchestrator, "receipt_service", None)
+            registry = A2ARegistry()
+            soul_provider = lambda: getattr(main_orchestrator, "soul", None)
+            client = A2AClient(receipt_service)
+            vault = _connector_vault if '_connector_vault' in dir() else None
+            inbound = InboundPipeline(
+                registry,
+                receipt_service,
+                soul_provider,
+                vault=vault,
+                a2a_client=client,
+            )
+            outbound = OutboundPipeline(
+                registry,
+                receipt_service,
+                soul_provider,
+                vault=vault,
+                a2a_client=client,
+                frontier_scrubber=(
+                    lambda: main_orchestrator.get_frontier_scrubber()
+                    if main_orchestrator is not None
+                    else None
+                ),
+            )
+
+            def _execute_inbound_a2a_task(*, task, caller, quest_id):
+                text_parts = []
+                if task.message:
+                    for part in task.message.parts:
+                        if part.text:
+                            text_parts.append(part.text)
+                        elif part.data is not None:
+                            text_parts.append(json.dumps(part.data, sort_keys=True))
+                        elif part.file_uri:
+                            text_parts.append(f"[file] {part.file_uri}")
+                user_message = "\n".join(p for p in text_parts if p).strip()
+                if not user_message:
+                    raise ValueError("Inbound A2A task contained no executable content")
+                envelope = (
+                    f"[External A2A task from {caller.display_name or caller.agent_id}"
+                    f" ({caller.agent_framework})]\n{user_message}"
+                )
+                response_text = main_orchestrator.chat(
+                    envelope,
+                    channel="api",
+                    quest_id=quest_id,
+                )
+                artifacts = [
+                    A2AArtifact(
+                        parts=[A2AMessagePart(type="text", text=response_text)],
+                        metadata={
+                            "quest_id": quest_id,
+                            "source": "lancelot",
+                            "external_peer": caller.agent_id,
+                        },
+                    ).to_dict()
+                ]
+                return {
+                    "status": "completed",
+                    "artifacts": artifacts,
+                    "message": "Task executed successfully.",
+                }
+
+            init_a2a_server(
+                soul_provider,
+                receipt_service,
+                registry,
+                inbound,
+                task_executor=_execute_inbound_a2a_task,
+                data_dir="/home/lancelot/data",
+            )
+            init_a2a_api(registry, receipt_service, soul_provider, outbound, client)
+            logger.info("A2A subsystem hot-started.")
+            return {
+                "registry": registry,
+                "client": client,
+                "inbound": inbound,
+                "outbound": outbound,
+                "receipt_service": receipt_service,
+            }
+
+        def _shutdown_a2a_subsystem(objects):
+            from a2a.api import shutdown_a2a_api
+            from a2a.server import shutdown_a2a_server
+
+            shutdown_a2a_api()
+            shutdown_a2a_server()
+
+        subsystem_manager.register(
+            "a2a",
+            "FEATURE_A2A",
+            _init_a2a_subsystem,
+            _shutdown_a2a_subsystem,
+            ["/api/a2a", "/a2a", "/.well-known/agent.json"],
+        )
+        try:
+            from feature_flags import FEATURE_A2A
+
+            if FEATURE_A2A:
+                entry = subsystem_manager.get("a2a")
+                if entry and not entry.running:
+                    entry.objects = {"receipt_service": _optional_receipt_service}
+                    entry.running = True
+        except Exception as exc:
+            logger.warning("A2A lifecycle registration failed: %s", exc)
     
         # Incident response playbooks
         try:
             from feature_flags import FEATURE_INCIDENT_RESPONSE
             if FEATURE_INCIDENT_RESPONSE:
-                from src.incidents.api import router as incidents_router, init_incidents_api
-                from src.incidents.playbook_api import router as playbook_router, init_playbook_api
+                from src.incidents.api import init_incidents_api
+                from src.incidents.playbook_api import init_playbook_api
                 from src.incidents.receipt_hook import configure as configure_incident_hook
     
                 init_incidents_api(_optional_receipt_service, "/home/lancelot/data")
-                app.include_router(incidents_router)
     
                 _playbooks_dir = os.path.join(os.path.dirname(__file__), "..", "..", "playbooks")
                 init_playbook_api(_playbooks_dir)
-                app.include_router(playbook_router)
     
                 configure_incident_hook(enabled=True, data_dir="/home/lancelot/data")
+                try:
+                    from feature_flags import FEATURE_OBSERVABILITY
+                    if not FEATURE_OBSERVABILITY:
+                        from src.observability.receipt_bridge import configure_bridge
+                        configure_bridge(enabled=True, otel_enabled=False)
+                except Exception as _bridge_exc:
+                    logger.debug("Incident receipt bridge activation skipped: %s", _bridge_exc)
     
                 logger.info("FEATURE_INCIDENT_RESPONSE enabled; API at /api/incidents/, /api/playbooks/")
         except Exception as e:
             logger.warning(f"Incident Response initialization failed: {e}")
+
+        def _init_incident_response_subsystem():
+            from src.incidents.api import init_incidents_api
+            from src.incidents.playbook_api import init_playbook_api
+            from src.incidents.receipt_hook import configure as configure_incident_hook
+
+            receipt_service = getattr(main_orchestrator, "receipt_service", None)
+            init_incidents_api(receipt_service, "/home/lancelot/data")
+            playbooks_dir = os.path.join(os.path.dirname(__file__), "..", "..", "playbooks")
+            init_playbook_api(playbooks_dir)
+            configure_incident_hook(enabled=True, data_dir="/home/lancelot/data")
+            try:
+                from feature_flags import FEATURE_OBSERVABILITY
+                if not FEATURE_OBSERVABILITY:
+                    from src.observability.receipt_bridge import configure_bridge
+                    configure_bridge(enabled=True, otel_enabled=False)
+            except Exception as exc:
+                logger.debug("Incident receipt bridge activation skipped: %s", exc)
+            logger.info("Incident Response subsystem hot-started.")
+            return {"receipt_service": receipt_service, "playbooks_dir": playbooks_dir}
+
+        def _shutdown_incident_response_subsystem(objects):
+            from src.incidents.api import shutdown_incidents_api
+            from src.incidents.playbook_api import shutdown_playbook_api
+            from src.incidents.receipt_hook import configure as configure_incident_hook
+
+            configure_incident_hook(enabled=False, data_dir="/home/lancelot/data")
+            try:
+                from feature_flags import FEATURE_OBSERVABILITY
+                if not FEATURE_OBSERVABILITY:
+                    from src.observability.receipt_bridge import configure_bridge
+                    configure_bridge(enabled=False, otel_enabled=False)
+            except Exception as exc:
+                logger.debug("Incident receipt bridge shutdown skipped: %s", exc)
+            shutdown_incidents_api()
+            shutdown_playbook_api()
+
+        subsystem_manager.register(
+            "incident_response",
+            "FEATURE_INCIDENT_RESPONSE",
+            _init_incident_response_subsystem,
+            _shutdown_incident_response_subsystem,
+            ["/api/incidents", "/api/playbooks"],
+        )
+        try:
+            from feature_flags import FEATURE_INCIDENT_RESPONSE
+
+            if FEATURE_INCIDENT_RESPONSE:
+                entry = subsystem_manager.get("incident_response")
+                if entry and not entry.running:
+                    entry.objects = {"receipt_service": _optional_receipt_service}
+                    entry.running = True
+        except Exception as exc:
+            logger.warning("Incident Response lifecycle registration failed: %s", exc)
     
         logger.info("Lancelot Gateway started.")
         return BootResult(

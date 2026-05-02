@@ -1,10 +1,19 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+import fs from 'fs'
+
+const versionPath = path.resolve(__dirname, '../../VERSION')
+const lancelotVersion = fs.existsSync(versionPath)
+  ? fs.readFileSync(versionPath, 'utf8').trim()
+  : 'unknown'
 
 export default defineConfig({
   plugins: [react()],
   base: '/war-room/',
+  define: {
+    __LANCELOT_VERSION__: JSON.stringify(lancelotVersion),
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

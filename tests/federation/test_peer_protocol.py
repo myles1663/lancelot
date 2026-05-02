@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import src.federation.peer_protocol as peer_protocol_module
 from src.federation.identity import generate_identity, sign_payload
 from src.federation.peer_protocol import PeerRegistrationProtocol, PendingRegistration
 from src.federation.topology import TopologyRegistry
@@ -56,6 +57,16 @@ class LoopbackTransport:
             error=response.get("error", ""),
             peer_id=peer_id,
         )
+
+
+class StaticTransport:
+    def __init__(self, result):
+        self.result = result
+        self.calls = []
+
+    async def send(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.result
 
 
 @pytest.fixture
@@ -332,3 +343,196 @@ class TestMutualRegistration:
             pending_ttl_s=1.0,
         )
         assert reloaded._pending == {}
+
+    @pytest.mark.asyncio
+    async def test_initiate_registration_rejects_bad_target_pending_limit_and_transport_failure(self, identity_a, topology_a):
+        protocol = PeerRegistrationProtocol(
+            identity=identity_a,
+            topology=topology_a,
+            transport=StaticTransport(SimpleNamespace(success=True, body={}, status_code=200, error="")),
+            self_address="http://a:8000",
+            max_pending=1,
+        )
+
+        assert "Target address" in (await protocol.initiate_registration("not-a-url")).error
+        protocol._pending["busy"] = PendingRegistration("busy", "", "", "", "http://a:8000", "peer", "", "c")
+        assert "Too many pending" in (await protocol.initiate_registration("http://b:8000")).error
+
+        failing = PeerRegistrationProtocol(
+            identity=identity_a,
+            topology=topology_a,
+            transport=StaticTransport(SimpleNamespace(success=False, body=None, status_code=503, error="down")),
+            self_address="http://a:8000",
+        )
+        assert (await failing.initiate_registration("http://b:8000")).error == "down"
+        assert failing._pending == {}
+
+    @pytest.mark.asyncio
+    async def test_initiate_registration_rejects_incomplete_invalid_and_unconfirmed_responses(self, identity_a, topology_a, monkeypatch):
+        incomplete = PeerRegistrationProtocol(
+            identity=identity_a,
+            topology=topology_a,
+            transport=StaticTransport(SimpleNamespace(success=True, body={"instance_id": "b"}, status_code=200, error="")),
+            self_address="http://a:8000",
+        )
+        assert "Incomplete" in (await incomplete.initiate_registration("http://b:8000")).error
+
+        invalid = PeerRegistrationProtocol(
+            identity=identity_a,
+            topology=topology_a,
+            transport=StaticTransport(SimpleNamespace(
+                success=True,
+                body={"instance_id": "b", "public_key_hex": "not-hex", "challenge_response": "bad"},
+                status_code=200,
+                error="",
+            )),
+            self_address="http://a:8000",
+        )
+        assert "Invalid key" in (await invalid.initiate_registration("http://b:8000")).error
+
+        target = generate_identity()
+        monkeypatch.setattr(peer_protocol_module, "verify_signature", lambda *_: False)
+        bad_sig = PeerRegistrationProtocol(
+            identity=identity_a,
+            topology=topology_a,
+            transport=StaticTransport(SimpleNamespace(
+                success=True,
+                body={
+                    "instance_id": target.instance_id,
+                    "public_key_hex": target.public_key_hex(),
+                    "challenge_response": "aa",
+                    "fingerprint": target.fingerprint,
+                },
+                status_code=200,
+                error="",
+            )),
+            self_address="http://a:8000",
+        )
+        assert "verification failed" in (await bad_sig.initiate_registration("http://b:8000")).error
+
+    @pytest.mark.asyncio
+    async def test_handle_registration_request_validation_and_confirmation_failures(self, protocol_b, identity_a):
+        request = {
+            "registration_id": "reg-1",
+            "instance_id": identity_a.instance_id,
+            "public_key_hex": identity_a.public_key_hex(),
+            "fingerprint": identity_a.fingerprint,
+            "address": "not-a-url",
+            "challenge": "c",
+            "challenge_signature": sign_payload(identity_a, b"c").hex(),
+        }
+        response = await protocol_b.handle_registration_request(request)
+        assert "valid initiator address" in response["error"]
+
+        protocol_b._pending = {
+            str(i): PendingRegistration(str(i), "", "", "", "http://x", "peer", "", "c")
+            for i in range(protocol_b._max_pending)
+        }
+        request["address"] = "http://a:8000"
+        response = await protocol_b.handle_registration_request(request)
+        assert "Too many pending" in response["error"]
+
+    @pytest.mark.asyncio
+    async def test_handle_registration_request_rejects_confirm_errors_and_bad_counter_signature(
+        self,
+        identity_b,
+        topology_b,
+        identity_a,
+        monkeypatch,
+    ):
+        def request_for(challenge="c"):
+            return {
+                "registration_id": "reg-1",
+                "instance_id": identity_a.instance_id,
+                "public_key_hex": identity_a.public_key_hex(),
+                "fingerprint": identity_a.fingerprint,
+                "address": "http://a:8000",
+                "challenge": challenge,
+                "challenge_signature": sign_payload(identity_a, challenge.encode()).hex(),
+            }
+
+        confirm_down = PeerRegistrationProtocol(
+            identity=identity_b,
+            topology=topology_b,
+            transport=StaticTransport(SimpleNamespace(success=False, body=None, status_code=500, error="confirm down")),
+            self_address="http://b:8000",
+        )
+        assert (await confirm_down.handle_registration_request(request_for()))["error"] == "confirm down"
+
+        confirm_reject = PeerRegistrationProtocol(
+            identity=identity_b,
+            topology=topology_b,
+            transport=StaticTransport(SimpleNamespace(success=True, body={"accepted": False, "error": "rejected"}, status_code=400, error="")),
+            self_address="http://b:8000",
+        )
+        assert (await confirm_reject.handle_registration_request(request_for()))["error"] == "rejected"
+
+        invalid_counter = PeerRegistrationProtocol(
+            identity=identity_b,
+            topology=topology_b,
+            transport=StaticTransport(SimpleNamespace(success=True, body={"accepted": True, "counter_challenge_response": "not-hex"}, status_code=200, error="")),
+            self_address="http://b:8000",
+        )
+        assert "Invalid confirmation" in (await invalid_counter.handle_registration_request(request_for()))["error"]
+
+        monkeypatch.setattr(peer_protocol_module, "verify_signature", lambda *args: True)
+        topology_b.register_peer = lambda **kwargs: (_ for _ in ()).throw(ValueError("policy rejected"))
+        register_reject = PeerRegistrationProtocol(
+            identity=identity_b,
+            topology=topology_b,
+            transport=StaticTransport(SimpleNamespace(success=True, body={"accepted": True, "counter_challenge_response": "aa"}, status_code=200, error="")),
+            self_address="http://b:8000",
+        )
+        assert "policy rejected" in (await register_reject.handle_registration_request(request_for()))["error"]
+
+    def test_confirm_validation_register_failure_callbacks_and_persistence_edges(self, identity_a, topology_a, tmp_path):
+        callbacks = {"added": 0, "removed": 0}
+        protocol = PeerRegistrationProtocol(
+            identity=identity_a,
+            topology=topology_a,
+            transport=StaticTransport(SimpleNamespace(success=True, body={}, status_code=200, error="")),
+            self_address="http://a:8000",
+            on_peer_registered=lambda *_: (_ for _ in ()).throw(RuntimeError("callback failed")),
+            on_peer_removed=lambda *_: (_ for _ in ()).throw(RuntimeError("callback failed")),
+            persistence_path=str(tmp_path / "pending.json"),
+        )
+        assert not protocol.handle_registration_confirm({})["accepted"]
+
+        peer = generate_identity()
+        protocol._pending["reg-1"] = PendingRegistration(
+            "reg-1", "", "", "", "http://a:8000", "peer", "", "challenge", expected_target_address="http://b:8000"
+        )
+        mismatch = protocol.handle_registration_confirm({
+            "registration_id": "reg-1",
+            "instance_id": peer.instance_id,
+            "public_key_hex": peer.public_key_hex(),
+            "fingerprint": "wrong",
+            "challenge_response": "aa",
+            "counter_challenge": "bb",
+        })
+        assert "Fingerprint" in mismatch["error"]
+
+        invalid = protocol.handle_registration_confirm({
+            "registration_id": "reg-1",
+            "instance_id": peer.instance_id,
+            "public_key_hex": peer.public_key_hex(),
+            "challenge_response": "bad",
+            "counter_challenge": "bb",
+        })
+        assert "Invalid key" in invalid["error"]
+
+        corrupt_path = tmp_path / "corrupt.json"
+        corrupt_path.write_text("{bad json", encoding="utf-8")
+        reloaded = PeerRegistrationProtocol(
+            identity=identity_a,
+            topology=topology_a,
+            transport=StaticTransport(SimpleNamespace(success=True, body={}, status_code=200, error="")),
+            self_address="http://a:8000",
+            persistence_path=str(corrupt_path),
+        )
+        assert reloaded._pending == {}
+
+        assert protocol._normalize_address("ftp://peer") == ""
+        assert protocol._is_pending_expired(PendingRegistration("x", "", "", "", "", "", "", "", created_at="not-date")) is True
+        protocol._pending_ttl_s = 0
+        assert protocol._is_pending_expired(PendingRegistration("x", "", "", "", "", "", "", "", created_at="not-date")) is False

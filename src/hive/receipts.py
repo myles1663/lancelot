@@ -2,7 +2,6 @@
 HIVE Receipts — helper functions for emitting HIVE-specific receipts.
 
 Wraps the shared receipt system with HIVE-specific defaults.
-Follows the BAL receipts pattern (src/core/bal/receipts.py).
 """
 
 from __future__ import annotations

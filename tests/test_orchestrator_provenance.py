@@ -142,6 +142,7 @@ class TestOrchestratorChatProvenance:
         with patch.object(runtime_flags, "FEATURE_AGENTIC_LOOP", False), \
              patch.object(runtime_flags, "FEATURE_LOCAL_AGENTIC", False), \
              patch.object(runtime_flags, "FEATURE_DEEP_REASONING_LOOP", False), \
+             patch.object(runtime_flags, "FEATURE_UNIFIED_CLASSIFICATION", False), \
              patch.object(runtime_flags, "FEATURE_COMPETITIVE_SCAN", False), \
              patch.object(orch_mod, "classify_intent", return_value=orch_mod.IntentType.KNOWLEDGE_REQUEST):
             response = orch.chat(

@@ -1,6 +1,6 @@
 # Trust Ledger
 
-**Feature Flag:** `FEATURE_TRUST_LEDGER` (default: `false`, requires `FEATURE_RISK_TIERED_GOVERNANCE`)
+**Feature Flag:** `FEATURE_TRUST_LEDGER` (default: `true`, requires `FEATURE_RISK_TIERED_GOVERNANCE`)
 **Codebase:** `src/core/governance/trust_ledger.py`, `src/core/governance/trust_models.py`, `src/core/trust_api.py`
 **Configuration:** `config/trust_graduation.yaml`
 **Persistence:** `lancelot_data/governance/trust_ledger.json`

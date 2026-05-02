@@ -503,3 +503,196 @@ class TestIntegration:
             assert receipts[0]["target_element"] == target
             assert receipts[0]["action_performed"] == "click"
 
+
+class _FakeElement:
+    def __init__(self, box):
+        self._box = box
+
+    async def bounding_box(self):
+        return self._box
+
+
+class _FakeLocator:
+    def __init__(self, boxes):
+        self.boxes = boxes
+
+    async def count(self):
+        return len(self.boxes)
+
+    def nth(self, index):
+        return _FakeElement(self.boxes[index])
+
+
+class _FakeMouse:
+    def __init__(self):
+        self.calls = []
+
+    async def click(self, x, y):
+        self.calls.append(("click", x, y))
+
+    async def move(self, x, y):
+        self.calls.append(("move", x, y))
+
+    async def down(self):
+        self.calls.append(("down",))
+
+    async def up(self):
+        self.calls.append(("up",))
+
+    async def wheel(self, x, y):
+        self.calls.append(("wheel", x, y))
+
+
+class _FakeKeyboard:
+    def __init__(self):
+        self.typed = []
+
+    async def type(self, value):
+        self.typed.append(value)
+
+
+class _FakePage:
+    def __init__(self, selector_boxes=None, text_boxes=None, url="https://example.com/app"):
+        self.selector_boxes = selector_boxes or []
+        self.text_boxes = text_boxes or []
+        self.url = url
+        self.mouse = _FakeMouse()
+        self.keyboard = _FakeKeyboard()
+        self.closed = False
+
+    async def screenshot(self, **_kwargs):
+        return b"screen"
+
+    async def close(self):
+        self.closed = True
+
+    def locator(self, selector):
+        return _FakeLocator(self.selector_boxes)
+
+    def get_by_text(self, text, exact=False):
+        return _FakeLocator(self.text_boxes)
+
+
+class _FakeContext:
+    def __init__(self, page):
+        self.page = page
+
+    async def new_page(self):
+        return self.page
+
+
+class _FakeEngine:
+    def __init__(self, page):
+        self.context = _FakeContext(page)
+        self.stopped = False
+
+    async def start(self):
+        pass
+
+    async def stop(self):
+        self.stopped = True
+
+
+class TestAsyncVisionInternals:
+    @pytest.mark.asyncio
+    async def test_async_capture_screen_hashes_and_closes_page(self, provider_enabled):
+        page = _FakePage()
+        provider_enabled._get_engine = AsyncMock(return_value=_FakeEngine(page))
+
+        screenshot, digest = await provider_enabled._async_capture_screen()
+
+        assert screenshot == b"screen"
+        assert len(digest) == 64
+        assert page.closed is True
+
+    @pytest.mark.asyncio
+    async def test_async_locate_element_css_and_text_paths(self, provider_enabled):
+        page = _FakePage(
+            selector_boxes=[{"x": 10, "y": 20, "width": 30, "height": 40}],
+            text_boxes=[{"x": 1, "y": 2, "width": 3, "height": 4}],
+        )
+        provider_enabled._get_engine = AsyncMock(return_value=_FakeEngine(page))
+
+        css = await provider_enabled._async_locate_element("#submit", None)
+        text = await provider_enabled._async_locate_element("Submit", None)
+
+        assert css[0]["type"] == "css_selector"
+        assert css[0]["center_x"] == 25
+        assert text[0]["type"] == "text_match"
+        assert text[0]["confidence"] == 0.8
+        assert page.closed is True
+
+    @pytest.mark.asyncio
+    async def test_async_perform_action_supports_click_type_drag_scroll_and_unknown(self, provider_enabled):
+        page = _FakePage()
+        provider_enabled._get_engine = AsyncMock(return_value=_FakeEngine(page))
+        target = {"x": 10, "y": 20, "center_x": 15, "center_y": 25, "end_x": 40, "end_y": 50, "delta": 300}
+
+        click = await provider_enabled._async_perform_action("click", target, None)
+        typed = await provider_enabled._async_perform_action("type", target, "hello")
+        drag = await provider_enabled._async_perform_action("drag", target, None)
+        scroll = await provider_enabled._async_perform_action("scroll", target, None)
+        unknown = await provider_enabled._async_perform_action("hover", target, None)
+
+        assert click.success is True
+        assert typed.success is True
+        assert drag.success is True
+        assert scroll.success is True
+        assert unknown.success is False
+        assert page.keyboard.typed == ["hello"]
+        assert ("wheel", 0, 300) in page.mouse.calls
+
+    @pytest.mark.asyncio
+    async def test_async_verify_state_checks_text_selector_and_url(self, provider_enabled):
+        page = _FakePage(
+            selector_boxes=[{"x": 1, "y": 2, "width": 3, "height": 4}],
+            text_boxes=[{"x": 5, "y": 6, "width": 7, "height": 8}],
+            url="https://example.com/success",
+        )
+        provider_enabled._get_engine = AsyncMock(return_value=_FakeEngine(page))
+
+        ok = await provider_enabled._async_verify_state(
+            {"text": "Welcome", "selector": "#ok", "url": "/success"},
+            None,
+        )
+        bad = await provider_enabled._async_verify_state(
+            {"text": "Welcome", "selector": "#ok", "url": "/missing"},
+            None,
+        )
+
+        assert ok.success is True
+        assert len(ok.elements_detected) == 2
+        assert bad.success is False
+        assert bad.confidence == 0.0
+
+    def test_public_methods_record_failures_as_receipts(self, provider_enabled):
+        def fail_run(coroutine):
+            coroutine.close()
+            raise RuntimeError("vision failed")
+
+        provider_enabled._run_sync = MagicMock(side_effect=fail_run)
+
+        with pytest.raises(VisionOperationError):
+            provider_enabled.capture_screen()
+        with pytest.raises(VisionOperationError):
+            provider_enabled.locate_element("#submit", screenshot=b"before")
+
+        action = provider_enabled.perform_action("click", {"x": 1, "y": 2})
+        state = provider_enabled.verify_state({"text": "done"}, screenshot=b"before")
+
+        receipts = provider_enabled.get_receipts()
+        assert action.success is False
+        assert state.success is False
+        assert len(receipts) == 4
+        assert all(receipt["success"] is False for receipt in receipts)
+
+    @pytest.mark.asyncio
+    async def test_cleanup_stops_engine_and_clears_reference(self, provider_enabled):
+        engine = _FakeEngine(_FakePage())
+        provider_enabled._engine = engine
+
+        await provider_enabled.cleanup()
+
+        assert engine.stopped is True
+        assert provider_enabled._engine is None
+

@@ -8,6 +8,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from urllib.error import HTTPError, URLError
 
+from src.core import local_model_client as local_model_module
 from src.core.local_model_client import LocalModelClient, LocalModelError
 
 
@@ -49,6 +50,11 @@ def prompts():
             "Make it specific, remove filler words, and expand abbreviations.\n\n"
             "Original query: {input}\n\n"
             "Rewritten query:"
+        ),
+        "verify_intent": (
+            "Classify whether the user wants a plan, action, or question.\n"
+            "Input: {input}\n"
+            "Answer:"
         ),
     }
 
@@ -209,6 +215,17 @@ class TestHealth:
                 client.health()
         assert "non-JSON HTTP error body" in caplog.text
 
+    def test_health_payload_normalization_handles_non_object_and_error_status(self):
+        assert local_model_module._normalize_health_payload("bad") == {
+            "loaded": False,
+            "ready": False,
+            "status": "unavailable",
+        }
+        degraded = local_model_module._normalize_health_payload({"status": "degraded", "error": "warming"})
+        assert degraded["ready"] is False
+        assert degraded["loaded"] is False
+        assert degraded["last_error"] == "warming"
+
 
 # ===================================================================
 # Raw completion
@@ -273,6 +290,19 @@ class TestComplete:
         )
         with pytest.raises(LocalModelError, match="500"):
             client.complete("crash me")
+
+    @patch("urllib.request.urlopen")
+    def test_complete_accepts_openai_chat_message_choices_and_rejects_missing_text(self, mock_open, client):
+        mock_open.return_value = _mock_urlopen({"choices": [{"message": {"content": "chat answer"}}]})
+        assert client.complete("chat style") == "chat answer"
+
+        mock_open.return_value = _mock_urlopen({"choices": [{}]})
+        with pytest.raises(LocalModelError, match="did not include text"):
+            client.complete("missing text")
+
+        mock_open.return_value = _mock_urlopen(["not", "object"])
+        with pytest.raises(LocalModelError, match="non-object"):
+            client.complete("bad payload")
 
 
 # ===================================================================
@@ -546,6 +576,78 @@ class TestRagRewrite:
         assert sent["max_tokens"] == 96
         assert sent["temperature"] == 0.0
         assert sent["stop"] == ["\n"]
+
+
+class TestRoutingAndChatTools:
+
+    @patch("urllib.request.urlopen")
+    def test_verify_routing_intent_extracts_allowed_label_and_defaults(self, mock_open, client):
+        mock_open.return_value = _mock_urlopen({"text": "I recommend a plan."})
+        assert client.verify_routing_intent("should we plan this?") == "plan"
+
+        mock_open.return_value = _mock_urlopen({"text": "no clear label"})
+        assert client.verify_routing_intent("ambiguous") == "action"
+
+    @patch("urllib.request.urlopen")
+    def test_chat_with_tools_sends_tools_and_tool_choice(self, mock_open, client):
+        mock_open.return_value = _mock_urlopen({"choices": [{"message": {"content": "ok"}}]})
+        response = client.chat_with_tools(
+            [{"role": "user", "content": "run tool"}],
+            tools=[{"type": "function", "function": {"name": "lookup"}}],
+            tool_choice="auto",
+        )
+
+        request_obj = mock_open.call_args.args[0]
+        sent = json.loads(request_obj.data.decode("utf-8"))
+        assert response["choices"][0]["message"]["content"] == "ok"
+        assert sent["tools"][0]["function"]["name"] == "lookup"
+        assert sent["tool_choice"] == "auto"
+
+    @patch("urllib.request.urlopen")
+    def test_get_helper_and_url_policy_failures_are_reported(self, mock_open, client, monkeypatch):
+        mock_open.return_value = _mock_urlopen({"ok": True})
+        assert client._get("/health") == {"ok": True}
+
+        monkeypatch.setattr(
+            local_model_module,
+            "assert_local_control_url",
+            lambda *args, **kwargs: (_ for _ in ()).throw(local_model_module.LocalControlPlaneError("remote denied")),
+        )
+        with pytest.raises(LocalModelError, match="remote denied"):
+            client._get("/health")
+        with pytest.raises(LocalModelError, match="remote denied"):
+            client._post("/v1/completions", {})
+
+    @patch("urllib.request.urlopen")
+    def test_get_helper_reports_http_url_and_generic_failures(self, mock_open, client):
+        mock_open.side_effect = HTTPError(
+            "http://test-llm:8080/health",
+            500,
+            "Server Error",
+            {},
+            MagicMock(read=lambda: b"health exploded"),
+        )
+        with pytest.raises(LocalModelError, match="HTTP 500"):
+            client._get("/health")
+
+        mock_open.side_effect = URLError("offline")
+        with pytest.raises(LocalModelError, match="Connection failed"):
+            client._get("/health")
+
+        mock_open.side_effect = RuntimeError("bad socket")
+        with pytest.raises(LocalModelError, match="Request failed"):
+            client._get("/health")
+
+    @patch("urllib.request.urlopen")
+    def test_post_helper_reports_generic_failure_and_heuristic_labels(self, mock_open, client):
+        mock_open.side_effect = RuntimeError("bad socket")
+        with pytest.raises(LocalModelError, match="Request failed"):
+            client._post("/v1/completions", {})
+
+        assert local_model_module._first_nonempty_line("\n\n") == ""
+        assert local_model_module._classify_intent_heuristically("") == "unclear"
+        assert local_model_module._classify_intent_heuristically("thank you, that worked") == "feedback"
+        assert local_model_module._classify_intent_heuristically("status update") == "information"
 
 
 # ===================================================================

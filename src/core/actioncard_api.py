@@ -44,6 +44,14 @@ def init_actioncard_api(card_store, card_resolver) -> None:
     logger.info("ActionCard API initialized")
 
 
+def shutdown_actioncard_api() -> None:
+    """Clear ActionCard API runtime references for hot-toggle shutdown."""
+    global _card_store, _card_resolver
+    _card_store = None
+    _card_resolver = None
+    logger.info("ActionCard API shutdown complete")
+
+
 class ResolveRequest(BaseModel):
     """Optional body for resolve endpoint."""
     model_config = ConfigDict(extra="forbid")

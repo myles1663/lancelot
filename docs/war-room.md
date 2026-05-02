@@ -335,7 +335,7 @@ Each kill switch has a confirmation dialog before activation. Disabling a subsys
 
 **Persistence:** Kill switch state is persisted to `.flag_state.json` in the Docker data volume. Toggles made in the War Room survive container restarts. The priority order is: persisted state > `.env` values > code defaults.
 
-**Hot-Toggle:** All feature flags are hot-toggleable via the SubsystemManager. Core subsystems (Soul, Skills, Scheduler, Health Monitor, Memory, BAL) are lazily initialized when toggled ON and gracefully shut down when toggled OFF. No container restart is ever required.
+**Hot-Toggle:** Process-local feature flags are hot-toggleable via the SubsystemManager. Core subsystems and optional surfaces such as MCP governance, Observability, Time Travel, A2A, Incident Response, ToolFlow streaming, ActionCards, and Google OAuth are lazily initialized when toggled ON and gracefully shut down when toggled OFF. Host-control surfaces such as Host Bridge and UAB also gate immediately, but still depend on their host-side services being installed and reachable.
 
 The War Room kill-switch story is unified even when the underlying implementations differ. Subsystem feature flags and MCP master/per-server kills use the same shared kill-switch contract (`switch_id`, `scope`, `reason`, `allowed`), while federation kill commands remain a specialized propagation workflow on top of that operator model.
 

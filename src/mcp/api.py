@@ -71,6 +71,18 @@ def init_mcp_api(
     logger.info("MCP API initialized")
 
 
+def shutdown_mcp_api() -> None:
+    """Clear MCP API runtime references for a hot-toggle shutdown."""
+    global _registry, _evaluator, _proxy, _vault, _network_policy, _receipt_service
+    _registry = None
+    _evaluator = None
+    _proxy = None
+    _vault = None
+    _network_policy = None
+    _receipt_service = None
+    logger.info("MCP API shutdown complete")
+
+
 def update_mcp_soul(soul) -> None:
     """Refresh MCP permissions from the live Soul document."""
     if _evaluator is None:

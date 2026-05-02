@@ -57,11 +57,11 @@ COPY VERSION /app/VERSION
 # Copy the rest of the application code
 COPY . .
 
-# Copy seed / onboarding data into the data directory.
-# When a named Docker volume is mounted here on first run, Docker
-# auto-populates it with these files (CAPABILITIES.md, RULES.md, etc.)
-RUN mkdir -p /home/lancelot/data && \
-    cp -r lancelot_data/* /home/lancelot/data/ 2>/dev/null || true
+# Create an empty runtime data directory. Clean bootstrap templates are kept in
+# config/bootstrap and seeded by the application when a new data volume starts.
+# Never bake operator runtime state, receipts, memory, topology, or onboarding
+# data into the image.
+RUN mkdir -p /home/lancelot/data
 
 # Build War Room React SPA
 RUN cd src/warroom && npm ci && npm run build && rm -rf node_modules

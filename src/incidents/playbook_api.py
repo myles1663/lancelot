@@ -41,6 +41,14 @@ def init_playbook_api(playbooks_dir: str) -> None:
     logger.info("Playbook API initialized: %s", playbooks_dir)
 
 
+def shutdown_playbook_api() -> None:
+    """Clear playbook API runtime state for hot-toggle shutdown."""
+    global _playbooks_dir
+    _playbooks_dir = None
+    invalidate_cache()
+    logger.info("Playbook API shutdown complete")
+
+
 @router.get("")
 def list_playbooks(
     category: Optional[str] = Query(None),

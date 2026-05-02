@@ -7,10 +7,12 @@ Tests for creating ActionCards from each approval subsystem.
 import tempfile
 import shutil
 import pytest
+import types
 
 from actioncard.models import ActionCard, ActionCardType, ActionButtonStyle
 from actioncard.store import ActionCardStore
 from actioncard.factory import ActionCardFactory
+from actioncard import factory as factory_module
 
 
 @pytest.fixture
@@ -198,3 +200,77 @@ class TestActionCardFactory:
             "p1", "test", "x" * 500,
         )
         assert len(card.description) <= 300
+
+    def test_helper_copy_variants_for_operator_facing_approval_scope(self):
+        assert factory_module._compact_text("  a\n b  ", limit=20) == "a b"
+        assert factory_module._compact_text("x" * 20, limit=8) == "xxxxx..."
+        assert factory_module._format_params({"b": 2, "a": 1}).startswith("{")
+        assert factory_module._format_params({"x": object()}, limit=10).endswith("...")
+        assert factory_module._extract_user_request(
+            "User request: deploy the API. Requested governed tool: command_runner"
+        ) == "deploy the API"
+        assert factory_module._extract_user_request("User request: unspecified") == ""
+        assert factory_module._file_target_kind({"workspace": "/home/lancelot/app", "path": "x"}) == "repository"
+        assert factory_module._file_target_kind({"workspace": "/tmp/work", "path": "x"}) == "workspace"
+        assert factory_module._file_target_kind({"path": "README.md"}) == "repository"
+        assert factory_module._file_kind_label("other") == "file"
+        assert factory_module._allows_bounded_workspace_retry({
+            "action": "create",
+            "workspace": "/tmp/work",
+            "path": "note.md",
+        }) is True
+
+        command = factory_module._approval_copy("command_runner", {"command": "pytest -q", "cwd": "/repo"})
+        network = factory_module._approval_copy("network_client", {"method": "post", "url": "https://api.example/v1"})
+        service = factory_module._approval_copy("service_runner", {"action": "restart", "service_name": "api"})
+        telegram = factory_module._approval_copy("telegram_send", {})
+
+        assert command["title"] == "Approve command: pytest"
+        assert "api.example" in network["headline"]
+        assert "restart" in service["headline"]
+        assert telegram["title"] == "Approve Telegram send"
+
+    def test_batch_copy_variants_and_request_detail_truncation(self):
+        network_group = factory_module._approval_group_copy([
+            {"tool_name": "network_client", "params": {"method": "GET", "url": "https://a.example/x"}},
+            {"tool_name": "github_connector", "params": {"method": "POST", "url": "https://api.github.com/repos"}},
+        ])
+        command_group = factory_module._approval_group_copy([
+            {"tool_name": "command_runner", "params": {"command": "pytest tests/a.py"}},
+            {"tool_name": "command_runner", "params": {"command": "python -m build"}},
+        ])
+        mixed_group = factory_module._approval_group_copy([
+            {"tool_name": "repo_writer", "params": {}},
+            {"tool_name": "telegram_send", "params": {}},
+        ])
+        details = factory_module._format_request_details([
+            {"request_id": "r1", "tool_name": "repo_writer", "params": {"content": "x" * 2000}},
+        ], limit=120)
+
+        assert network_group["items_label"] == "Requests"
+        assert "api.github.com" in network_group["items"]
+        assert command_group["items_label"] == "Commands"
+        assert mixed_group["title"] == "Approve 2 governed actions"
+        assert details.endswith("...")
+
+    def test_sentry_batch_rejects_empty_request_ids_and_event_bus_failures_are_non_fatal(self, temp_data_dir, monkeypatch):
+        store = ActionCardStore(data_dir=temp_data_dir)
+        published = []
+        event_bus = types.SimpleNamespace(publish_sync=lambda event: published.append(event))
+        monkeypatch.setitem(
+            __import__("sys").modules,
+            "event_bus",
+            types.SimpleNamespace(Event=lambda **kwargs: types.SimpleNamespace(**kwargs)),
+        )
+        f = ActionCardFactory(card_store=store, event_bus=event_bus)
+
+        with pytest.raises(ValueError, match="request_id"):
+            f.from_sentry_request_batch([{"tool_name": "repo_writer", "params": {}}])
+
+        card = f.from_sentry_request("r1", "telegram_send", {})
+        assert published[0].type == "actioncard_presented"
+        assert published[0].payload["card_id"] == card.card_id
+
+        f._event_bus = types.SimpleNamespace(publish_sync=lambda event: (_ for _ in ()).throw(RuntimeError("bus down")))
+        f.from_scheduler_approval("job-1", "Daily", "daily_news_brief")
+        store.close()

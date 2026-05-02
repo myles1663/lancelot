@@ -44,6 +44,7 @@ class _FakeSubsystemManager:
         self.registered = {}
         self.started = []
         self.entries = {}
+        self.invoke_start = False
 
     def register(self, name, flag_name, init_fn, shutdown_fn, routes):
         self.registered[name] = (flag_name, init_fn, shutdown_fn, routes)
@@ -51,7 +52,11 @@ class _FakeSubsystemManager:
 
     def start(self, name):
         self.started.append(name)
-        self.entries.setdefault(name, _FakeSubsystemEntry()).running = True
+        entry = self.entries.setdefault(name, _FakeSubsystemEntry())
+        if self.invoke_start:
+            _flag_name, init_fn, _shutdown_fn, _routes = self.registered[name]
+            entry.objects = init_fn() or {}
+        entry.running = True
 
     def get(self, name):
         return self.entries.get(name)
@@ -136,7 +141,6 @@ BOOT_BOUND_GLOBALS = (
     "_bootstrap_model_discovery",
     "_bootstrap_model_router",
     "_get_uab_provider",
-    "_init_bal",
     "_init_federation",
     "_init_health_monitor",
     "_init_hive",
@@ -147,7 +151,6 @@ BOOT_BOUND_GLOBALS = (
     "_init_soul",
     "_init_uab",
     "_restore_persisted_provider",
-    "_shutdown_bal",
     "_shutdown_federation",
     "_shutdown_health_monitor",
     "_shutdown_hive",
@@ -236,7 +239,6 @@ def _install_boot_success_modules(monkeypatch):
         "soul.template_api": {"router": router},
         "scheduler_api": {"router": router, "init_scheduler_api": remember("init_scheduler_api")},
         "health.api": {"router": router, "set_snapshot_provider": remember("set_snapshot_provider")},
-        "bal.clients.api": {"router": router},
         "src.hive.api": {"router": router},
         "src.federation.api": {"router": router},
         "src.federation.graph_api": {"graph_router": router},
@@ -563,6 +565,7 @@ async def test_boot_composition_root_registers_core_subsystems_without_optional_
 
     app = _FakeApp()
     subsystem_manager = _FakeSubsystemManager()
+    subsystem_manager.invoke_start = True
     orchestrator = _FakeOrchestrator()
     antigravity = _AsyncService()
     librarian = _SyncService()
@@ -603,8 +606,6 @@ async def test_boot_composition_root_registers_core_subsystems_without_optional_
         _shutdown_scheduler=lambda *_: None,
         _init_health_monitor=lambda: {},
         _shutdown_health_monitor=lambda *_: None,
-        _init_bal=lambda: {},
-        _shutdown_bal=lambda *_: None,
         _init_host_bridge=lambda: {},
         _shutdown_host_bridge=lambda *_: None,
         _init_uab=lambda: {},
@@ -725,8 +726,6 @@ async def test_boot_composition_root_wires_optional_success_paths(monkeypatch):
         _shutdown_scheduler=lambda *_: None,
         _init_health_monitor=lambda: {},
         _shutdown_health_monitor=lambda *_: None,
-        _init_bal=lambda: {},
-        _shutdown_bal=lambda *_: None,
         _init_host_bridge=lambda: {},
         _shutdown_host_bridge=lambda *_: None,
         _init_uab=lambda: {},

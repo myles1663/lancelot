@@ -432,7 +432,7 @@ Lancelot's governance architecture aligns with several NIST AI RMF practices:
 
 ---
 
-*This public security overview is derived from the internal security whitepaper for Project Lancelot v7.4 (v0.2.25). All 15 security findings have been resolved. For detailed findings, remediation history, and threat model analysis, refer to the internal security whitepaper.*
+*This security overview summarizes the public threat model and remediation posture for Project Lancelot v7.4 (v0.2.25). All 15 findings from the referenced assessment have been resolved.*
 
 **Author:** Myles Russell Hamilton
 **Date:** February 21, 2026

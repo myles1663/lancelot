@@ -8,7 +8,9 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from src.core.skills.registry import SkillRegistry, SkillOwnership
+from src.core.skills.registry import SkillError
 from src.core.scheduler.service import SchedulerService
+from src.core.scheduler.schema import SchedulerError
 from src.ui.panels.soul_panel import SoulPanel
 from src.ui.panels.skills_panel import SkillsPanel
 from src.ui.panels.health_panel import HealthPanel
@@ -111,6 +113,15 @@ class TestSkillsPanel:
         result = panel.enable_skill("nonexistent")
         assert "error" in result
 
+    def test_list_and_disable_fail_closed_on_registry_errors(self):
+        registry = MagicMock()
+        registry.list_skills.side_effect = RuntimeError("registry unavailable")
+        registry.disable_skill.side_effect = SkillError("missing skill")
+        panel = SkillsPanel(registry)
+
+        assert panel.list_skills() == []
+        assert panel.disable_skill("missing") == {"error": "missing skill"}
+
 
 # ===================================================================
 # Health Panel
@@ -192,6 +203,25 @@ class TestSchedulerPanel:
         panel = SchedulerPanel(svc)
         result = panel.run_now("nonexistent")
         assert "error" in result
+
+    def test_scheduler_panel_fail_closed_on_service_errors(self):
+        service = MagicMock()
+        service.last_scheduler_tick_at = "2026-05-01T00:00:00Z"
+        service.list_jobs.side_effect = RuntimeError("store unavailable")
+        service.enable_job.side_effect = SchedulerError("missing job")
+        service.disable_job.side_effect = SchedulerError("missing job")
+        service.run_now.side_effect = SchedulerError("missing job")
+        panel = SchedulerPanel(service)
+
+        assert panel.list_jobs() == []
+        assert panel.enable_job("missing") == {"error": "missing job"}
+        assert panel.disable_job("missing") == {"error": "missing job"}
+        assert panel.run_now("missing") == {"error": "missing job"}
+        assert panel.render_data() == {
+            "panel": "scheduler",
+            "jobs": [],
+            "last_tick": "2026-05-01T00:00:00Z",
+        }
 
     def test_no_secrets_in_output(self, tmp_path):
         config_dir = _write_scheduler_config(tmp_path)

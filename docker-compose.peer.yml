@@ -17,7 +17,6 @@ services:
       - FEATURE_TOOLS_FABRIC=false
       - FEATURE_TOOLS_UAB=false
       - FEATURE_HIVE=false
-      - FEATURE_BAL=false
       - FEATURE_TOOLS_HOST_BRIDGE=false
       - FEATURE_AGENTIC_LOOP=false
       - FEATURE_LOCAL_AGENTIC=false

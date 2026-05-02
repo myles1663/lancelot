@@ -201,7 +201,10 @@ def wants_action(prompt: str) -> bool:
         "send", "notify", "message", "tell",
         "schedule", "alarm", "remind", "wake up", "cancel",
     ]
-    return any(phrase in prompt_lower for phrase in action_phrases)
+    return any(
+        re.search(rf'\b{re.escape(phrase)}\b', prompt_lower)
+        for phrase in action_phrases
+    )
 
 
 def is_low_risk_exec(prompt: str) -> bool:

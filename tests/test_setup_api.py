@@ -1,5 +1,7 @@
 import importlib
 import threading
+import zipfile
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -82,6 +84,24 @@ def _insert_session(token, capabilities):
 def _authenticate_client(client, token):
     client.cookies.set(auth_api.get_warroom_session_cookie_name(), token)
     return client
+
+
+def _admin_client(tmp_data_dir, *, connector_vault=None, receipt_service=None):
+    importlib.reload(setup_api_module)
+    app = FastAPI()
+    setup_api_module.init_setup_api(
+        data_dir=str(tmp_data_dir),
+        startup_time=0.0,
+        audit_logger=MagicMock(),
+        connector_vault=connector_vault,
+        receipt_service=receipt_service,
+        verify_request=lambda request: True,
+    )
+    app.include_router(setup_api_module.router)
+    client = TestClient(app)
+    auth_api._sessions.clear()
+    _insert_session("setup-admin", {"warroom.login", "setup.admin"})
+    return _authenticate_client(client, "setup-admin")
 
 
 @pytest.mark.parametrize(
@@ -346,3 +366,144 @@ def test_setup_vault_reset_rejects_unexpected_fields(tmp_data_dir):
     )
 
     assert response.status_code == 422
+
+
+def test_setup_logs_vault_keys_masked_and_delete_paths(tmp_data_dir, tmp_path):
+    class Vault:
+        def __init__(self):
+            self.values = {"short": "abcd", "long": "abcdef123456"}
+
+        def health_snapshot(self, last_error=None):
+            return SimpleNamespace(to_dict=lambda: {"status": "ok", "last_error": last_error})
+
+        def list_entry_metadata(self):
+            return [
+                {"key": "short", "type": "secret", "created_at": "now"},
+                {"key": "long", "type": "token", "created_at": "later"},
+            ]
+
+        def retrieve(self, key):
+            return self.values.get(key)
+
+        def delete(self, key):
+            return self.values.pop(key, None) is not None
+
+    audit_log = tmp_data_dir / "audit.log"
+    audit_log.write_text("a\nb\nc\n", encoding="utf-8")
+    client = _admin_client(tmp_data_dir, connector_vault=Vault())
+
+    assert client.get("/api/setup/logs?file=audit&lines=2").json()["lines"] == ["b", "c"]
+    assert client.get("/api/setup/logs?file=missing").status_code == 400
+    assert client.get("/api/setup/logs?file=vault").json()["file"] == "vault"
+
+    keys = client.get("/api/setup/vault/keys").json()
+    assert keys["total"] == 2
+    masked = client.get("/api/setup/vault/masked").json()
+    assert masked["keys"][0]["masked_value"] == "****"
+    assert masked["keys"][1]["masked_value"] == "abcd****3456"
+
+    deleted = client.delete("/api/setup/vault/keys/short")
+    assert deleted.status_code == 200
+    assert deleted.json() == {"status": "deleted", "key": "short"}
+    assert client.delete("/api/setup/vault/keys/missing").status_code == 404
+
+
+def test_setup_vault_and_log_error_paths(tmp_data_dir, monkeypatch):
+    class BrokenVault:
+        def health_snapshot(self, last_error=None):
+            raise RuntimeError("vault health failed")
+
+        def list_entry_metadata(self):
+            raise RuntimeError("metadata failed")
+
+        def delete(self, key):
+            raise RuntimeError("delete failed")
+
+    client = _admin_client(tmp_data_dir, connector_vault=BrokenVault())
+    monkeypatch.setattr(setup_api_module.Path, "read_text", lambda *_, **__: (_ for _ in ()).throw(OSError("read failed")))
+    (tmp_data_dir / "audit.log").write_text("x", encoding="utf-8")
+
+    assert client.get("/api/setup/logs?file=audit").status_code == 500
+    assert client.get("/api/setup/vault/status").status_code == 500
+    assert client.get("/api/setup/vault/keys").status_code == 500
+    assert client.get("/api/setup/vault/masked").status_code == 500
+    assert client.delete("/api/setup/vault/keys/key").status_code == 500
+
+
+def test_setup_receipt_clear_paths(tmp_data_dir):
+    assert _admin_client(tmp_data_dir).post("/api/setup/receipts/clear", json={"confirm": False}).status_code == 400
+    assert _admin_client(tmp_data_dir).post("/api/setup/receipts/clear", json={"confirm": True}).status_code == 400
+
+    unsupported = _admin_client(tmp_data_dir, receipt_service=object())
+    assert unsupported.post("/api/setup/receipts/clear", json={"confirm": True}).status_code == 501
+
+    cleared = []
+    service = SimpleNamespace(clear=lambda: cleared.append("cleared"))
+    response = _admin_client(tmp_data_dir, receipt_service=service).post(
+        "/api/setup/receipts/clear",
+        json={"confirm": True},
+    )
+    assert response.json()["status"] == "cleared"
+    assert cleared == ["cleared"]
+
+    broken = SimpleNamespace(clear=lambda: (_ for _ in ()).throw(RuntimeError("clear failed")))
+    assert _admin_client(tmp_data_dir, receipt_service=broken).post(
+        "/api/setup/receipts/clear",
+        json={"confirm": True},
+    ).status_code == 500
+
+
+def test_setup_reload_export_purge_and_flags_reset_paths(tmp_data_dir, tmp_path, monkeypatch):
+    client = _admin_client(tmp_data_dir)
+
+    # Config reload should report per-subsystem failures without failing the endpoint.
+    response = client.post("/api/setup/config/reload")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "reloaded"
+    assert set(body["results"]) == {"feature_flags", "scheduler", "connectors"}
+
+    (tmp_data_dir / "soul").mkdir()
+    (tmp_data_dir / "soul" / "active.yaml").write_text("soul: true", encoding="utf-8")
+    (tmp_data_dir / "core_blocks.json").write_text("[]", encoding="utf-8")
+    (tmp_data_dir / ".flag_state.json").write_text("{}", encoding="utf-8")
+    (tmp_data_dir / "scheduler").mkdir()
+    (tmp_data_dir / "scheduler" / "jobs.json").write_text("[]", encoding="utf-8")
+
+    export = client.get("/api/setup/export")
+    assert export.status_code == 200
+    archive = tmp_path / "backup.zip"
+    archive.write_bytes(export.content)
+    with zipfile.ZipFile(archive) as zf:
+        assert {"soul/active.yaml", "memory/core_blocks.json", "flags/.flag_state.json", "scheduler/jobs.json"}.issubset(
+            set(zf.namelist())
+        )
+
+    (tmp_data_dir / "memory.db").write_text("db", encoding="utf-8")
+    (tmp_data_dir / "memory.sqlite").write_text("db", encoding="utf-8")
+    purge = client.post("/api/setup/memory/purge", json={"confirm": True})
+    assert set(purge.json()["purged_files"]) == {"core_blocks.json", "memory.db", "memory.sqlite"}
+
+    reset_flags = client.post("/api/setup/flags/reset", json={"confirm": True})
+    assert reset_flags.status_code == 200
+    assert "state file deleted" in reset_flags.json()["message"]
+
+
+def test_setup_factory_reset_handles_partial_delete_failure(tmp_data_dir, monkeypatch):
+    (tmp_data_dir / "file.txt").write_text("data", encoding="utf-8")
+    keep_dir = tmp_data_dir / "keep"
+    keep_dir.mkdir()
+    (keep_dir / "child.txt").write_text("data", encoding="utf-8")
+
+    monkeypatch.setattr(setup_api_module.shutil, "rmtree", lambda path: (_ for _ in ()).throw(OSError("busy")))
+    client = _admin_client(tmp_data_dir)
+
+    response = client.post(
+        "/api/setup/factory-reset",
+        json={"confirm": True, "confirmation_text": "RESET"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "reset_complete"
+    assert keep_dir.exists()
+    assert not (tmp_data_dir / "file.txt").exists()

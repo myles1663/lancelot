@@ -1,10 +1,15 @@
 # Model weights (mounted as volume, not baked into image)
 local_models/weights/
 
-# Data directory — NOT excluded; seed files (CAPABILITIES.md, RULES.md,
-# USER.md, onboarding_snapshot.json) are baked into the image so named
-# Docker volumes auto-populate on first mount.
-# lancelot_data/
+# Runtime data must never be baked into public images. Clean bootstrap
+# templates live under config/bootstrap and are seeded by the app when a
+# fresh data volume starts.
+/data/
+/lancelot_data/
+/secrets/
+coverage.xml
+coverage*.json
+*.log
 
 # Git
 .git/

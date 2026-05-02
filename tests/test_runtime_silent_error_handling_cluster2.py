@@ -1,5 +1,4 @@
 import asyncio
-import builtins
 import importlib
 import logging
 import sqlite3
@@ -8,27 +7,11 @@ import types
 import urllib.error
 
 import pytest
-from fastapi import HTTPException
-
 from src.a2a import server as a2a_server
 from src.agents.antigravity_engine import AntigravityEngine, EngineMode
-from src.business.war_room_business import render_business_panel
-from src.core.bal.clients import api as bal_client_api
 from src.core.flagship_client import FlagshipClient, FlagshipError
 from src.core.provider_profile import LaneConfig, ProviderProfile
 from src.core.scheduler.service import SchedulerService
-
-
-def test_business_panel_logs_connector_health_failure(caplog):
-    class _Registry:
-        def list_active(self):
-            raise RuntimeError("connector health exploded")
-
-    with caplog.at_level(logging.WARNING):
-        panel = render_business_panel(connector_registry=_Registry())
-
-    assert panel["connector_health"] == {}
-    assert "Failed to inspect business connector health" in caplog.text
 
 
 def test_antigravity_engine_stop_logs_browser_session_close_failure(caplog):
@@ -63,23 +46,6 @@ def test_a2a_kill_switch_logs_flag_lookup_failure(caplog, monkeypatch):
         assert a2a_server._check_a2a_kill_switch() is True
 
     assert "Failed to inspect A2A feature flags; leaving A2A enabled" in caplog.text
-
-
-def test_bal_feature_flag_lookup_fails_closed(monkeypatch):
-    original_import = builtins.__import__
-
-    def _raising_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name in {"feature_flags", "src.core.feature_flags"}:
-            raise ImportError(f"missing {name}")
-        return original_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(builtins, "__import__", _raising_import)
-
-    with pytest.raises(HTTPException) as exc_info:
-        bal_client_api._check_bal_enabled()
-
-    assert exc_info.value.status_code == 503
-    assert exc_info.value.detail == "BAL feature flags unavailable"
 
 
 def test_vault_logs_permission_hardening_failure(caplog, monkeypatch, tmp_path):

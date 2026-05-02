@@ -14,12 +14,14 @@ import hmac
 import json
 import threading
 import time
+import types
 
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 
 from src.observability.config import WebhookEndpoint
 from src.core.outbound_http import OutboundNetworkError
+import src.observability.webhook_engine as webhook_engine_module
 from src.observability.webhook_engine import (
     WebhookEngine,
     WebhookDelivery,
@@ -422,3 +424,202 @@ class TestThreadSafety:
 
         assert len(errors) == 0, f"Concurrent calls raised: {errors}"
         assert engine.get_stats()["ep-1"]["delivered"] == 50
+
+
+class TestWebhookRuntimePersistence:
+    def test_default_pending_file_uses_data_dir_when_no_override(self, mock_httpx_client, monkeypatch, tmp_path):
+        monkeypatch.delenv("LANCELOT_WEBHOOK_PENDING_FILE", raising=False)
+
+        engine = WebhookEngine(endpoints=[_make_endpoint()], data_dir=str(tmp_path))
+
+        assert engine._pending_file == tmp_path / "webhook_pending_deliveries.json"
+
+    def test_secret_cache_and_env_fallback_paths(self, mock_httpx_client, monkeypatch):
+        ep = _make_endpoint(secret_vault_key="WH_SECRET")
+        engine = WebhookEngine(endpoints=[ep])
+
+        monkeypatch.setitem(
+            sys.modules,
+            "secret_cache",
+            type(
+                "SecretCache",
+                (),
+                {
+                    "is_bootstrapped": staticmethod(lambda: True),
+                    "get": staticmethod(lambda key: "vault-secret"),
+                },
+            ),
+        )
+        assert engine._get_secret(ep) == "vault-secret"
+
+        monkeypatch.setitem(
+            sys.modules,
+            "secret_cache",
+            type(
+                "BrokenSecretCache",
+                (),
+                {
+                    "is_bootstrapped": staticmethod(lambda: (_ for _ in ()).throw(RuntimeError("vault down"))),
+                },
+            ),
+        )
+        monkeypatch.setenv("WH_SECRET", "env-secret")
+        assert engine._get_secret(ep) == "env-secret"
+
+    def test_load_pending_restores_matching_deliveries_and_skips_stale_endpoints(
+        self, mock_httpx_client, monkeypatch, tmp_path
+    ):
+        pending_file = tmp_path / "pending.json"
+        pending_file.write_text(
+            json.dumps(
+                [
+                    {
+                        "webhook_id": "wh-1",
+                        "endpoint_id": "ep-1",
+                        "payload_envelope": {"event_type": "TASK_EXECUTED"},
+                        "attempt": 3,
+                        "created_at": 123.5,
+                        "last_status": 503,
+                        "last_error": "HTTP 503",
+                    },
+                    {
+                        "webhook_id": "wh-stale",
+                        "endpoint_id": "missing",
+                        "payload_envelope": {},
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("LANCELOT_WEBHOOK_PENDING_FILE", str(pending_file))
+
+        engine = WebhookEngine(endpoints=[_make_endpoint(id="ep-1")])
+
+        assert len(engine._pending) == 1
+        assert engine._pending[0].webhook_id == "wh-1"
+        assert engine._pending[0].attempt == 3
+        assert engine._stats["ep-1"]["pending_retries"] == 1
+
+    def test_load_pending_handles_empty_or_corrupt_files(self, mock_httpx_client, monkeypatch, tmp_path):
+        pending_file = tmp_path / "empty.json"
+        pending_file.write_text("", encoding="utf-8")
+        monkeypatch.setenv("LANCELOT_WEBHOOK_PENDING_FILE", str(pending_file))
+
+        engine = WebhookEngine(endpoints=[_make_endpoint(id="ep-1")])
+        assert engine._pending == []
+
+        pending_file.write_text("{not-json", encoding="utf-8")
+        engine = WebhookEngine(endpoints=[_make_endpoint(id="ep-1")])
+        assert engine._pending == []
+        assert engine._stats["ep-1"]["pending_retries"] == 0
+
+    def test_save_pending_failure_is_non_fatal(self, mock_httpx_client, monkeypatch):
+        ep = _make_endpoint()
+        engine = WebhookEngine(endpoints=[ep])
+        engine._pending.append(
+            WebhookDelivery(webhook_id="wh-1", endpoint=ep, payload_envelope={"event_type": "TEST"})
+        )
+        monkeypatch.setattr(
+            type(engine._pending_file),
+            "write_text",
+            lambda self, *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")),
+        )
+
+        with engine._lock:
+            engine._save_pending_locked()
+
+    def test_retry_loop_exhausts_waits_and_requeues_failed_ready_delivery(
+        self, mock_httpx_client, monkeypatch
+    ):
+        ep = _make_endpoint()
+        engine = WebhookEngine(endpoints=[ep], max_retries=2)
+        now = time.time()
+        exhausted = WebhookDelivery(
+            webhook_id="wh-exhausted",
+            endpoint=ep,
+            payload_envelope={"event_type": "TEST"},
+            attempt=2,
+        )
+        ready = WebhookDelivery(
+            webhook_id="wh-ready",
+            endpoint=ep,
+            payload_envelope={"event_type": "TEST"},
+            attempt=1,
+            created_at=now - 10,
+        )
+        waiting = WebhookDelivery(
+            webhook_id="wh-waiting",
+            endpoint=ep,
+            payload_envelope={"event_type": "TEST"},
+            attempt=1,
+            created_at=now + 1000,
+        )
+        engine._pending = [exhausted, ready, waiting]
+        failed = []
+
+        monkeypatch.setattr(time, "sleep", lambda seconds: setattr(engine, "_running", False))
+        monkeypatch.setattr(time, "time", lambda: now)
+        monkeypatch.setattr(engine, "_record_failure", lambda delivery: failed.append(delivery.webhook_id))
+        monkeypatch.setattr(engine, "_deliver", lambda delivery: False)
+
+        engine._running = True
+        engine._retry_loop()
+
+        assert failed == ["wh-exhausted"]
+        assert sorted(delivery.webhook_id for delivery in engine._pending) == ["wh-ready", "wh-waiting"]
+        assert next(delivery for delivery in engine._pending if delivery.webhook_id == "wh-ready").attempt == 2
+
+    def test_unsubscribed_receipt_does_not_deliver(self, mock_httpx_client):
+        engine = WebhookEngine(
+            endpoints=[_make_endpoint(categories=["COST_THRESHOLD"])]
+        )
+
+        engine.on_receipt(_make_receipt(action_type="task_executed"))
+
+        mock_httpx_client.post.assert_not_called()
+        assert engine._pending == []
+
+    def test_record_failure_swallows_receipt_service_import_failures(
+        self, mock_httpx_client, monkeypatch
+    ):
+        ep = _make_endpoint()
+        engine = WebhookEngine(endpoints=[ep])
+        delivery = WebhookDelivery(
+            webhook_id="wh-failed",
+            endpoint=ep,
+            payload_envelope={"event_type": "TEST", "receipt_id": "receipt-1"},
+            attempt=6,
+        )
+        monkeypatch.setitem(sys.modules, "src.shared.receipts", types.SimpleNamespace())
+
+        engine._record_failure(delivery)
+
+        assert engine._stats["ep-1"]["failed"] == 1
+
+
+class TestWebhookSingletonLifecycle:
+    def test_init_replaces_existing_engine_and_shutdown_clears_singleton(
+        self, mock_httpx_client, monkeypatch, tmp_path
+    ):
+        starts = []
+        stops = []
+        monkeypatch.setattr(WebhookEngine, "start", lambda self: starts.append(id(self)))
+        monkeypatch.setattr(WebhookEngine, "stop", lambda self: stops.append(id(self)))
+
+        first = webhook_engine_module.init_webhook_engine(
+            [_make_endpoint(id="ep-1")],
+            data_dir=str(tmp_path),
+        )
+        second = webhook_engine_module.init_webhook_engine(
+            [_make_endpoint(id="ep-2")],
+            data_dir=str(tmp_path),
+        )
+
+        assert webhook_engine_module.get_webhook_engine() is second
+        assert starts == [id(first), id(second)]
+        assert stops == [id(first)]
+
+        webhook_engine_module.shutdown_webhook_engine()
+
+        assert stops == [id(first), id(second)]
+        assert webhook_engine_module.get_webhook_engine() is None

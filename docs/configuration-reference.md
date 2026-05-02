@@ -136,7 +136,7 @@ The default deployment uses `LOCAL_LLM_URL` for every local-model role. Operator
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `HOST_AGENT_URL` | No | `http://host.docker.internal:9111` | URL of the Lancelot Host Agent. Must stay on loopback or `host.docker.internal`; public FQDNs are rejected at runtime. |
-| `HOST_AGENT_TOKEN` | Yes when host bridge is enabled | â€” | Shared bearer token between the container runtime and the host agent. The legacy default token is rejected. |
+| `HOST_AGENT_TOKEN` | Yes when host bridge is enabled | - | Shared bearer token between the container runtime and the host agent. The legacy default token is rejected. |
 
 ### Logging
 
@@ -165,7 +165,7 @@ The default deployment uses `LOCAL_LLM_URL` for every local-model role. Operator
 
 ### Feature Flags
 
-All feature flags are boolean: `true`/`1`/`yes` to enable, anything else to disable. All flags are **hot-toggleable** — changes take effect immediately without a container restart. Core subsystem flags (Soul, Skills, Scheduler, Health Monitor, Memory, BAL) use the SubsystemManager to lazily initialize or gracefully shut down their subsystems at runtime.
+All feature flags are boolean: `true`/`1`/`yes` to enable, anything else to disable. Process-local subsystem flags are **hot-toggleable** through the War Room: changes persist immediately and the SubsystemManager starts or stops registered runtime objects without a container restart. Higher-authority host-control surfaces such as Host Bridge and UAB still require their host-side daemons or services to be installed and reachable before the toggle can grant useful access.
 
 **Dependency enforcement:** Some flags have `requires` dependencies (e.g., `FEATURE_SCHEDULER` requires `FEATURE_SKILLS`). The API validates these before toggling — enabling a flag without its dependencies returns a 400 error. Disabling a flag that other enabled flags depend on is also blocked. See the War Room Kill Switches page for the full dependency graph.
 
@@ -175,25 +175,33 @@ All feature flags are boolean: `true`/`1`/`yes` to enable, anything else to disa
 | `FEATURE_SKILLS` | `true` | Modular skill system |
 | `FEATURE_HEALTH_MONITOR` | `true` | Background health monitoring |
 | `FEATURE_SCHEDULER` | `true` | Automated job scheduling |
-| `FEATURE_MEMORY_VNEXT` | `false` | Tiered memory system |
-| `FEATURE_BAL` | `false` | Business Automation Layer |
+| `FEATURE_MEMORY_VNEXT` | `true` | Tiered memory system |
 | `FEATURE_TOOLS_FABRIC` | `true` | Tool execution layer |
 | `FEATURE_TOOLS_CLI_PROVIDERS` | `false` | CLI tool adapters |
 | `FEATURE_TOOLS_ANTIGRAVITY` | `false` | Generative UI/Vision providers |
 | `FEATURE_TOOLS_NETWORK` | `false` | Network access from sandbox |
 | `FEATURE_TOOLS_HOST_EXECUTION` | `false` | Host execution (no Docker sandbox — **DANGEROUS**) |
-| `FEATURE_AGENTIC_LOOP` | `false` | Agentic tool loop |
-| `FEATURE_LOCAL_AGENTIC` | `false` | Enable the local utility execution lane for bounded low-risk work |
+| `FEATURE_AGENTIC_LOOP` | `true` | Agentic tool loop |
+| `FEATURE_LOCAL_AGENTIC` | `true` | Enable the local utility execution lane for bounded low-risk work |
 | `FEATURE_RESPONSE_ASSEMBLER` | `true` | Response assembly pipeline |
 | `FEATURE_EXECUTION_TOKENS` | `true` | Execution token minting |
 | `FEATURE_TASK_GRAPH_EXECUTION` | `true` | Task graph compilation |
 | `FEATURE_NETWORK_ALLOWLIST` | `true` | Network domain allowlist enforcement |
 | `FEATURE_VOICE_NOTES` | `true` | Voice note support |
-| `FEATURE_RISK_TIERED_GOVERNANCE` | `false` | Risk-tiered governance master switch |
-| `FEATURE_POLICY_CACHE` | `false` | Boot-time policy compilation |
-| `FEATURE_ASYNC_VERIFICATION` | `false` | Async verification for T1 actions |
-| `FEATURE_INTENT_TEMPLATES` | `false` | Cached intent plan templates |
+| `FEATURE_RISK_TIERED_GOVERNANCE` | `true` | Risk-tiered governance master switch |
+| `FEATURE_POLICY_CACHE` | `true` | Boot-time policy compilation |
+| `FEATURE_ASYNC_VERIFICATION` | `true` | Async verification for T1 actions |
+| `FEATURE_INTENT_TEMPLATES` | `true` | Cached intent plan templates |
 | `FEATURE_BATCH_RECEIPTS` | `false` | Batched receipt emission |
+| `FEATURE_CONNECTORS` | `true` | External connector system |
+| `FEATURE_TRUST_LEDGER` | `true` | Progressive trust relaxation |
+| `FEATURE_SKILL_SECURITY_PIPELINE` | `true` | Security pipeline for new skills |
+| `FEATURE_APPROVAL_LEARNING` | `true` | Learn owner approval patterns |
+| `FEATURE_STRUCTURED_OUTPUT` | `true` | JSON schema output with receipt verification |
+| `FEATURE_CLAIM_VERIFICATION` | `true` | Cross-reference response claims against receipts |
+| `FEATURE_UNIFIED_CLASSIFICATION` | `true` | Single-call intent classification |
+| `FEATURE_TOOL_FLOW_STREAMING` | `true` | Real-time tool execution progress events |
+| `FEATURE_ACTION_CARDS` | `true` | Interactive approval/action buttons |
 | `FEATURE_TOOLS_UAB` | `false` | Universal Application Bridge (desktop app control) |
 | `FEATURE_HIVE` | `false` | Hive Agent Mesh (ephemeral sub-agents) |
 | `FEATURE_HIVE_UAB` | `false` | UAB integration for Hive sub-agents |

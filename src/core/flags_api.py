@@ -277,15 +277,6 @@ FLAG_META = {
         "warning": "Requires RISK_TIERED_GOVERNANCE. The system will auto-approve actions matching learned patterns. Review APL rules regularly — incorrect patterns can bypass intended oversight.",
     },
 
-    # ── Business Automation Layer ──────────────────────────────────
-    "FEATURE_BAL": {
-        "description": "Business Automation Layer — client management, intake, delivery, and billing workflows. Provides CRM, content pipeline, and revenue tracking.",
-        "category": "Core Subsystem",
-        "requires": [],
-        "conflicts": [],
-        "warning": "Disabling will stop all BAL client operations and close the database connection. Active client workflows will be interrupted.",
-    },
-
     # ── Response Hygiene ──────────────────────────────────────────
     "FEATURE_STRUCTURED_OUTPUT": {
         "description": "Structured Output Mode. After the agentic loop completes, a reformat step converts the raw response into a verified JSON structure with explicit fields: response_to_user, actions_taken, next_action. A presentation layer cross-references claimed actions against actual tool receipts and silently drops anything that didn't happen. Converts the verified JSON back to readable chat text. Eliminates narration, fake progress claims, and verbose failure descriptions at the format level.",

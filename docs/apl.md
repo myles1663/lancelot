@@ -1,6 +1,6 @@
 # Approval Pattern Learning (APL)
 
-**Feature Flag:** `FEATURE_APPROVAL_LEARNING` (default: `false`, requires `FEATURE_RISK_TIERED_GOVERNANCE`)
+**Feature Flag:** `FEATURE_APPROVAL_LEARNING` (default: `true`, requires `FEATURE_RISK_TIERED_GOVERNANCE`)
 **Codebase:** `src/core/governance/approval_learning/`
 **Configuration:** `config/approval_learning.yaml`
 

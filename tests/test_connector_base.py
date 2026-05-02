@@ -162,7 +162,7 @@ class TestConnectorBase:
 # ── Feature Flags ─────────────────────────────────────────────────
 
 class TestFeatureFlags:
-    def test_connector_flags_default_false(self):
+    def test_connector_flags_default_true(self):
         # Clear env vars to test defaults
         for key in ("FEATURE_CONNECTORS", "FEATURE_TRUST_LEDGER", "FEATURE_SKILL_SECURITY_PIPELINE"):
             os.environ.pop(key, None)
@@ -175,9 +175,9 @@ class TestFeatureFlags:
         feature_flags.clear_persisted_flag_state("FEATURE_SKILL_SECURITY_PIPELINE")
         feature_flags.reload_flags()
 
-        assert feature_flags.FEATURE_CONNECTORS is False
-        assert feature_flags.FEATURE_TRUST_LEDGER is False
-        assert feature_flags.FEATURE_SKILL_SECURITY_PIPELINE is False
+        assert feature_flags.FEATURE_CONNECTORS is True
+        assert feature_flags.FEATURE_TRUST_LEDGER is True
+        assert feature_flags.FEATURE_SKILL_SECURITY_PIPELINE is True
 
         # Restore persisted state
         feature_flags.replace_persisted_flag_state(old_persisted)

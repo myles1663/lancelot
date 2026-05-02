@@ -524,7 +524,7 @@ class GoogleOAuthManager:
 _google_oauth_manager: Optional[GoogleOAuthManager] = None
 
 
-def set_google_oauth_manager(manager: GoogleOAuthManager) -> None:
+def set_google_oauth_manager(manager: Optional[GoogleOAuthManager]) -> None:
     """Set the global GoogleOAuthManager instance (called at gateway startup)."""
     global _google_oauth_manager
     _google_oauth_manager = manager

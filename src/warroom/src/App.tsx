@@ -18,7 +18,6 @@ const SetupRecoveryPage = lazy(() => import('@/pages/SetupRecovery').then(module
 const CostTrackerPage = lazy(() => import('@/pages/CostTracker').then(module => ({ default: module.CostTracker })))
 const KillSwitchesPage = lazy(() => import('@/pages/KillSwitches').then(module => ({ default: module.KillSwitches })))
 const ConnectorsPage = lazy(() => import('@/pages/Connectors').then(module => ({ default: module.Connectors })))
-const BusinessDashboardPage = lazy(() => import('@/pages/BusinessDashboard').then(module => ({ default: module.BusinessDashboard })))
 const HealthDashboardPage = lazy(() => import('@/pages/HealthDashboard').then(module => ({ default: module.HealthDashboard })))
 const SkillsPanelPage = lazy(() => import('@/pages/SkillsPanel').then(module => ({ default: module.SkillsPanel })))
 const HiveAgentMeshPage = lazy(() => import('@/pages/HiveAgentMesh').then(module => ({ default: module.HiveAgentMesh })))
@@ -88,9 +87,6 @@ function App() {
 
           {/* INCIDENTS */}
           <Route path="/incidents" element={routeElement(IncidentsDashboardPage)} />
-
-          {/* BUSINESS */}
-          <Route path="/business" element={routeElement(BusinessDashboardPage)} />
 
           {/* Default redirect */}
           <Route path="/" element={<Navigate to="/command" replace />} />

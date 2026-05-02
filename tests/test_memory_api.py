@@ -605,6 +605,162 @@ class TestQuarantineEndpoints:
         assert delete_response.status_code == 200
         assert delete_response.json()["status"] == "deleted"
 
+    def test_commit_edit_rejects_invalid_provenance_editor_and_gate_blocks(self, client, app, monkeypatch):
+        """Commit edits should fail closed before staged memory is mutated."""
+        begin_response = client.post(
+            "/memory/commit/begin",
+            json={"created_by": "owner_user", "message": "Guardrail checks"},
+        )
+        commit_id = begin_response.json()["commit_id"]
+
+        invalid_provenance = client.post(
+            f"/memory/commit/{commit_id}/edit",
+            json={
+                "op": "replace",
+                "target": "core:mission",
+                "after": "new mission",
+                "reason": "bad provenance",
+                "provenance_type": "not_real",
+                "provenance_ref": "ref-1",
+            },
+        )
+        assert invalid_provenance.status_code == 400
+        assert "Invalid provenance type" in invalid_provenance.json()["detail"]
+
+        invalid_editor = client.post(
+            f"/memory/commit/{commit_id}/edit",
+            json={
+                "op": "replace",
+                "target": "core:mission",
+                "after": "new mission",
+                "reason": "bad editor",
+                "editor": "stranger",
+            },
+        )
+        assert invalid_editor.status_code == 400
+        assert "Invalid editor" in invalid_editor.json()["detail"]
+
+        service = next(iter(app.dependency_overrides.values()))()
+        service["gate_validator"].validate_edit = lambda edit, editor: type(
+            "GateResult",
+            (),
+            {"allowed": False, "reason": "owner-only block", "scrubbed_content": None},
+        )()
+        blocked = client.post(
+            f"/memory/commit/{commit_id}/edit",
+            json={
+                "op": "replace",
+                "target": "core:persona",
+                "after": "blocked persona",
+                "reason": "gate block",
+            },
+        )
+        assert blocked.status_code == 403
+        assert "owner-only block" in blocked.json()["detail"]
+
+        service["gate_validator"].validate_edit = lambda edit, editor: type(
+            "GateResult",
+            (),
+            {"allowed": True, "reason": "", "scrubbed_content": "scrubbed content"},
+        )()
+        captured = {}
+        original_add_edit = service["commit_manager"].add_edit
+
+        def add_edit_with_capture(**kwargs):
+            captured.update(kwargs)
+            return original_add_edit(**kwargs)
+
+        service["commit_manager"].add_edit = add_edit_with_capture
+        scrubbed = client.post(
+            f"/memory/commit/{commit_id}/edit",
+            json={
+                "op": "replace",
+                "target": "core:mission",
+                "after": "raw secret content",
+                "reason": "scrub before commit",
+            },
+        )
+        assert scrubbed.status_code == 200
+        assert captured["after"] == "scrubbed content"
+
+    def test_commit_finish_and_rollback_report_manager_failures(self, client, app):
+        service = next(iter(app.dependency_overrides.values()))()
+        service["commit_manager"].finish_edits = lambda **kwargs: (_ for _ in ()).throw(
+            RuntimeError("commit store unavailable")
+        )
+        finish = client.post("/memory/commit/missing/finish", json={})
+        assert finish.status_code == 400
+        assert finish.json()["detail"] == "Failed to finish commit"
+
+        service["commit_manager"].rollback = lambda **kwargs: (_ for _ in ()).throw(
+            RuntimeError("rollback unavailable")
+        )
+        rollback = client.post("/memory/rollback/commit-1", json={"reason": "undo"})
+        assert rollback.status_code == 400
+        assert rollback.json()["detail"] == "Failed to rollback commit"
+
+    def test_quarantine_and_item_mutations_reject_invalid_or_missing_targets(self, client):
+        assert client.post(
+            "/memory/quarantine/core/not-a-block/approve",
+            json={"reason": "approve"},
+        ).status_code == 400
+        assert client.post(
+            "/memory/quarantine/core/mission/approve",
+            json={"reason": "approve"},
+        ).status_code == 404
+        assert client.post(
+            "/memory/quarantine/core/not-a-block/reject",
+            json={"reason": "reject"},
+        ).status_code == 400
+        assert client.post(
+            "/memory/quarantine/core/mission/reject",
+            json={"reason": "reject"},
+        ).status_code == 404
+        assert client.post(
+            "/memory/quarantine/not-a-tier/item-1/approve",
+            json={"reason": "approve"},
+        ).status_code == 400
+        assert client.post(
+            "/memory/quarantine/working/item-1/approve",
+            json={"reason": "approve"},
+        ).status_code == 404
+        assert client.post(
+            "/memory/quarantine/not-a-tier/item-1/reject",
+            json={"reason": "reject"},
+        ).status_code == 400
+        assert client.post(
+            "/memory/quarantine/working/item-1/reject",
+            json={"reason": "reject"},
+        ).status_code == 404
+        assert client.post(
+            "/memory/item/not-a-tier/item-1/status?status=active",
+            json={"reason": "status"},
+        ).status_code == 400
+        assert client.post(
+            "/memory/item/core/item-1/status?status=active",
+            json={"reason": "status"},
+        ).status_code == 400
+        assert client.post(
+            "/memory/item/working/item-1/status?status=not-a-status",
+            json={"reason": "status"},
+        ).status_code == 400
+        assert client.post(
+            "/memory/item/working/item-1/status?status=active",
+            json={"reason": "status"},
+        ).status_code == 404
+        assert client.post(
+            "/memory/item/not-a-tier/item-1/delete",
+            json={"reason": "delete"},
+        ).status_code == 400
+        assert client.post(
+            "/memory/item/core/item-1/delete",
+            json={"reason": "delete"},
+        ).status_code == 400
+        assert client.post(
+            "/memory/item/working/item-1/delete",
+            json={"reason": "delete"},
+        ).status_code == 404
+
 
 # ---------------------------------------------------------------------------
 # Context Compiler Endpoint Tests

@@ -7,9 +7,10 @@ Uses FastAPI TestClient. No real network calls.
 import os
 import logging
 import pytest
+import types
 from typing import Any
 from cryptography.fernet import Fernet
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from src.connectors.base import ConnectorBase, ConnectorManifest, ConnectorStatus, CredentialSpec
@@ -18,6 +19,7 @@ from src.connectors.models import ConnectorOperation, ConnectorResult, HTTPMetho
 from src.connectors.registry import ConnectorRegistry
 from src.connectors.vault import CredentialVault
 from src.core.api_auth import init_api_auth
+from src.connectors import credential_api as credential_api_module
 import src.core.connectors_api as connectors_api
 from src.core import feature_flags
 
@@ -281,3 +283,121 @@ class TestCredentialAPI:
             os.environ.pop("LANCELOT_VAULT_KEY", None)
             init_credential_api(None, None)
             init_api_auth(None)
+
+    def test_uninitialized_and_lazy_registration_failure_paths(self, monkeypatch):
+        init_credential_api(None, None)
+        with pytest.raises(HTTPException) as uninitialized:
+            credential_api_module._resolve_connector_entry("missing")
+        assert uninitialized.value.status_code == 500
+
+        registry = types.SimpleNamespace(
+            _config={"connectors": {"lazy": {"enabled": False}}},
+            get=lambda connector_id: None,
+        )
+        init_credential_api(registry, object())
+
+        monkeypatch.setattr(
+            "src.core.connectors_api.register_connector_with_vault_access",
+            lambda *args, **kwargs: None,
+        )
+        with pytest.raises(HTTPException) as not_found:
+            credential_api_module._resolve_connector_entry("lazy")
+        assert not_found.value.status_code == 404
+
+        monkeypatch.setattr(
+            "src.core.connectors_api.register_connector_with_vault_access",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("bad config")),
+        )
+        with pytest.raises(HTTPException) as failed:
+            credential_api_module._resolve_connector_entry("lazy")
+        assert failed.value.status_code == 500
+
+        with pytest.raises(HTTPException) as missing:
+            credential_api_module._resolve_connector_entry("absent")
+        assert missing.value.status_code == 404
+
+    def test_workspace_path_hot_swap_updates_compose_and_survives_restart_errors(self, tmp_path, monkeypatch):
+        compose = tmp_path / "docker-compose.yml"
+        compose.write_text(
+            "services:\n"
+            "  lancelot-core:\n"
+            "    volumes:\n"
+            "      - /old/workspace:/home/lancelot/workspace\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(credential_api_module, "_COMPOSE_PATH", compose)
+
+        started = []
+
+        class ImmediateTimer:
+            def __init__(self, delay, target):
+                self.delay = delay
+                self.target = target
+
+            def start(self):
+                started.append(self.delay)
+                self.target()
+
+        monkeypatch.setattr(credential_api_module.threading, "Timer", ImmediateTimer)
+        monkeypatch.setattr(
+            credential_api_module.subprocess,
+            "run",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("docker unavailable")),
+        )
+
+        credential_api_module._apply_workspace_path("/new/workspace")
+
+        assert "/new/workspace:/home/lancelot/workspace" in compose.read_text(encoding="utf-8")
+        assert started == [1.0]
+
+    def test_workspace_path_hot_swap_noops_without_compose_or_mount(self, tmp_path, monkeypatch):
+        missing = tmp_path / "missing-compose.yml"
+        monkeypatch.setattr(credential_api_module, "_COMPOSE_PATH", missing)
+        credential_api_module._apply_workspace_path("/new/workspace")
+
+        compose = tmp_path / "docker-compose.yml"
+        compose.write_text("services:\n  lancelot-core:\n    image: lancelot\n", encoding="utf-8")
+        monkeypatch.setattr(credential_api_module, "_COMPOSE_PATH", compose)
+        credential_api_module._apply_workspace_path("/new/workspace")
+
+        assert "/new/workspace" not in compose.read_text(encoding="utf-8")
+
+    def test_endpoint_functions_fail_when_runtime_dependencies_are_missing(self):
+        init_credential_api(None, None)
+        body = credential_api_module.StoreCredentialRequest(vault_key="key", value="value")
+        request = types.SimpleNamespace()
+
+        for call in (
+            lambda: credential_api_module.store_credential("missing", body, request),
+            lambda: credential_api_module.credential_status("missing"),
+            lambda: credential_api_module.delete_credential("missing", "key", request),
+            lambda: credential_api_module.validate_credentials("missing"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                call()
+            assert exc.value.status_code == 500
+
+    def test_workspace_path_preserves_mount_line_newline_and_store_survives_hotswap_failure(self, setup, tmp_path, monkeypatch):
+        client, vault, _registry = setup
+        compose = tmp_path / "docker-compose.yml"
+        compose.write_text('services:\n  lancelot-core:\n    volumes:\n      - "/old:/home/lancelot/workspace"', encoding="utf-8")
+        monkeypatch.setattr(credential_api_module, "_COMPOSE_PATH", compose)
+        monkeypatch.setattr(
+            credential_api_module,
+            "_apply_workspace_path",
+            lambda value: (_ for _ in ()).throw(RuntimeError("compose locked")),
+        )
+
+        entry = _registry.get("apitest")
+        entry.manifest.required_credentials.append(
+            CredentialSpec(name="Workspace", type="path", vault_key="shared_workspace.host_path")
+        )
+
+        resp = client.post("/connectors/apitest/credentials", json={
+            "vault_key": "shared_workspace.host_path",
+            "value": str(tmp_path / "workspace"),
+            "type": "path",
+        })
+
+        assert resp.status_code == 200
+        assert vault.exists("shared_workspace.host_path") is True

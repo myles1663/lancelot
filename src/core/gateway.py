@@ -317,8 +317,6 @@ def _sync_gateway_runtime_bindings() -> None:
         "_shutdown_scheduler": _gateway_boot_support.shutdown_scheduler,
         "_init_health_monitor": _gateway_boot_support.init_health_monitor,
         "_shutdown_health_monitor": _gateway_boot_support.shutdown_health_monitor,
-        "_init_bal": _gateway_boot_support.init_bal,
-        "_shutdown_bal": _gateway_boot_support.shutdown_bal,
         "_init_host_bridge": _gateway_boot_support.init_host_bridge,
         "_shutdown_host_bridge": _gateway_boot_support.shutdown_host_bridge,
         "_init_uab": _gateway_boot_support.init_uab,
@@ -418,10 +416,6 @@ def _bootstrap_model_discovery():
 def _resolve_peer_key(peer_registry, topology, instance_id: str):
     _sync_gateway_runtime_bindings()
     return _gateway_boot_support.resolve_peer_key(peer_registry, topology, instance_id)
-
-def _shutdown_bal(objects):
-    _sync_gateway_runtime_bindings()
-    return _gateway_boot_support.shutdown_bal(objects)
 
 def _shutdown_hive(objects):
     _sync_gateway_runtime_bindings()

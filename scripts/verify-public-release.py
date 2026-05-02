@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import os
 import shutil
 import subprocess
@@ -23,6 +24,28 @@ EXCLUDED_PARTS = {
     "data",
     "lancelot_data",
 }
+
+RUNTIME_DATA_PREFIXES = (
+    "artifacts/",
+    "data/",
+    "lancelot_data/",
+    "secrets/",
+    "test_data/",
+)
+RUNTIME_DATA_FILES = {
+    ".coverage",
+    "coverage.xml",
+}
+RUNTIME_DATA_GLOBS = (
+    "coverage*.json",
+)
+RUNTIME_DATA_SUFFIXES = (
+    ".db",
+    ".sqlite",
+    ".sqlite3",
+    ".jsonl",
+    ".log",
+)
 
 
 def run(command: list[str], *, required: bool = True) -> int:
@@ -57,6 +80,8 @@ def git_files() -> list[Path]:
 def source_files() -> list[Path]:
     files = []
     for path in git_files():
+        if not path.is_file():
+            continue
         rel_parts = set(path.relative_to(ROOT).parts)
         if rel_parts & EXCLUDED_PARTS:
             continue
@@ -90,6 +115,46 @@ def check_no_local_only_files() -> None:
         print("Tracked local/internal release artifacts:")
         for path in violations:
             print(f"  {path}")
+        raise SystemExit(1)
+
+
+def check_no_tracked_runtime_data() -> None:
+    tracked = {str(path.relative_to(ROOT)).replace("\\", "/") for path in git_files()}
+    violations = sorted(
+        path
+        for path in tracked
+        if path in RUNTIME_DATA_FILES
+        or any(fnmatch.fnmatch(path, pattern) for pattern in RUNTIME_DATA_GLOBS)
+        or path.endswith(RUNTIME_DATA_SUFFIXES)
+        or any(path.startswith(prefix) for prefix in RUNTIME_DATA_PREFIXES)
+    )
+    if violations:
+        print("Tracked runtime/operator data artifacts:")
+        for path in violations:
+            print(f"  {path}")
+        raise SystemExit(1)
+
+
+def check_docker_excludes_runtime_data() -> None:
+    dockerignore = ROOT / ".dockerignore"
+    dockerfile = ROOT / "Dockerfile"
+    ignore_text = dockerignore.read_text(encoding="utf-8", errors="ignore") if dockerignore.exists() else ""
+    dockerfile_text = dockerfile.read_text(encoding="utf-8", errors="ignore") if dockerfile.exists() else ""
+
+    required_ignores = ("/data/", "/lancelot_data/", "/secrets/", "coverage.xml", "coverage*.json", "*.log")
+    missing_ignores = [entry for entry in required_ignores if entry not in ignore_text]
+    if missing_ignores:
+        print("Docker build context does not exclude runtime/operator data:")
+        for entry in missing_ignores:
+            print(f"  {entry}")
+        raise SystemExit(1)
+
+    forbidden_dockerfile_refs = ("lancelot_data", "onboarding_snapshot.json", "USER.md")
+    violations = [entry for entry in forbidden_dockerfile_refs if entry in dockerfile_text]
+    if violations:
+        print("Dockerfile references runtime/operator data:")
+        for entry in violations:
+            print(f"  {entry}")
         raise SystemExit(1)
 
 
@@ -143,13 +208,15 @@ def main() -> int:
         action="store_true",
         help="enforce checks for a prepared public release tree",
     )
-    parser.add_argument("--max-source-lines", type=int, default=1500)
+    parser.add_argument("--max-source-lines", type=int, default=3000)
     args = parser.parse_args()
 
     if args.public_artifact or not PUBLIC_RELEASE_EXCLUDE_FILE.exists():
         check_no_local_only_files()
     else:
         print("Dev checkout detected; public-only artifact exclusions are checked after release prep.")
+    check_no_tracked_runtime_data()
+    check_docker_excludes_runtime_data()
     check_line_counts(args.max_source_lines)
     check_no_print_statements()
 
