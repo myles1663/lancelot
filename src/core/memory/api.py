@@ -219,6 +219,25 @@ class QuarantineResponse(BaseModel):
     items: list[QuarantineItemResponse]
 
 
+def _quarantine_detection_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """Return operator review metadata for a quarantined memory item."""
+    if not metadata:
+        return {}
+
+    review_metadata: dict[str, Any] = {}
+    for key in (
+        "injection_detection",
+        "ethics_rule",
+        "ethics_reason",
+        "ethics_exclude_from_context",
+        "superseded_claims",
+        "promotion_decision",
+    ):
+        if key in metadata:
+            review_metadata[key] = metadata[key]
+    return review_metadata
+
+
 class PromoteRequest(BaseModel):
     """Request to promote a quarantined item."""
     model_config = ConfigDict(extra="forbid")
@@ -738,14 +757,20 @@ async def get_quarantine(service: dict = Depends(get_memory_service)):
 
     items = []
     for item in quarantine_manager.list_quarantined_items():
+        metadata = item.metadata or {}
+        flagged_reason = metadata.get("flagged_reason")
+        if not flagged_reason and metadata.get("superseded_claims"):
+            flagged_reason = "claim_supersession"
+        if not flagged_reason and metadata.get("promotion_decision"):
+            flagged_reason = "promotion_review"
         items.append(QuarantineItemResponse(
             id=item.id,
             tier=item.tier.value,
             title=item.title,
             content=item.content[:200],
             status=item.status.value,
-            flagged_reason=(item.metadata or {}).get("flagged_reason"),
-            detection_metadata=(item.metadata or {}).get("injection_detection", {}),
+            flagged_reason=flagged_reason,
+            detection_metadata=_quarantine_detection_metadata(metadata),
         ))
 
     return QuarantineResponse(

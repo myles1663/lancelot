@@ -4,6 +4,7 @@ import { usePolling, usePageTitle } from '@/hooks'
 import { fetchCoreBlocks, fetchQuarantine, fetchMemoryStats, fetchRecentMemory, searchMemory, promoteItem } from '@/api'
 import { MetricCard, EmptyState } from '@/components'
 import type { CoreBlock, SearchResultItem, RecentMemoryItem } from '@/types/api'
+import { quarantineBadgeClass, quarantineReviewSummary } from '@/utils/memoryReview'
 
 function formatTimestamp(value: string): string {
   try {
@@ -163,21 +164,41 @@ export function MemoryPanel() {
           <p className="text-sm text-text-muted">No quarantined items</p>
         ) : (
           <div className="space-y-3">
-            {quarantineItems.map((item) => (
-              <div key={item.id} className="p-3 bg-surface-card-elevated rounded-md border border-border-default">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-text-primary">{item.title}</span>
-                  <span className="text-xs font-mono text-state-degraded">{item.status}</span>
+            {quarantineItems.map((item) => {
+              const review = quarantineReviewSummary(item)
+              return (
+                <div key={item.id} className="p-3 bg-surface-card-elevated rounded-md border border-border-default">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm text-text-primary truncate">{item.title}</span>
+                        <span className={`rounded border px-2 py-0.5 text-[10px] font-medium ${quarantineBadgeClass(review.tone)}`}>
+                          {review.label}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-text-muted">{review.description}</p>
+                    </div>
+                    <span className="text-xs font-mono text-state-degraded">{item.status}</span>
+                  </div>
+                  {review.details.length > 0 ? (
+                    <div className="mt-3 rounded border border-border-default bg-surface-input px-3 py-2">
+                      {review.details.slice(0, 2).map((detail) => (
+                        <div key={detail} className="text-[10px] text-text-secondary">
+                          {detail}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  <p className="text-xs text-text-secondary mt-2 whitespace-pre-wrap break-words">{item.content}</p>
+                  <button
+                    onClick={() => handlePromote(item.id)}
+                    className="mt-2 px-3 py-1 text-xs bg-state-healthy/15 text-state-healthy rounded hover:bg-state-healthy/25"
+                  >
+                    Promote
+                  </button>
                 </div>
-                <p className="text-xs text-text-secondary mt-1 whitespace-pre-wrap break-words">{item.content}</p>
-                <button
-                  onClick={() => handlePromote(item.id)}
-                  className="mt-2 px-3 py-1 text-xs bg-state-healthy/15 text-state-healthy rounded hover:bg-state-healthy/25"
-                >
-                  Promote
-                </button>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </section>

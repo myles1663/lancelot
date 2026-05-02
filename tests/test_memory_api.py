@@ -491,6 +491,34 @@ class TestQuarantineEndpoints:
         assert isinstance(data["core_blocks"], list)
         assert isinstance(data["items"], list)
 
+    def test_get_quarantine_includes_review_metadata(self, client, app):
+        """Quarantine listing returns review details for operator triage."""
+        service = next(iter(app.dependency_overrides.values()))()
+        item = MemoryItem(
+            id="review_metadata_item",
+            tier=MemoryTier.episodic,
+            namespace="global",
+            title="Needs policy review",
+            content="Quarantined content",
+            status=MemoryStatus.quarantined,
+            metadata={
+                "flagged_reason": "memory_ethics",
+                "ethics_rule": "pii_requires_consent",
+                "ethics_reason": "Long-term memory containing PII requires explicit consent",
+                "injection_detection": {"reason": "instruction override", "matched": "ignore previous"},
+            },
+        )
+        service["store_manager"].episodic.insert(item)
+
+        response = client.get("/memory/quarantine")
+
+        assert response.status_code == 200
+        data = response.json()
+        listed = next(entry for entry in data["items"] if entry["id"] == "review_metadata_item")
+        assert listed["flagged_reason"] == "memory_ethics"
+        assert listed["detection_metadata"]["ethics_rule"] == "pii_requires_consent"
+        assert listed["detection_metadata"]["injection_detection"]["matched"] == "ignore previous"
+
     def test_promote_nonexistent_item(self, client):
         """Test promoting a nonexistent item."""
         response = client.post(
