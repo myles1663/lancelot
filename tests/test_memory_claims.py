@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.core.memory.schemas import MemoryItem, MemoryTier
+from src.core.memory.schemas import MemoryItem, MemoryStatus, MemoryTier
 from src.core.memory.sqlite_store import MemoryStoreManager
 
 
@@ -23,20 +23,42 @@ def _claim_item(item_id: str, value: str) -> MemoryItem:
     )
 
 
-def test_new_claim_supersedes_prior_contradiction(tmp_data_dir):
-    """A newer contradictory claim supersedes the older entity/attribute value."""
+def test_new_contradictory_claim_is_quarantined_until_approval(tmp_data_dir):
+    """A newer contradictory claim waits for review before superseding the old value."""
     manager = MemoryStoreManager(data_dir=tmp_data_dir)
     manager.episodic.insert(_claim_item("claim-old", "blocked"))
     manager.episodic.insert(_claim_item("claim-new", "ready"))
 
     history = manager.episodic.get_claim_history("Atlas", "status")
     old_entry = next(entry for entry in history if entry["item_id"] == "claim-old")
+    pending = manager.episodic.get("claim-new")
+
+    assert old_entry["valid_until"] is None
+    assert old_entry["superseded_by"] is None
+    assert pending is not None
+    assert pending.status == MemoryStatus.quarantined
+    assert pending.metadata["flagged_reason"] == "claim_supersession"
+
+
+def test_approved_contradictory_claim_supersedes_prior_value(tmp_data_dir):
+    """Approval applies the contradiction resolution and activates the new claim."""
+    manager = MemoryStoreManager(data_dir=tmp_data_dir)
+    manager.episodic.insert(_claim_item("claim-old", "blocked"))
+    manager.episodic.insert(_claim_item("claim-new", "ready"))
+
+    manager.episodic.update_status("claim-new", MemoryStatus.active)
+
+    history = manager.episodic.get_claim_history("Atlas", "status")
+    old_entry = next(entry for entry in history if entry["item_id"] == "claim-old")
     new_entry = next(entry for entry in history if entry["item_id"] == "claim-new")
+    approved = manager.episodic.get("claim-new")
 
     assert old_entry["valid_until"] is not None
     assert old_entry["superseded_by"] == "claim-new"
     assert new_entry["valid_until"] is None
     assert new_entry["superseded_by"] is None
+    assert approved is not None
+    assert approved.status == MemoryStatus.active
 
 
 def test_default_retrieval_prefers_current_claim(tmp_data_dir):
@@ -44,6 +66,7 @@ def test_default_retrieval_prefers_current_claim(tmp_data_dir):
     manager = MemoryStoreManager(data_dir=tmp_data_dir)
     manager.episodic.insert(_claim_item("claim-old", "blocked"))
     manager.episodic.insert(_claim_item("claim-new", "ready"))
+    manager.episodic.update_status("claim-new", MemoryStatus.active)
 
     results = manager.search_all("Atlas status", tiers=[MemoryTier.episodic], limit=10)
 
@@ -55,6 +78,7 @@ def test_claim_supersede_emits_receipt(tmp_data_dir):
     manager = MemoryStoreManager(data_dir=tmp_data_dir)
     manager.episodic.insert(_claim_item("claim-old", "blocked"))
     manager.episodic.insert(_claim_item("claim-new", "ready"))
+    manager.episodic.update_status("claim-new", MemoryStatus.active)
 
     receipts = manager.episodic._receipt_emitter.receipt_service.list(
         action_type="memory_claim_supersede"

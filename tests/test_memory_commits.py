@@ -556,6 +556,45 @@ class TestRollback:
         assert restored.content == "After"
         assert restored.confidence == 0.9
 
+    def test_repeated_rollback_of_same_commit_is_noop(self, commit_manager, store_manager):
+        """Rolling back the same original commit twice should not overwrite later work."""
+        store_manager.working.insert(MemoryItem(
+            id="idempotent_rollback",
+            tier=MemoryTier.working,
+            title="Idempotent rollback",
+            content="Before",
+            confidence=0.4,
+        ))
+        commit_id = commit_manager.begin_edits(created_by="agent")
+        commit_manager.add_edit(
+            commit_id=commit_id,
+            op=MemoryEditOp.replace,
+            target="working:idempotent_rollback",
+            after="After",
+            reason="Update item",
+            confidence=0.9,
+        )
+        commit_manager.finish_edits(commit_id)
+
+        rollback_id = commit_manager.rollback(commit_id=commit_id, reason="undo", created_by="owner")
+        assert store_manager.working.get("idempotent_rollback").content == "Before"
+
+        store_manager.working.update(MemoryItem(
+            id="idempotent_rollback",
+            tier=MemoryTier.working,
+            title="Idempotent rollback",
+            content="Later work",
+            confidence=0.7,
+        ))
+        second_rollback_id = commit_manager.rollback(
+            commit_id=commit_id,
+            reason="undo again",
+            created_by="owner",
+        )
+
+        assert second_rollback_id == rollback_id
+        assert store_manager.working.get("idempotent_rollback").content == "Later work"
+
     def test_item_only_rollback_survives_new_commit_manager(self, core_store, store_manager, tmp_data_dir):
         """Persisted item undo logs allow item-only rollback after manager restart."""
         manager = CommitManager(core_store=core_store, store_manager=store_manager, data_dir=tmp_data_dir)

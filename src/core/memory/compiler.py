@@ -576,6 +576,8 @@ class ContextCompilerService:
             query=query,
             tiers=[MemoryTier.episodic, MemoryTier.archival],
             limit=retrieval_limit,
+            total_limit=retrieval_limit,
+            current_quest_id=quest_id or "",
         )
         self._quarantine_injection_candidates([*working_items, *retrieved_items])
 

@@ -697,12 +697,16 @@ class MemoryJobExecutor:
                 cold_path = None
                 evicted_items: list[MemoryItem] = []
                 if evict_count and not dry_run:
-                    evicted_items = store.evict_lru(max_items=cap, batch_size=batch_size)
+                    evicted_items = store.list_lru_eviction_candidates(
+                        max_items=cap,
+                        batch_size=batch_size,
+                    )
                     cold_path_obj = self._cold_storage.write_items(
                         tier=tier,
                         items=evicted_items,
                         reason="tier_cap_lru_eviction",
                     )
+                    store.delete_items([item.id for item in evicted_items])
                     cold_path = str(cold_path_obj) if cold_path_obj else None
                     affected += len(evicted_items)
                 elif evict_count:

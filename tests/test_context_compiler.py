@@ -598,6 +598,35 @@ class TestContextCompilerService:
         assert "retrieval-tracked" in ctx.included_memory_item_ids
         assert stored.last_retrieved_at is not None
 
+    def test_compile_for_objective_prioritizes_current_quest_memory(self, tmp_data_dir):
+        """Quest-scoped retrieval should outrank otherwise similar global memories."""
+        service = ContextCompilerService(data_dir=tmp_data_dir)
+        service.memory_manager.episodic.insert(MemoryItem(
+            id="global-atlas-memory",
+            tier=MemoryTier.episodic,
+            namespace="global",
+            title="Atlas deployment",
+            content="Atlas deployment checkpoint is globally scoped.",
+            confidence=0.95,
+        ))
+        service.memory_manager.episodic.insert(MemoryItem(
+            id="quest-atlas-memory",
+            tier=MemoryTier.episodic,
+            namespace="quest:quest-atlas",
+            title="Atlas deployment",
+            content="Atlas deployment checkpoint is quest scoped.",
+            confidence=0.8,
+        ))
+
+        ctx = service.compile_for_objective(
+            objective="Atlas deployment checkpoint",
+            quest_id="quest-atlas",
+            search_query="Atlas deployment checkpoint",
+            retrieval_limit=1,
+        )
+
+        assert ctx.included_memory_item_ids == ["quest-atlas-memory"]
+
 
 # ---------------------------------------------------------------------------
 # Determinism Tests

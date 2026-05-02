@@ -304,6 +304,14 @@ class CommitManager:
             commit = self.load_commit(commit_id)
             if commit is None:
                 raise CommitError(f"Commit {commit_id} not found")
+            existing_rollback = self._find_existing_rollback(commit_id)
+            if existing_rollback is not None:
+                logger.info(
+                    "Rollback for commit %s already exists as %s",
+                    commit_id,
+                    existing_rollback.commit_id,
+                )
+                return existing_rollback.commit_id
             snapshot = self._snapshots.get(commit_id)
             if snapshot is None and (commit.has_core_edits() or not self._has_item_undo_entries(commit_id)):
                 raise CommitError(f"Snapshot for commit {commit_id} not found")
@@ -331,6 +339,27 @@ class CommitManager:
 
             logger.info("Rolled back commit %s -> %s", commit_id, rollback_commit.commit_id)
             return rollback_commit.commit_id
+
+    def _find_existing_rollback(self, commit_id: str) -> Optional[MemoryCommit]:
+        """Return the already-committed rollback for a commit, if one exists."""
+        commit_files = sorted(
+            self.commits_dir.glob("*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for commit_file in commit_files:
+            try:
+                with open(commit_file, "r", encoding="utf-8") as handle:
+                    commit = MemoryCommit.model_validate(json.load(handle))
+            except Exception as exc:
+                logger.warning("Failed to inspect commit file %s: %s", commit_file, exc)
+                continue
+            if (
+                commit.status == CommitStatus.committed
+                and commit.rollback_of == commit_id
+            ):
+                return commit
+        return None
 
     def _get_current_content(self, target: str) -> Optional[str]:
         """Get current content for a target."""

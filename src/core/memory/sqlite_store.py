@@ -452,8 +452,8 @@ class MemoryItemStore:
                 self._replace_entities(cursor, item)
                 self._replace_claims(cursor, item)
                 cursor.execute(
-                    "UPDATE memory_items SET metadata = ? WHERE id = ?",
-                    (json.dumps(item.metadata), item.id),
+                    "UPDATE memory_items SET status = ?, metadata = ? WHERE id = ?",
+                    (item.status.value, json.dumps(item.metadata), item.id),
                 )
                 conn.commit()
                 logger.debug("Inserted memory item %s", item.id)
@@ -521,8 +521,8 @@ class MemoryItemStore:
                 self._replace_entities(cursor, item)
                 self._replace_claims(cursor, item)
                 cursor.execute(
-                    "UPDATE memory_items SET metadata = ? WHERE id = ?",
-                    (json.dumps(item.metadata), item.id),
+                    "UPDATE memory_items SET status = ?, metadata = ? WHERE id = ?",
+                    (item.status.value, json.dumps(item.metadata), item.id),
                 )
             conn.commit()
             if updated:
@@ -584,10 +584,52 @@ class MemoryItemStore:
         )
 
     def _replace_claims(self, cursor: sqlite3.Cursor, item: MemoryItem) -> None:
-        """Rebuild structured factual claims and supersede contradictory prior claims."""
+        """Rebuild structured factual claims, quarantining contradictions until approval."""
         now = datetime.utcnow().isoformat()
         cursor.execute("DELETE FROM memory_claims WHERE item_id = ?", (item.id,))
-        for claim in extract_claims(item):
+        claims = extract_claims(item)
+        pending_supersessions: list[dict[str, Any]] = []
+        for claim in claims:
+            cursor.execute(
+                """
+                SELECT item_id, value FROM memory_claims
+                WHERE entity_normalized = ?
+                  AND attribute = ?
+                  AND item_id != ?
+                  AND superseded_by IS NULL
+                  AND value != ?
+                """,
+                [claim.entity_normalized, claim.attribute, item.id, claim.value],
+            )
+            superseded_claims = [
+                {"item_id": row["item_id"], "value": row["value"]}
+                for row in cursor.fetchall()
+            ]
+            if superseded_claims:
+                pending_supersessions.append({
+                    "entity_normalized": claim.entity_normalized,
+                    "attribute": claim.attribute,
+                    "new_value": claim.value,
+                    "superseded_count": len(superseded_claims),
+                    "superseded_item_ids": [entry["item_id"] for entry in superseded_claims],
+                    "superseded_claims": superseded_claims,
+                })
+
+        metadata = dict(item.metadata or {})
+        if pending_supersessions and not metadata.get("claim_supersession_approved"):
+            metadata["claim_supersession_pending"] = True
+            metadata["flagged_reason"] = "claim_supersession"
+            metadata["superseded_claims"] = pending_supersessions
+            item.metadata = metadata
+            item.status = MemoryStatus.quarantined
+            return
+
+        metadata.pop("claim_supersession_pending", None)
+        if metadata.get("flagged_reason") == "claim_supersession":
+            metadata.pop("flagged_reason", None)
+        item.metadata = metadata
+
+        for claim in claims:
             cursor.execute(
                 """
                 SELECT item_id, value FROM memory_claims
@@ -990,13 +1032,30 @@ class MemoryItemStore:
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            item: MemoryItem | None = None
+            if status == MemoryStatus.active:
+                cursor.execute("SELECT * FROM memory_items WHERE id = ?", [item_id])
+                row = cursor.fetchone()
+                if row:
+                    item = self._row_to_item(row)
+                    if (item.metadata or {}).get("claim_supersession_pending"):
+                        metadata = dict(item.metadata or {})
+                        metadata["claim_supersession_approved"] = True
+                        item.metadata = metadata
+                        item.status = status
+                        self._replace_claims(cursor, item)
             cursor.execute(
                 """
                 UPDATE memory_items
-                SET status = ?, updated_at = ?
+                SET status = ?, updated_at = ?, metadata = COALESCE(?, metadata)
                 WHERE id = ?
                 """,
-                [status.value, datetime.utcnow().isoformat(), item_id],
+                [
+                    status.value,
+                    datetime.utcnow().isoformat(),
+                    json.dumps(item.metadata) if item is not None else None,
+                    item_id,
+                ],
             )
             conn.commit()
             return cursor.rowcount > 0
@@ -1273,8 +1332,8 @@ class MemoryItemStore:
                 )
             return count
 
-    def evict_lru(self, *, max_items: int, batch_size: int = 100) -> list[MemoryItem]:
-        """Delete excess items in deprecated-first, least-recently-retrieved order."""
+    def list_lru_eviction_candidates(self, *, max_items: int, batch_size: int = 100) -> list[MemoryItem]:
+        """Return excess items in deprecated-first, least-recently-retrieved order."""
         self._ensure_initialized()
         if max_items < 0:
             raise ValueError("max_items must be non-negative")
@@ -1303,12 +1362,38 @@ class MemoryItemStore:
                 (self.tier.value, limit),
             )
             candidates = [self._row_to_item(row) for row in cursor.fetchall()]
-            for item in candidates:
-                cursor.execute("DELETE FROM memory_entities WHERE item_id = ?", (item.id,))
-                cursor.execute("DELETE FROM memory_claims WHERE item_id = ?", (item.id,))
-                cursor.execute("DELETE FROM memory_items WHERE id = ?", (item.id,))
-            conn.commit()
             return candidates
+
+    def delete_items(self, item_ids: list[str]) -> int:
+        """Delete a batch of items and associated sidecar rows."""
+        self._ensure_initialized()
+        if not item_ids:
+            return 0
+        placeholders = ",".join("?" * len(item_ids))
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"DELETE FROM memory_entities WHERE item_id IN ({placeholders})",
+                item_ids,
+            )
+            cursor.execute(
+                f"DELETE FROM memory_claims WHERE item_id IN ({placeholders})",
+                item_ids,
+            )
+            cursor.execute(
+                f"DELETE FROM memory_items WHERE id IN ({placeholders})",
+                item_ids,
+            )
+            deleted = cursor.rowcount
+            conn.commit()
+            return deleted
+
+    def evict_lru(self, *, max_items: int, batch_size: int = 100) -> list[MemoryItem]:
+        """Delete excess items in deprecated-first, least-recently-retrieved order."""
+        candidates = self.list_lru_eviction_candidates(max_items=max_items, batch_size=batch_size)
+        if candidates:
+            self.delete_items([item.id for item in candidates])
+        return candidates
 
     def get_items_by_ids(self, item_ids: list[str]) -> list[MemoryItem]:
         """
@@ -1489,6 +1574,7 @@ class MemoryStoreManager:
         }
         query_tokens = self._query_tokens(query)
         ranked: dict[str, tuple[float, MemoryItem]] = {}
+        candidate_limit = max(int(limit), int(total_limit or 0), 10)
         for tier in tiers:
             if tier == MemoryTier.core:
                 continue
@@ -1497,13 +1583,13 @@ class MemoryStoreManager:
                 *store.search_by_entities(
                     query,
                     namespace=namespace,
-                    limit=limit,
+                    limit=candidate_limit,
                     include_blobs=include_blobs,
                 ),
                 *store.search(
                     query,
                     namespace=namespace,
-                    limit=limit,
+                    limit=candidate_limit,
                     include_blobs=include_blobs,
                 ),
             ]

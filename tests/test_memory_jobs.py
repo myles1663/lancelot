@@ -596,6 +596,46 @@ class TestMemoryEviction:
         assert result.details["tiers"]["working"]["evicted"] == 0
         assert store.get("dry-evict") is not None
 
+    def test_eviction_preserves_items_when_cold_storage_write_fails(
+        self,
+        job_executor,
+        store_manager,
+        monkeypatch,
+    ):
+        """Eviction must not delete source rows before cold-storage export succeeds."""
+        store = store_manager.get_store(MemoryTier.episodic)
+        store.insert(MemoryItem(
+            id="export-fail-old",
+            tier=MemoryTier.episodic,
+            title="Export failure old",
+            content="This item should survive a failed cold-storage export.",
+            confidence=0.9,
+            last_retrieved_at=datetime.utcnow() - timedelta(days=5),
+        ))
+        store.insert(MemoryItem(
+            id="export-fail-new",
+            tier=MemoryTier.episodic,
+            title="Export failure new",
+            content="This item remains above the cap.",
+            confidence=0.9,
+            last_retrieved_at=datetime.utcnow(),
+        ))
+
+        def fail_write(*args, **kwargs):
+            raise OSError("cold storage unavailable")
+
+        monkeypatch.setattr(job_executor._cold_storage, "write_items", fail_write)
+
+        result = job_executor.run_eviction_job(
+            max_working_items=100,
+            max_episodic_items=1,
+            max_archival_items=100,
+        )
+
+        assert result.success is False
+        assert store.get("export-fail-old") is not None
+        assert store.get("export-fail-new") is not None
+
 
 # ---------------------------------------------------------------------------
 # Integrity Audit Tests
