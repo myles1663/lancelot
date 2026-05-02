@@ -65,6 +65,12 @@ python -m pytest -q tests/test_subsystem_runtime_contract.py
 For a fuller command-by-command path, including live receipt-chain validation inside Docker, see the [Proof Walkthrough](docs/proof-walkthrough.md).
 For release-candidate checks, dependency lockfiles, and Docker image pinning guidance, see [Release Verification](docs/release-verification.md).
 
+The latest release-readiness pass recorded `7,216 passed`, `24 skipped`, `31 deselected`, and `90.5085%` Python line coverage with:
+
+```bash
+python -m pytest -q --cov=src --cov-report=term-missing --cov-report=json:coverage-full.json
+```
+
 ## What Lancelot Is Not
 
 - Not a consumer chatbot or companion app.
@@ -148,6 +154,7 @@ The diagram shows the system boundary clearly: governance sits in front of execu
 Key guarantees are backed by contract tests you can run directly:
 
 - Release verification: `python scripts/verify-public-release.py`
+- Full Python suite coverage baseline: `90.5085%` line coverage in the latest release-readiness pass
 - Receipt immutability and integrity-chain validation: [tests/test_receipts.py](tests/test_receipts.py)
 - HIVE scoped execution and boundary enforcement: [tests/hive/test_runtime.py](tests/hive/test_runtime.py)
 - Kill switch propagation and fail-closed behavior: [tests/test_kill_switch_contract.py](tests/test_kill_switch_contract.py)

@@ -45,6 +45,19 @@ python -m pytest -q \
   tests/test_token_url_hardening.py::test_live_websocket_rejects_query_param_tokens
 ```
 
+For the full Python release-readiness suite with coverage:
+
+```bash
+python -m pytest -q --cov=src --cov-report=term-missing --cov-report=json:coverage-full.json
+```
+
+The latest release-readiness pass recorded:
+
+```text
+7,216 passed, 24 skipped, 31 deselected
+90.5085% Python line coverage
+```
+
 Then verify the UI and UAB surfaces:
 
 ```bash
@@ -80,6 +93,7 @@ The Dockerfile pins several build-time tools directly, including the `uv` versio
 
 - [ ] Public release verification passes.
 - [ ] Focused Python proof tests pass.
+- [ ] Full Python coverage run is reviewed for the release candidate.
 - [ ] War Room typecheck and production build pass.
 - [ ] UAB build and tests pass.
 - [ ] Docker Compose config resolves.

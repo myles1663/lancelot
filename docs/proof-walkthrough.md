@@ -138,6 +138,16 @@ if [ "${cleanup_env:-0}" = "1" ]; then rm .env; fi
 
 No output means Compose accepted the configuration.
 
+## Optional Full Coverage Run
+
+For a full release-readiness view, run:
+
+```bash
+python -m pytest -q --cov=src --cov-report=term-missing --cov-report=json:coverage-full.json
+```
+
+The latest release-readiness pass recorded `7,216 passed`, `24 skipped`, `31 deselected`, and `90.5085%` Python line coverage.
+
 ## What This Does Not Prove
 
 This walkthrough does not prove that every feature-gated subsystem is production-ready. Federation, A2A, MCP governance, Time Travel, Observability, and broad desktop automation coverage should be evaluated separately. The default path to inspect first is governance, receipts, health/readiness, the core tool bridge, and the War Room.
