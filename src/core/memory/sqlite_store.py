@@ -18,6 +18,7 @@ from __future__ import annotations
 import atexit
 import json
 import logging
+import re
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -37,6 +38,10 @@ from .schemas import (
     MemoryTier,
     Provenance,
 )
+from .ethics import MemoryEthicsEvaluator
+from .claims import extract_claims
+from .entities import extract_entities, extract_entities_from_item_fields, normalize_entity
+from .receipt_events import MemoryReceiptEmitter
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +54,7 @@ class MemoryItemStore:
     Each tier (working, episodic, archival) uses a separate database file.
     """
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 5
 
     # Schema for memory items table
     CREATE_ITEMS_TABLE = """
@@ -63,6 +68,7 @@ class MemoryItemStore:
         confidence REAL NOT NULL DEFAULT 0.5,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
+        last_retrieved_at TEXT,
         expires_at TEXT,
         decay_half_life_days INTEGER,
         provenance TEXT NOT NULL DEFAULT '[]',
@@ -122,6 +128,77 @@ class MemoryItemStore:
     );
     """
 
+    CREATE_COMPACTION_JOURNAL_TABLE = """
+    CREATE TABLE IF NOT EXISTS compaction_journal (
+        compaction_id TEXT PRIMARY KEY,
+        namespace TEXT NOT NULL,
+        source_item_ids TEXT NOT NULL DEFAULT '[]',
+        archival_item_id TEXT,
+        status TEXT NOT NULL,
+        error TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        metadata TEXT NOT NULL DEFAULT '{}'
+    );
+    """
+
+    CREATE_COMPACTION_JOURNAL_INDEXES = """
+    CREATE INDEX IF NOT EXISTS idx_compaction_journal_status ON compaction_journal(status);
+    CREATE INDEX IF NOT EXISTS idx_compaction_journal_namespace ON compaction_journal(namespace);
+    """
+
+    CREATE_COMMIT_UNDO_LOG_TABLE = """
+    CREATE TABLE IF NOT EXISTS commit_undo_log (
+        commit_id TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        tier TEXT NOT NULL,
+        pre_state TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (commit_id, item_id)
+    );
+    """
+
+    CREATE_COMMIT_UNDO_LOG_INDEXES = """
+    CREATE INDEX IF NOT EXISTS idx_undo_commit ON commit_undo_log(commit_id);
+    """
+
+    CREATE_ENTITIES_TABLE = """
+    CREATE TABLE IF NOT EXISTS memory_entities (
+        item_id TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_value TEXT NOT NULL,
+        entity_normalized TEXT NOT NULL,
+        confidence REAL NOT NULL DEFAULT 0.8,
+        PRIMARY KEY (item_id, entity_type, entity_normalized)
+    );
+    """
+
+    CREATE_ENTITIES_INDEXES = """
+    CREATE INDEX IF NOT EXISTS idx_entities_normalized ON memory_entities(entity_normalized);
+    CREATE INDEX IF NOT EXISTS idx_entities_type ON memory_entities(entity_type);
+    CREATE INDEX IF NOT EXISTS idx_entities_item ON memory_entities(item_id);
+    """
+
+    CREATE_CLAIMS_TABLE = """
+    CREATE TABLE IF NOT EXISTS memory_claims (
+        item_id TEXT NOT NULL,
+        entity_normalized TEXT NOT NULL,
+        attribute TEXT NOT NULL,
+        value TEXT NOT NULL,
+        valid_from TEXT NOT NULL,
+        valid_until TEXT,
+        superseded_by TEXT,
+        PRIMARY KEY (item_id, entity_normalized, attribute)
+    );
+    """
+
+    CREATE_CLAIMS_INDEXES = """
+    CREATE INDEX IF NOT EXISTS idx_claims_entity_attr ON memory_claims(entity_normalized, attribute);
+    CREATE INDEX IF NOT EXISTS idx_claims_valid ON memory_claims(valid_until);
+    CREATE INDEX IF NOT EXISTS idx_claims_item ON memory_claims(item_id);
+    """
+
     def __init__(
         self,
         data_dir: str | Path,
@@ -150,6 +227,8 @@ class MemoryItemStore:
         self._local = threading.local()
         self._initialized = False
         self._init_lock = threading.Lock()
+        self._ethics = MemoryEthicsEvaluator()
+        self._receipt_emitter = MemoryReceiptEmitter(self.data_dir)
 
     @contextmanager
     def _get_connection(self) -> Iterator[sqlite3.Connection]:
@@ -186,9 +265,20 @@ class MemoryItemStore:
                 # Create tables
                 cursor.executescript(self.CREATE_META_TABLE)
                 cursor.executescript(self.CREATE_ITEMS_TABLE)
+                cursor.executescript(self.CREATE_COMPACTION_JOURNAL_TABLE)
+                cursor.executescript(self.CREATE_COMMIT_UNDO_LOG_TABLE)
+                cursor.executescript(self.CREATE_ENTITIES_TABLE)
+                cursor.executescript(self.CREATE_CLAIMS_TABLE)
                 cursor.executescript(self.CREATE_FTS_TABLE)
                 cursor.executescript(self.CREATE_FTS_TRIGGERS)
                 cursor.executescript(self.CREATE_INDEXES)
+                cursor.executescript(self.CREATE_COMPACTION_JOURNAL_INDEXES)
+                cursor.executescript(self.CREATE_COMMIT_UNDO_LOG_INDEXES)
+                cursor.executescript(self.CREATE_ENTITIES_INDEXES)
+                cursor.executescript(self.CREATE_CLAIMS_INDEXES)
+                self._migrate_schema(cursor)
+                self._backfill_missing_entities(cursor)
+                self._backfill_missing_claims(cursor)
 
                 # Set schema version
                 cursor.execute(
@@ -203,6 +293,40 @@ class MemoryItemStore:
                 "MemoryItemStore initialized for tier=%s at %s",
                 self.tier.value, self.db_file
             )
+
+    def _migrate_schema(self, cursor: sqlite3.Cursor) -> None:
+        """Apply additive schema migrations for existing memory databases."""
+        cursor.execute("PRAGMA table_info(memory_items)")
+        columns = {row["name"] for row in cursor.fetchall()}
+        if "last_retrieved_at" not in columns:
+            cursor.execute("ALTER TABLE memory_items ADD COLUMN last_retrieved_at TEXT")
+
+    def _backfill_missing_entities(self, cursor: sqlite3.Cursor) -> None:
+        """Populate entity sidecar rows for items created before the entity index."""
+        cursor.execute(
+            """
+            SELECT mi.* FROM memory_items mi
+            WHERE NOT EXISTS (
+                SELECT 1 FROM memory_entities me WHERE me.item_id = mi.id
+            )
+            """
+        )
+        for row in cursor.fetchall():
+            item = self._row_to_item(row)
+            self._replace_entities(cursor, item)
+
+    def _backfill_missing_claims(self, cursor: sqlite3.Cursor) -> None:
+        """Populate claim rows for items created before the claim index."""
+        cursor.execute(
+            """
+            SELECT mi.* FROM memory_items mi
+            WHERE NOT EXISTS (
+                SELECT 1 FROM memory_claims mc WHERE mc.item_id = mi.id
+            )
+            """
+        )
+        for row in cursor.fetchall():
+            self._replace_claims(cursor, self._row_to_item(row))
 
     def _ensure_initialized(self) -> None:
         """Ensure the store is initialized."""
@@ -255,6 +379,7 @@ class MemoryItemStore:
             "confidence": item.confidence,
             "created_at": item.created_at.isoformat(),
             "updated_at": item.updated_at.isoformat(),
+            "last_retrieved_at": item.last_retrieved_at.isoformat() if item.last_retrieved_at else None,
             "expires_at": item.expires_at.isoformat() if item.expires_at else None,
             "decay_half_life_days": item.decay_half_life_days,
             "provenance": json.dumps([p.model_dump(mode="json") for p in item.provenance]),
@@ -275,6 +400,11 @@ class MemoryItemStore:
             confidence=row["confidence"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+            last_retrieved_at=(
+                datetime.fromisoformat(row["last_retrieved_at"])
+                if "last_retrieved_at" in row.keys() and row["last_retrieved_at"]
+                else None
+            ),
             expires_at=datetime.fromisoformat(row["expires_at"]) if row["expires_at"] else None,
             decay_half_life_days=row["decay_half_life_days"],
             provenance=[Provenance.model_validate(p) for p in json.loads(row["provenance"])],
@@ -297,6 +427,9 @@ class MemoryItemStore:
             ValueError: If an item with this ID already exists
         """
         self._ensure_initialized()
+        decision = self._ethics.evaluate_write(item)
+        self._emit_ethics_receipt(item, decision, operation="insert")
+        item = self._ethics.apply_write_decision(item, decision)
         row = self._item_to_row(item)
 
         with self._get_connection() as conn:
@@ -306,15 +439,21 @@ class MemoryItemStore:
                     """
                     INSERT INTO memory_items (
                         id, tier, namespace, title, content, tags, confidence,
-                        created_at, updated_at, expires_at, decay_half_life_days,
+                        created_at, updated_at, last_retrieved_at, expires_at, decay_half_life_days,
                         provenance, status, token_count, metadata
                     ) VALUES (
                         :id, :tier, :namespace, :title, :content, :tags, :confidence,
-                        :created_at, :updated_at, :expires_at, :decay_half_life_days,
+                        :created_at, :updated_at, :last_retrieved_at, :expires_at, :decay_half_life_days,
                         :provenance, :status, :token_count, :metadata
                     )
                     """,
                     row,
+                )
+                self._replace_entities(cursor, item)
+                self._replace_claims(cursor, item)
+                cursor.execute(
+                    "UPDATE memory_items SET metadata = ? WHERE id = ?",
+                    (json.dumps(item.metadata), item.id),
                 )
                 conn.commit()
                 logger.debug("Inserted memory item %s", item.id)
@@ -356,6 +495,9 @@ class MemoryItemStore:
             True if updated, False if not found
         """
         self._ensure_initialized()
+        decision = self._ethics.evaluate_write(item)
+        self._emit_ethics_receipt(item, decision, operation="update")
+        item = self._ethics.apply_write_decision(item, decision)
         row = self._item_to_row(item)
 
         with self._get_connection() as conn:
@@ -365,7 +507,8 @@ class MemoryItemStore:
                 UPDATE memory_items SET
                     tier = :tier, namespace = :namespace, title = :title,
                     content = :content, tags = :tags, confidence = :confidence,
-                    updated_at = :updated_at, expires_at = :expires_at,
+                    updated_at = :updated_at, last_retrieved_at = :last_retrieved_at,
+                    expires_at = :expires_at,
                     decay_half_life_days = :decay_half_life_days,
                     provenance = :provenance, status = :status,
                     token_count = :token_count, metadata = :metadata
@@ -373,8 +516,15 @@ class MemoryItemStore:
                 """,
                 row,
             )
-            conn.commit()
             updated = cursor.rowcount > 0
+            if updated:
+                self._replace_entities(cursor, item)
+                self._replace_claims(cursor, item)
+                cursor.execute(
+                    "UPDATE memory_items SET metadata = ? WHERE id = ?",
+                    (json.dumps(item.metadata), item.id),
+                )
+            conn.commit()
             if updated:
                 logger.debug("Updated memory item %s", item.id)
             return updated
@@ -393,6 +543,8 @@ class MemoryItemStore:
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute("DELETE FROM memory_entities WHERE item_id = ?", (item_id,))
+            cursor.execute("DELETE FROM memory_claims WHERE item_id = ?", (item_id,))
             cursor.execute(
                 "DELETE FROM memory_items WHERE id = ?",
                 (item_id,),
@@ -402,6 +554,136 @@ class MemoryItemStore:
             if deleted:
                 logger.debug("Deleted memory item %s", item_id)
             return deleted
+
+    def _replace_entities(self, cursor: sqlite3.Cursor, item: MemoryItem) -> None:
+        """Rebuild sidecar entity rows for an item."""
+        cursor.execute("DELETE FROM memory_entities WHERE item_id = ?", (item.id,))
+        entities = extract_entities_from_item_fields(
+            title=item.title,
+            content=item.content,
+            namespace=item.namespace,
+            tags=item.tags,
+            metadata=item.metadata,
+        )
+        cursor.executemany(
+            """
+            INSERT OR REPLACE INTO memory_entities (
+                item_id, entity_type, entity_value, entity_normalized, confidence
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    item.id,
+                    entity.entity_type,
+                    entity.entity_value,
+                    entity.entity_normalized,
+                    entity.confidence,
+                )
+                for entity in entities
+            ],
+        )
+
+    def _replace_claims(self, cursor: sqlite3.Cursor, item: MemoryItem) -> None:
+        """Rebuild structured factual claims and supersede contradictory prior claims."""
+        now = datetime.utcnow().isoformat()
+        cursor.execute("DELETE FROM memory_claims WHERE item_id = ?", (item.id,))
+        for claim in extract_claims(item):
+            cursor.execute(
+                """
+                SELECT item_id, value FROM memory_claims
+                WHERE entity_normalized = ?
+                  AND attribute = ?
+                  AND item_id != ?
+                  AND superseded_by IS NULL
+                  AND value != ?
+                """,
+                [claim.entity_normalized, claim.attribute, item.id, claim.value],
+            )
+            superseded_claims = [
+                {"item_id": row["item_id"], "value": row["value"]}
+                for row in cursor.fetchall()
+            ]
+            cursor.execute(
+                """
+                UPDATE memory_claims
+                SET valid_until = ?, superseded_by = ?
+                WHERE entity_normalized = ?
+                  AND attribute = ?
+                  AND item_id != ?
+                  AND superseded_by IS NULL
+                  AND value != ?
+                """,
+                [
+                    now,
+                    item.id,
+                    claim.entity_normalized,
+                    claim.attribute,
+                    item.id,
+                    claim.value,
+                ],
+            )
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO memory_claims (
+                    item_id, entity_normalized, attribute, value,
+                    valid_from, valid_until, superseded_by
+                ) VALUES (?, ?, ?, ?, ?, NULL, NULL)
+                """,
+                [
+                    item.id,
+                    claim.entity_normalized,
+                    claim.attribute,
+                    claim.value,
+                    claim.valid_from.isoformat(),
+                ],
+            )
+            if superseded_claims:
+                metadata = dict(item.metadata or {})
+                metadata.setdefault("superseded_claims", [])
+                metadata["superseded_claims"].append({
+                    "entity_normalized": claim.entity_normalized,
+                    "attribute": claim.attribute,
+                    "new_value": claim.value,
+                    "superseded_count": len(superseded_claims),
+                    "superseded_item_ids": [entry["item_id"] for entry in superseded_claims],
+                })
+                item.metadata = metadata
+                self._receipt_emitter.emit(
+                    action_type="memory_claim_supersede",
+                    action_name="memory_claim_contradiction",
+                    inputs={
+                        "item_id": item.id,
+                        "tier": item.tier.value,
+                        "entity_normalized": claim.entity_normalized,
+                        "attribute": claim.attribute,
+                        "value": claim.value,
+                    },
+                    outputs={
+                        "superseded_claims": superseded_claims,
+                        "superseded_by": item.id,
+                    },
+                )
+
+    def _emit_ethics_receipt(self, item: MemoryItem, decision: Any, *, operation: str) -> None:
+        """Emit a receipt for ethics decisions that changed memory behavior."""
+        if not getattr(decision, "rule_name", ""):
+            return
+        self._receipt_emitter.emit(
+            action_type="memory_ethics_evaluation",
+            action_name=f"memory_{operation}_ethics",
+            inputs={
+                "item_id": item.id,
+                "tier": item.tier.value,
+                "operation": operation,
+            },
+            outputs={
+                "item_id": item.id,
+                "tier": item.tier.value,
+                "rule_name": decision.rule_name,
+                "action": decision.action.value,
+                "reason": decision.reason,
+            },
+        )
 
     def list_items(
         self,
@@ -475,6 +757,7 @@ class MemoryItemStore:
         limit: int = 20,
         include_expired: bool = False,
         include_quarantined: bool = False,
+        include_blobs: bool = False,
     ) -> list[MemoryItem]:
         """
         Full-text search using FTS5.
@@ -486,6 +769,7 @@ class MemoryItemStore:
             limit: Maximum results
             include_expired: Whether to include expired items
             include_quarantined: Whether to include quarantined items
+            include_blobs: Whether to include full-source audit blobs
 
         Returns:
             List of matching MemoryItem objects ranked by relevance
@@ -516,6 +800,14 @@ class MemoryItemStore:
             conditions.append("(mi.expires_at IS NULL OR mi.expires_at > ?)")
             params.append(datetime.utcnow().isoformat())
 
+        if not include_blobs:
+            conditions.append("(mi.metadata IS NULL OR mi.metadata NOT LIKE ?)")
+            params.append('%"blob_type": "full_source"%')
+
+        conditions.append(
+            "NOT EXISTS (SELECT 1 FROM memory_claims mc WHERE mc.item_id = mi.id AND mc.superseded_by IS NOT NULL)"
+        )
+
         where_clause = " AND ".join(conditions)
         params.append(limit)
 
@@ -531,6 +823,70 @@ class MemoryItemStore:
                 LIMIT ?
                 """,
                 [safe_query, *params],
+            )
+            return [self._row_to_item(row) for row in cursor.fetchall()]
+
+    def search_by_entities(
+        self,
+        query: str,
+        namespace: Optional[str] = None,
+        status: Optional[MemoryStatus] = None,
+        limit: int = 20,
+        include_expired: bool = False,
+        include_quarantined: bool = False,
+        include_blobs: bool = False,
+    ) -> list[MemoryItem]:
+        """Search items by normalized sidecar entities extracted from a query."""
+        self._ensure_initialized()
+        entities = extract_entities(query)
+        normalized = list(dict.fromkeys(entity.entity_normalized for entity in entities))
+        if not normalized:
+            return []
+
+        conditions = ["mi.tier = ?", f"me.entity_normalized IN ({','.join('?' * len(normalized))})"]
+        params: list[Any] = [self.tier.value, *normalized]
+
+        if namespace is not None:
+            conditions.append("mi.namespace = ?")
+            params.append(namespace)
+
+        if status is not None:
+            conditions.append("mi.status = ?")
+            params.append(status.value)
+        elif not include_quarantined:
+            conditions.append("mi.status != ?")
+            params.append(MemoryStatus.quarantined.value)
+
+        if not include_expired:
+            conditions.append("(mi.expires_at IS NULL OR mi.expires_at > ?)")
+            params.append(datetime.utcnow().isoformat())
+
+        if not include_blobs:
+            conditions.append("(mi.metadata IS NULL OR mi.metadata NOT LIKE ?)")
+            params.append('%"blob_type": "full_source"%')
+
+        conditions.append(
+            "NOT EXISTS (SELECT 1 FROM memory_claims mc WHERE mc.item_id = mi.id AND mc.superseded_by IS NOT NULL)"
+        )
+
+        where_clause = " AND ".join(conditions)
+        params.append(limit)
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT mi.*, COUNT(me.entity_normalized) AS entity_matches,
+                       MAX(me.confidence) AS entity_confidence
+                FROM memory_entities me
+                JOIN memory_items mi ON mi.id = me.item_id
+                WHERE {where_clause}
+                GROUP BY mi.id
+                ORDER BY entity_matches DESC, entity_confidence DESC,
+                         mi.confidence DESC, mi.updated_at DESC
+                LIMIT ?
+                """,
+                params,
             )
             return [self._row_to_item(row) for row in cursor.fetchall()]
 
@@ -587,10 +943,27 @@ class MemoryItemStore:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                DELETE FROM memory_items
+                SELECT id FROM memory_items
                 WHERE tier = ? AND expires_at IS NOT NULL AND expires_at <= ?
                 """,
                 [self.tier.value, now],
+            )
+            expired_ids = [row["id"] for row in cursor.fetchall()]
+            if not expired_ids:
+                return 0
+
+            placeholders = ",".join("?" * len(expired_ids))
+            cursor.execute(
+                f"DELETE FROM memory_entities WHERE item_id IN ({placeholders})",
+                expired_ids,
+            )
+            cursor.execute(
+                f"DELETE FROM memory_claims WHERE item_id IN ({placeholders})",
+                expired_ids,
+            )
+            cursor.execute(
+                f"DELETE FROM memory_items WHERE id IN ({placeholders})",
+                expired_ids,
             )
             conn.commit()
             count = cursor.rowcount
@@ -627,6 +1000,204 @@ class MemoryItemStore:
             )
             conn.commit()
             return cursor.rowcount > 0
+
+    def mark_retrieved(self, item_id: str, when: Optional[datetime] = None) -> bool:
+        """Record that an item was included in compiled context."""
+        self._ensure_initialized()
+        retrieved_at = (when or datetime.utcnow()).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE memory_items
+                SET last_retrieved_at = ?
+                WHERE id = ?
+                """,
+                [retrieved_at, item_id],
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def find_by_metadata(self, key: str, value: str, limit: int = 20) -> list[MemoryItem]:
+        """Find items with an exact metadata key/value pair."""
+        self._ensure_initialized()
+        pattern = f'%"{key}": "{value}"%'
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM memory_items
+                WHERE tier = ? AND metadata LIKE ?
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                [self.tier.value, pattern, limit],
+            )
+            matches = []
+            for row in cursor.fetchall():
+                item = self._row_to_item(row)
+                if str((item.metadata or {}).get(key)) == value:
+                    matches.append(item)
+            return matches
+
+    def get_claim_history(self, entity: str, attribute: str) -> list[dict[str, Any]]:
+        """Return claim timeline entries for an entity/attribute pair."""
+        self._ensure_initialized()
+        entity_normalized = normalize_entity(entity)
+        normalized_attribute = str(attribute or "").strip().lower().replace(" ", "_")
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT * FROM memory_claims
+                WHERE entity_normalized = ? AND attribute = ?
+                ORDER BY valid_from ASC
+                """,
+                [entity_normalized, normalized_attribute],
+            )
+            return [
+                {
+                    "item_id": row["item_id"],
+                    "entity_normalized": row["entity_normalized"],
+                    "attribute": row["attribute"],
+                    "value": row["value"],
+                    "valid_from": row["valid_from"],
+                    "valid_until": row["valid_until"],
+                    "superseded_by": row["superseded_by"],
+                }
+                for row in cursor.fetchall()
+            ]
+
+    def create_compaction_journal(
+        self,
+        *,
+        compaction_id: str,
+        namespace: str,
+        source_item_ids: list[str],
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Create a journal entry for an in-flight memory compaction."""
+        self._ensure_initialized()
+        now = datetime.utcnow().isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO compaction_journal (
+                    compaction_id, namespace, source_item_ids, archival_item_id,
+                    status, error, created_at, updated_at, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    compaction_id,
+                    namespace,
+                    json.dumps(source_item_ids),
+                    None,
+                    "planned",
+                    "",
+                    now,
+                    now,
+                    json.dumps(metadata or {}),
+                ],
+            )
+            conn.commit()
+
+    def update_compaction_journal(
+        self,
+        compaction_id: str,
+        *,
+        status: str,
+        archival_item_id: Optional[str] = None,
+        error: str = "",
+    ) -> None:
+        """Update an existing compaction journal entry."""
+        self._ensure_initialized()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE compaction_journal
+                SET status = ?,
+                    archival_item_id = COALESCE(?, archival_item_id),
+                    error = ?,
+                    updated_at = ?
+                WHERE compaction_id = ?
+                """,
+                [status, archival_item_id, error, datetime.utcnow().isoformat(), compaction_id],
+            )
+            conn.commit()
+
+    def list_pending_compactions(self) -> list[dict[str, Any]]:
+        """List compaction journal entries that need recovery."""
+        self._ensure_initialized()
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT * FROM compaction_journal
+                WHERE status IN ('planned', 'archival_written')
+                ORDER BY created_at ASC
+                """
+            )
+            return [
+                {
+                    "compaction_id": row["compaction_id"],
+                    "namespace": row["namespace"],
+                    "source_item_ids": json.loads(row["source_item_ids"] or "[]"),
+                    "archival_item_id": row["archival_item_id"],
+                    "status": row["status"],
+                    "error": row["error"],
+                    "metadata": json.loads(row["metadata"] or "{}"),
+                }
+                for row in cursor.fetchall()
+            ]
+
+    def record_undo_entry(
+        self,
+        *,
+        commit_id: str,
+        item_id: str,
+        operation: str,
+        pre_state: Optional[MemoryItem],
+    ) -> None:
+        """Persist the first pre-state for an item touched by a commit."""
+        self._ensure_initialized()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO commit_undo_log (
+                    commit_id, item_id, tier, pre_state, operation, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    commit_id,
+                    item_id,
+                    self.tier.value,
+                    pre_state.model_dump_json() if pre_state is not None else "",
+                    operation,
+                    datetime.utcnow().isoformat(),
+                ],
+            )
+            conn.commit()
+
+    def list_undo_entries(self, commit_id: str) -> list[dict[str, Any]]:
+        """Return persisted undo entries for a commit in insertion order."""
+        self._ensure_initialized()
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT * FROM commit_undo_log
+                WHERE commit_id = ?
+                ORDER BY created_at DESC
+                """,
+                [commit_id],
+            )
+            return [
+                {
+                    "commit_id": row["commit_id"],
+                    "item_id": row["item_id"],
+                    "tier": row["tier"],
+                    "operation": row["operation"],
+                    "pre_state": MemoryItem.model_validate_json(row["pre_state"]) if row["pre_state"] else None,
+                }
+                for row in cursor.fetchall()
+            ]
 
     def count(
         self,
@@ -701,6 +1272,43 @@ class MemoryItemStore:
                     days_elapsed, count, self.tier.value
                 )
             return count
+
+    def evict_lru(self, *, max_items: int, batch_size: int = 100) -> list[MemoryItem]:
+        """Delete excess items in deprecated-first, least-recently-retrieved order."""
+        self._ensure_initialized()
+        if max_items < 0:
+            raise ValueError("max_items must be non-negative")
+        batch_size = max(1, int(batch_size))
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM memory_items WHERE tier = ?", (self.tier.value,))
+            total = int(cursor.fetchone()[0])
+            excess = total - max_items
+            if excess <= 0:
+                return []
+
+            limit = min(excess, batch_size)
+            cursor.execute(
+                """
+                SELECT * FROM memory_items
+                WHERE tier = ?
+                ORDER BY
+                    CASE WHEN status = 'deprecated' THEN 0 ELSE 1 END ASC,
+                    COALESCE(last_retrieved_at, updated_at, created_at) ASC,
+                    confidence ASC,
+                    created_at ASC
+                LIMIT ?
+                """,
+                (self.tier.value, limit),
+            )
+            candidates = [self._row_to_item(row) for row in cursor.fetchall()]
+            for item in candidates:
+                cursor.execute("DELETE FROM memory_entities WHERE item_id = ?", (item.id,))
+                cursor.execute("DELETE FROM memory_claims WHERE item_id = ?", (item.id,))
+                cursor.execute("DELETE FROM memory_items WHERE id = ?", (item.id,))
+            conn.commit()
+            return candidates
 
     def get_items_by_ids(self, item_ids: list[str]) -> list[MemoryItem]:
         """
@@ -788,12 +1396,74 @@ class MemoryStoreManager:
         """Get the archival memory store."""
         return self.get_store(MemoryTier.archival)
 
+    @staticmethod
+    def _result_signature(item: MemoryItem) -> str:
+        text = " ".join(f"{item.title} {item.content}".lower().split())
+        return text[:600]
+
+    @staticmethod
+    def _query_tokens(query: str) -> set[str]:
+        return set(re.findall(r"[A-Za-z0-9_]{2,}", str(query or "").lower()))
+
+    @staticmethod
+    def _metadata_values(metadata: dict[str, Any], *keys: str) -> set[str]:
+        values: set[str] = set()
+        for key in keys:
+            value = metadata.get(key)
+            if isinstance(value, list):
+                values.update(str(entry) for entry in value if entry not in (None, ""))
+            elif value not in (None, ""):
+                values.add(str(value))
+        return values
+
+    def _scope_boost(
+        self,
+        item: MemoryItem,
+        *,
+        current_quest_id: str = "",
+        operator_id: str = "",
+        workflow_id: str = "",
+    ) -> float:
+        metadata = item.metadata or {}
+        score = 0.0
+        if current_quest_id:
+            quest_values = self._metadata_values(metadata, "quest_id", "quest_ids")
+            if item.namespace == f"quest:{current_quest_id}" or current_quest_id in quest_values:
+                score += 4.0
+        if operator_id:
+            operator_values = self._metadata_values(metadata, "operator_id", "operator_ids")
+            if item.namespace == f"operator:{operator_id}" or operator_id in operator_values:
+                score += 2.5
+        if workflow_id:
+            workflow_values = self._metadata_values(metadata, "workflow_id", "workflow", "template_id")
+            if item.namespace == f"workflow:{workflow_id}" or workflow_id in workflow_values:
+                score += 1.5
+        if item.namespace == "global":
+            score += 0.25
+        return score
+
+    @staticmethod
+    def _evidence_boost(item: MemoryItem, query_tokens: set[str]) -> float:
+        tags = {str(tag).lower() for tag in item.tags}
+        score = min(len(tags & query_tokens), 5) * 0.15
+        if tags & {"receipt", "receipts", "work_ledger", "session_brief", "task_experience"}:
+            score += 0.5
+        metadata = item.metadata or {}
+        if metadata.get("receipt_ids") or metadata.get("last_receipt_id"):
+            score += 0.35
+        return score
+
     def search_all(
         self,
         query: str,
         tiers: Optional[list[MemoryTier]] = None,
         namespace: Optional[str] = None,
         limit: int = 20,
+        total_limit: Optional[int] = None,
+        current_quest_id: str = "",
+        operator_id: str = "",
+        workflow_id: str = "",
+        include_blobs: bool = False,
     ) -> list[MemoryItem]:
         """
         Search across multiple tiers.
@@ -803,6 +1473,8 @@ class MemoryStoreManager:
             tiers: Tiers to search (default: all non-core)
             namespace: Filter by namespace
             limit: Maximum results per tier
+            total_limit: Optional maximum results after cross-tier dedupe/ranking
+            include_blobs: Whether to include full-source audit blobs
 
         Returns:
             Combined list of matching items
@@ -810,14 +1482,62 @@ class MemoryStoreManager:
         if tiers is None:
             tiers = [MemoryTier.working, MemoryTier.episodic, MemoryTier.archival]
 
-        results = []
+        tier_weight = {
+            MemoryTier.working: 3.0,
+            MemoryTier.episodic: 2.0,
+            MemoryTier.archival: 1.0,
+        }
+        query_tokens = self._query_tokens(query)
+        ranked: dict[str, tuple[float, MemoryItem]] = {}
         for tier in tiers:
             if tier == MemoryTier.core:
                 continue
             store = self.get_store(tier)
-            results.extend(store.search(query, namespace=namespace, limit=limit))
+            candidates = [
+                *store.search_by_entities(
+                    query,
+                    namespace=namespace,
+                    limit=limit,
+                    include_blobs=include_blobs,
+                ),
+                *store.search(
+                    query,
+                    namespace=namespace,
+                    limit=limit,
+                    include_blobs=include_blobs,
+                ),
+            ]
+            for position, item in enumerate(candidates):
+                signature = self._result_signature(item) or item.id
+                score = (
+                    tier_weight.get(item.tier, 0.0)
+                    + item.confidence
+                    + self._scope_boost(
+                        item,
+                        current_quest_id=current_quest_id,
+                        operator_id=operator_id,
+                        workflow_id=workflow_id,
+                    )
+                    + self._evidence_boost(item, query_tokens)
+                    - (position * 0.01)
+                )
+                existing = ranked.get(signature)
+                if existing is None or score > existing[0]:
+                    ranked[signature] = (score, item)
 
-        return results
+        ordered = [
+            item
+            for _, item in sorted(
+                ranked.values(),
+                key=lambda pair: (
+                    pair[0],
+                    pair[1].updated_at,
+                ),
+                reverse=True,
+            )
+        ]
+        max_results = total_limit if total_limit is not None else limit * max(1, len(tiers))
+        return ordered[: max(1, int(max_results))]
 
     def close_all(self) -> None:
         """Close all store connections."""

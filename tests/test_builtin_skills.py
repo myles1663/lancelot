@@ -16,6 +16,8 @@ from src.core.skills.builtins import (
     command_runner,
     daily_news_brief,
     document_creator,
+    memory_cleanup,
+    memory_query,
     network_client,
     repo_writer,
     schedule_job,
@@ -450,6 +452,23 @@ class TestServiceRunner:
             "error": "docker missing",
         }
 
+
+# =========================================================================
+# memory_cleanup Tests
+# =========================================================================
+
+
+class TestMemoryCleanup:
+    def test_memory_cleanup_runs_maintenance_jobs(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LANCELOT_DATA_DIR", str(tmp_path))
+
+        result = memory_cleanup.execute(CTX, {"dry_run": True})
+
+        assert result["status"] == "success"
+        assert result["dry_run"] is True
+        assert result["jobs_run"] == 5
+        assert "working_compaction" in result["results"]
+        assert "memory_eviction" in result["results"]
 
 # =========================================================================
 # network_client Tests
@@ -967,6 +986,28 @@ class TestOperatorBuiltins:
 # =========================================================================
 
 
+class TestMemoryQuery:
+    def test_memory_query_searches_entity_index(self, tmp_path, monkeypatch):
+        from src.core.memory.schemas import MemoryItem, MemoryTier
+        from src.core.memory.sqlite_store import MemoryStoreManager
+
+        monkeypatch.setenv("LANCELOT_DATA_DIR", str(tmp_path))
+        manager = MemoryStoreManager(data_dir=tmp_path)
+        manager.episodic.insert(MemoryItem(
+            id="mq-atlas",
+            tier=MemoryTier.episodic,
+            title="Prior decision",
+            content="Wait for the receipt verification before release.",
+            confidence=0.9,
+            metadata={"project_id": "Atlas"},
+        ))
+
+        result = memory_query.execute(CTX, {"query": "Atlas", "tiers": ["episodic"]})
+
+        assert result["status"] == "success"
+        assert result["results"][0]["id"] == "mq-atlas"
+
+
 class TestExecutorRegistration:
     def test_builtin_skills_registered(self):
         from src.core.skills.executor import _BUILTIN_SKILLS
@@ -975,3 +1016,5 @@ class TestExecutorRegistration:
         assert "command_runner" in _BUILTIN_SKILLS
         assert "service_runner" in _BUILTIN_SKILLS
         assert "network_client" in _BUILTIN_SKILLS
+        assert "memory_cleanup" in _BUILTIN_SKILLS
+        assert "memory_query" in _BUILTIN_SKILLS

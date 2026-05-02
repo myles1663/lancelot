@@ -371,6 +371,25 @@ class TestRetrievalCompilation:
         exclusions = [e for e in ctx.excluded_candidates if e["reason"] == "quarantined"]
         assert len(exclusions) == 1
 
+    def test_full_source_blob_retrieval_excluded(self, compiler):
+        """Full-source audit blobs are never rendered into default prompt context."""
+        blob = create_archival_item(
+            title="Source Blob",
+            content="Full source audit payload that should not enter normal context.",
+        )
+        blob.metadata = {"blob_type": "full_source"}
+        valid = create_archival_item(title="Summary", content="Compact summary context.")
+
+        ctx = compiler.compile(
+            objective="Test",
+            retrieved_items=[blob, valid],
+        )
+
+        assert valid.id in ctx.included_memory_item_ids
+        assert blob.id not in ctx.included_memory_item_ids
+        exclusions = [e for e in ctx.excluded_candidates if e["reason"] == "blob_excluded"]
+        assert len(exclusions) == 1
+
     def test_duplicate_items_not_repeated(self, compiler):
         """Test that items in working memory aren't duplicated in retrieval."""
         item = create_working_item(title="Shared")
@@ -557,6 +576,27 @@ class TestContextCompilerService:
 
         assert "WORKING MEMORY" in ctx.rendered_prompt
         assert "Active Objective" in ctx.rendered_prompt
+
+    def test_compile_for_objective_marks_included_memory_retrieved(self, tmp_data_dir):
+        """Included retrieval items should record last_retrieved_at for promotion/eviction policy."""
+        service = ContextCompilerService(data_dir=tmp_data_dir)
+        item = MemoryItem(
+            id="retrieval-tracked",
+            tier=MemoryTier.episodic,
+            title="Tracked memory",
+            content="Tracked memory content for retrieval telemetry.",
+            confidence=0.9,
+        )
+        service.memory_manager.episodic.insert(item)
+
+        ctx = service.compile_for_objective(
+            objective="Tracked memory",
+            search_query="Tracked memory content",
+        )
+
+        stored = service.memory_manager.episodic.get("retrieval-tracked")
+        assert "retrieval-tracked" in ctx.included_memory_item_ids
+        assert stored.last_retrieved_at is not None
 
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,8 @@ from .schemas import (
     Provenance,
     ProvenanceType,
 )
+from .receipt_events import MemoryReceiptEmitter
+from src.shared.receipts import ReceiptStatus
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +76,7 @@ class SearchRequest(BaseModel):
     tags: Optional[list[str]] = None
     min_confidence: float = 0.3
     limit: int = 20
+    include_blobs: bool = False
 
 
 class SearchResultItem(BaseModel):
@@ -206,6 +209,8 @@ class QuarantineItemResponse(BaseModel):
     title: str
     content: str
     status: str
+    flagged_reason: Optional[str] = None
+    detection_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class QuarantineResponse(BaseModel):
@@ -297,6 +302,7 @@ def get_memory_service():
         from .gates import WriteGateValidator, QuarantineManager
         from .index import MemoryIndex
         from .compiler import ContextCompilerService
+        from .receipt_events import MemoryReceiptEmitter
 
         data_dir = _get_memory_data_dir()
 
@@ -315,9 +321,28 @@ def get_memory_service():
             "compiler_service": ContextCompilerService(
                 data_dir, core_store=core_store, memory_manager=store_manager
             ),
+            "receipt_emitter": MemoryReceiptEmitter(data_dir),
         }
 
     return _memory_service
+
+
+def _receipt_emitter(service: dict) -> MemoryReceiptEmitter:
+    """Return a memory receipt emitter, adding one to test-local services if needed."""
+    emitter = service.get("receipt_emitter")
+    if emitter is not None:
+        return emitter
+    data_dir = getattr(service.get("core_store"), "data_dir", _get_memory_data_dir())
+    emitter = MemoryReceiptEmitter(data_dir)
+    service["receipt_emitter"] = emitter
+    return emitter
+
+
+def _identity_fields(identity: Any) -> dict[str, str]:
+    return {
+        "operator_id": getattr(identity, "operator_id", "") or "",
+        "session_id": getattr(identity, "session_id", "") or "",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +424,7 @@ async def search_memory(
         tags=request.tags,
         min_confidence=request.min_confidence,
         limit=request.limit,
+        include_blobs=request.include_blobs,
     )
 
     result_items = [
@@ -420,6 +446,15 @@ async def search_memory(
         total_count=len(result_items),
         query=request.query,
     )
+
+
+@router.post("/query", response_model=SearchResponse)
+async def query_memory(
+    request: SearchRequest,
+    service: dict = Depends(get_memory_service),
+):
+    """Run a natural-language memory query using entity-aware retrieval."""
+    return await search_memory(request, service)
 
 
 @router.get("/recent", response_model=RecentMemoryResponse)
@@ -550,6 +585,8 @@ async def add_edit(
             reason=request.reason,
             confidence=request.confidence,
             provenance=provenance,
+            suggested_status=getattr(gate_result, "suggested_status", MemoryStatus.staged),
+            editor=request.editor,
         )
 
         return AddEditResponse(
@@ -595,6 +632,7 @@ async def list_commits(
 async def finish_commit(
     commit_id: str,
     request: FinishCommitRequest,
+    http_request: Request,
     _authz: None = Depends(require_operator_capability("memory.admin")),
     service: dict = Depends(get_memory_service),
 ):
@@ -609,6 +647,20 @@ async def finish_commit(
 
         commit = commit_manager.load_commit(result_id)
         edit_count = len(commit.edits) if commit else 0
+        identity = resolve_authenticated_identity(http_request)
+        _receipt_emitter(service).emit(
+            action_type="memory_commit_apply",
+            action_name="finish_commit",
+            inputs={"commit_id": commit_id},
+            outputs={
+                "commit_id": result_id,
+                "edit_count": edit_count,
+                "affected_targets": sorted(commit.get_affected_targets()) if commit else [],
+                "has_core_edits": commit.has_core_edits() if commit else False,
+                "parent_commit_id": commit.parent_commit_id if commit else None,
+            },
+            **_identity_fields(identity),
+        )
 
         return FinishCommitResponse(
             commit_id=result_id,
@@ -635,10 +687,27 @@ async def rollback_commit(
     try:
         identity = resolve_authenticated_identity(http_request)
         created_by = identity.display_name or identity.operator_id or "operator"
+        original = commit_manager.load_commit(commit_id)
         rollback_id = commit_manager.rollback(
             commit_id=commit_id,
             reason=request.reason,
             created_by=created_by,
+        )
+        rollback_commit = commit_manager.load_commit(rollback_id)
+        snapshot = commit_manager._snapshots.get(commit_id)
+        restored_targets = sorted(original.get_affected_targets()) if original else []
+        _receipt_emitter(service).emit(
+            action_type="memory_commit_rollback",
+            action_name="rollback_commit",
+            inputs={"commit_id": commit_id, "reason": request.reason},
+            outputs={
+                "rollback_commit_id": rollback_id,
+                "rollback_of": commit_id,
+                "restored_targets": restored_targets,
+                "snapshot_ids": [snapshot.snapshot_id] if snapshot else [],
+                "parent_commit_id": rollback_commit.parent_commit_id if rollback_commit else None,
+            },
+            **_identity_fields(identity),
         )
 
         return RollbackResponse(
@@ -675,6 +744,8 @@ async def get_quarantine(service: dict = Depends(get_memory_service)):
             title=item.title,
             content=item.content[:200],
             status=item.status.value,
+            flagged_reason=(item.metadata or {}).get("flagged_reason"),
+            detection_metadata=(item.metadata or {}).get("injection_detection", {}),
         ))
 
     return QuarantineResponse(
@@ -702,14 +773,29 @@ async def promote_item(
         block_type_str = item_id.replace("core:", "")
         try:
             block_type = CoreBlockType(block_type_str)
+            block = service["core_store"].get_block(block_type)
+            original_status = block.status.value if block else ""
             result = quarantine_manager.approve_core_block(block_type, approver)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid block type: {block_type_str}")
+        tier_value = "core"
     else:
+        tier_enum = MemoryTier(tier)
+        item = service["store_manager"].get_store(tier_enum).get(item_id)
+        original_status = item.status.value if item else ""
         result = quarantine_manager.approve_item(item_id, tier, approver)
+        tier_value = tier
 
     if not result:
         raise HTTPException(status_code=404, detail="Item not found or not quarantined")
+
+    _receipt_emitter(service).emit(
+        action_type="memory_quarantine_approve",
+        action_name="promote_quarantined_memory",
+        inputs={"block_or_item_id": item_id, "tier": tier_value},
+        outputs={"block_or_item_id": item_id, "tier": tier_value, "approver": approver, "original_status": original_status},
+        **_identity_fields(identity),
+    )
 
     return {"status": "promoted", "item_id": item_id}
 
@@ -732,8 +818,23 @@ async def approve_quarantined_core_block(
 
     identity = resolve_authenticated_identity(http_request)
     operator = identity.display_name or identity.operator_id or "operator"
+    block = service["core_store"].get_block(core_block_type)
+    original_status = block.status.value if block else ""
     if not quarantine_manager.approve_core_block(core_block_type, operator):
         raise HTTPException(status_code=404, detail="Core block not found or not quarantined")
+
+    _receipt_emitter(service).emit(
+        action_type="memory_quarantine_approve",
+        action_name="approve_quarantined_core_block",
+        inputs={"block_or_item_id": f"core:{block_type}", "tier": "core"},
+        outputs={
+            "block_or_item_id": f"core:{block_type}",
+            "tier": "core",
+            "approver": operator,
+            "original_status": original_status,
+        },
+        **_identity_fields(identity),
+    )
 
     return MemoryActionResponse(status="approved", item_id=f"core:{block_type}", block_type=block_type, reason=request.reason)
 
@@ -756,8 +857,24 @@ async def reject_quarantined_core_block(
 
     identity = resolve_authenticated_identity(http_request)
     operator = identity.display_name or identity.operator_id or "operator"
+    block = service["core_store"].get_block(core_block_type)
+    original_status = block.status.value if block else ""
     if not quarantine_manager.reject_core_block(core_block_type, operator, request.reason):
         raise HTTPException(status_code=404, detail="Core block not found or not quarantined")
+
+    _receipt_emitter(service).emit(
+        action_type="memory_quarantine_reject",
+        action_name="reject_quarantined_core_block",
+        inputs={"block_or_item_id": f"core:{block_type}", "tier": "core", "reason": request.reason},
+        outputs={
+            "block_or_item_id": f"core:{block_type}",
+            "tier": "core",
+            "rejector": operator,
+            "reason": request.reason,
+            "original_status": original_status,
+        },
+        **_identity_fields(identity),
+    )
 
     return MemoryActionResponse(status="rejected", item_id=f"core:{block_type}", block_type=block_type, reason=request.reason)
 
@@ -781,8 +898,23 @@ async def approve_quarantined_item(
 
     identity = resolve_authenticated_identity(http_request)
     operator = identity.display_name or identity.operator_id or "operator"
+    item = service["store_manager"].get_store(MemoryTier(tier)).get(item_id)
+    original_status = item.status.value if item else ""
     if not quarantine_manager.approve_item(item_id, tier, operator):
         raise HTTPException(status_code=404, detail="Item not found or not quarantined")
+
+    _receipt_emitter(service).emit(
+        action_type="memory_quarantine_approve",
+        action_name="approve_quarantined_item",
+        inputs={"block_or_item_id": item_id, "tier": tier},
+        outputs={
+            "block_or_item_id": item_id,
+            "tier": tier,
+            "approver": operator,
+            "original_status": original_status,
+        },
+        **_identity_fields(identity),
+    )
 
     return MemoryActionResponse(status="approved", item_id=item_id, tier=tier, reason=request.reason)
 
@@ -806,8 +938,24 @@ async def reject_quarantined_item(
 
     identity = resolve_authenticated_identity(http_request)
     operator = identity.display_name or identity.operator_id or "operator"
+    item = service["store_manager"].get_store(MemoryTier(tier)).get(item_id)
+    original_status = item.status.value if item else ""
     if not quarantine_manager.reject_item(item_id, tier, operator):
         raise HTTPException(status_code=404, detail="Item not found or not quarantined")
+
+    _receipt_emitter(service).emit(
+        action_type="memory_quarantine_reject",
+        action_name="reject_quarantined_item",
+        inputs={"block_or_item_id": item_id, "tier": tier, "reason": request.reason},
+        outputs={
+            "block_or_item_id": item_id,
+            "tier": tier,
+            "rejector": operator,
+            "reason": request.reason,
+            "original_status": original_status,
+        },
+        **_identity_fields(identity),
+    )
 
     return MemoryActionResponse(status="rejected", item_id=item_id, tier=tier, reason=request.reason)
 
@@ -841,8 +989,24 @@ async def update_memory_item_status(
     identity = resolve_authenticated_identity(http_request)
     operator = identity.display_name or identity.operator_id or "operator"
     store = store_manager.get_store(tier_enum)
+    item = store.get(item_id)
+    from_status = item.status.value if item else ""
     if not store.update_status(item_id, status_enum):
         raise HTTPException(status_code=404, detail="Memory item not found")
+
+    _receipt_emitter(service).emit(
+        action_type="memory_item_status_change",
+        action_name="update_memory_item_status",
+        inputs={"item_id": item_id, "tier": tier, "to_status": status},
+        outputs={
+            "item_id": item_id,
+            "tier": tier,
+            "from_status": from_status,
+            "to_status": status_enum.value,
+            "actor": operator,
+        },
+        **_identity_fields(identity),
+    )
 
     logger.info("Operator %s updated memory item %s in %s to %s", operator, item_id, tier, status)
     return MemoryActionResponse(status=status_enum.value, item_id=item_id, tier=tier, reason=request.reason)
@@ -871,8 +1035,22 @@ async def delete_memory_item(
     identity = resolve_authenticated_identity(http_request)
     operator = identity.display_name or identity.operator_id or "operator"
     store = store_manager.get_store(tier_enum)
+    item = store.get(item_id)
     if not store.delete(item_id):
         raise HTTPException(status_code=404, detail="Memory item not found")
+
+    _receipt_emitter(service).emit(
+        action_type="memory_item_delete",
+        action_name="delete_memory_item",
+        inputs={"item_id": item_id, "tier": tier, "reason": request.reason},
+        outputs={
+            "item_id": item_id,
+            "tier": tier,
+            "actor": operator,
+            "from_status": item.status.value if item else "",
+        },
+        **_identity_fields(identity),
+    )
 
     logger.info("Operator %s deleted memory item %s in %s", operator, item_id, tier)
     return MemoryActionResponse(status="deleted", item_id=item_id, tier=tier, reason=request.reason)
@@ -894,6 +1072,8 @@ async def compile_context(
         quest_id=request.quest_id,
         mode=request.mode,
         search_query=request.search_query,
+        emit_receipt=True,
+        receipt_emitter=_receipt_emitter(service),
     )
 
     return CompileContextResponse(

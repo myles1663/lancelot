@@ -121,6 +121,17 @@ Every item below was rejected because it conflicts with at least one of these pr
 
 ---
 
+## 10. We will not market unimplemented guarantees as shipped behavior
+
+**Not now:**
+- Claiming exact rollback for tiers that do not yet persist undo logs
+- Presenting roadmap memory features as current runtime behavior
+- Describing optional or feature-gated subsystems as part of the default proof path
+
+**Why:** Governance depends on trust between claims, code, tests, and receipts. If a feature is not implemented and covered by a runnable proof path, it belongs in a roadmap section, not in the shipped-behavior narrative. Lancelot should be evaluated on real guarantees, not aspirational language.
+
+---
+
 ## What We Build Instead
 
 Every feature we ship must improve at least one of:

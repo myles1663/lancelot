@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from src.core.memory.promotion import evaluate_promotion
+from src.core.memory.promotion import evaluate_promotion, evaluate_working_to_episodic_promotion
 from src.core.memory.schemas import (
     MemoryItem,
     MemoryStatus,
@@ -90,3 +90,34 @@ def test_working_promotion_warns_without_ttl():
 
     assert decision.allowed is True
     assert "Working memory should have an expiry" in decision.warnings
+
+
+def test_working_to_episodic_promotion_allows_explicit_learning():
+    item = _memory_item(tier=MemoryTier.working, tags=["learning"], confidence=0.6)
+    item.last_retrieved_at = datetime.utcnow()
+
+    decision = evaluate_working_to_episodic_promotion(item)
+
+    assert decision.allowed is True
+    assert decision.suggested_status == MemoryStatus.active
+    assert decision.requires_approval is False
+
+
+def test_working_to_episodic_promotion_quarantines_review_candidate():
+    item = _memory_item(tier=MemoryTier.working, tags=[], confidence=0.6)
+    item.last_retrieved_at = datetime.utcnow()
+
+    decision = evaluate_working_to_episodic_promotion(item)
+
+    assert decision.allowed is True
+    assert decision.suggested_status == MemoryStatus.quarantined
+    assert decision.requires_approval is True
+
+
+def test_working_to_episodic_promotion_requires_retrieval():
+    item = _memory_item(tier=MemoryTier.working, tags=["learning"], confidence=0.6)
+
+    decision = evaluate_working_to_episodic_promotion(item)
+
+    assert decision.allowed is False
+    assert "retrieval" in decision.reason

@@ -95,7 +95,8 @@ def _init_skills():
     skill_registry = SkillRegistry(data_dir="/home/lancelot/data")
     for builtin_name in ("echo", "command_runner", "repo_writer", "service_runner",
                          "network_client", "telegram_send", "warroom_send", "schedule_job",
-                         "health_check", "document_creator", "skill_manager"):
+                         "health_check", "document_creator", "skill_manager",
+                         "memory_query"):
         skill_registry.ensure_system_skill(builtin_name)
 
     executor = SkillExecutor(registry=skill_registry)

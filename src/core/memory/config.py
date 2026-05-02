@@ -34,6 +34,13 @@ DEFAULT_CONFIDENCE: float = 0.5
 DEFAULT_WORKING_MEMORY_TTL_HOURS: int = 24
 DEFAULT_ARCHIVAL_DECAY_HALF_LIFE_DAYS: int = 30
 
+# Tier size caps and cold-storage retention
+MAX_WORKING_ITEMS: int = 10_000
+MAX_EPISODIC_ITEMS: int = 100_000
+MAX_ARCHIVAL_ITEMS: int = 1_000_000
+EVICTION_BATCH_SIZE: int = 100
+COLD_STORAGE_RETENTION_DAYS: int = 90
+
 # Quarantine settings
 QUARANTINE_BY_DEFAULT_FOR_CORE: bool = True
 REQUIRE_PROVENANCE_FOR_CORE: bool = True
@@ -73,6 +80,12 @@ class MemoryConfig:
 
     working_memory_ttl_hours: int = DEFAULT_WORKING_MEMORY_TTL_HOURS
     archival_decay_half_life_days: int = DEFAULT_ARCHIVAL_DECAY_HALF_LIFE_DAYS
+
+    max_working_items: int = MAX_WORKING_ITEMS
+    max_episodic_items: int = MAX_EPISODIC_ITEMS
+    max_archival_items: int = MAX_ARCHIVAL_ITEMS
+    eviction_batch_size: int = EVICTION_BATCH_SIZE
+    cold_storage_retention_days: int = COLD_STORAGE_RETENTION_DAYS
 
     quarantine_by_default: bool = QUARANTINE_BY_DEFAULT_FOR_CORE
     require_provenance: bool = REQUIRE_PROVENANCE_FOR_CORE

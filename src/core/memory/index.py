@@ -63,6 +63,7 @@ class SearchQuery:
     limit: int = 20
     include_quarantined: bool = False
     include_expired: bool = False
+    include_blobs: bool = False
 
 
 class MemoryIndex:
@@ -100,6 +101,7 @@ class MemoryIndex:
         min_confidence: float = 0.3,
         limit: int = 20,
         include_quarantined: bool = False,
+        include_blobs: bool = False,
     ) -> list[SearchResult]:
         """
         Search across memory tiers.
@@ -112,6 +114,7 @@ class MemoryIndex:
             min_confidence: Minimum confidence threshold
             limit: Maximum results per tier
             include_quarantined: Include quarantined items
+            include_blobs: Include full-source audit blobs
 
         Returns:
             List of SearchResult objects ranked by relevance
@@ -137,6 +140,7 @@ class MemoryIndex:
                     namespace=namespace,
                     limit=limit,
                     include_quarantined=include_quarantined,
+                    include_blobs=include_blobs,
                 )
                 all_results.extend(tier_results)
             except Exception as e:
@@ -169,15 +173,24 @@ class MemoryIndex:
         namespace: Optional[str],
         limit: int,
         include_quarantined: bool,
+        include_blobs: bool,
     ) -> list[SearchResult]:
         """Search a single tier and return results with scores."""
-        # Use basic search which supports all filters
-        items = store.search(
+        entity_items = store.search_by_entities(
             query=query,
             namespace=namespace,
             limit=limit,
             include_quarantined=include_quarantined,
+            include_blobs=include_blobs,
         )
+        fts_items = store.search(
+            query=query,
+            namespace=namespace,
+            limit=limit,
+            include_quarantined=include_quarantined,
+            include_blobs=include_blobs,
+        )
+        items = list({item.id: item for item in [*entity_items, *fts_items]}.values())
 
         results = []
         for i, item in enumerate(items):
@@ -209,6 +222,7 @@ class MemoryIndex:
             min_confidence=query.min_confidence,
             limit=query.limit,
             include_quarantined=query.include_quarantined,
+            include_blobs=query.include_blobs,
         )
 
     def get_recent(

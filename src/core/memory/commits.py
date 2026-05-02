@@ -141,6 +141,8 @@ class CommitManager:
         selector: Optional[str] = None,
         confidence: float = 0.5,
         provenance: Optional[list[Provenance]] = None,
+        suggested_status: Optional[MemoryStatus] = None,
+        editor: Optional[str] = None,
     ) -> str:
         """
         Add an edit to a staged commit.
@@ -155,6 +157,8 @@ class CommitManager:
             selector: Optional selector for partial edits
             confidence: Confidence score for this edit
             provenance: Evidence for this edit
+            suggested_status: Lifecycle status suggested by write gates
+            editor: Validated edit actor
 
         Returns:
             The edit ID
@@ -183,6 +187,8 @@ class CommitManager:
                 reason=reason,
                 confidence=confidence,
                 provenance=provenance or [],
+                suggested_status=suggested_status,
+                editor=editor,
             )
 
             commit.add_edit(edit)
@@ -224,7 +230,7 @@ class CommitManager:
 
                 # Apply all edits
                 for edit in commit.edits:
-                    self._apply_edit(edit)
+                    self._apply_edit(edit, commit.commit_id)
 
                 # Update commit status
                 commit.status = CommitStatus.committed
@@ -295,8 +301,11 @@ class CommitManager:
             CommitError: If commit or snapshot not found
         """
         with self._lock:
+            commit = self.load_commit(commit_id)
+            if commit is None:
+                raise CommitError(f"Commit {commit_id} not found")
             snapshot = self._snapshots.get(commit_id)
-            if snapshot is None:
+            if snapshot is None and (commit.has_core_edits() or not self._has_item_undo_entries(commit_id)):
                 raise CommitError(f"Snapshot for commit {commit_id} not found")
 
             # Create rollback commit
@@ -307,9 +316,14 @@ class CommitManager:
                 parent_commit_id=self._last_commit_id,
                 rollback_of=commit_id,
             )
+            self._snapshots[rollback_commit.commit_id] = self.core_store.create_snapshot(
+                commit_id=rollback_commit.commit_id
+            )
 
-            # Restore from snapshot
-            self.core_store.restore_snapshot(snapshot)
+            # Restore from snapshot and persisted item undo logs.
+            if snapshot is not None:
+                self.core_store.restore_snapshot(snapshot)
+            self._rollback_item_commit(commit_id, rollback_commit.commit_id)
 
             # Persist rollback commit
             self._persist_commit(rollback_commit)
@@ -333,17 +347,19 @@ class CommitManager:
 
         return None
 
-    def _apply_edit(self, edit: MemoryEdit) -> None:
+    def _apply_edit(self, edit: MemoryEdit, commit_id: str) -> None:
         """Apply a single edit."""
         tier, id_or_type = self._parse_target(edit.target)
 
         if tier == "core":
             self._apply_core_edit(edit, CoreBlockType(id_or_type))
         else:
-            self._apply_item_edit(edit, tier, id_or_type)
+            self._apply_item_edit(edit, tier, id_or_type, commit_id)
 
     def _apply_core_edit(self, edit: MemoryEdit, block_type: CoreBlockType) -> None:
         """Apply an edit to a core block."""
+        status = edit.suggested_status or MemoryStatus.staged
+        updated_by = edit.editor or "agent"
         if edit.op == MemoryEditOp.insert:
             # Insert adds content to an existing block
             current = self.core_store.get_block(block_type)
@@ -352,36 +368,36 @@ class CommitManager:
             self.core_store.set_block(
                 block_type=block_type,
                 content=new_content,
-                updated_by="agent",
+                updated_by=updated_by,
                 provenance=edit.provenance,
                 confidence=edit.confidence,
-                status=MemoryStatus.staged,  # Core edits go to staged first
+                status=status,
             )
 
         elif edit.op == MemoryEditOp.replace:
             self.core_store.set_block(
                 block_type=block_type,
                 content=edit.after or "",
-                updated_by="agent",
+                updated_by=updated_by,
                 provenance=edit.provenance,
                 confidence=edit.confidence,
-                status=MemoryStatus.staged,
+                status=status,
             )
 
         elif edit.op == MemoryEditOp.delete:
             self.core_store.set_block(
                 block_type=block_type,
                 content="",
-                updated_by="agent",
+                updated_by=updated_by,
                 provenance=edit.provenance,
                 confidence=1.0,
-                status=MemoryStatus.active,
+                status=status,
             )
 
         elif edit.op == MemoryEditOp.rethink:
             raise CommitError("rethink operation not yet implemented")
 
-    def _apply_item_edit(self, edit: MemoryEdit, tier: str, item_id: str) -> None:
+    def _apply_item_edit(self, edit: MemoryEdit, tier: str, item_id: str, commit_id: str) -> None:
         """Apply an edit to a memory item, recording undo info for rollback."""
         store = self._get_store_for_tier(tier)
         if store is None:
@@ -390,6 +406,12 @@ class CommitManager:
         if edit.op == MemoryEditOp.insert:
             # Insert creates a new item
             actual_id = item_id if item_id else generate_id()
+            store.record_undo_entry(
+                commit_id=commit_id,
+                item_id=actual_id,
+                operation="create",
+                pre_state=None,
+            )
             item = MemoryItem(
                 id=actual_id,
                 tier=MemoryTier(tier),
@@ -397,6 +419,7 @@ class CommitManager:
                 content=edit.after or "",
                 confidence=edit.confidence,
                 provenance=edit.provenance,
+                status=edit.suggested_status or MemoryStatus.active,
             )
             store.insert(item)
             # Undo: delete the inserted item
@@ -411,6 +434,12 @@ class CommitManager:
             from copy import deepcopy
             original = deepcopy(item)
             self._item_undo_log.append((tier, "restore", item_id, original))
+            store.record_undo_entry(
+                commit_id=commit_id,
+                item_id=item_id,
+                operation="update",
+                pre_state=original,
+            )
 
             item.content = edit.after or ""
             item.confidence = edit.confidence
@@ -423,7 +452,14 @@ class CommitManager:
             item = store.get(item_id)
             if item:
                 from copy import deepcopy
-                self._item_undo_log.append((tier, "restore", item_id, deepcopy(item)))
+                original = deepcopy(item)
+                self._item_undo_log.append((tier, "restore", item_id, original))
+                store.record_undo_entry(
+                    commit_id=commit_id,
+                    item_id=item_id,
+                    operation="delete",
+                    pre_state=original,
+                )
             store.delete(item_id)
 
         elif edit.op == MemoryEditOp.rethink:
@@ -468,6 +504,58 @@ class CommitManager:
         count = len(self._item_undo_log)
         self._item_undo_log = []
         logger.warning("Rolled back %d item-level edits", count)
+
+    def _rollback_item_commit(self, commit_id: str, rollback_commit_id: str) -> list[str]:
+        """Rollback persisted tiered item changes for a committed memory commit."""
+        restored: list[str] = []
+        for tier in ("working", "episodic", "archival"):
+            store = self._get_store_for_tier(tier)
+            if store is None:
+                continue
+            for entry in store.list_undo_entries(commit_id):
+                item_id = entry["item_id"]
+                current = store.get(item_id)
+                if entry["operation"] == "create":
+                    if current is not None:
+                        store.record_undo_entry(
+                            commit_id=rollback_commit_id,
+                            item_id=item_id,
+                            operation="delete",
+                            pre_state=current,
+                        )
+                    store.delete(item_id)
+                    restored.append(f"{tier}:{item_id}")
+                    continue
+
+                pre_state = entry["pre_state"]
+                if pre_state is None:
+                    continue
+                if current is None:
+                    store.record_undo_entry(
+                        commit_id=rollback_commit_id,
+                        item_id=item_id,
+                        operation="create",
+                        pre_state=None,
+                    )
+                    store.insert(pre_state)
+                else:
+                    store.record_undo_entry(
+                        commit_id=rollback_commit_id,
+                        item_id=item_id,
+                        operation="update",
+                        pre_state=current,
+                    )
+                    store.update(pre_state)
+                restored.append(f"{tier}:{item_id}")
+        return restored
+
+    def _has_item_undo_entries(self, commit_id: str) -> bool:
+        """Return whether any tier has persisted undo entries for a commit."""
+        for tier in ("working", "episodic", "archival"):
+            store = self._get_store_for_tier(tier)
+            if store is not None and store.list_undo_entries(commit_id):
+                return True
+        return False
 
     @staticmethod
     def _validate_commit_id(commit_id: str) -> None:

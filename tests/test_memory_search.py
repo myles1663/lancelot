@@ -254,6 +254,35 @@ class TestMultiTierSearch:
         for result in results:
             assert result.source_tier == MemoryTier.archival
 
+    def test_full_source_blobs_are_opt_in(self, store_manager, memory_index):
+        """Audit blobs stay out of normal search unless explicitly requested."""
+        summary = create_item(
+            MemoryTier.archival,
+            "Summary",
+            "needle release memory summary",
+            confidence=0.7,
+        )
+        blob = create_item(
+            MemoryTier.archival,
+            "Source Blob",
+            "needle release memory full source audit payload",
+            confidence=1.0,
+        )
+        blob.metadata = {"blob_type": "full_source"}
+        store_manager.archival.insert(summary)
+        store_manager.archival.insert(blob)
+
+        default_results = memory_index.search("needle", tiers=[MemoryTier.archival], limit=10)
+        audit_results = memory_index.search(
+            "needle",
+            tiers=[MemoryTier.archival],
+            limit=10,
+            include_blobs=True,
+        )
+
+        assert {result.item.id for result in default_results} == {summary.id}
+        assert {result.item.id for result in audit_results} == {summary.id, blob.id}
+
     def test_core_tier_ignored(self, populated_index):
         """Test that core tier is ignored in search."""
         results = populated_index.search(

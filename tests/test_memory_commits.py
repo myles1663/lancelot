@@ -453,6 +453,128 @@ class TestRollback:
                 created_by="test",
             )
 
+    def test_rollback_deletes_inserted_working_item(self, commit_manager, store_manager):
+        """Rollback of an item insert removes the created tiered item."""
+        commit_id = commit_manager.begin_edits(created_by="agent")
+        commit_manager.add_edit(
+            commit_id=commit_id,
+            op=MemoryEditOp.insert,
+            target="working:new_item",
+            after="Temporary working memory",
+            reason="New item",
+            confidence=0.8,
+        )
+        commit_manager.finish_edits(commit_id)
+        assert store_manager.working.get("new_item") is not None
+
+        commit_manager.rollback(commit_id=commit_id, reason="undo insert", created_by="owner")
+
+        assert store_manager.working.get("new_item") is None
+
+    def test_rollback_restores_updated_episodic_item(self, commit_manager, store_manager):
+        """Rollback of an item update restores content, confidence, and status."""
+        item = MemoryItem(
+            id="episodic_update",
+            tier=MemoryTier.episodic,
+            title="Original",
+            content="Original content",
+            confidence=0.4,
+            status=MemoryStatus.quarantined,
+        )
+        store_manager.episodic.insert(item)
+        commit_id = commit_manager.begin_edits(created_by="agent")
+        commit_manager.add_edit(
+            commit_id=commit_id,
+            op=MemoryEditOp.replace,
+            target="episodic:episodic_update",
+            after="Updated content",
+            reason="Update item",
+            confidence=0.9,
+        )
+        commit_manager.finish_edits(commit_id)
+
+        commit_manager.rollback(commit_id=commit_id, reason="undo update", created_by="owner")
+
+        restored = store_manager.episodic.get("episodic_update")
+        assert restored.content == "Original content"
+        assert restored.confidence == 0.4
+        assert restored.status == MemoryStatus.quarantined
+
+    def test_rollback_restores_deleted_archival_item(self, commit_manager, store_manager):
+        """Rollback of an item delete restores the deleted item."""
+        item = MemoryItem(
+            id="archival_delete",
+            tier=MemoryTier.archival,
+            title="Archive",
+            content="Archive content",
+            confidence=0.8,
+        )
+        store_manager.archival.insert(item)
+        commit_id = commit_manager.begin_edits(created_by="agent")
+        commit_manager.add_edit(
+            commit_id=commit_id,
+            op=MemoryEditOp.delete,
+            target="archival:archival_delete",
+            reason="Delete item",
+        )
+        commit_manager.finish_edits(commit_id)
+        assert store_manager.archival.get("archival_delete") is None
+
+        commit_manager.rollback(commit_id=commit_id, reason="undo delete", created_by="owner")
+
+        restored = store_manager.archival.get("archival_delete")
+        assert restored is not None
+        assert restored.content == "Archive content"
+
+    def test_rollback_of_rollback_restores_post_original_state(self, commit_manager, store_manager):
+        """Rollback commits have undo logs so a rollback can itself be rolled back."""
+        item = MemoryItem(
+            id="double_rollback",
+            tier=MemoryTier.working,
+            title="Double",
+            content="Before",
+            confidence=0.4,
+        )
+        store_manager.working.insert(item)
+        commit_id = commit_manager.begin_edits(created_by="agent")
+        commit_manager.add_edit(
+            commit_id=commit_id,
+            op=MemoryEditOp.replace,
+            target="working:double_rollback",
+            after="After",
+            reason="Update item",
+            confidence=0.9,
+        )
+        commit_manager.finish_edits(commit_id)
+
+        rollback_id = commit_manager.rollback(commit_id=commit_id, reason="undo", created_by="owner")
+        assert store_manager.working.get("double_rollback").content == "Before"
+
+        commit_manager.rollback(commit_id=rollback_id, reason="redo", created_by="owner")
+
+        restored = store_manager.working.get("double_rollback")
+        assert restored.content == "After"
+        assert restored.confidence == 0.9
+
+    def test_item_only_rollback_survives_new_commit_manager(self, core_store, store_manager, tmp_data_dir):
+        """Persisted item undo logs allow item-only rollback after manager restart."""
+        manager = CommitManager(core_store=core_store, store_manager=store_manager, data_dir=tmp_data_dir)
+        commit_id = manager.begin_edits(created_by="agent")
+        manager.add_edit(
+            commit_id=commit_id,
+            op=MemoryEditOp.insert,
+            target="working:persisted_undo",
+            after="Persisted undo item",
+            reason="Insert item",
+            confidence=0.8,
+        )
+        manager.finish_edits(commit_id)
+        restarted = CommitManager(core_store=core_store, store_manager=store_manager, data_dir=tmp_data_dir)
+
+        restarted.rollback(commit_id=commit_id, reason="undo after restart", created_by="owner")
+
+        assert store_manager.working.get("persisted_undo") is None
+
 
 # ---------------------------------------------------------------------------
 # Persistence Tests

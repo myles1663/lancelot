@@ -6,11 +6,22 @@ import datetime
 import re
 import socket
 import threading
+from dataclasses import dataclass
 from urllib.parse import urlparse, unquote, urlunparse
 
 from src.core.network_allowlist import NetworkAllowlistService
 
 _security_logger = logging.getLogger("lancelot.security")
+
+
+@dataclass(frozen=True)
+class InjectionResult:
+    """Non-mutating prompt-injection detection result."""
+
+    detected: bool
+    reason: str = ""
+    matched: str = ""
+
 
 class InputSanitizer:
     BANNED_PHRASES = [
@@ -86,6 +97,18 @@ class InputSanitizer:
                 return True
         return False
 
+    def detect_injection(self, text: str) -> InjectionResult:
+        """Detect instruction-override content without mutating the input."""
+        normalized = self._normalize(text or "")
+        for phrase in self.BANNED_PHRASES:
+            if re.search(re.escape(phrase), normalized, flags=re.IGNORECASE):
+                return InjectionResult(True, reason="banned_phrase", matched=phrase)
+        for pattern in self._SUSPICIOUS_PATTERNS:
+            match = pattern.search(normalized)
+            if match:
+                return InjectionResult(True, reason="suspicious_pattern", matched=match.group(0))
+        return InjectionResult(False)
+
     def sanitize(self, text: str) -> str:
         """Normalizes and removes banned phrases from input text."""
         # Normalize first to defeat obfuscation
@@ -101,6 +124,11 @@ class InputSanitizer:
             sanitized_text = "[SUSPICIOUS INPUT DETECTED] " + sanitized_text
 
         return sanitized_text
+
+
+def detect_injection(text: str) -> InjectionResult:
+    """Detect prompt-injection patterns without rewriting the provided text."""
+    return InputSanitizer().detect_injection(text)
 
 class AuditLogger:
     """F-011: Tamper-evident audit logger with hash chaining.
