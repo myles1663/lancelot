@@ -2,6 +2,10 @@
 
 Lancelot uses several durable state layers so long-running sessions can resume without treating the raw chat transcript as the source of truth.
 
+<p align="center">
+  <img src="images/war-room-context-efficiency.png" alt="War Room Context Efficiency diagnostics" width="900">
+</p>
+
 ## Runtime State Layers
 
 | Layer | Storage | Purpose |

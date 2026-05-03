@@ -1,11 +1,15 @@
 # Trust Ledger
 
-**Feature Flag:** `FEATURE_TRUST_LEDGER` (default: `true`, requires `FEATURE_RISK_TIERED_GOVERNANCE`)
+**Runtime toggle:** `FEATURE_TRUST_LEDGER` (default: `true`, requires `FEATURE_RISK_TIERED_GOVERNANCE`)
 **Codebase:** `src/core/governance/trust_ledger.py`, `src/core/governance/trust_models.py`, `src/core/trust_api.py`
 **Configuration:** `config/trust_graduation.yaml`
 **Persistence:** `lancelot_data/governance/trust_ledger.json`
 
 The Trust Ledger tracks per-capability execution history and proposes tier graduations when consecutive success thresholds are met. It enables progressive trust - capabilities start at their default risk tier and can graduate to lower tiers through demonstrated reliability.
+
+<p align="center">
+  <img src="images/war-room-trust-ledger.png" alt="War Room Trust Ledger" width="900">
+</p>
 
 ---
 

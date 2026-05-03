@@ -4,13 +4,15 @@ The operator's manual for Lancelot's command center — a panel-by-panel walkthr
 
 The War Room is a React SPA (Vite + React 18 + TypeScript + Tailwind) accessible at `http://localhost:8000/war-room/`. It communicates with Lancelot exclusively through the Gateway REST API.
 
+<p align="center">
+  <img src="images/war-room-command-center.png" alt="War Room Command Center" width="900">
+</p>
+
 ---
 
 ## Overview
 
 The War Room provides full observability into every aspect of Lancelot's operation. It is organized into tabbed panels, each focused on a specific subsystem. The sidebar provides navigation, and the header shows system vitals at a glance.
-
-![War Room — Overview Dashboard](images/war-room-overview-dashboard.png)
 
 **Access:** Local only (localhost). The War Room is not designed for public internet exposure. If you need remote access, add your own authentication layer in front of it.
 

@@ -2,9 +2,13 @@
 
 Lancelot implements Google's **Agent-to-Agent (A2A) v0.2** protocol as a governed transport layer for cross-agent communication with **non-Lancelot agents treated as hostile external systems by default**. Every inbound and outbound A2A interaction passes through preregistered peer authentication, Agent Card verification, Soul evaluation, risk classification, trust tracking, and T3 approval gates.
 
-**Feature-gated:** `FEATURE_A2A=false` by default. Enable via environment variable or the War Room Kill Switches panel.
+**Runtime toggle:** `FEATURE_A2A=false` by default. Enable via environment variable or the War Room Kill Switches panel.
 
 For the architectural context, see [Architecture](architecture.md). For the trust model, see [Trust Ledger](trust-ledger.md).
+
+<p align="center">
+  <img src="images/war-room-a2a-protocol.png" alt="War Room A2A Protocol Panel" width="900">
+</p>
 
 ---
 

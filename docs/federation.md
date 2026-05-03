@@ -2,11 +2,15 @@
 
 # Federation Data Plane
 
-**Feature Flag:** `FEATURE_FEDERATION` (default: `false`)
+**Runtime toggle:** `FEATURE_FEDERATION` (default: `false`)
 **Configuration:** `config/federation.yaml`
 **Codebase:** `src/federation/`
 
 Lancelot Federation enables multi-instance coordination — hierarchical parent-child trees or peer-to-peer meshes — with Soul-governed task handoff, cost governance, and persisted cross-instance audit trails with forensic timeline reconstruction.
+
+<p align="center">
+  <img src="images/war-room-federation-overview.png" alt="War Room Federation Overview" width="900">
+</p>
 
 ---
 

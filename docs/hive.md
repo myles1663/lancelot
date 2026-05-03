@@ -4,6 +4,10 @@ Lancelot's ephemeral sub-agent architecture — task decomposition, scoped souls
 
 For the system architecture overview, see [Architecture](architecture.md). For governance details, see [Governance](governance.md). For operational procedures, see [Hive Runbook](operations/runbooks/hive.md).
 
+<p align="center">
+  <img src="images/war-room-hive-agent-mesh.png" alt="War Room HIVE Agent Mesh" width="900">
+</p>
+
 ---
 
 ## What Hive Is and Why
@@ -25,7 +29,7 @@ Each sub-agent:
 - **Receipt-traced** — every agent action, state transition, and intervention is auditable
 - **No identical retry** — after failure or intervention, the Architect must produce a new plan
 
-**Feature flag:** `FEATURE_HIVE` (default: `false`)
+**Runtime toggle:** `FEATURE_HIVE` (default: `false`)
 
 ---
 

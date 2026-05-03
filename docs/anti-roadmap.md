@@ -126,7 +126,7 @@ Every item below was rejected because it conflicts with at least one of these pr
 **Not now:**
 - Claiming rollback beyond retained core snapshots or persisted item undo logs
 - Presenting roadmap memory features as current runtime behavior
-- Describing optional or feature-gated subsystems as part of the default proof path
+- Describing optional runtime-toggleable subsystems as part of the default proof path
 
 **Why:** Governance depends on trust between claims, code, tests, and receipts. If a feature is not implemented and covered by a runnable proof path, it belongs in a roadmap section, not in the shipped-behavior narrative. Lancelot should be evaluated on real guarantees, not aspirational language.
 
