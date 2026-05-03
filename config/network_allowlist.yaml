@@ -46,6 +46,7 @@ domains:
 - bloomberg.com
 - reuters.com
 - techcrunch.com
+- news.ycombinator.com
 
 # ── Google OAuth ───────────────────────────────────────────
 - accounts.google.com

@@ -45,7 +45,7 @@ class SubsystemManager:
     """Registry for hot-toggleable subsystems.
 
     Each subsystem is registered with:
-    - name:            short identifier (e.g. "bal", "scheduler")
+    - name:            short identifier (e.g. "memory", "scheduler")
     - flag_name:       the FEATURE_* flag that controls it
     - init_fn:         callable that initializes the subsystem, returns dict of objects
     - shutdown_fn:     callable that tears down the subsystem, receives the objects dict

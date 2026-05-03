@@ -234,15 +234,8 @@ FEATURE_SOUL=true
 FEATURE_SKILLS=true
 FEATURE_HEALTH_MONITOR=true
 FEATURE_SCHEDULER=true
-FEATURE_MEMORY_VNEXT=true
-FEATURE_TOOLS_FABRIC=true
-FEATURE_RISK_TIERED_GOVERNANCE=true
-FEATURE_TRUST_LEDGER=true
-FEATURE_APPROVAL_LEARNING=true
 FEATURE_AGENTIC_LOOP=true
 FEATURE_LOCAL_AGENTIC=true
-FEATURE_TOOL_FLOW_STREAMING=true
-FEATURE_ACTION_CARDS=true
 ```
 
 > **Tip:** If you skip the security tokens, the in-app onboarding at `http://localhost:8000` will auto-generate them on first launch.

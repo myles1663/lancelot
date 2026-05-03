@@ -428,7 +428,6 @@ def _shutdown_health_monitor(objects):
         objects["monitor"].stop_monitor()
     logger.info("Health monitor stopped.")
 
-
 # Tool Fabric provider subsystems
 # These init/shutdown functions let the SubsystemManager hot-toggle
 # individual providers inside the already-running ToolFabric.

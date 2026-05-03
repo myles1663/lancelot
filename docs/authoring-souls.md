@@ -68,7 +68,7 @@ memory_ethics:
   - "Do not store PII in long-term memory without explicit consent"
   - "Redact sensitive data before logging"
   - "Soul is not stored in recursive memory"
-  - "Memory references soul version, never soul content"
+  - "Do not store raw Soul documents recursively in tiered memory"
 
 scheduling_boundaries:
   max_concurrent_jobs: 5

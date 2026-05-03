@@ -52,6 +52,7 @@ WORKING_MEMORY_DB: str = "working_memory.sqlite"
 EPISODIC_DB: str = "episodic.sqlite"
 ARCHIVAL_DB: str = "archival.sqlite"
 COMMITS_DIR: str = "commits"
+SNAPSHOTS_DIR: str = "snapshots"
 
 # Secret patterns to detect and scrub
 SECRET_PATTERNS: list[str] = [

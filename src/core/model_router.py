@@ -1,4 +1,4 @@
-﻿"""
+"""
 Model router for lane selection and escalation.
 
 Single-owner module that routes tasks to the appropriate lane:

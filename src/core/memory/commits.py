@@ -19,7 +19,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Optional
 
-from .config import MEMORY_DIR, COMMITS_DIR
+from .config import MEMORY_DIR, COMMITS_DIR, SNAPSHOTS_DIR
 from .schemas import (
     CommitStatus,
     CoreBlockType,
@@ -81,6 +81,7 @@ class CommitManager:
         self.store_manager = store_manager
         self.data_dir = Path(data_dir)
         self.commits_dir = self.data_dir / MEMORY_DIR / COMMITS_DIR
+        self.snapshots_dir = self.data_dir / MEMORY_DIR / SNAPSHOTS_DIR
 
         self._lock = RLock()
         self._staged_commits: dict[str, MemoryCommit] = {}
@@ -90,6 +91,7 @@ class CommitManager:
 
         # Ensure commits directory exists
         self.commits_dir.mkdir(parents=True, exist_ok=True)
+        self.snapshots_dir.mkdir(parents=True, exist_ok=True)
 
     def begin_edits(
         self,
@@ -119,6 +121,7 @@ class CommitManager:
 
             self._staged_commits[commit.commit_id] = commit
             self._snapshots[commit.commit_id] = snapshot
+            self._persist_snapshot(snapshot)
 
             # Evict oldest snapshots if limit exceeded
             if len(self._snapshots) > MAX_RETAINED_SNAPSHOTS:
@@ -126,6 +129,7 @@ class CommitManager:
                 for key in oldest_keys:
                     del self._snapshots[key]
                     self._staged_commits.pop(key, None)
+                    self._delete_snapshot(key)
 
             logger.info("Started staged commit %s by %s", commit.commit_id, created_by)
             return commit.commit_id
@@ -274,6 +278,7 @@ class CommitManager:
                 del self._staged_commits[commit_id]
                 if commit_id in self._snapshots:
                     del self._snapshots[commit_id]
+                self._delete_snapshot(commit_id)
                 logger.info("Cancelled staged commit %s", commit_id)
                 return True
             return False
@@ -312,7 +317,9 @@ class CommitManager:
                     existing_rollback.commit_id,
                 )
                 return existing_rollback.commit_id
-            snapshot = self._snapshots.get(commit_id)
+            snapshot = self._snapshots.get(commit_id) or self._load_snapshot(commit_id)
+            if snapshot is not None:
+                self._snapshots[commit_id] = snapshot
             if snapshot is None and (commit.has_core_edits() or not self._has_item_undo_entries(commit_id)):
                 raise CommitError(f"Snapshot for commit {commit_id} not found")
 
@@ -327,6 +334,7 @@ class CommitManager:
             self._snapshots[rollback_commit.commit_id] = self.core_store.create_snapshot(
                 commit_id=rollback_commit.commit_id
             )
+            self._persist_snapshot(self._snapshots[rollback_commit.commit_id])
 
             # Restore from snapshot and persisted item undo logs.
             if snapshot is not None:
@@ -621,6 +629,52 @@ class CommitManager:
             json.dump(data, f, indent=2, default=str)
 
         logger.debug("Persisted commit %s to %s", commit.commit_id, commit_file)
+
+    def _snapshot_path(self, commit_id: str) -> Path:
+        """Return the persisted snapshot path for a commit id."""
+        self._validate_commit_id(commit_id)
+        snapshot_file = self.snapshots_dir / f"{commit_id}.json"
+        if not str(snapshot_file.resolve()).startswith(str(self.snapshots_dir.resolve())):
+            raise ValueError(f"Snapshot path escapes snapshots directory: {commit_id}")
+        return snapshot_file
+
+    def _persist_snapshot(self, snapshot: CoreBlocksSnapshot) -> None:
+        """Persist a core-block snapshot so rollback survives process restart."""
+        if not snapshot.commit_id:
+            return
+        snapshot_file = self._snapshot_path(snapshot.commit_id)
+        temp_file = snapshot_file.with_suffix(".json.tmp")
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(snapshot.model_dump(mode="json"), f, indent=2, default=str)
+        temp_file.replace(snapshot_file)
+        logger.debug("Persisted core snapshot %s to %s", snapshot.snapshot_id, snapshot_file)
+
+    def _load_snapshot(self, commit_id: str) -> Optional[CoreBlocksSnapshot]:
+        """Load a persisted core-block snapshot for rollback."""
+        try:
+            snapshot_file = self._snapshot_path(commit_id)
+        except ValueError as exc:
+            logger.error("Invalid snapshot commit_id: %s", exc)
+            return None
+        if not snapshot_file.exists():
+            return None
+        try:
+            with open(snapshot_file, "r", encoding="utf-8") as f:
+                return CoreBlocksSnapshot.model_validate(json.load(f))
+        except Exception as exc:
+            logger.error("Failed to load snapshot for commit %s: %s", commit_id, exc)
+            return None
+
+    def _delete_snapshot(self, commit_id: str) -> None:
+        """Delete a persisted snapshot when a staged commit is cancelled or evicted."""
+        try:
+            snapshot_file = self._snapshot_path(commit_id)
+        except ValueError:
+            return
+        try:
+            snapshot_file.unlink(missing_ok=True)
+        except Exception as exc:
+            logger.warning("Failed to delete snapshot %s: %s", commit_id, exc)
 
     def load_commit(self, commit_id: str) -> Optional[MemoryCommit]:
         """

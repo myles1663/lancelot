@@ -30,7 +30,7 @@ def _memory_data_dir() -> Path:
     return Path(os.getenv("LANCELOT_DATA_DIR", "/home/lancelot/data"))
 
 
-def execute(context: Any, inputs: Dict[str, Any]) -> Dict[str, Any]:
+def execute(context, inputs: Dict[str, Any]) -> Dict[str, Any]:
     """Run all memory maintenance jobs and return a compact scheduler result."""
     dry_run = bool((inputs or {}).get("dry_run", False))
     data_dir = _memory_data_dir()

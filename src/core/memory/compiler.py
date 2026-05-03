@@ -171,6 +171,14 @@ class ContextCompiler:
         ctx.rendered_prompt = "\n\n".join(sections)
         ctx.token_estimate = total_tokens
         ctx.token_breakdown = token_breakdown
+        ctx.context_efficiency = self._build_context_efficiency(
+            ctx,
+            max_tokens=max_tokens,
+            working_items=working_items or [],
+            retrieved_items=retrieved_items or [],
+            working_candidate_count=len(working_items or []),
+            retrieval_candidate_count=len(retrieved_items or []),
+        )
 
         logger.info(
             "Compiled context %s: %d tokens (core=%d, working=%d, retrieval=%d)",
@@ -182,6 +190,95 @@ class ContextCompiler:
         )
 
         return ctx
+
+    def _build_context_efficiency(
+        self,
+        ctx: CompiledContext,
+        *,
+        max_tokens: int,
+        working_items: list[MemoryItem],
+        retrieved_items: list[MemoryItem],
+        working_candidate_count: int,
+        retrieval_candidate_count: int,
+    ) -> dict[str, Any]:
+        exclusion_reasons: dict[str, int] = {}
+        excluded_token_estimate = 0
+        for exclusion in ctx.excluded_candidates:
+            reason = str(exclusion.get("reason") or "unknown")
+            exclusion_reasons[reason] = exclusion_reasons.get(reason, 0) + 1
+            excluded_token_estimate += int(exclusion.get("tokens") or 0)
+        section_percentages = {
+            section: round(tokens / max(ctx.token_estimate, 1), 4)
+            for section, tokens in ctx.token_breakdown.items()
+        }
+        static_tokens = (
+            ctx.token_breakdown.get("core_blocks", 0)
+            + ctx.token_breakdown.get("objective", 0)
+        )
+        dynamic_tokens = (
+            ctx.token_breakdown.get("working_memory", 0)
+            + ctx.token_breakdown.get("retrieval", 0)
+        )
+        memory_candidates = working_candidate_count + retrieval_candidate_count
+        included_ids = set(ctx.included_memory_item_ids)
+        working_included = sum(1 for item in working_items if item.id in included_ids)
+        retrieval_included = sum(1 for item in retrieved_items if item.id in included_ids)
+        template_hits = sum(
+            1
+            for item in [*working_items, *retrieved_items]
+            if item.id in included_ids
+            and (
+                "task_experience" in {str(tag).lower() for tag in item.tags}
+                or "runbook" in {str(tag).lower() for tag in item.tags}
+                or bool((item.metadata or {}).get("template_id"))
+            )
+        )
+        excluded_count = len(ctx.excluded_candidates)
+        included_count = len(ctx.included_memory_item_ids)
+        considered_count = included_count + excluded_count
+        return {
+            "max_tokens": max_tokens,
+            "used_tokens": ctx.token_estimate,
+            "total_context_tokens": ctx.token_estimate,
+            "remaining_tokens": max(max_tokens - ctx.token_estimate, 0),
+            "budget_used_ratio": round(ctx.token_estimate / max(max_tokens, 1), 4),
+            "static_context_tokens": static_tokens,
+            "dynamic_context_tokens": dynamic_tokens,
+            "static_context_ratio": round(static_tokens / max(ctx.token_estimate, 1), 4),
+            "dynamic_context_ratio": round(dynamic_tokens / max(ctx.token_estimate, 1), 4),
+            "included_memory_count": len(ctx.included_memory_item_ids),
+            "excluded_count": len(ctx.excluded_candidates),
+            "memory_hits_considered": memory_candidates,
+            "memory_hits_included": included_count,
+            "memory_hits_excluded": excluded_count,
+            "working_memory_hits_included": working_included,
+            "retrieval_hits_included": retrieval_included,
+            "retrieval_miss_rate": round(excluded_count / max(considered_count, 1), 4),
+            "exclusion_reasons": exclusion_reasons,
+            "excluded_token_estimate": excluded_token_estimate,
+            "working_candidate_count": working_candidate_count,
+            "retrieval_candidate_count": retrieval_candidate_count,
+            "section_percentages": section_percentages,
+            "compaction_savings_tokens": 0,
+            "compaction_savings_source": "no_compaction_applied",
+            "cache_eligibility": {
+                "eligible": True,
+                "reason": "deterministic_context_inputs",
+                "key_inputs": [
+                    "compiler_version",
+                    "soul_version",
+                    "objective",
+                    "quest_id",
+                    "mode",
+                    "included_memory_item_ids",
+                ],
+            },
+            "template_reuse": {
+                "template_hits": template_hits,
+                "template_candidates": included_count,
+                "template_hit_rate": round(template_hits / max(included_count, 1), 4),
+            },
+        }
 
     def _compile_core_blocks(
         self,
@@ -498,6 +595,7 @@ class ContextCompiler:
             "excluded_count": len(ctx.excluded_candidates),
             "token_estimate": ctx.token_estimate,
             "token_breakdown": ctx.token_breakdown,
+            "context_efficiency": ctx.context_efficiency,
             "compiler_version": ctx.compiler_version,
             "soul_version": ctx.soul_version,
         }
@@ -558,6 +656,8 @@ class ContextCompilerService:
         mode: str = "normal",
         search_query: Optional[str] = None,
         retrieval_limit: int = 10,
+        operator_id: str = "",
+        workflow_id: str = "",
         emit_receipt: bool = False,
         receipt_emitter: Optional[Any] = None,
     ) -> CompiledContext:
@@ -570,6 +670,8 @@ class ContextCompilerService:
             mode: Execution mode
             search_query: Query for retrieval (defaults to objective)
             retrieval_limit: Max items to retrieve
+            operator_id: Optional authenticated operator ID for retrieval boosts
+            workflow_id: Optional workflow/template ID for retrieval boosts
 
         Returns:
             Compiled context ready for use
@@ -598,6 +700,8 @@ class ContextCompilerService:
             limit=retrieval_limit,
             total_limit=retrieval_limit,
             current_quest_id=quest_id or "",
+            operator_id=operator_id,
+            workflow_id=workflow_id,
         )
         self._quarantine_injection_candidates([*working_items, *retrieved_items])
 
@@ -618,6 +722,8 @@ class ContextCompilerService:
                     "quest_id": quest_id,
                     "mode": mode,
                     "search_query": query,
+                    "operator_id": operator_id,
+                    "workflow_id": workflow_id,
                 },
                 outputs={
                     "context_id": ctx.context_id,

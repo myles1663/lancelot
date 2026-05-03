@@ -1,4 +1,4 @@
-Rewrite the following query to improve retrieval from a vector database.
+Rewrite the following query to improve retrieval from Lancelot's memory index.
 Make it specific, remove filler words, and expand abbreviations.
 
 Original query: {input}

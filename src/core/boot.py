@@ -324,7 +324,7 @@ async def boot(app, config):
             app.include_router(health_api_router)
         except Exception as e:
             logger.warning("Health API router mount failed: %s", e)
-    
+
         try:
             from src.hive.api import router as hive_router
             app.include_router(hive_router)
@@ -465,7 +465,7 @@ async def boot(app, config):
                 logger.warning("Federation initialization failed: %s", e)
         else:
             logger.info("Federation disabled by feature flag.")
-    
+
         try:
             from feature_flags import FEATURE_LOCAL_AGENTIC
             from src.core.local_model_roles import LocalModelRoleRouter

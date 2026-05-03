@@ -305,7 +305,7 @@ class LocalModelClient:
         return raw.strip()
 
     def rag_rewrite(self, query: str) -> str:
-        """Rewrite a query for improved vector database retrieval."""
+        """Rewrite a query for improved memory-index retrieval."""
         prompt = self._render("rag_rewrite", input=query)
         raw = self.complete(
             prompt,

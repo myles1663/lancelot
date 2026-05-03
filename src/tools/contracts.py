@@ -176,7 +176,7 @@ class ExecResult:
 class FileChange:
     """Record of a file change with before/after hashes."""
     path: str
-    action: str  # "created", "modified", "deleted", "error"
+    action: str  # "created", "modified", "deleted"
     hash_before: Optional[str] = None
     hash_after: Optional[str] = None
     size_before: Optional[int] = None

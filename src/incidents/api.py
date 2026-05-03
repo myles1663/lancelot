@@ -61,7 +61,7 @@ def init_incidents_api(receipt_service, data_dir: str) -> None:
 
 
 def shutdown_incidents_api() -> None:
-    """Clear incidents API runtime references for hot-toggle shutdown."""
+    """Clear incident API runtime references for hot-toggle shutdown."""
     global _data_dir, _receipt_service
     _data_dir = None
     _receipt_service = None

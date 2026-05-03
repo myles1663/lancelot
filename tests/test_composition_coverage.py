@@ -44,7 +44,6 @@ class _FakeSubsystemManager:
         self.registered = {}
         self.started = []
         self.entries = {}
-        self.invoke_start = False
 
     def register(self, name, flag_name, init_fn, shutdown_fn, routes):
         self.registered[name] = (flag_name, init_fn, shutdown_fn, routes)
@@ -52,11 +51,7 @@ class _FakeSubsystemManager:
 
     def start(self, name):
         self.started.append(name)
-        entry = self.entries.setdefault(name, _FakeSubsystemEntry())
-        if self.invoke_start:
-            _flag_name, init_fn, _shutdown_fn, _routes = self.registered[name]
-            entry.objects = init_fn() or {}
-        entry.running = True
+        self.entries.setdefault(name, _FakeSubsystemEntry()).running = True
 
     def get(self, name):
         return self.entries.get(name)
@@ -565,7 +560,6 @@ async def test_boot_composition_root_registers_core_subsystems_without_optional_
 
     app = _FakeApp()
     subsystem_manager = _FakeSubsystemManager()
-    subsystem_manager.invoke_start = True
     orchestrator = _FakeOrchestrator()
     antigravity = _AsyncService()
     librarian = _SyncService()
@@ -617,7 +611,6 @@ async def test_boot_composition_root_registers_core_subsystems_without_optional_
     )
 
     try:
-        monkeypatch.setenv("LANCELOT_PROVIDER", "gemini")
         result = await boot.boot(app, boot.BootConfig())
 
         assert result.env.provider in {"", "gemini"}
@@ -1348,7 +1341,10 @@ def test_local_agentic_generate_returns_text_and_tracks_usage():
     runtime.usage_tracker = types.SimpleNamespace(record_simple=lambda *args: usage.append(args))
 
     assert tool_loop._local_agentic_generate(runtime, "hello") == "local answer"
-    assert "emoji sparingly" in captured["messages"][0]["content"]
+    system_message = captured["messages"][0]["content"]
+    assert "include one light, relevant emoji" in system_message
+    assert "Use 1-3 max" in system_message
+    assert "code, logs, JSON, commands" in system_message
     assert ("tokens", 17) in runtime.governor.logged
     assert usage == [("local-llm", 17)]
 

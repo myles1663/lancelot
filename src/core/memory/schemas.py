@@ -261,6 +261,10 @@ class CompiledContext(BaseModel):
         default_factory=dict,
         description="Token counts per section"
     )
+    context_efficiency: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Context budget, inclusion, and exclusion telemetry"
+    )
     rendered_prompt: str = Field(default="")
 
     compiler_version: str = Field(default="1.0.0")

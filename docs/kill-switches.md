@@ -8,15 +8,15 @@ Lancelot uses hot-toggleable feature flags as kill switches for every high-risk 
 
 ### Priority System
 
-1. **Persisted state** (`data/.flag_state.json`) — Written by War Room toggles, survives restart
-2. **Environment variable** (`.env` / `docker-compose`) — Set at deployment
-3. **Hardcoded default** — Safe fallback
+1. **Persisted state** (`data/.flag_state.json`) - Written by War Room toggles, survives restart
+2. **Environment variable** (`.env` / `docker-compose`) - Set at deployment
+3. **Hardcoded default** - Safe fallback
 
 ### Runtime Control
 
-- `toggle_flag(name)` — Hot-toggle, persists to disk immediately
-- `set_flag(name, value)` — Set specific value, persists
-- `reload_flags()` — Re-read from environment
+- `toggle_flag(name)` - Hot-toggle, persists to disk immediately
+- `set_flag(name, value)` - Set specific value, persists
+- `reload_flags()` - Re-read from environment
 - War Room Kill Switches page provides toggle UI for all flags
 
 ---
@@ -62,7 +62,7 @@ Lancelot uses hot-toggleable feature flags as kill switches for every high-risk 
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `FEATURE_RISK_TIERED_GOVERNANCE` | true | Master switch for 4-tier risk classification (T0–T3). *Requires: FEATURE_SOUL* |
+| `FEATURE_RISK_TIERED_GOVERNANCE` | true | Master switch for 4-tier risk classification (T0-T3). *Requires: FEATURE_SOUL* |
 | `FEATURE_POLICY_CACHE` | true | Boot-time policy compilation. *Requires: FEATURE_RISK_TIERED_GOVERNANCE* |
 | `FEATURE_ASYNC_VERIFICATION` | true | Background verification for T1 actions. *Requires: FEATURE_RISK_TIERED_GOVERNANCE* |
 | `FEATURE_INTENT_TEMPLATES` | true | Cached execution plan templates. *Requires: FEATURE_RISK_TIERED_GOVERNANCE* |
@@ -111,8 +111,6 @@ Lancelot uses hot-toggleable feature flags as kill switches for every high-risk 
 | `FEATURE_FEDERATION` | false | Multi-instance coordination |
 | `FEATURE_MCP` | false | Governed MCP tool invocations |
 
----
-
 ## Safe Defaults
 
 - Dangerous features default to **off** (network, host bridge, write commands, UAB)
@@ -128,32 +126,32 @@ Some flags require others to be enabled:
 
 ```
 FEATURE_TOOLS_FABRIC
-  ├── FEATURE_TOOLS_CLI_PROVIDERS
-  ├── FEATURE_TOOLS_ANTIGRAVITY
-  ├── FEATURE_TOOLS_NETWORK
-  ├── FEATURE_TOOLS_HOST_EXECUTION
-  ├── FEATURE_TOOLS_HOST_BRIDGE
-  │     ├── FEATURE_HOST_WRITE_COMMANDS
-  │     └── FEATURE_TOOLS_UAB
-  └── FEATURE_CONNECTORS
-        └── FEATURE_MCP
+  |-- FEATURE_TOOLS_CLI_PROVIDERS
+  |-- FEATURE_TOOLS_ANTIGRAVITY
+  |-- FEATURE_TOOLS_NETWORK
+  |-- FEATURE_TOOLS_HOST_EXECUTION
+  |-- FEATURE_TOOLS_HOST_BRIDGE
+  |     |-- FEATURE_HOST_WRITE_COMMANDS
+  |     `-- FEATURE_TOOLS_UAB
+  `-- FEATURE_CONNECTORS
+        `-- FEATURE_MCP
 
 FEATURE_SOUL
-  └── FEATURE_RISK_TIERED_GOVERNANCE
-        ├── FEATURE_POLICY_CACHE
-        ├── FEATURE_ASYNC_VERIFICATION
-        ├── FEATURE_INTENT_TEMPLATES
-        ├── FEATURE_TRUST_LEDGER
-        └── FEATURE_APPROVAL_LEARNING
+  `-- FEATURE_RISK_TIERED_GOVERNANCE
+        |-- FEATURE_POLICY_CACHE
+        |-- FEATURE_ASYNC_VERIFICATION
+        |-- FEATURE_INTENT_TEMPLATES
+        |-- FEATURE_TRUST_LEDGER
+        `-- FEATURE_APPROVAL_LEARNING
 
 FEATURE_SKILLS
-  ├── FEATURE_SCHEDULER
-  ├── FEATURE_SKILL_SECURITY_PIPELINE
-  └── FEATURE_AGENTIC_LOOP
-        ├── FEATURE_LOCAL_AGENTIC
-        ├── FEATURE_STRUCTURED_OUTPUT
-        └── FEATURE_GITHUB_SEARCH
+  |-- FEATURE_SCHEDULER
+  |-- FEATURE_SKILL_SECURITY_PIPELINE
+  `-- FEATURE_AGENTIC_LOOP
+        |-- FEATURE_LOCAL_AGENTIC
+        |-- FEATURE_STRUCTURED_OUTPUT
+        `-- FEATURE_GITHUB_SEARCH
 
 FEATURE_HIVE
-  └── FEATURE_HIVE_UAB (also requires FEATURE_TOOLS_UAB)
+  `-- FEATURE_HIVE_UAB (also requires FEATURE_TOOLS_UAB)
 ```

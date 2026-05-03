@@ -331,3 +331,116 @@ def test_work_ledger_archive_work_hides_item_without_deleting_history(tmp_path):
         assert store.list_checkpoints("quest-archive")[0]["reason"] == "work_archived_by_operator"
     finally:
         store.close()
+
+
+def test_work_ledger_session_brief_captures_complete_and_left(tmp_path):
+    store = WorkLedgerStore(str(tmp_path / "work.sqlite"))
+    try:
+        store.upsert_work(
+            quest_id="quest-complete",
+            objective="finish continuity docs",
+            session_id="sess-1",
+            operator_id="op-1",
+            status="completed",
+            phase="completed",
+            last_receipt_id="receipt-complete",
+        )
+        store.append_event(
+            quest_id="quest-complete",
+            event_type="file_updated",
+            summary="Updated continuity docs",
+            receipt_id="receipt-doc",
+            phase="execution",
+            status="completed",
+            metadata={"path": "docs/continuity.md"},
+        )
+        store.create_checkpoint("quest-complete", reason="session_end")
+
+        store.upsert_work(
+            quest_id="quest-left",
+            objective="finish memory retrieval ranking",
+            session_id="sess-1",
+            operator_id="op-1",
+            status="blocked",
+            phase="validation",
+            next_action="Add retrieval ranking proof tests",
+            blocker="Need approval before changing ranking defaults",
+            metadata={"known_risks": ["Ranking defaults can change retrieval ordering"]},
+        )
+        store.append_event(
+            quest_id="quest-left",
+            event_type="approval_requested",
+            summary="Ranking defaults need Commander approval",
+            receipt_id="receipt-approval",
+            phase="validation",
+            status="blocked",
+            metadata={
+                "target_path": "src/core/memory/sqlite_store.py",
+                "approval_request_id": "approval-1",
+            },
+        )
+        store.create_checkpoint("quest-left", reason="session_end")
+
+        brief = store.create_session_brief(
+            session_id="sess-1",
+            operator_id="op-1",
+            reason="session_end",
+        )
+        stored = store.latest_session_brief(session_id="sess-1", operator_id="op-1")
+
+        assert stored is not None
+        assert stored.brief_id == brief.brief_id
+        assert "quest-complete" in stored.quest_ids
+        assert "quest-left" in stored.quest_ids
+        assert "finish continuity docs" in stored.objective
+        assert "finish memory retrieval ranking" in stored.objective
+        assert any("quest-complete finished" in entry for entry in stored.completed_work)
+        assert "Add retrieval ranking proof tests" in stored.pending_work
+        assert stored.next_action == "Add retrieval ranking proof tests"
+        assert "Need approval before changing ranking defaults" in stored.blockers
+        assert "Need approval before changing ranking defaults" in stored.open_decisions
+        assert "Ranking defaults can change retrieval ordering" in stored.known_risks
+        assert "docs/continuity.md" in stored.files_touched
+        assert "src/core/memory/sqlite_store.py" in stored.files_touched
+        assert "approval-1" in stored.approvals
+        assert "receipt-doc" in stored.receipt_ids
+        assert "receipt-approval" in stored.receipt_ids
+    finally:
+        store.close()
+
+
+def test_work_ledger_context_block_falls_back_to_latest_session_brief(tmp_path):
+    store = WorkLedgerStore(str(tmp_path / "work.sqlite"))
+    try:
+        store.upsert_work(
+            quest_id="quest-complete",
+            objective="complete session work",
+            session_id="sess-1",
+            operator_id="op-1",
+            status="completed",
+            phase="completed",
+        )
+        store.append_event(
+            quest_id="quest-complete",
+            event_type="work_completed",
+            summary="Completed the session scope",
+            status="completed",
+        )
+        store.create_checkpoint("quest-complete", reason="session_end")
+        store.create_session_brief(
+            session_id="sess-1",
+            operator_id="op-1",
+            reason="session_end",
+        )
+
+        block = store.render_context_block(session_id="sess-1", operator_id="op-1")
+        briefs = store.list_session_briefs(session_id="sess-1", operator_id="op-1")
+
+        assert "LAST SESSION BRIEF" in block
+        assert "Objective:" in block
+        assert "Complete:" in block
+        assert "quest-complete finished with status completed" in block
+        assert len(briefs) == 1
+        assert briefs[0].reason == "session_end"
+    finally:
+        store.close()

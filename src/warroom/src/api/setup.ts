@@ -72,15 +72,6 @@ export function resetConnectorVault(confirmationText: string) {
   })
 }
 
-// ── Receipt Management ───────────────────────────────────────────
-
-/** POST /api/setup/receipts/clear */
-export function clearReceipts() {
-  return apiPost<SetupActionResponse>('/api/setup/receipts/clear', { confirm: true })
-}
-
-// Receipt stats: use fetchReceiptStats from './receipts' instead
-
 // ── Token Management (existing endpoints) ────────────────────────
 
 /** GET /tokens — list execution tokens */

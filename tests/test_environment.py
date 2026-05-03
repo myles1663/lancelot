@@ -19,13 +19,6 @@ def test_imports():
         print(f"FAILURE: Could not import fastapi. Error: {e}")
         sys.exit(1)
 
-    try:
-        import chromadb
-        print("SUCCESS: chromadb imported.")
-    except ImportError as e:
-        print(f"FAILURE: Could not import chromadb. Error: {e}")
-        sys.exit(1)
-
 def test_volume_persistence():
     print("\nTesting volume persistence...")
     data_dir = "/home/lancelot/data"

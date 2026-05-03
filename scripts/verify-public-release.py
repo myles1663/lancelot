@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import fnmatch
 import os
 import shutil
@@ -176,8 +177,19 @@ def check_no_print_statements() -> None:
     for path in (ROOT / "src").rglob("*.py"):
         if any(part in EXCLUDED_PARTS for part in path.relative_to(ROOT).parts):
             continue
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        if "print(" in text:
+        text = path.read_text(encoding="utf-8-sig", errors="ignore")
+        try:
+            tree = ast.parse(text, filename=str(path))
+        except SyntaxError:
+            offenders.append(str(path.relative_to(ROOT)).replace("\\", "/"))
+            continue
+        has_print_call = any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "print"
+            for node in ast.walk(tree)
+        )
+        if has_print_call:
             offenders.append(str(path.relative_to(ROOT)).replace("\\", "/"))
     if offenders:
         print("Production Python files contain print():")

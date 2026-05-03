@@ -20,6 +20,7 @@ import ssl
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus
@@ -111,6 +112,16 @@ _USER_AGENT = "Mozilla/5.0 (compatible; Lancelot-AI-Agent/2.0)"
 _FETCH_TIMEOUT = 12
 _MAX_SUMMARY_LEN = 200
 _ATOM_NS = "{http://www.w3.org/2005/Atom}"
+
+
+def _write_local_brief(message: str) -> str:
+    """Persist the generated brief when no Telegram channel is configured."""
+    data_dir = Path(os.getenv("LANCELOT_DATA_DIR", "/home/lancelot/data"))
+    brief_dir = data_dir / "news_briefs"
+    brief_dir.mkdir(parents=True, exist_ok=True)
+    path = brief_dir / f"ai_news_brief_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.md"
+    path.write_text(message, encoding="utf-8")
+    return str(path)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -233,7 +244,8 @@ def _parse_atom(root: ET.Element, source: str, cutoff: datetime) -> List[Dict[st
     for entry in entries:
         title = (entry.findtext(f"{_ATOM_NS}title") or entry.findtext("title") or "").strip()
 
-        # Atom link is an attribute: <link href="..." />
+        # Atom link is an attribute: <link href="..." />. Do not use
+        # Element truthiness here; empty elements evaluate false.
         link_el = entry.find(f"{_ATOM_NS}link")
         if link_el is None:
             link_el = entry.find("link")
@@ -458,13 +470,22 @@ def execute(context: Any, inputs: Dict[str, Any]) -> Dict[str, Any]:
             }
 
     send_result = telegram_send.send_text(message, chat_id_override)
+    status = send_result.get("status", "error")
+    local_brief_path = None
+    delivery_error = str(send_result.get("error", "")) if status == "error" else ""
+    if status == "error" and "Telegram not configured" in delivery_error:
+        local_brief_path = _write_local_brief(message)
+        status = "skipped"
 
     # 7. Return stats
     sources_in_report = {a["source"] for a in articles}
     return {
-        "status": send_result.get("status", "error"),
+        "status": status,
         "articles_found": len(unique),
         "articles_sent": len(articles),
+        "delivery": "telegram" if status == "sent" else "local_artifact",
+        "local_brief_path": local_brief_path,
+        "error": delivery_error or None,
         "sources_in_report": sorted(sources_in_report),
         "feeds_checked": len(_RSS_FEEDS) + len(_GOOGLE_NEWS_QUERIES),
         "feeds_succeeded": feeds_succeeded,

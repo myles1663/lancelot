@@ -143,7 +143,7 @@ class ContextEnvironment:
             buffer.append("--- COMPACTED CHAT HISTORY ---")
             for summary in summaries:
                 timestamp = self._format_summary_timestamp(summary)
-                buffer.append(f"SUMMARY [{timestamp}]: {summary.get('summary', '')}")
+                buffer.append(self._render_chat_summary(summary, timestamp=timestamp))
 
         if not self.history:
             return "\n".join(buffer)
@@ -203,14 +203,15 @@ class ContextEnvironment:
 
         first_ts = messages[0].get("timestamp") if messages else None
         last_ts = messages[-1].get("timestamp") if messages else None
-        user_preview = "; ".join(
+        user_preview = [
             self._preview_chat_text(msg.get("content", ""), CHAT_SUMMARY_PREVIEW_CHARS)
-            for msg in user_messages[:3]
-        )
-        assistant_preview = "; ".join(
+            for msg in user_messages[:5]
+        ]
+        assistant_preview = [
             self._preview_chat_text(msg.get("content", ""), CHAT_SUMMARY_PREVIEW_CHARS)
-            for msg in assistant_messages[:3]
-        )
+            for msg in assistant_messages[:5]
+        ]
+        schema = self._extract_chat_summary_schema(messages)
 
         parts = [
             f"Compacted {len(messages)} older chat messages",
@@ -219,9 +220,9 @@ class ContextEnvironment:
         if channels:
             parts.append(f"channels: {', '.join(channels)}")
         if user_preview:
-            parts.append(f"user intents: {user_preview}")
+            parts.append(f"user intents: {'; '.join(user_preview[:3])}")
         if assistant_preview:
-            parts.append(f"assistant outcomes: {assistant_preview}")
+            parts.append(f"assistant outcomes: {'; '.join(assistant_preview[:3])}")
 
         return {
             "created_at": time.time(),
@@ -231,7 +232,108 @@ class ContextEnvironment:
             "channels": channels,
             "source": "deterministic_chat_compaction",
             "summary": ". ".join(parts),
+            "schema_version": 2,
+            "user_intents": user_preview,
+            "assistant_outcomes": assistant_preview,
+            **schema,
         }
+
+    def _extract_chat_summary_schema(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+        fields = {
+            "decisions_made": [],
+            "user_preferences": [],
+            "unresolved_questions": [],
+            "durable_facts": [],
+            "rejected_or_blocked_actions": [],
+            "next_steps": [],
+            "receipt_references": [],
+        }
+        for message in messages:
+            role = str(message.get("role") or "")
+            content = self._strip_channel_tags(str(message.get("content") or ""))
+            if not content.strip():
+                continue
+            sentences = self._split_summary_sentences(content)
+            for sentence in sentences:
+                lowered = sentence.lower()
+                target = self._preview_chat_text(sentence, CHAT_SUMMARY_PREVIEW_CHARS)
+                for receipt_id in self._extract_receipt_references(sentence):
+                    self._append_summary_value(fields["receipt_references"], receipt_id, limit=120)
+                if role == "user" and any(marker in lowered for marker in (
+                    "i want", "i don't want", "i dont want", "do not", "don't", "prefer",
+                    "should", "shouldn't", "lets", "let's", "works for me",
+                )):
+                    self._append_summary_value(fields["user_preferences"], target)
+                if any(marker in lowered for marker in (
+                    "decided", "decision", "we will", "we should", "approved",
+                    "works for me", "this works", "let's do", "lets do",
+                )):
+                    self._append_summary_value(fields["decisions_made"], target)
+                if "?" in sentence or any(marker in lowered for marker in (
+                    "need to decide", "unresolved", "not sure", "wondering", "question",
+                )):
+                    self._append_summary_value(fields["unresolved_questions"], target)
+                if any(marker in lowered for marker in (
+                    "blocked", "failed", "denied", "rejected", "do not", "don't",
+                    "cannot", "can't", "not allowed", "red flag",
+                )):
+                    self._append_summary_value(fields["rejected_or_blocked_actions"], target)
+                if any(marker in lowered for marker in (
+                    "next", "todo", "to do", "left", "remaining", "follow up",
+                    "come back", "need to", "we need", "let's", "lets",
+                )):
+                    self._append_summary_value(fields["next_steps"], target)
+                if any(marker in lowered for marker in (
+                    " repo ", " branch ", " container ", "memory", "session",
+                    "operator", "credential", "feature", "default", "scheduler",
+                )):
+                    self._append_summary_value(fields["durable_facts"], target)
+
+        return {key: values[:12] for key, values in fields.items()}
+
+    @staticmethod
+    def _append_summary_value(target: List[str], value: Any, *, limit: int = 500) -> None:
+        text = ContextEnvironment._preview_chat_text(value, limit)
+        if text and text not in target:
+            target.append(text)
+
+    @staticmethod
+    def _strip_channel_tags(value: str) -> str:
+        return re.sub(r"\[via [^\]]+\]\s*", "", value or "").strip()
+
+    @staticmethod
+    def _split_summary_sentences(value: str) -> List[str]:
+        chunks = re.split(r"(?<=[.!?])\s+|\n+", value or "")
+        return [chunk.strip() for chunk in chunks if chunk.strip()]
+
+    @staticmethod
+    def _extract_receipt_references(value: str) -> List[str]:
+        patterns = (
+            r"\breceipt[-_: ][A-Za-z0-9][A-Za-z0-9_.:-]{2,}\b",
+            r"\b[a-f0-9]{8}-[a-f0-9-]{12,}\b",
+        )
+        refs: list[str] = []
+        for pattern in patterns:
+            refs.extend(re.findall(pattern, value or "", flags=re.IGNORECASE))
+        return list(dict.fromkeys(refs))
+
+    def _render_chat_summary(self, summary: Dict[str, Any], *, timestamp: str) -> str:
+        lines = [f"SUMMARY [{timestamp}]: {summary.get('summary', '')}"]
+        field_labels = (
+            ("decisions_made", "Decisions"),
+            ("user_preferences", "User Preferences"),
+            ("unresolved_questions", "Unresolved Questions"),
+            ("durable_facts", "Durable Facts"),
+            ("rejected_or_blocked_actions", "Rejected/Blocked Actions"),
+            ("next_steps", "Next Steps"),
+            ("receipt_references", "Receipt References"),
+        )
+        for key, label in field_labels:
+            values = summary.get(key) or []
+            if values:
+                rendered = "; ".join(self._preview_chat_text(value, 220) for value in values[:5])
+                lines.append(f"{label}: {rendered}")
+        return "\n".join(lines)
 
     def _filtered_chat_summaries(self, channel: str = None) -> List[Dict[str, Any]]:
         if not channel:

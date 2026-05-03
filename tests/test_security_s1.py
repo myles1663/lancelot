@@ -22,7 +22,6 @@ from src.core.operator_identity import OperatorIdentity
 
 # Stub heavy external dependencies that gateway.py imports
 sys.modules.setdefault("google.generativeai", type(sys)("google.generativeai"))
-sys.modules.setdefault("chromadb", type(sys)("chromadb"))
 
 
 def _prepare_data_dir(data_dir: str):

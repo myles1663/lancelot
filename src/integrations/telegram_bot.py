@@ -1366,11 +1366,9 @@ class TelegramBot:
             resolution_text,
             keyboard={"inline_keyboard": []},
         )
-
         logger.info(
             "TelegramBot: ActionCard cross-channel update: message=%s resolved via %s",
-            telegram_message_id,
-            channel,
+            telegram_message_id, channel,
         )
 
     async def handle_actioncard_resolved_event(self, event):

@@ -66,6 +66,17 @@ COPY server.py .
 COPY models.lock.yaml .
 COPY prompts/ ./prompts/
 
+# Also expose the files as an importable local_models package. The server
+# entrypoint uses the flat files above, while smoke tests and setup helpers
+# import local_models.lockfile/fetch_model/smoke_test.
+RUN mkdir -p local_models
+COPY __init__.py local_models/__init__.py
+COPY lockfile.py local_models/lockfile.py
+COPY smoke_test.py local_models/smoke_test.py
+COPY fetch_model.py local_models/fetch_model.py
+COPY models.lock.yaml local_models/models.lock.yaml
+COPY prompts/ local_models/prompts/
+
 # Create weights directory (model mounted at runtime)
 RUN mkdir -p /home/llm/models && chown -R llm:llm /home/llm
 

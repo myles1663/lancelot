@@ -175,10 +175,13 @@ def _collect_tool_provider_status(logger) -> tuple[dict[str, str], dict[str, Any
             return {}, {}
 
         fabric = get_tool_fabric()
-        try:
-            health_by_provider = fabric.get_health()
-        except Exception:
+        # Public health is operator-facing, so prefer a live provider probe over
+        # a cached startup result. This lets bridges recover after their host
+        # daemon starts without requiring a core restart.
+        if hasattr(fabric, "probe_health"):
             health_by_provider = fabric.probe_health()
+        else:
+            health_by_provider = fabric.get_health()
 
         components: dict[str, str] = {}
         details: dict[str, Any] = {}

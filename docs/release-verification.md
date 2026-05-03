@@ -10,7 +10,7 @@ Run:
 python scripts/verify-public-release.py --public-artifact --skip-pytest --skip-uab --skip-docker
 ```
 
-This verifies that the public tree does not track private/internal release artifacts and that source files pass the release hygiene checks encoded in `scripts/verify-public-release.py`.
+This verifies that the public tree does not track non-release artifacts and that source files pass the release hygiene checks encoded in `scripts/verify-public-release.py`.
 
 ## Dependency Lockfiles
 
@@ -99,4 +99,4 @@ The Dockerfile pins several build-time tools directly, including the `uv` versio
 - [ ] Docker Compose config resolves.
 - [ ] Release notes list mature paths and known limitations.
 - [ ] Docker image tags or digests are recorded for the release.
-- [ ] The release is tagged from the public repository, not from a private/dev-only tree.
+- [ ] The release is tagged from the public repository, not from the source working tree.

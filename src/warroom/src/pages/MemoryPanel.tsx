@@ -106,8 +106,14 @@ export function MemoryPanel() {
         >
           Open Governed Memory Manager
         </Link>
+        <Link
+          to="/memory/context"
+          className="inline-flex items-center px-4 py-2 text-sm rounded-md border border-border-default text-text-primary hover:border-border-active"
+        >
+          Context Efficiency
+        </Link>
         <span className="text-xs text-text-muted">
-          Use the manager for governed edits, removals, quarantine review, and future rollback tooling.
+          Use the manager for governed edits and context diagnostics for long-running session inspection.
         </span>
       </div>
 

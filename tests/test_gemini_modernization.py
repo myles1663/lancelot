@@ -264,6 +264,14 @@ class TestSystemInstructions(unittest.TestCase):
         self.assertIn("Memory:", instruction)
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
+    def test_instruction_preserves_operator_emoji_style(self):
+        orch = _build_orchestrator()
+        instruction = orch._build_system_instruction()
+        self.assertIn("include one light, relevant emoji", instruction)
+        self.assertIn("✅ ❌ ⚠️", instruction)
+        self.assertIn("Avoid emoji inside code, logs, JSON, shell commands", instruction)
+
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
     def test_crusader_mode_modifies_instruction(self):
         orch = _build_orchestrator()
         normal = orch._build_system_instruction(crusader_mode=False)

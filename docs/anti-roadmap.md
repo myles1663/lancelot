@@ -124,7 +124,7 @@ Every item below was rejected because it conflicts with at least one of these pr
 ## 10. We will not market unimplemented guarantees as shipped behavior
 
 **Not now:**
-- Claiming exact rollback for tiers that do not yet persist undo logs
+- Claiming rollback beyond retained core snapshots or persisted item undo logs
 - Presenting roadmap memory features as current runtime behavior
 - Describing optional or feature-gated subsystems as part of the default proof path
 

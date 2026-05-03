@@ -42,7 +42,7 @@ def init_playbook_api(playbooks_dir: str) -> None:
 
 
 def shutdown_playbook_api() -> None:
-    """Clear playbook API runtime state for hot-toggle shutdown."""
+    """Clear playbook API runtime references for hot-toggle shutdown."""
     global _playbooks_dir
     _playbooks_dir = None
     invalidate_cache()
