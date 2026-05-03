@@ -2,6 +2,10 @@
 
 Lancelot is a self-hosted AI operator for technical users who want model-driven automation with hard policy boundaries. It can call tools, control desktop applications through a governed bridge, keep structured memory across long-running work, and write immutable receipts for governed actions. The design goal is simple: treat the model as untrusted planning logic inside a system that can remember, say no, require approval, and leave an audit trail.
 
+<p align="center">
+  <img src="docs/images/war-room-command-center.png" alt="Lancelot War Room command center" width="900">
+</p>
+
 ## Quickstart
 
 1. Install Docker Desktop and Node.js 18+.
@@ -70,7 +74,7 @@ python -m pytest -q --cov=src --cov-report=term-missing --cov-report=json:covera
 | Health/readiness, async chat runs, and War Room build | Covered by public proof tests and CI |
 | UAB routing, fallback behavior, and action-risk taxonomy | Implemented with focused test coverage |
 | HIVE scoped sub-agents | Implemented and feature-gated |
-| Federation, A2A, MCP governance, Time Travel, Observability | Implemented behind opt-in kill switches; evaluate as separate subsystems |
+| Federation, A2A, MCP governance, Time Travel, Observability | Implemented as runtime-toggleable governed capabilities |
 | Broad desktop automation coverage | Strongest on supported host setups and frameworks; not universal app control |
 
 ## Evaluation FAQ
@@ -83,9 +87,9 @@ No. Lancelot is source-available under BSL 1.1. You can use, copy, modify, and r
 
 Start with governance, receipts, health/readiness, the core tool bridge, and the War Room. Those are the default paths the README proof commands are intended to exercise.
 
-### What is still early?
+### How do optional subsystems work?
 
-HIVE, Federation, A2A, MCP governance, Time Travel, Observability, and parts of UAB are real subsystems behind opt-in kill switches. Treat each one as a separate evaluation path rather than assuming every advanced capability is active in the default install.
+The default install exercises Lancelot's governed operator path: governance, structured memory, receipts, health/readiness, the core tool bridge, and the War Room. HIVE, Federation, A2A, MCP governance, Time Travel, Observability, and parts of UAB are runtime-toggleable so operators can match Lancelot to their deployment. They are not separate products; they are optional governed capabilities behind kill switches.
 
 ### Is UAB universal desktop automation?
 
@@ -124,6 +128,33 @@ The receipt system is the audit trail. Actions are staged, finalized into an imm
 3. Kill switches, approval rules, and scoped runtime boundaries decide whether execution can continue.
 4. The approved action runs through a governed tool provider or UAB route.
 5. The outcome is written as a finalized receipt linked into the integrity chain.
+
+## War Room
+
+The War Room is the local operator console for governed execution, receipt review, kill-switch control, and runtime health.
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/images/war-room-receipt-explorer.png" alt="Receipt Explorer showing governed action receipts">
+    </td>
+    <td width="50%">
+      <img src="docs/images/war-room-kill-switches.png" alt="Kill Switches panel showing runtime-toggleable governed capabilities">
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Receipt Explorer</sub></td>
+    <td align="center"><sub>Runtime Kill Switches</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <img src="docs/images/war-room-health-dashboard.png" alt="Health Dashboard showing runtime component readiness">
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><sub>Runtime Health</sub></td>
+  </tr>
+</table>
 
 ## Architecture
 
@@ -210,7 +241,7 @@ Lancelot was built through AI-assisted development. The engineering bar for the 
 
 ## Known Limitations
 
-- Several major subsystems, including HIVE, Federation, MCP Governance, A2A, Time Travel, Observability, and parts of UAB, are opt-in through runtime kill switches. The default path to inspect first is governance, receipts, health checks, structured memory, and the core tool bridge.
+- Several major subsystems, including HIVE, Federation, MCP Governance, A2A, Time Travel, Observability, and parts of UAB, are runtime-toggleable governed capabilities. The default path to inspect first is governance, receipts, health checks, structured memory, and the core tool bridge.
 - UAB is strongest on supported desktop frameworks and host setups. It is not universal automation for every application.
 - The system is local-first and self-hosted, not a managed SaaS.
 - The configuration surface is large. Operators should treat `config/*.yaml` and `.env` as deployment artifacts, not casual defaults.
