@@ -10,6 +10,8 @@ The War Room is a React SPA (Vite + React 18 + TypeScript + Tailwind) accessible
 
 The War Room provides full observability into every aspect of Lancelot's operation. It is organized into tabbed panels, each focused on a specific subsystem. The sidebar provides navigation, and the header shows system vitals at a glance.
 
+![War Room — Overview Dashboard](images/war-room-overview-dashboard.png)
+
 **Access:** Local only (localhost). The War Room is not designed for public internet exposure. If you need remote access, add your own authentication layer in front of it.
 
 ---
@@ -49,6 +51,8 @@ This is deliberate. A blank table or a default status should no longer be treate
 ---
 
 ## Command Panel
+
+![War Room — Command Center](images/war-room-command-center.png)
 
 The primary interaction interface — send messages to Lancelot and see governed responses.
 
@@ -114,6 +118,8 @@ System-wide health monitoring with subsystem-level detail.
 
 ## Governance Panel
 
+![War Room — Rule Properties](images/war-room-rule-properties.png)
+
 Risk tier distribution, policy decisions, and the approval queue.
 
 **Displays:**
@@ -142,6 +148,8 @@ Actions: **Approve** (execute the action) or **Deny** (block and receipt the den
 
 ## Trust Panel
 
+![War Room — Trust Ledger](images/war-room-trust-ledger.png)
+
 Per-connector trust scores, graduation history, and revocation alerts.
 
 **Displays:**
@@ -165,6 +173,8 @@ When a connector earns enough trust (e.g., 50 successful T3 actions), a graduati
 ---
 
 ## APL Panel
+
+![War Room — APL Learning](images/war-room-apl-learning.png)
 
 Approval Pattern Learning — detected patterns, active automation rules, and proposals.
 
@@ -236,6 +246,8 @@ Governed skill proposal review and install lifecycle.
 
 ## Connector Status
 
+![War Room — Connectors](images/war-room-connectors.png)
+
 Per-connector health, configuration, and usage metrics.
 
 **Displays:**
@@ -271,6 +283,8 @@ Provider usage, key status, and provider-side authentication controls.
 
 ## Scheduler Panel
 
+![War Room — Scheduler](images/war-room-scheduler.png)
+
 Automated job management and execution history.
 
 **Displays:**
@@ -303,8 +317,15 @@ Memory tier overview, quarantine management, and commit history.
 - Tier sizes (core blocks, working items, episodic entries, archival records)
 - Core block viewer (content, token usage, last updated)
 - Quarantine queue (pending items with approve/deny actions)
-- Commit history with diff preview and rollback buttons
-- Context compiler trace (last N compilations with token breakdown)
+- Search across working, episodic, and archival memory
+- Recent tiered memory items
+- Link to the Governed Memory Manager for commits, governed edits, removals, quarantine review, and future rollback tooling
+
+The Context Efficiency view exposes compile telemetry from `POST /memory/compile`
+and `memory_compile` receipt data. Operators can run an objective-specific
+diagnostic and inspect budget use, static versus dynamic tokens, memory hits,
+exclusions, retrieval miss rate, cache eligibility, task/template reuse, and
+compaction status.
 
 **Quarantine Management:**
 
@@ -325,6 +346,8 @@ Actions: **Approve** (promote to active memory) or **Reject** (discard with rece
 
 ## Kill Switches
 
+![War Room — Service Dashboard with Kill Switches](images/war-room-service-dashboard.png)
+
 Emergency controls for disabling subsystems.
 
 Each kill switch has a confirmation dialog before activation. Disabling a subsystem:
@@ -335,7 +358,7 @@ Each kill switch has a confirmation dialog before activation. Disabling a subsys
 
 **Persistence:** Kill switch state is persisted to `.flag_state.json` in the Docker data volume. Toggles made in the War Room survive container restarts. The priority order is: persisted state > `.env` values > code defaults.
 
-**Hot-Toggle:** Process-local feature flags are hot-toggleable via the SubsystemManager. Core subsystems and optional surfaces such as MCP governance, Observability, Time Travel, A2A, Incident Response, ToolFlow streaming, ActionCards, and Google OAuth are lazily initialized when toggled ON and gracefully shut down when toggled OFF. Host-control surfaces such as Host Bridge and UAB also gate immediately, but still depend on their host-side services being installed and reachable.
+**Hot-Toggle:** Runtime-managed feature flags are hot-toggleable via the SubsystemManager. Core runtime subsystems such as Soul, Skills, Scheduler, Health Monitor, and Memory are lazily initialized when toggled ON and gracefully shut down when toggled OFF where the subsystem supports live start/stop. Startup-only flags still show an operator confirmation because they may require a container restart to fully initialize or shut down.
 
 The War Room kill-switch story is unified even when the underlying implementations differ. Subsystem feature flags and MCP master/per-server kills use the same shared kill-switch contract (`switch_id`, `scope`, `reason`, `allowed`), while federation kill commands remain a specialized propagation workflow on top of that operator model.
 
@@ -367,7 +390,7 @@ The system administration hub — 4 tabs covering all operational and destructiv
 - **Connector Vault Health**: Shows non-secret connector-vault status, key source/origin, key id, encrypted file presence, and operator-facing failure details when the vault failed closed.
 - **Vault Credentials**: Lists all credential keys with type and created_at (values are never displayed). Individual keys can be deleted.
 - **Execution Tokens**: Lists active tokens with status. Active tokens can be revoked.
-- **Receipt Management**: Shows total receipt count with a Clear All button.
+- **Receipt Management**: Shows total receipt count. Finalized receipts are append-only; complete fresh starts require an external volume reset.
 - **Usage Counters**: Reset in-memory usage counters for a fresh tracking period.
 
 ### Logs & Config Tab

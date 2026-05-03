@@ -4,8 +4,6 @@
 
 - [Installation Guide](installation.md)
 - [Quickstart](quickstart.md)
-- [Proof Walkthrough](proof-walkthrough.md)
-- [Release Verification](release-verification.md)
 - [Configuration Reference](configuration-reference.md)
 - [War Room Guide](war-room.md) - includes Fleet Dashboard operator workflow
 
@@ -15,6 +13,7 @@
 - [Architecture Decision Records](adr/README.md)
 - [Governance](governance.md)
 - [Memory](memory.md)
+- [Context Continuity](context-continuity.md)
 - [Receipts](receipts.md)
 - [UAB](uab.md)
 - [HIVE](hive.md)

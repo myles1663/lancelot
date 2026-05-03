@@ -14,6 +14,9 @@ from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
+_TELEGRAM_TEXT_LIMIT = 4096
+_TELEGRAM_SAFE_CHUNK = 3800
+
 # Default workspace root (must match repo_writer)
 DEFAULT_WORKSPACE = os.getenv("LANCELOT_WORKSPACE", "/home/lancelot/data")
 
@@ -35,6 +38,66 @@ MANIFEST = {
          "description": "Override chat ID (uses default if omitted)"},
     ],
 }
+
+
+def _secret_or_env(key: str) -> str:
+    """Resolve Telegram credentials the same way the gateway bot does."""
+    for module_name in ("secret_cache", "src.core.secret_cache"):
+        try:
+            secret_cache = __import__(module_name, fromlist=["get"])
+            value = secret_cache.get(key, "")
+            if value:
+                return value
+        except Exception as exc:
+            logger.debug("telegram_send: secret cache lookup failed for %s via %s: %s", key, module_name, exc)
+
+    value = os.environ.get(key, "")
+    if value:
+        return value
+
+    vault_key = {
+        "LANCELOT_TELEGRAM_TOKEN": "system.telegram_token",
+        "LANCELOT_TELEGRAM_CHAT_ID": "system.telegram_chat_id",
+    }.get(key)
+    if not vault_key:
+        return ""
+
+    for vault_module, kwargs in (
+        ("connectors.vault", {"config_path": "config/vault.yaml"}),
+        ("src.connectors.vault", {}),
+    ):
+        try:
+            module = __import__(vault_module, fromlist=["CredentialVault"])
+            vault = module.CredentialVault(**kwargs)
+            if vault.exists(vault_key):
+                return vault.retrieve(vault_key)
+        except Exception as exc:
+            logger.debug("telegram_send: vault lookup failed for %s via %s: %s", key, vault_module, exc)
+    return ""
+
+
+def _split_telegram_text(message: str, limit: int = _TELEGRAM_SAFE_CHUNK) -> list[str]:
+    """Split long Telegram messages on paragraph/line boundaries when possible."""
+    if len(message) <= limit:
+        return [message]
+
+    chunks: list[str] = []
+    remaining = message
+    while len(remaining) > limit:
+        split_at = max(
+            remaining.rfind("\n\n", 0, limit),
+            remaining.rfind("\n", 0, limit),
+            remaining.rfind(" ", 0, limit),
+        )
+        if split_at < max(1, int(limit * 0.5)):
+            split_at = limit
+        chunk = remaining[:split_at].strip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_at:].strip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
 
 
 def _resolve_workspace_path(rel_path: str) -> Path:
@@ -105,8 +168,8 @@ def _send_file(file_path: str, caption: str, chat_id_override: str = None) -> Di
         logger.debug("telegram_send: gateway TelegramBot document helper unavailable: %s", exc)
 
     # Fallback: direct API call
-    token = os.environ.get("LANCELOT_TELEGRAM_TOKEN", "")
-    chat_id = chat_id_override or os.environ.get("LANCELOT_TELEGRAM_CHAT_ID", "")
+    token = _secret_or_env("LANCELOT_TELEGRAM_TOKEN")
+    chat_id = chat_id_override or _secret_or_env("LANCELOT_TELEGRAM_CHAT_ID")
 
     if not token or not chat_id:
         return {
@@ -170,8 +233,8 @@ def send_text(message: str, chat_id_override: str = None) -> Dict[str, Any]:
         logger.debug("telegram_send: gateway TelegramBot instance unavailable: %s", exc)
 
     # Fallback: direct API call
-    token = os.environ.get("LANCELOT_TELEGRAM_TOKEN", "")
-    chat_id = chat_id_override or os.environ.get("LANCELOT_TELEGRAM_CHAT_ID", "")
+    token = _secret_or_env("LANCELOT_TELEGRAM_TOKEN")
+    chat_id = chat_id_override or _secret_or_env("LANCELOT_TELEGRAM_CHAT_ID")
 
     if not token or not chat_id:
         return {
@@ -180,32 +243,48 @@ def send_text(message: str, chat_id_override: str = None) -> Dict[str, Any]:
         }
 
     import json
+    from urllib.error import HTTPError
     from urllib.request import Request, urlopen
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = json.dumps({
-        "chat_id": chat_id,
-        "text": message,
-        "parse_mode": "HTML",
-    }).encode("utf-8")
-
-    req = Request(url, data=payload, method="POST")
-    req.add_header("Content-Type", "application/json")
+    def _post(payload: dict[str, Any]) -> dict[str, Any]:
+        req = Request(url, data=json.dumps(payload).encode("utf-8"), method="POST")
+        req.add_header("Content-Type", "application/json")
+        response = urlopen(req, timeout=15)
+        return json.loads(response.read().decode("utf-8"))
 
     try:
-        response = urlopen(req, timeout=15)
-        result = json.loads(response.read().decode("utf-8"))
-        if result.get("ok"):
+        chunks = _split_telegram_text(message)
+        for chunk in chunks:
+            payload_obj = {
+                "chat_id": chat_id,
+                "text": chunk,
+                "parse_mode": "HTML",
+            }
+            try:
+                result = _post(payload_obj)
+            except HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")[:500]
+                if exc.code == 400 and "parse" in body.lower():
+                    fallback_payload = dict(payload_obj)
+                    fallback_payload.pop("parse_mode", None)
+                    result = _post(fallback_payload)
+                else:
+                    return {"status": "error", "error": body or f"HTTP Error {exc.code}: {exc.reason}"}
+            if not result.get("ok"):
+                return {
+                    "status": "error",
+                    "error": result.get("description", "Unknown Telegram API error"),
+                }
+        if chunks:
             return {
                 "status": "sent",
                 "type": "message",
                 "chat_id": chat_id,
                 "message_length": len(message),
+                "chunk_count": len(chunks),
             }
-        return {
-            "status": "error",
-            "error": result.get("description", "Unknown Telegram API error"),
-        }
+        return {"status": "error", "error": "Empty Telegram message"}
     except Exception as e:
         return {"status": "error", "error": str(e)}
 

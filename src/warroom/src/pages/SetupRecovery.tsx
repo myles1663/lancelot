@@ -17,7 +17,6 @@ import {
   deleteVaultKey,
   fetchTokens,
   revokeToken,
-  clearReceipts,
   resetUsage,
   reloadConfig,
   updateModelUsagePolicy,
@@ -591,14 +590,13 @@ function DataTab() {
     fetcher: () => fetchTokens(50),
     interval: 15000,
   })
-  const { data: receiptStats, refetch: refetchReceipts } = usePolling({
+  const { data: receiptStats } = usePolling({
     fetcher: fetchReceiptStats,
     interval: 30000,
   })
 
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [revokeConfirm, setRevokeConfirm] = useState<string | null>(null)
-  const [clearReceiptsConfirm, setClearReceiptsConfirm] = useState(false)
 
   const handleDeleteKey = async () => {
     if (!deleteConfirm) return
@@ -618,15 +616,6 @@ function DataTab() {
       refetchTokens()
     } finally {
       setRevokeConfirm(null)
-    }
-  }
-
-  const handleClearReceipts = async () => {
-    try {
-      await clearReceipts()
-      refetchReceipts()
-    } finally {
-      setClearReceiptsConfirm(false)
     }
   }
 
@@ -787,12 +776,10 @@ function DataTab() {
                 {receiptStats?.stats?.total_receipts ?? '--'}
               </span>
             </p>
+            <p className="mt-1 text-xs text-text-muted">
+              Finalized receipts are append-only. Complete fresh starts require an external volume reset.
+            </p>
           </div>
-          <ActionButton
-            label="Clear All Receipts"
-            variant="destructive"
-            onClick={() => setClearReceiptsConfirm(true)}
-          />
         </div>
       </Section>
 
@@ -822,15 +809,6 @@ function DataTab() {
         confirmLabel="Revoke"
         onConfirm={handleRevokeToken}
         onCancel={() => setRevokeConfirm(null)}
-      />
-      <ConfirmDialog
-        open={clearReceiptsConfirm}
-        title="Clear All Receipts"
-        description="This will permanently delete all execution receipts. This action cannot be undone."
-        variant="destructive"
-        confirmLabel="Clear All"
-        onConfirm={handleClearReceipts}
-        onCancel={() => setClearReceiptsConfirm(false)}
       />
     </>
   )

@@ -325,8 +325,8 @@ Stage 6: Trust Initialization
 | Feature | Implementation |
 |---------|----------------|
 | Atomic transactions | Snapshot isolation with rollback support |
-| Snapshot retention | 50 snapshots with LRU eviction |
-| Rollback | Per-item undo log for insert/update/delete recovery |
+| Snapshot retention | 50 retained core snapshots, persisted under `lancelot_data/memory/snapshots/` |
+| Rollback | Core snapshot restore plus per-item undo log for insert/update/delete recovery |
 | Provenance | Every edit records origin type, timestamp, and approval chain |
 
 ### 3.8 Audit and Observability
@@ -432,7 +432,7 @@ Lancelot's governance architecture aligns with several NIST AI RMF practices:
 
 ---
 
-*This security overview summarizes the public threat model and remediation posture for Project Lancelot v7.4 (v0.2.25). All 15 findings from the referenced assessment have been resolved.*
+*This security overview summarizes the public threat model and remediation posture for Project Lancelot. It is intended as an operator-facing reference for the current runtime.*
 
 **Author:** Myles Russell Hamilton
 **Date:** February 21, 2026

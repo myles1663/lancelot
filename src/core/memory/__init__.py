@@ -7,7 +7,7 @@ This package provides Lancelot's memory subsystem with:
 - Governed Self-Edits with atomic commits and rollback
 - Context Compiler for deterministic prompt assembly
 
-Feature Flag: FEATURE_MEMORY_VNEXT (default: false)
+Feature Flag: FEATURE_MEMORY_VNEXT (default: true)
 
 Usage:
     from src.core.memory import get_memory_service, is_memory_enabled

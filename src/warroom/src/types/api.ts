@@ -609,6 +609,7 @@ export interface CompileContextResponse {
   context_id: string
   token_estimate: number
   token_breakdown: Record<string, number>
+  context_efficiency: Record<string, unknown>
   included_blocks: string[]
   included_memory_count: number
   excluded_count: number

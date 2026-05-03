@@ -342,11 +342,9 @@ class MemoryItemStore:
         """
         Escape a query string for safe use with FTS5 MATCH.
 
-        FTS5 has special syntax characters that need handling.
-        This escapes the query by:
-        1. Replacing double quotes (FTS5 phrase delimiter)
-        2. Removing other problematic characters
-        3. Wrapping in double quotes for literal matching
+        Search favors recall for long-running work: split natural language into
+        safe tokens and search them as prefix terms instead of requiring one
+        exact phrase match.
 
         Args:
             query: Raw search query
@@ -354,23 +352,11 @@ class MemoryItemStore:
         Returns:
             Escaped query safe for FTS5 MATCH
         """
-        # Remove or escape FTS5 special characters
-        # FTS5 operators: AND, OR, NOT, NEAR, *, ^, :, -, +
-        # Also need to handle quotes and parentheses
-        escaped = query.replace('"', '""')
-
-        # Remove other FTS5 special characters that could cause syntax errors
-        for char in ["'", "(", ")", "{", "}", "[", "]", "^", "*", ":", "-", "+"]:
-            escaped = escaped.replace(char, " ")
-
-        # Collapse multiple spaces
-        escaped = " ".join(escaped.split())
-
-        # Return empty query protection
-        if not escaped.strip():
-            return '""'
-
-        return f'"{escaped}"'
+        tokens = re.findall(r"[A-Za-z0-9_]{2,}", str(query or "").lower())
+        deduped = list(dict.fromkeys(tokens))[:12]
+        if not deduped:
+            return ""
+        return " OR ".join(f"{token}*" for token in deduped)
 
     def _item_to_row(self, item: MemoryItem) -> dict[str, Any]:
         """Convert a MemoryItem to a database row."""
@@ -823,10 +809,10 @@ class MemoryItemStore:
         """
         self._ensure_initialized()
 
-        # Build the search query
-        # FTS5 requires special handling for the query
-        # Escape special characters and wrap in quotes for phrase matching
+        # Build a safe FTS5 query from natural-language input.
         safe_query = self._escape_fts5_query(query)
+        if not safe_query:
+            return []
 
         conditions = ["mi.tier = ?"]
         params: list[Any] = [self.tier.value]
@@ -862,11 +848,11 @@ class MemoryItemStore:
             cursor = conn.cursor()
             cursor.execute(
                 f"""
-                SELECT mi.* FROM memory_items mi
+                SELECT mi.*, bm25(memory_items_fts) as score FROM memory_items mi
                 JOIN memory_items_fts fts ON mi.id = fts.id
                 WHERE fts.memory_items_fts MATCH ?
                 AND {where_clause}
-                ORDER BY rank
+                ORDER BY score, mi.confidence DESC, mi.updated_at DESC
                 LIMIT ?
                 """,
                 [safe_query, *params],
@@ -954,6 +940,8 @@ class MemoryItemStore:
         """
         self._ensure_initialized()
         safe_query = self._escape_fts5_query(query)
+        if not safe_query:
+            return []
 
         with self._get_connection() as conn:
             cursor = conn.cursor()

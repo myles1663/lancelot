@@ -653,6 +653,78 @@ class TestRollback:
 
         assert store_manager.working.get("persisted_undo") is None
 
+    def test_core_rollback_survives_new_commit_manager(self, core_store, store_manager, tmp_data_dir):
+        """Persisted core snapshots allow core rollback after manager restart."""
+        prov = Provenance(type=ProvenanceType.system, ref="test")
+        core_store.set_block(
+            block_type=CoreBlockType.mission,
+            content="Original mission",
+            updated_by="owner",
+            provenance=[prov],
+        )
+        manager = CommitManager(core_store=core_store, store_manager=store_manager, data_dir=tmp_data_dir)
+        commit_id = manager.begin_edits(created_by="agent")
+        manager.add_edit(
+            commit_id=commit_id,
+            op=MemoryEditOp.replace,
+            target="core:mission",
+            after="Changed mission",
+            reason="Update mission",
+            confidence=0.9,
+        )
+        manager.finish_edits(commit_id)
+
+        restarted_core = CoreBlockStore(data_dir=tmp_data_dir)
+        restarted_core.initialize()
+        restarted = CommitManager(
+            core_store=restarted_core,
+            store_manager=store_manager,
+            data_dir=tmp_data_dir,
+        )
+
+        restarted.rollback(commit_id=commit_id, reason="undo after restart", created_by="owner")
+
+        assert restarted_core.get_block(CoreBlockType.mission).content == "Original mission"
+
+    def test_core_rollback_of_rollback_survives_new_commit_manager(
+        self,
+        core_store,
+        store_manager,
+        tmp_data_dir,
+    ):
+        """Rollback commits persist core snapshots so restart does not break redo."""
+        prov = Provenance(type=ProvenanceType.system, ref="test")
+        core_store.set_block(
+            block_type=CoreBlockType.mission,
+            content="Before",
+            updated_by="owner",
+            provenance=[prov],
+        )
+        manager = CommitManager(core_store=core_store, store_manager=store_manager, data_dir=tmp_data_dir)
+        commit_id = manager.begin_edits(created_by="agent")
+        manager.add_edit(
+            commit_id=commit_id,
+            op=MemoryEditOp.replace,
+            target="core:mission",
+            after="After",
+            reason="Update mission",
+            confidence=0.9,
+        )
+        manager.finish_edits(commit_id)
+        rollback_id = manager.rollback(commit_id=commit_id, reason="undo", created_by="owner")
+        assert core_store.get_block(CoreBlockType.mission).content == "Before"
+
+        restarted_core = CoreBlockStore(data_dir=tmp_data_dir)
+        restarted_core.initialize()
+        restarted = CommitManager(
+            core_store=restarted_core,
+            store_manager=store_manager,
+            data_dir=tmp_data_dir,
+        )
+        restarted.rollback(commit_id=rollback_id, reason="redo after restart", created_by="owner")
+
+        assert restarted_core.get_block(CoreBlockType.mission).content == "After"
+
 
 # ---------------------------------------------------------------------------
 # Persistence Tests

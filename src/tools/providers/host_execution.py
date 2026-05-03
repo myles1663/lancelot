@@ -273,7 +273,7 @@ class HostExecutionProvider(BaseProvider):
 
         files = {"modified": [], "added": [], "deleted": [], "untracked": []}
         for line in result.stdout.splitlines():
-            if not line.strip():
+            if not line:
                 continue
             status_code = line[:2]
             filepath = line[3:]

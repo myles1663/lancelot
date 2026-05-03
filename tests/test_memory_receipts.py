@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 
 os.environ["FEATURE_MEMORY_VNEXT"] = "true"
 
@@ -100,6 +101,22 @@ def test_finish_commit_emits_queryable_receipt(client, app):
     assert receipts[0].outputs["commit_id"] == commit_id
     assert receipts[0].outputs["edit_count"] == 1
     assert receipts[0].outputs["affected_targets"] == ["core:mission"]
+    assert receipts[0].outputs["full_commit_ref"] == {
+        "type": "memory_commit",
+        "commit_id": commit_id,
+    }
+    edits = receipts[0].outputs["edits"]
+    assert len(edits) == 1
+    assert edits[0]["op"] == "replace"
+    assert edits[0]["target"] == "core:mission"
+    assert edits[0]["reason"] == "Receipt test"
+    assert edits[0]["confidence"] == 0.9
+    assert edits[0]["editor"] == "owner"
+    assert edits[0]["after_preview"] == "Receipt-backed mission update"
+    assert edits[0]["after_hash"] == hashlib.sha256(
+        b"Receipt-backed mission update"
+    ).hexdigest()
+    assert edits[0]["before_hash"]
 
 
 def test_rollback_emits_queryable_receipt(client, app):

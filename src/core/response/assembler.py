@@ -22,6 +22,32 @@ from src.core.response.war_room_artifact import ArtifactType, WarRoomArtifact
 
 logger = logging.getLogger(__name__)
 
+_STATUS_EMOJI = {
+    "planned": "🧭",
+    "pending": "⏳",
+    "waiting": "⏳",
+    "running": "🔄",
+    "active": "🔄",
+    "succeeded": "✅",
+    "success": "✅",
+    "completed": "✅",
+    "failed": "❌",
+    "failure": "❌",
+    "error": "❌",
+    "blocked": "⚠️",
+    "cancelled": "🛑",
+    "canceled": "🛑",
+    "requires_approval": "🛡️",
+    "approval_required": "🛡️",
+}
+
+
+def _status_emoji(status: Any) -> str:
+    """Return a light operator-facing icon for deterministic status lines."""
+    raw = status.value if hasattr(status, "value") else status
+    key = str(raw or "").strip().lower().replace(" ", "_").replace("-", "_")
+    return _STATUS_EMOJI.get(key, "•")
+
 
 @dataclass
 class AssembledResponse:
@@ -156,7 +182,7 @@ class ResponseAssembler:
         Returns:
             Formatted permission request string.
         """
-        lines = ["**Permission required:**\n"]
+        lines = ["🛡️ **Permission required:**\n"]
         lines.append("**What I will do:**")
         for item in what_i_will_do[:OutputPolicy.MAX_NEXT_ACTIONS]:
             if hasattr(item, 'inputs'):
@@ -188,7 +214,7 @@ class ResponseAssembler:
             else:
                 chat_lines.append(f"{i}. {step}")
 
-        chat_lines.append(f"\n**Status:** PLANNED")
+        chat_lines.append(f"\n**Status:** {_status_emoji('planned')} PLANNED")
         chat_lines.append(f"\n**Next action:**\n- {artifact.next_action}")
 
         # War Room: Full artifact + verbose sections
@@ -249,7 +275,7 @@ class ResponseAssembler:
         if hasattr(status, 'value'):
             status = status.value
 
-        line = f"**Status:** `{status}`"
+        line = f"**Status:** {_status_emoji(status)} `{status}`"
         if hasattr(task_run, 'current_step_id') and task_run.current_step_id:
             line += f" (step: {task_run.current_step_id})"
         if hasattr(task_run, 'last_error') and task_run.last_error:

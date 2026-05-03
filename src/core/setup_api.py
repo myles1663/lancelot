@@ -422,31 +422,6 @@ async def reset_connector_vault(request: Request, body: VaultResetRequest):
 
 
 # ------------------------------------------------------------------
-# Receipt Management
-# ------------------------------------------------------------------
-
-@router.post("/receipts/clear")
-async def clear_receipts(request: Request, body: ConfirmRequest):
-    """Clear all execution receipts."""
-    try:
-        if not body.confirm:
-            return _safe_error(400, "Confirmation required: {\"confirm\": true}")
-
-        if _receipt_service is None:
-            return _safe_error(400, "Receipt service not initialised")
-
-        if not hasattr(_receipt_service, 'clear'):
-            return _safe_error(501, "Receipt service does not support operator clearing")
-        _receipt_service.clear()
-
-        _audit("SETUP_RECEIPTS_CLEAR", "All receipts cleared via War Room", request=request)
-        return {"status": "cleared", "message": "All receipts have been cleared"}
-    except Exception as exc:
-        logger.error("clear_receipts error: %s", exc)
-        return _safe_error(500, "Failed to clear receipts")
-
-
-# ------------------------------------------------------------------
 # Configuration Reload
 # ------------------------------------------------------------------
 
@@ -649,3 +624,22 @@ async def reset_flags(request: Request, body: ConfirmRequest):
     except Exception as exc:
         logger.error("reset_flags error: %s", exc)
         return _safe_error(500, "Failed to reset flags")
+
+
+@router.post("/receipts/clear")
+async def clear_receipts(request: Request, body: ConfirmRequest):
+    """Clear receipt storage when a test or non-finalized service supports it."""
+    try:
+        if not body.confirm:
+            return _safe_error(400, "Confirmation required: {\"confirm\": true}")
+        if _receipt_service is None:
+            return _safe_error(400, "Receipt service is not configured")
+        clear = getattr(_receipt_service, "clear", None)
+        if not callable(clear):
+            return _safe_error(501, "Receipt service does not support clearing")
+        clear()
+        _audit("SETUP_RECEIPTS_CLEAR", "Receipts cleared via War Room", request=request)
+        return {"status": "cleared"}
+    except Exception as exc:
+        logger.error("clear_receipts error: %s", exc)
+        return _safe_error(500, "Failed to clear receipts")

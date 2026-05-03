@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -64,6 +65,9 @@ class IntentTemplate:
     )
     active: bool = False
     invalidation_reason: str = ""
+    usage_count: int = 0
+    success_receipts: list[str] = field(default_factory=list)
+    runbook: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -78,6 +82,9 @@ class IntentTemplate:
             "created_at": self.created_at,
             "active": self.active,
             "invalidation_reason": self.invalidation_reason,
+            "usage_count": self.usage_count,
+            "success_receipts": list(self.success_receipts),
+            "runbook": dict(self.runbook),
         }
 
     @classmethod
@@ -96,7 +103,26 @@ class IntentTemplate:
             created_at=data.get("created_at", ""),
             active=data.get("active", False),
             invalidation_reason=data.get("invalidation_reason", ""),
+            usage_count=data.get("usage_count", 0),
+            success_receipts=data.get("success_receipts", []),
+            runbook=data.get("runbook", {}),
         )
+
+    def to_runbook(self) -> dict[str, Any]:
+        """Return the operator-facing reusable runbook form."""
+        return {
+            "template_id": self.template_id,
+            "intent_pattern": self.intent_pattern,
+            "max_risk_tier": int(self.max_risk_tier),
+            "steps": [step.to_dict() for step in self.plan_skeleton],
+            "success_count": self.success_count,
+            "failure_count": self.failure_count,
+            "usage_count": self.usage_count,
+            "success_receipts": list(self.success_receipts[-10:]),
+            "required_inputs": list(self.runbook.get("required_inputs", [])),
+            "operator_notes": list(self.runbook.get("operator_notes", [])),
+            "evidence": list(self.runbook.get("evidence", [])),
+        }
 
 
 class IntentTemplateRegistry:
@@ -138,6 +164,7 @@ class IntentTemplateRegistry:
         intent: str,
         plan_steps: list[dict],
         receipt_id: str = "",
+        runbook: Optional[dict[str, Any]] = None,
     ) -> str:
         """Create a template candidate from a successful execution.
 
@@ -174,6 +201,8 @@ class IntentTemplateRegistry:
             success_count=1,
             created_from=receipt_id,
             active=False,
+            success_receipts=[receipt_id] if receipt_id else [],
+            runbook=dict(runbook or {}),
         )
         self._templates[template_id] = template
         self._save()
@@ -182,31 +211,85 @@ class IntentTemplateRegistry:
 
     # ── Matching ─────────────────────────────────────────────────
 
+    @staticmethod
+    def _intent_tokens(value: str) -> set[str]:
+        stop_words = {
+            "the",
+            "and",
+            "for",
+            "with",
+            "from",
+            "into",
+            "please",
+            "task",
+            "work",
+        }
+        return {
+            token
+            for token in re.findall(r"[a-z0-9_]{3,}", str(value or "").lower())
+            if token not in stop_words
+        }
+
+    def _match_score(self, template: IntentTemplate, intent: str) -> float:
+        pattern = template.intent_pattern.lower()
+        intent_lower = intent.lower()
+        if pattern and pattern in intent_lower:
+            return 1.0
+        pattern_tokens = self._intent_tokens(pattern)
+        intent_tokens = self._intent_tokens(intent_lower)
+        if not pattern_tokens or not intent_tokens:
+            return 0.0
+        overlap = pattern_tokens & intent_tokens
+        return len(overlap) / len(pattern_tokens)
+
     def match(self, intent: str, parameters: dict = None) -> Optional[IntentTemplate]:
         """Find an active template matching the given intent.
 
-        Uses simple keyword matching: if the intent string contains
-        the template's intent_pattern (case-insensitive), it's a match.
+        Uses substring matching first, then token overlap so recurring tasks
+        still match when the operator changes word order.
 
         Only returns active templates (promoted past threshold).
         Updates last_used timestamp on match.
         """
-        intent_lower = intent.lower()
+        best: tuple[float, IntentTemplate] | None = None
         for template in self._templates.values():
-            if template.active and template.intent_pattern.lower() in intent_lower:
-                template.last_used = datetime.now(timezone.utc).isoformat()
-                self._save()
-                return template
-        return None
+            if not template.active:
+                continue
+            score = self._match_score(template, intent)
+            if score < 0.6:
+                continue
+            if best is None or score > best[0]:
+                best = (score, template)
+        if best is None:
+            return None
+        template = best[1]
+        template.last_used = datetime.now(timezone.utc).isoformat()
+        template.usage_count += 1
+        self._save()
+        return template
 
     # ── Success/Failure Tracking + Promotion ─────────────────────
 
-    def record_success(self, template_id: str) -> None:
+    def record_success(
+        self,
+        template_id: str,
+        *,
+        receipt_id: str = "",
+        note: str = "",
+    ) -> None:
         """Increment success_count. Promote if threshold reached."""
         template = self._templates.get(template_id)
         if template is None:
             return
         template.success_count += 1
+        if receipt_id and receipt_id not in template.success_receipts:
+            template.success_receipts.append(receipt_id)
+            template.success_receipts = template.success_receipts[-25:]
+        if note:
+            notes = list(template.runbook.get("operator_notes", []))
+            if note not in notes:
+                notes.append(note)
+            template.runbook["operator_notes"] = notes[-20:]
         if (
             not template.active
             and template.success_count >= self._config.promotion_threshold

@@ -13,6 +13,7 @@ const ReceiptExplorerPage = lazy(() => import('@/pages/ReceiptExplorer').then(mo
 const ToolFabricPage = lazy(() => import('@/pages/ToolFabric').then(module => ({ default: module.ToolFabric })))
 const MemoryPanelPage = lazy(() => import('@/pages/MemoryPanel').then(module => ({ default: module.MemoryPanel })))
 const MemoryManagerPageRoute = lazy(() => import('@/pages/MemoryManagerPage').then(module => ({ default: module.MemoryManagerPage })))
+const ContextEfficiencyPage = lazy(() => import('@/pages/ContextEfficiency').then(module => ({ default: module.ContextEfficiency })))
 const SchedulerPanelPage = lazy(() => import('@/pages/SchedulerPanel').then(module => ({ default: module.SchedulerPanel })))
 const SetupRecoveryPage = lazy(() => import('@/pages/SetupRecovery').then(module => ({ default: module.SetupRecovery })))
 const CostTrackerPage = lazy(() => import('@/pages/CostTracker').then(module => ({ default: module.CostTracker })))
@@ -62,6 +63,7 @@ function App() {
           <Route path="/tools" element={routeElement(ToolFabricPage)} />
           <Route path="/memory" element={routeElement(MemoryPanelPage)} />
           <Route path="/memory/manage" element={routeElement(MemoryManagerPageRoute)} />
+          <Route path="/memory/context" element={routeElement(ContextEfficiencyPage)} />
           <Route path="/skills" element={routeElement(SkillsPanelPage)} />
           <Route path="/a2a" element={routeElement(A2AManagementPage)} />
           <Route path="/scheduler" element={routeElement(SchedulerPanelPage)} />

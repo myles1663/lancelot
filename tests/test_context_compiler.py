@@ -449,6 +449,14 @@ class TestTokenBudgets:
 
         assert "objective" in ctx.token_breakdown
         assert ctx.token_breakdown["objective"] > 0
+        assert ctx.context_efficiency["used_tokens"] == ctx.token_estimate
+        assert ctx.context_efficiency["total_context_tokens"] == ctx.token_estimate
+        assert ctx.context_efficiency["included_memory_count"] == 0
+        assert "budget_used_ratio" in ctx.context_efficiency
+        assert "static_context_tokens" in ctx.context_efficiency
+        assert "dynamic_context_tokens" in ctx.context_efficiency
+        assert "cache_eligibility" in ctx.context_efficiency
+        assert ctx.context_efficiency["cache_eligibility"]["eligible"] is True
 
     def test_working_memory_budget_enforced(self, compiler):
         """Test that working memory respects budget."""
@@ -472,6 +480,10 @@ class TestTokenBudgets:
             if e["reason"] == "exceeded_budget"
         ]
         assert len(budget_exclusions) > 0
+        assert ctx.context_efficiency["exclusion_reasons"]["exceeded_budget"] > 0
+        assert ctx.context_efficiency["working_candidate_count"] == len(items)
+        assert ctx.context_efficiency["memory_hits_excluded"] == len(ctx.excluded_candidates)
+        assert ctx.context_efficiency["retrieval_miss_rate"] > 0
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +508,9 @@ class TestReceiptData:
         assert receipt_data["compiler_version"] == "1.0.0"
         assert "token_estimate" in receipt_data
         assert "token_breakdown" in receipt_data
+        assert "context_efficiency" in receipt_data
+        assert receipt_data["context_efficiency"]["used_tokens"] == ctx.token_estimate
+        assert "template_reuse" in receipt_data["context_efficiency"]
 
     def test_receipt_includes_counts(self, compiler):
         """Test that receipt includes item counts."""
@@ -659,6 +674,36 @@ class TestContextCompilerService:
         )
 
         assert ctx.included_memory_item_ids == ["quest-atlas-memory"]
+
+    def test_compile_for_objective_prioritizes_same_operator_memory(self, tmp_data_dir):
+        """Operator-scoped retrieval should use the authenticated operator boost."""
+        service = ContextCompilerService(data_dir=tmp_data_dir)
+        service.memory_manager.episodic.insert(MemoryItem(
+            id="global-operator-memory",
+            tier=MemoryTier.episodic,
+            namespace="global",
+            title="Operator retrieval",
+            content="Operator retrieval checkpoint prefers specific prior work.",
+            confidence=0.95,
+        ))
+        service.memory_manager.episodic.insert(MemoryItem(
+            id="operator-specific-memory",
+            tier=MemoryTier.episodic,
+            namespace="operator:op-123",
+            title="Operator retrieval",
+            content="Operator retrieval checkpoint prefers scoped prior work.",
+            confidence=0.7,
+            metadata={"operator_id": "op-123"},
+        ))
+
+        ctx = service.compile_for_objective(
+            objective="Operator retrieval checkpoint",
+            search_query="Operator retrieval checkpoint",
+            retrieval_limit=1,
+            operator_id="op-123",
+        )
+
+        assert ctx.included_memory_item_ids == ["operator-specific-memory"]
 
 
 # ---------------------------------------------------------------------------

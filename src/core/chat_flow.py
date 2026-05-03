@@ -223,6 +223,48 @@ def _agentic_write_execution_allowed(
     return explicit_write_request or (needs_research and wants_action)
 
 
+def _should_record_task_experience(
+    user_message: str,
+    response_text: str,
+    *,
+    tool_receipts: list | None = None,
+    needs_research: bool = False,
+    wants_action: bool = False,
+    explicit_tool_request: bool = False,
+    explicit_write_request: bool = False,
+    reasoning_artifact: Any = None,
+) -> bool:
+    """Return true when a completed turn is useful repeat-task evidence."""
+    if not str(response_text or "").strip():
+        return False
+    message = str(user_message or "").strip()
+    if not message or _is_short_acknowledgement(message):
+        return False
+    if tool_receipts:
+        return True
+    if needs_research or wants_action or explicit_tool_request or explicit_write_request:
+        return True
+    if reasoning_artifact is not None:
+        return True
+    action_terms = (
+        "build",
+        "fix",
+        "update",
+        "review",
+        "analyze",
+        "compare",
+        "debug",
+        "implement",
+        "create",
+        "write",
+        "plan",
+        "investigate",
+        "summarize",
+    )
+    lowered = message.lower()
+    return len(message) >= 40 and any(term in lowered for term in action_terms)
+
+
 def _latest_task_graph(self, session_id: str):
     task_store = getattr(self, "task_store", None)
     if not task_store:
@@ -1026,15 +1068,27 @@ def chat(
                     extra={"error": str(e)},
                 )
 
-        # Record task experience for future retrieval
-        if FEATURE_DEEP_REASONING_LOOP and sanitized_response:
+        # Record reusable task experience for future retrieval. This is not
+        # gated on deep reasoning; routine governed work should also teach
+        # future long-running and repeat-task sessions.
+        _v25_artifact = locals().get('reasoning_artifact', None)
+        _v25_tool_receipts = getattr(self, '_last_tool_receipts', [])
+        if _should_record_task_experience(
+            user_message,
+            sanitized_response,
+            tool_receipts=_v25_tool_receipts,
+            needs_research=bool(locals().get('needs_research', False)),
+            wants_action=bool(locals().get('wants_action', False)),
+            explicit_tool_request=bool(explicit_tool_request),
+            explicit_write_request=bool(explicit_write_request),
+            reasoning_artifact=_v25_artifact,
+        ):
             try:
                 _v25_duration = int((__import__("time").time() - start_time) * 1000)
-                _v25_artifact = locals().get('reasoning_artifact', None)
                 self._record_task_experience(
                     user_message=user_message,
                     response_text=sanitized_response,
-                    tool_receipts=getattr(self, '_last_tool_receipts', []),
+                    tool_receipts=_v25_tool_receipts,
                     reasoning_artifact=_v25_artifact,
                     duration_ms=_v25_duration,
                 )

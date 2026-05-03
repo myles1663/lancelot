@@ -1,20 +1,6 @@
 # Lancelot
 
-Lancelot is a governed operating layer for AI agents: a self-hosted runtime where models can use tools, control desktop applications, coordinate scoped sub-agents, remember context, and still be constrained by policy, approvals, kill switches, and immutable action receipts.
-
-The premise is that useful agents need more than prompts and tool calls. They need an execution environment that can decide when the model is allowed to act, when a human must approve, when work should be stopped, and how every outcome can be reconstructed later.
-
-The core design choice is to treat the model as untrusted planning logic inside a system that can say no. The model proposes actions; Lancelot classifies risk, checks policy, requires approval when needed, routes execution through governed connectors or UAB, and records what happened.
-
-Lancelot is source-available under BSL 1.1. Non-production use is free; production use requires a commercial license.
-
-## Install Expectations
-
-- Requires Docker Desktop, Docker Compose, Node.js 18+, Git, and one LLM provider credential.
-- Plan for at least 10 GB free disk. The local GGUF utility model is about 5 GB; Docker images and runtime data use the rest.
-- First install time depends mostly on image pulls, model download speed, and whether the local model is CPU-only or GPU-assisted.
-- The War Room can come up while the local model is still warming. Readiness endpoints report degraded lanes explicitly instead of hiding them.
-- If Docker, ports, provider keys, or model download fail, start with the [Quickstart troubleshooting section](docs/quickstart.md#troubleshooting) and the full [Installation Guide](docs/installation.md).
+Lancelot is a self-hosted AI operator for technical users who want model-driven automation with hard policy boundaries. It can call tools, control desktop applications through a governed bridge, keep structured memory across long-running work, and write immutable receipts for governed actions. The design goal is simple: treat the model as untrusted planning logic inside a system that can remember, say no, require approval, and leave an audit trail.
 
 ## Quickstart
 
@@ -55,9 +41,6 @@ python -m pytest -q tests/hive/test_runtime.py
 # Kill switch propagation and fail-closed behavior.
 python -m pytest -q tests/test_kill_switch_contract.py
 
-# Hot-toggle subsystem contracts and route gating.
-python -m pytest -q tests/test_subsystem_runtime_contract.py
-
 # War Room frontend typecheck and production build.
 (cd src/warroom && npm ci && npm run type-check && npm run build)
 ```
@@ -86,8 +69,8 @@ python -m pytest -q --cov=src --cov-report=term-missing --cov-report=json:covera
 | Structured memory, context compilation, quarantine, and memory receipts | Core path to inspect first |
 | Health/readiness, async chat runs, and War Room build | Covered by public proof tests and CI |
 | UAB routing, fallback behavior, and action-risk taxonomy | Implemented with focused test coverage |
-| HIVE scoped sub-agents | Implemented as an optional governed capability surface |
-| Federation, A2A, MCP governance, Time Travel, Observability | Deployment-profile gated, route-gated, and covered by focused subsystem tests |
+| HIVE scoped sub-agents | Implemented and feature-gated |
+| Federation, A2A, MCP governance, Time Travel, Observability | Implemented behind opt-in kill switches; evaluate as separate subsystems |
 | Broad desktop automation coverage | Strongest on supported host setups and frameworks; not universal app control |
 
 ## Evaluation FAQ
@@ -100,9 +83,9 @@ No. Lancelot is source-available under BSL 1.1. You can use, copy, modify, and r
 
 Start with governance, receipts, health/readiness, the core tool bridge, and the War Room. Those are the default paths the README proof commands are intended to exercise.
 
-### Why are advanced subsystems gated?
+### What is still early?
 
-Lancelot is designed to run as either a lightweight governed developer tool or a fuller enterprise operator runtime. Advanced surfaces such as HIVE, Federation, A2A, MCP governance, Time Travel, Observability, ActionCards, ToolFlow streaming, Google OAuth, and UAB are enabled per deployment profile and controlled through War Room kill switches. Where the subsystem is process-local, toggles start or stop the runtime without a container restart; higher-authority host-control surfaces still require explicit operator setup.
+HIVE, Federation, A2A, MCP governance, Time Travel, Observability, and parts of UAB are real subsystems behind opt-in kill switches. Treat each one as a separate evaluation path rather than assuming every advanced capability is active in the default install.
 
 ### Is UAB universal desktop automation?
 
@@ -216,9 +199,9 @@ pytest \
 (cd src/warroom && npm ci && npm run type-check && npm run build)
 
 # Docker Compose configuration validation
-if [ ! -f .env ]; then cp .env.example .env && created_env=1; fi
+if [ ! -f .env ]; then cp .env.example .env && cleanup_env=1; fi
 docker compose config --quiet
-if [ "${created_env:-0}" = "1" ]; then rm .env; fi
+if [ "${cleanup_env:-0}" = "1" ]; then rm .env; fi
 ```
 
 ## Development Note
@@ -227,12 +210,11 @@ Lancelot was built through AI-assisted development. The engineering bar for the 
 
 ## Known Limitations
 
-- Advanced capability surfaces are deployment-profile gated. They are intended to be enabled when the use case needs them, not loaded into every lightweight local setup by default.
-- Lancelot trades some speed and autonomy for governance. Classification, policy checks, approval pauses, local-model readiness, and receipt finalization add overhead compared with a direct model-to-tool loop.
+- Several major subsystems, including HIVE, Federation, MCP Governance, A2A, Time Travel, Observability, and parts of UAB, are opt-in through runtime kill switches. The default path to inspect first is governance, receipts, health checks, structured memory, and the core tool bridge.
 - UAB is strongest on supported desktop frameworks and host setups. It is not universal automation for every application.
 - The system is local-first and self-hosted, not a managed SaaS.
 - The configuration surface is large. Operators should treat `config/*.yaml` and `.env` as deployment artifacts, not casual defaults.
-- Some less central modules are still being consolidated; evaluate the core governance, receipt, health, and tool-bridge paths first.
+- Some modules still need refactoring and logging cleanup to match the maturity of the core governance and receipt systems.
 
 ## Deep Dives
 

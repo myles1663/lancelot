@@ -11,7 +11,6 @@ import sys
 
 # Stub external dependencies before importing orchestrator
 sys.modules.setdefault("google.generativeai", type(sys)("google.generativeai"))
-sys.modules.setdefault("chromadb", type(sys)("chromadb"))
 
 from orchestrator import LancelotOrchestrator, COMMAND_WHITELIST, COMMAND_BLACKLIST_CHARS
 

@@ -224,7 +224,7 @@ FEATURE_GITHUB_SEARCH: bool = _env_bool("FEATURE_GITHUB_SEARCH", default=True)  
 FEATURE_COMPETITIVE_SCAN: bool = _env_bool("FEATURE_COMPETITIVE_SCAN", default=False)     # Store competitive scans in episodic memory for trending/diffing (requires MEMORY_VNEXT)
 
 # Deep reasoning before action
-FEATURE_DEEP_REASONING_LOOP: bool = _env_bool("FEATURE_DEEP_REASONING_LOOP", default=False)  # Reasoning-only LLM pass before agentic loop + task experience memory
+FEATURE_DEEP_REASONING_LOOP: bool = _env_bool("FEATURE_DEEP_REASONING_LOOP", default=False)  # Reasoning-only LLM pass before agentic loop
 
 # Google OAuth flow for Gmail + Calendar connectors
 FEATURE_GOOGLE_OAUTH: bool = _env_bool("FEATURE_GOOGLE_OAUTH", default=False)  # OAuth 2.0 Authorization Code + PKCE for Gmail and Google Calendar

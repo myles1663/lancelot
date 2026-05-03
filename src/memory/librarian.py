@@ -229,7 +229,7 @@ class Librarian:
         self.observer = Observer()
 
         # Ignored paths to prevent loops
-        self.ignored_dirs = [".trash", "logs", "chroma_db", "artifacts"]
+        self.ignored_dirs = [".trash", "logs", "artifacts"]
 
     def start_watching(self):
         """Starts the watchdog observer."""

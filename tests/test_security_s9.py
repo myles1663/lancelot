@@ -13,7 +13,6 @@ import sys
 
 # Stub external dependencies before importing orchestrator
 sys.modules.setdefault("google.generativeai", type(sys)("google.generativeai"))
-sys.modules.setdefault("chromadb", type(sys)("chromadb"))
 
 from security import InputSanitizer
 from orchestrator import LancelotOrchestrator

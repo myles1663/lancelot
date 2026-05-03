@@ -77,3 +77,40 @@ def test_chat_history_compaction_bounds_summary_previews(monkeypatch, tmp_data_d
 
     assert "... [truncated]" in rendered
     assert len(rendered) < 2000
+
+
+def test_chat_history_compaction_emits_structured_schema(monkeypatch, tmp_data_dir):
+    _set_small_compaction_window(monkeypatch, max_messages=3, recent_keep=1, batch_size=10)
+    env = ContextEnvironment(str(tmp_data_dir))
+
+    env.add_history(
+        "user",
+        "[via warroom] I want public-neutral docs. We should not mention launch targeting. "
+        "What remains unresolved? receipt-abc123",
+    )
+    env.add_history(
+        "assistant",
+        "Decision: use public-neutral release wording. Next step: update docs. "
+        "Blocked action: do not publish private wording.",
+    )
+    env.add_history(
+        "user",
+        "[via warroom] Keep memory phase two focused on schema compaction and session briefs.",
+    )
+    env.add_history("assistant", "Done")
+
+    summary = env.chat_summaries[0]
+    rendered = env.get_history_string(channel="warroom")
+
+    assert summary["schema_version"] == 2
+    assert summary["decisions_made"]
+    assert summary["user_preferences"]
+    assert summary["unresolved_questions"]
+    assert summary["durable_facts"]
+    assert summary["rejected_or_blocked_actions"]
+    assert summary["next_steps"]
+    assert "receipt-abc123" in summary["receipt_references"]
+    assert "Decisions:" in rendered
+    assert "User Preferences:" in rendered
+    assert "Rejected/Blocked Actions:" in rendered
+    assert "Receipt References:" in rendered

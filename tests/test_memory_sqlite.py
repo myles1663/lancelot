@@ -342,6 +342,18 @@ class TestMemoryItemStoreSearch:
         assert len(results) == 1
         assert results[0].title == "Task 1"
 
+    def test_search_retrieves_non_phrase_context_terms(self, working_store):
+        """Natural-language search should not require exact phrase order."""
+        item = create_test_item(
+            title="Context efficiency",
+            content="Retrieval ranking improves long running context compaction.",
+        )
+        working_store.insert(item)
+
+        results = working_store.search("context compaction retrieval")
+
+        assert [result.id for result in results] == [item.id]
+
     def test_search_with_namespace_filter(self, working_store):
         """Test search with namespace filter."""
         item1 = create_test_item(
@@ -569,6 +581,72 @@ class TestMemoryStoreManager:
 
         results = store_manager.search_all("Python")
         assert len(results) == 2
+
+    def test_search_all_dedupes_repeated_memory_content(self, store_manager):
+        """Cross-tier retrieval should not spend context on duplicate memories."""
+        content = "Session recap completed receipt review and left retrieval proof tests."
+        episodic_item = create_test_item(
+            tier=MemoryTier.episodic,
+            title="Session recap",
+            content=content,
+            confidence=0.7,
+        )
+        archival_item = create_test_item(
+            tier=MemoryTier.archival,
+            title="Session recap",
+            content=content,
+            confidence=0.9,
+        )
+
+        store_manager.episodic.insert(episodic_item)
+        store_manager.archival.insert(archival_item)
+
+        results = store_manager.search_all(
+            "session recap retrieval proof",
+            tiers=[MemoryTier.episodic, MemoryTier.archival],
+            limit=5,
+            total_limit=5,
+        )
+
+        assert len(results) == 1
+        assert results[0].id == episodic_item.id
+
+    def test_search_all_prioritizes_current_quest_and_receipt_evidence(self, store_manager):
+        """Retrieval should prefer the current quest evidence over generic matches."""
+        global_item = create_test_item(
+            tier=MemoryTier.episodic,
+            title="Generic memory retrieval",
+            content="Memory retrieval ranking proof test guidance.",
+            namespace="global",
+            confidence=0.95,
+        )
+        quest_item = create_test_item(
+            tier=MemoryTier.episodic,
+            title="Quest memory retrieval",
+            content="Memory retrieval ranking proof test guidance.",
+            namespace="quest:quest-memory",
+            tags=["receipt", "work_ledger"],
+            confidence=0.2,
+        )
+        quest_item.metadata = {
+            "quest_id": "quest-memory",
+            "operator_id": "op-1",
+            "receipt_ids": ["receipt-memory-proof"],
+        }
+
+        store_manager.episodic.insert(global_item)
+        store_manager.episodic.insert(quest_item)
+
+        results = store_manager.search_all(
+            "memory retrieval proof",
+            tiers=[MemoryTier.episodic],
+            limit=5,
+            total_limit=2,
+            current_quest_id="quest-memory",
+            operator_id="op-1",
+        )
+
+        assert [item.id for item in results] == [quest_item.id, global_item.id]
 
     def test_stores_are_cached(self, store_manager):
         """Test that stores are cached and reused."""

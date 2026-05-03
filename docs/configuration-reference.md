@@ -9,8 +9,8 @@ Complete reference for every configuration file and environment variable in Lanc
 When the same setting exists in multiple places:
 
 ```
-Environment variables (.env)  →  override  →  YAML config files
-Soul risk overrides           →  override  →  governance.yaml defaults
+Environment variables (.env)  ->  override  ->  YAML config files
+Soul risk overrides           ->  override  ->  governance.yaml defaults
 ```
 
 Environment variables always win. The Soul can escalate risk tiers above governance.yaml defaults but never reduce them.
@@ -77,8 +77,8 @@ At least one API key is required. You can configure one or more providers. Keys 
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `LANCELOT_OWNER_TOKEN` | Yes | — | Token for administrative operations (Soul amendments, memory writes, approvals) |
-| `LANCELOT_VAULT_KEY` | Yes | — | Encryption key for credential vault (Fernet). Vault startup now fails closed when this is missing unless you explicitly set `LANCELOT_ALLOW_EPHEMERAL_VAULT=true` for development. |
+| `LANCELOT_OWNER_TOKEN` | Yes | - | Token for administrative operations (Soul amendments, memory writes, approvals) |
+| `LANCELOT_VAULT_KEY` | Yes | - | Encryption key for credential vault (Fernet). Vault startup now fails closed when this is missing unless you explicitly set `LANCELOT_ALLOW_EPHEMERAL_VAULT=true` for development. |
 | `LANCELOT_ALLOW_EPHEMERAL_VAULT` | No | `false` | Development-only override that allows an ephemeral in-memory vault key when `LANCELOT_VAULT_KEY` is missing. Credentials will not survive restart. Do not use in production. |
 
 ### Local Model
@@ -159,15 +159,15 @@ The default deployment uses `LOCAL_LLM_URL` for every local-model role. Operator
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `TELEGRAM_BOT_TOKEN` | No | — | Telegram bot token for messaging integration |
-| `TELEGRAM_CHAT_ID` | No | — | Telegram chat ID for delivery |
-| `GOOGLE_CHAT_WEBHOOK_URL` | No | — | Google Chat webhook URL |
+| `TELEGRAM_BOT_TOKEN` | No | - | Telegram bot token for messaging integration |
+| `TELEGRAM_CHAT_ID` | No | - | Telegram chat ID for delivery |
+| `GOOGLE_CHAT_WEBHOOK_URL` | No | - | Google Chat webhook URL |
 
 ### Feature Flags
 
-All feature flags are boolean: `true`/`1`/`yes` to enable, anything else to disable. Process-local subsystem flags are **hot-toggleable** through the War Room: changes persist immediately and the SubsystemManager starts or stops registered runtime objects without a container restart. Higher-authority host-control surfaces such as Host Bridge and UAB still require their host-side daemons or services to be installed and reachable before the toggle can grant useful access.
+All feature flags are boolean: `true`/`1`/`yes` to enable, anything else to disable. All flags are **hot-toggleable** - changes take effect immediately without a container restart. Core subsystem flags (Soul, Skills, Scheduler, Health Monitor, Memory) use the SubsystemManager to lazily initialize or gracefully shut down their subsystems at runtime.
 
-**Dependency enforcement:** Some flags have `requires` dependencies (e.g., `FEATURE_SCHEDULER` requires `FEATURE_SKILLS`). The API validates these before toggling — enabling a flag without its dependencies returns a 400 error. Disabling a flag that other enabled flags depend on is also blocked. See the War Room Kill Switches page for the full dependency graph.
+**Dependency enforcement:** Some flags have `requires` dependencies (e.g., `FEATURE_SCHEDULER` requires `FEATURE_SKILLS`). The API validates these before toggling - enabling a flag without its dependencies returns a 400 error. Disabling a flag that other enabled flags depend on is also blocked. See the War Room Kill Switches page for the full dependency graph.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -180,7 +180,7 @@ All feature flags are boolean: `true`/`1`/`yes` to enable, anything else to disa
 | `FEATURE_TOOLS_CLI_PROVIDERS` | `false` | CLI tool adapters |
 | `FEATURE_TOOLS_ANTIGRAVITY` | `false` | Generative UI/Vision providers |
 | `FEATURE_TOOLS_NETWORK` | `false` | Network access from sandbox |
-| `FEATURE_TOOLS_HOST_EXECUTION` | `false` | Host execution (no Docker sandbox — **DANGEROUS**) |
+| `FEATURE_TOOLS_HOST_EXECUTION` | `false` | Host execution (no Docker sandbox - **DANGEROUS**) |
 | `FEATURE_AGENTIC_LOOP` | `true` | Agentic tool loop |
 | `FEATURE_LOCAL_AGENTIC` | `true` | Enable the local utility execution lane for bounded low-risk work |
 | `FEATURE_RESPONSE_ASSEMBLER` | `true` | Response assembly pipeline |
@@ -193,15 +193,6 @@ All feature flags are boolean: `true`/`1`/`yes` to enable, anything else to disa
 | `FEATURE_ASYNC_VERIFICATION` | `true` | Async verification for T1 actions |
 | `FEATURE_INTENT_TEMPLATES` | `true` | Cached intent plan templates |
 | `FEATURE_BATCH_RECEIPTS` | `false` | Batched receipt emission |
-| `FEATURE_CONNECTORS` | `true` | External connector system |
-| `FEATURE_TRUST_LEDGER` | `true` | Progressive trust relaxation |
-| `FEATURE_SKILL_SECURITY_PIPELINE` | `true` | Security pipeline for new skills |
-| `FEATURE_APPROVAL_LEARNING` | `true` | Learn owner approval patterns |
-| `FEATURE_STRUCTURED_OUTPUT` | `true` | JSON schema output with receipt verification |
-| `FEATURE_CLAIM_VERIFICATION` | `true` | Cross-reference response claims against receipts |
-| `FEATURE_UNIFIED_CLASSIFICATION` | `true` | Single-call intent classification |
-| `FEATURE_TOOL_FLOW_STREAMING` | `true` | Real-time tool execution progress events |
-| `FEATURE_ACTION_CARDS` | `true` | Interactive approval/action buttons |
 | `FEATURE_TOOLS_UAB` | `false` | Universal Application Bridge (desktop app control) |
 | `FEATURE_HIVE` | `false` | Hive Agent Mesh (ephemeral sub-agents) |
 | `FEATURE_HIVE_UAB` | `false` | UAB integration for Hive sub-agents |
@@ -223,7 +214,7 @@ Some feature flags include extended metadata for the War Room UI:
 | Flag | Requires |
 |------|----------|
 | `FEATURE_TOOLS_UAB` | `FEATURE_TOOLS_FABRIC` |
-| `FEATURE_HIVE` | — |
+| `FEATURE_HIVE` | - |
 | `FEATURE_HIVE_UAB` | `FEATURE_HIVE`, `FEATURE_TOOLS_UAB` |
 
 ---
@@ -425,13 +416,14 @@ jobs:
     requires_approvals: []
     timeout_s: 120
     skill: memory_cleanup
+    description: "Daily memory maintenance bundle."
 ```
 
 **Example file:** `config/scheduler.example.yaml`
 
 **Trigger types:**
-- `interval` — runs every N seconds (`seconds` field)
-- `cron` — runs on a cron schedule (`expression` field, 5-field format: minute hour day-of-month month day-of-week)
+- `interval` - runs every N seconds (`seconds` field)
+- `cron` - runs on a cron schedule (`expression` field, 5-field format: minute hour day-of-month month day-of-week)
 
 ### `config/trust_graduation.yaml`
 
@@ -441,9 +433,9 @@ Trust Ledger thresholds and revocation behavior.
 version: "1.0"
 
 thresholds:
-  T3_to_T2: 50              # Actions needed to graduate T3 → T2
-  T2_to_T1: 100             # Actions needed to graduate T2 → T1
-  T1_to_T0: 200             # Actions needed to graduate T1 → T0
+  T3_to_T2: 50              # Actions needed to graduate T3 -> T2
+  T2_to_T1: 100             # Actions needed to graduate T2 -> T1
+  T1_to_T0: 200             # Actions needed to graduate T1 -> T0
 
 revocation:
   on_failure: "reset_to_default"
@@ -518,7 +510,7 @@ log_decomposition: true              # Log task decomposition details
 
 ### Soul Overlay: `soul/overlays/hive.yaml`
 
-Hive governance overlay — adds subsystem-specific rules on top of the base Soul. Contains five non-negotiable rules (hive_no_autonomous_t3, hive_collapse_on_governance_violation, hive_scoped_soul_monotonic, hive_intervention_requires_reason, hive_never_retry_identical) plus allowed_autonomous and requires_approval action lists.
+Hive governance overlay - adds subsystem-specific rules on top of the base Soul. Contains five non-negotiable rules (hive_no_autonomous_t3, hive_collapse_on_governance_violation, hive_scoped_soul_monotonic, hive_intervention_requires_reason, hive_never_retry_identical) plus allowed_autonomous and requires_approval action lists.
 
 See [Hive Agent Mesh](hive.md) for full rule descriptions.
 
@@ -564,7 +556,7 @@ audit:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `UAB_DAEMON_URL` | `http://host.docker.internal:7900` | UAB daemon address (for container → host communication) |
+| `UAB_DAEMON_URL` | `http://host.docker.internal:7900` | UAB daemon address (for container -> host communication) |
 | `UAB_DAEMON_PORT` | `7900` | UAB daemon listen port (for host-side startup) |
 | `UAB_LOG_LEVEL` | `info` | Daemon log level: `debug`, `info`, `warn`, `error` |
 | `UAB_LOG_FILE` | _(none)_ | Optional daemon log file path |

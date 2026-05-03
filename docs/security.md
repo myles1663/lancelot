@@ -217,17 +217,17 @@ This prevents memory poisoning attacks from having immediate effect.
 ### Rollback
 
 All memory edits are **commit-based**:
-- Full diff receipts track every change
-- Exact rollback to any previous state is supported
-- Rollback is idempotent (safe to call multiple times)
+- Commit receipts include bounded per-edit diffs with content previews, hashes, targets, status suggestions, and editor identity
+- Item-tier rollback uses persisted undo logs; core block rollback uses retained snapshots persisted under `lancelot_data/memory/snapshots/`
+- Rollback emits its own receipt and is safe to retry when the target rollback state is still available
 - Commit history provides a complete audit trail of memory evolution
 
 ### Memory Exclusions
 
 Critical security boundaries for memory:
-- The Soul is **never stored in memory** — memory references Soul version numbers, never Soul content. This prevents memory poisoning from corrupting governance.
-- Secrets are **never stored in memory** — sealed references only
-- PII is redacted before storage (via local model)
+- Raw Soul documents are not stored recursively in tiered memory. Memory may reference a Soul version; copied Soul YAML/content is quarantined and excluded from context.
+- Detected API keys, tokens, and credentials are redacted before memory persistence.
+- Long-term memory containing detected email addresses, phone numbers, or SSN-like identifiers is quarantined unless explicit consent metadata is present.
 
 ---
 
@@ -258,7 +258,7 @@ Every action emits a receipt containing:
 |-------|-------------|
 | `id` | Unique identifier (UUID) |
 | `timestamp` | When the action occurred |
-| `action_type` | Category (llm_call, tool_exec, file_op, memory_edit, scheduler_run, verification, governance) |
+| `action_type` | Category (llm_call, tool_exec, file_op, memory_commit_apply, memory_commit_rollback, memory_compile, memory job events, scheduled_job_run, scheduled_job_failed, scheduled_job_skipped, verification, governance) |
 | `action_name` | Specific action taken |
 | `inputs` | Sanitized request data |
 | `outputs` | Sanitized response data |
@@ -299,13 +299,13 @@ Every high-risk subsystem has an independent kill switch via feature flags:
 | `FEATURE_TOOLS_HOST_EXECUTION=false` | Host execution bypass (default: off) |
 | `FEATURE_SKILLS=false` | Skill system |
 | `FEATURE_SCHEDULER=false` | Automated job execution |
-| `FEATURE_MEMORY_VNEXT=false` | Memory writes (default: off) |
+| `FEATURE_MEMORY_VNEXT=false` | Structured memory subsystem (default: on) |
 | `FEATURE_SOUL=false` | Constitutional governance (not recommended) |
 | `FEATURE_HIVE=false` | Hive Agent Mesh sub-agents |
 | `FEATURE_TOOLS_UAB=false` | Universal Application Bridge (default: off) |
 | `FEATURE_FEDERATION=false` | Federation multi-instance coordination (default: off) |
 | `FEATURE_MCP=false` | MCP tool server access (default: off) |
-| `FEATURE_CONNECTORS=false` | External service connectors (default: off) |
+| `FEATURE_CONNECTORS=false` | External service connectors (default: on) |
 | `FEATURE_VAULT_SECRETS=true` | Vault-backed secret storage |
 
 **Safe defaults:**

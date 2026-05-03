@@ -27,7 +27,7 @@ jobs:
     requires_approvals: []
     timeout_s: 120
     skill: memory_cleanup
-    description: "Daily cleanup of stale memory entries."
+    description: "Daily memory maintenance bundle."
 
   - id: credential_rotation
     name: "Credential Rotation"

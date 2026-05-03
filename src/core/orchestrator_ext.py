@@ -185,10 +185,12 @@ def _build_system_instruction(self, crusader_mode=False):
     # 7. EXPRESSION STYLE
     expression = (
         "EXPRESSION STYLE:\n"
-        "Use emoji naturally to enhance your messages — they add warmth and clarity. "
+        "Use emoji naturally to enhance everyday War Room or Telegram conversation — they add warmth and clarity. "
         "Use them for status indicators (✅ ❌ ⚠️), reactions (👍 🎉 💡), "
-        "and to punctuate key points. Don't overuse them — 1-3 per message is ideal. "
-        "Match the user's energy: casual messages get more emoji, technical responses stay cleaner."
+        "and to punctuate key points. For casual acknowledgements and status updates, include one light, relevant emoji "
+        "when it feels natural. Don't overuse them — 1-3 per message is ideal. "
+        "Match the user's energy: casual messages get more emoji, technical responses stay cleaner. "
+        "Avoid emoji inside code, logs, JSON, shell commands, audit artifacts, or formal documents."
     )
 
     # Dynamic connector status — tell the LLM what's actually usable
@@ -1183,11 +1185,16 @@ def _record_task_experience(
 
         # Extract tool usage stats from receipts
         stats = TaskExperience.from_tool_receipts(tool_receipts or [])
+        if not isinstance(stats, dict):
+            stats = {}
 
         # Determine outcome
         has_errors = "Error" in (response_text or "")
         has_tools = bool(stats["tools_succeeded"])
-        outcome = "success" if has_tools and not has_errors else "partial" if has_tools else "failed"
+        if has_errors:
+            outcome = "partial" if has_tools else "failed"
+        else:
+            outcome = "success"
 
         experience = TaskExperience(
             task_summary=user_message[:200],
@@ -1201,11 +1208,110 @@ def _record_task_experience(
 
         _mem_mgr = getattr(self, '_memory_store_manager', None)
         if _mem_mgr is None:
+            compiler = getattr(self, "context_compiler", None)
+            compiler_mgr = getattr(compiler, "memory_manager", None)
+            if compiler_mgr is not None:
+                _mem_mgr = compiler_mgr
+                self._memory_store_manager = _mem_mgr
+        if _mem_mgr is None:
             from memory.sqlite_store import MemoryStoreManager
             self._memory_store_manager = MemoryStoreManager(
                 data_dir=getattr(self, 'data_dir', '/home/lancelot/data')
             )
             _mem_mgr = self._memory_store_manager
+
+        def _receipt_ref(receipt) -> str:
+            if isinstance(receipt, dict):
+                return str(receipt.get("receipt_id") or receipt.get("id") or "")
+            return str(
+                getattr(receipt, "receipt_id", "")
+                or getattr(receipt, "id", "")
+                or getattr(receipt, "action_id", "")
+                or ""
+            )
+
+        def _receipt_value(receipt, *keys: str):
+            if isinstance(receipt, dict):
+                metadata = receipt.get("metadata") if isinstance(receipt.get("metadata"), dict) else {}
+                inputs = receipt.get("inputs") if isinstance(receipt.get("inputs"), dict) else {}
+                outputs = receipt.get("outputs") if isinstance(receipt.get("outputs"), dict) else {}
+                for key in keys:
+                    for source in (receipt, metadata, inputs, outputs):
+                        value = source.get(key)
+                        if value not in (None, ""):
+                            return value
+                return None
+            for key in keys:
+                value = getattr(receipt, key, None)
+                if value not in (None, ""):
+                    return value
+            return None
+
+        def _append_values(target: list[str], value) -> None:
+            values = value if isinstance(value, list) else [value]
+            for entry in values:
+                text = str(entry or "").strip()
+                if text and text not in target:
+                    target.append(text)
+
+        receipt_ids = [
+            receipt_id
+            for receipt_id in (_receipt_ref(receipt) for receipt in (tool_receipts or []))
+            if receipt_id
+        ][:20]
+        files_touched: list[str] = []
+        approvals: list[str] = []
+        retries = 0
+        workflow_id = ""
+        for receipt in tool_receipts or []:
+            _append_values(
+                files_touched,
+                _receipt_value(receipt, "path", "file", "file_path", "target_path", "paths", "files"),
+            )
+            _append_values(
+                approvals,
+                _receipt_value(
+                    receipt,
+                    "approval_id",
+                    "approval_request_id",
+                    "execution_token_id",
+                    "permission_token_id",
+                ),
+            )
+            retry_value = _receipt_value(receipt, "retry_count", "retries", "attempt")
+            try:
+                retries = max(retries, int(retry_value or 0))
+            except (TypeError, ValueError):
+                pass
+            workflow_value = _receipt_value(receipt, "workflow_id", "workflow", "template_id")
+            if workflow_value and not workflow_id:
+                workflow_id = str(workflow_value)
+
+        quest_id = getattr(self, "_current_quest_id", "") or ""
+        session_id = getattr(self, "_current_session_id", "") or ""
+        operator_id = getattr(self, "_current_operator_id", "") or ""
+        operator_name = getattr(self, "_current_operator_name", "") or ""
+        channel = getattr(self, "_current_channel", "") or ""
+        provenance = [
+            Provenance(
+                type=ProvenanceType.agent_inference,
+                ref=quest_id or session_id or "task_experience",
+                snippet=user_message[:100],
+            )
+        ]
+        receipt_provenance_type = getattr(
+            ProvenanceType,
+            "receipt",
+            getattr(ProvenanceType, "agent_inference", "agent_inference"),
+        )
+        provenance.extend(
+            Provenance(
+                type=receipt_provenance_type,
+                ref=receipt_id,
+                snippet="Receipt-backed task execution evidence.",
+            )
+            for receipt_id in receipt_ids[:5]
+        )
 
         item = MemoryItem(
             id=generate_id(),
@@ -1213,20 +1319,42 @@ def _record_task_experience(
             namespace="task_experience",
             title=f"Task: {user_message[:80]}",
             content=experience.to_memory_content(),
-            tags=["task_experience", "autonomy_v2", outcome],
+            tags=[
+                tag
+                for tag in (
+                    "task_experience",
+                    "autonomy_v2",
+                    outcome,
+                    f"channel:{channel}" if channel else "",
+                    f"operator:{operator_id}" if operator_id else "",
+                    f"quest:{quest_id}" if quest_id else "",
+                    f"workflow:{workflow_id}" if workflow_id else "",
+                )
+                if tag
+            ],
             confidence=0.7 if outcome == "success" else 0.4,
             decay_half_life_days=60,
-            provenance=[Provenance(
-                type=ProvenanceType.agent_inference,
-                ref="autonomy_loop_v2",
-                snippet=user_message[:100],
-            )],
+            provenance=provenance,
             metadata={
                 "reasoning_used": experience.reasoning_was_used,
                 "duration_ms": duration_ms,
                 "outcome": outcome,
                 "capability_gaps": experience.capability_gaps,
-                "tools_used": stats["tools_used"],
+                "tools_used": stats.get("tools_used", []),
+                "tools_succeeded": stats.get("tools_succeeded", []),
+                "tools_failed": stats.get("tools_failed", []),
+                "actions_blocked": stats.get("actions_blocked", []),
+                "quest_id": quest_id,
+                "session_id": session_id,
+                "operator_id": operator_id,
+                "operator_name": operator_name,
+                "channel": channel,
+                "receipt_ids": receipt_ids,
+                "files_touched": files_touched[:50],
+                "approvals": approvals[:20],
+                "elapsed_ms": duration_ms,
+                "retries": retries,
+                "workflow_id": workflow_id,
             },
             token_count=len(experience.to_memory_content()) // 4,
         )

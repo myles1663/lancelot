@@ -148,6 +148,8 @@ When archived work has unresolved ActionCards with the same `quest_id`, the gate
 
 Checkpoints can be created at operator pause boundaries with `POST /api/work/{quest_id}/checkpoint`. A checkpoint captures a bounded summary of completed work, pending work, open decisions, files touched, approvals, and receipt IDs. The context compiler injects the latest active-work block into future turns so Lancelot can resume from durable state instead of relying on a long chat transcript.
 
+Session briefs extend this handoff model across completed or terminal work. The work ledger can persist a session/operator brief containing objective, completed work, pending work, blockers, files touched, approvals, receipt IDs, next action, known risks, and quest IDs. Future context rendering prefers active work first, then falls back to the latest session brief for the same session or operator when no active work item remains.
+
 The gateway also checkpoints open work automatically during safe lifecycle boundaries:
 
 - gateway shutdown checkpoints all open work with reason `gateway_shutdown`

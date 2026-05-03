@@ -54,7 +54,7 @@ def init_metrics_api(receipt_service, data_dir: str = "/home/lancelot/data") -> 
 
 
 def shutdown_metrics_api() -> None:
-    """Clear Metrics API runtime references for hot-toggle shutdown."""
+    """Clear metrics API runtime references for hot-toggle shutdown."""
     global _receipt_service, _data_dir
     _receipt_service = None
     _data_dir = "/home/lancelot/data"

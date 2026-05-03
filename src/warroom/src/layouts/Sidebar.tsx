@@ -36,6 +36,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: 'Receipt Explorer', path: '/receipts', shortcut: '6' },
       { label: 'Tool Fabric', path: '/tools', shortcut: '7' },
       { label: 'Memory', path: '/memory', shortcut: '8' },
+      { label: 'Context Efficiency', path: '/memory/context' },
       { label: 'Skills', path: '/skills' },
       { label: 'A2A Protocol', path: '/a2a' },
       { label: 'Scheduler', path: '/scheduler', shortcut: '9' },

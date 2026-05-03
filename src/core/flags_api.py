@@ -318,7 +318,7 @@ FLAG_META = {
 
     # ── Deep Reasoning Loop ───────────────────────────────────────
     "FEATURE_DEEP_REASONING_LOOP": {
-        "description": "Deep reasoning pass before agentic execution. Runs a reasoning-only LLM call (no tools, deep model, high thinking) before the agentic loop. The model analyzes the task, identifies information needs, proposes approaches, and flags capability gaps. Reasoning output is injected as context for the agentic loop. Also records task experiences in episodic memory for future learning, and provides structured governance feedback when actions are blocked.",
+        "description": "Deep reasoning pass before agentic execution. Runs a reasoning-only LLM call (no tools, deep model, high thinking) before the agentic loop. The model analyzes the task, identifies information needs, proposes approaches, and flags capability gaps. Reasoning output is injected as context for the agentic loop and provides structured governance feedback when actions are blocked. Task experience recording is handled by the core chat flow and is not gated by this flag.",
         "category": "Reasoning",
         "requires": [],
         "conflicts": [],

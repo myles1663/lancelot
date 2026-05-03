@@ -198,13 +198,10 @@ def wants_action(prompt: str) -> bool:
         "figure out a way", "figure out a plan", "figure out how",
         "figure out", "find a way", "get it working",
         "hook up", "wire up", "connect", "enable",
-        "send", "notify", "message", "tell",
+        "send", "notify", "message",
         "schedule", "alarm", "remind", "wake up", "cancel",
     ]
-    return any(
-        re.search(rf'\b{re.escape(phrase)}\b', prompt_lower)
-        for phrase in action_phrases
-    )
+    return any(re.search(rf"\b{re.escape(phrase)}\b", prompt_lower) for phrase in action_phrases)
 
 
 def is_low_risk_exec(prompt: str) -> bool:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import hashlib
 from pathlib import Path
 from typing import Any, Optional
 
@@ -271,6 +272,7 @@ class CompileContextRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     objective: str
     quest_id: Optional[str] = None
+    workflow_id: Optional[str] = None
     mode: str = "normal"
     search_query: Optional[str] = None
 
@@ -280,6 +282,7 @@ class CompileContextResponse(BaseModel):
     context_id: str
     token_estimate: int
     token_breakdown: dict[str, int]
+    context_efficiency: dict[str, Any]
     included_blocks: list[str]
     included_memory_count: int
     excluded_count: int
@@ -361,6 +364,43 @@ def _identity_fields(identity: Any) -> dict[str, str]:
     return {
         "operator_id": getattr(identity, "operator_id", "") or "",
         "session_id": getattr(identity, "session_id", "") or "",
+    }
+
+
+_RECEIPT_DIFF_PREVIEW_CHARS = 500
+
+
+def _receipt_content_hash(content: str | None) -> str | None:
+    """Return a stable hash for memory receipt diff content."""
+    if content is None:
+        return None
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _receipt_content_preview(content: str | None) -> str | None:
+    """Return bounded memory content for receipt review."""
+    if content is None:
+        return None
+    if len(content) <= _RECEIPT_DIFF_PREVIEW_CHARS:
+        return content
+    return f"{content[:_RECEIPT_DIFF_PREVIEW_CHARS]}..."
+
+
+def _receipt_edit_summary(edit: MemoryEdit) -> dict[str, Any]:
+    """Return a bounded diff summary suitable for immutable receipt output."""
+    return {
+        "edit_id": edit.id,
+        "op": edit.op.value,
+        "target": edit.target,
+        "reason": edit.reason,
+        "confidence": edit.confidence,
+        "before_hash": _receipt_content_hash(edit.before),
+        "after_hash": _receipt_content_hash(edit.after),
+        "before_preview": _receipt_content_preview(edit.before),
+        "after_preview": _receipt_content_preview(edit.after),
+        "provenance": [p.model_dump(mode="json") for p in edit.provenance],
+        "suggested_status": edit.suggested_status.value if edit.suggested_status else None,
+        "editor": edit.editor,
     }
 
 
@@ -470,10 +510,53 @@ async def search_memory(
 @router.post("/query", response_model=SearchResponse)
 async def query_memory(
     request: SearchRequest,
+    http_request: Request,
     service: dict = Depends(get_memory_service),
 ):
     """Run a natural-language memory query using entity-aware retrieval."""
-    return await search_memory(request, service)
+    store_manager = service["store_manager"]
+    identity = resolve_authenticated_identity(http_request)
+
+    tiers = [MemoryTier(t) for t in request.tiers if t != "core"]
+    results = store_manager.search_all(
+        query=request.query,
+        tiers=tiers,
+        namespace=request.namespace,
+        limit=request.limit,
+        total_limit=request.limit,
+        operator_id=identity.operator_id,
+        include_blobs=request.include_blobs,
+    )
+
+    if request.tags:
+        results = [
+            item for item in results
+            if any(tag in item.tags for tag in request.tags)
+        ]
+    results = [
+        item for item in results
+        if item.confidence >= request.min_confidence
+    ][: request.limit]
+
+    result_items = [
+        SearchResultItem(
+            id=item.id,
+            tier=item.tier.value,
+            title=item.title,
+            content=item.content[:500],
+            confidence=item.confidence,
+            score=1.0 / (index + 1),
+            tags=item.tags,
+            namespace=item.namespace,
+        )
+        for index, item in enumerate(results)
+    ]
+
+    return SearchResponse(
+        results=result_items,
+        total_count=len(result_items),
+        query=request.query,
+    )
 
 
 @router.get("/recent", response_model=RecentMemoryResponse)
@@ -677,6 +760,11 @@ async def finish_commit(
                 "affected_targets": sorted(commit.get_affected_targets()) if commit else [],
                 "has_core_edits": commit.has_core_edits() if commit else False,
                 "parent_commit_id": commit.parent_commit_id if commit else None,
+                "edits": [_receipt_edit_summary(edit) for edit in commit.edits] if commit else [],
+                "full_commit_ref": {
+                    "type": "memory_commit",
+                    "commit_id": result_id,
+                },
             },
             **_identity_fields(identity),
         )
@@ -1087,16 +1175,20 @@ async def delete_memory_item(
 @router.post("/compile", response_model=CompileContextResponse)
 async def compile_context(
     request: CompileContextRequest,
+    http_request: Request,
     service: dict = Depends(get_memory_service),
 ):
     """Compile a context for an objective."""
     compiler_service = service["compiler_service"]
+    identity = resolve_authenticated_identity(http_request)
 
     ctx = compiler_service.compile_for_objective(
         objective=request.objective,
         quest_id=request.quest_id,
         mode=request.mode,
         search_query=request.search_query,
+        operator_id=identity.operator_id,
+        workflow_id=request.workflow_id or "",
         emit_receipt=True,
         receipt_emitter=_receipt_emitter(service),
     )
@@ -1105,6 +1197,7 @@ async def compile_context(
         context_id=ctx.context_id,
         token_estimate=ctx.token_estimate,
         token_breakdown=ctx.token_breakdown,
+        context_efficiency=ctx.context_efficiency,
         included_blocks=[b.value for b in ctx.included_blocks],
         included_memory_count=len(ctx.included_memory_item_ids),
         excluded_count=len(ctx.excluded_candidates),

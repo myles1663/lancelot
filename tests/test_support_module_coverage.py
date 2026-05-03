@@ -1066,10 +1066,7 @@ async def test_setup_api_recovery_endpoints_and_filesystem_paths(tmp_path, monke
     )
 
     audit_calls = []
-    receipt_service = types.SimpleNamespace(
-        cleared=False,
-        clear=lambda: setattr(receipt_service, "cleared", True),
-    )
+    receipt_service = types.SimpleNamespace()
 
     class AuditLogger:
         def log_event(self, *args, **kwargs):
@@ -1190,11 +1187,6 @@ async def test_setup_api_recovery_endpoints_and_filesystem_paths(tmp_path, monke
             setup_api.VaultResetRequest(confirm=False, confirmation_text=""),
         )
     ).status_code == 400
-
-    assert (await setup_api.clear_receipts(_QueryRequest(), setup_api.ConfirmRequest(confirm=False))).status_code == 400
-    cleared = await setup_api.clear_receipts(_QueryRequest(), setup_api.ConfirmRequest(confirm=True))
-    assert cleared["status"] == "cleared"
-    assert receipt_service.cleared is True
 
     monkeypatch.setitem(
         sys.modules,

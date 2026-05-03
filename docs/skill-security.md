@@ -1,6 +1,6 @@
 # Skill Security Pipeline
 
-**Feature Flag:** `FEATURE_SKILL_SECURITY_PIPELINE` (default: `false`, requires `FEATURE_SKILLS`)
+**Feature Flag:** `FEATURE_SKILL_SECURITY_PIPELINE` (default: `true`, requires `FEATURE_SKILLS`)
 **Codebase:** `src/skills/security/pipeline.py`
 
 The Skill Security Pipeline is a 6-stage evaluation process for new skills before installation. It ensures that only validated, owner-approved skills with properly registered capabilities enter the system.

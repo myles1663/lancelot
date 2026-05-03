@@ -60,6 +60,34 @@ def test_to_dict_from_dict_roundtrip():
     assert restored.active is True
 
 
+def test_template_runbook_roundtrip():
+    """IntentTemplate preserves reusable runbook metadata."""
+    steps = [PlanStepTemplate(capability="fs.read", risk_tier=RiskTier.T0_INERT)]
+    template = IntentTemplate(
+        template_id="test-1",
+        intent_pattern="review receipts",
+        plan_skeleton=steps,
+        max_risk_tier=RiskTier.T0_INERT,
+        success_count=3,
+        active=True,
+        usage_count=2,
+        success_receipts=["receipt-1"],
+        runbook={
+            "required_inputs": ["repo path"],
+            "operator_notes": ["Start with receipt evidence."],
+            "evidence": ["receipt explorer"],
+        },
+    )
+
+    restored = IntentTemplate.from_dict(template.to_dict())
+    runbook = restored.to_runbook()
+
+    assert restored.usage_count == 2
+    assert runbook["success_receipts"] == ["receipt-1"]
+    assert runbook["required_inputs"] == ["repo path"]
+    assert runbook["operator_notes"] == ["Start with receipt evidence."]
+
+
 def test_registry_loads_from_empty_dir(tmp_path, config):
     """Registry loads from empty directory without error."""
     reg = IntentTemplateRegistry(config=config, data_dir=str(tmp_path))
@@ -84,6 +112,20 @@ def test_create_candidate_persists_to_json(tmp_path, config):
     data = json.loads(path.read_text())
     assert len(data) == 1
     assert data[0]["intent_pattern"] == "read workspace"
+
+
+def test_create_candidate_stores_runbook_and_receipt(registry):
+    tid = registry.create_candidate(
+        "review receipts",
+        make_steps(0),
+        receipt_id="receipt-1",
+        runbook={"required_inputs": ["date range"]},
+    )
+
+    template = registry.get_template(tid)
+
+    assert template.success_receipts == ["receipt-1"]
+    assert template.to_runbook()["required_inputs"] == ["date range"]
 
 
 def test_create_candidate_rejects_t2(registry):
@@ -151,6 +193,19 @@ def test_match_returns_after_promotion(registry):
     assert result.template_id == tid
 
 
+def test_match_handles_reordered_repeat_task_words(registry):
+    """Repeat-task templates should match intent wording changes."""
+    tid = registry.create_candidate("workspace receipt review", make_steps(0))
+    registry.record_success(tid)
+    registry.record_success(tid)
+
+    result = registry.match("please review receipts for the workspace")
+
+    assert result is not None
+    assert result.template_id == tid
+    assert result.usage_count == 1
+
+
 def test_promotion_lifecycle(registry):
     """Promotion: create candidate, record 3 successes (threshold=3), template becomes active."""
     tid = registry.create_candidate("workspace read", make_steps(0))
@@ -160,6 +215,20 @@ def test_promotion_lifecycle(registry):
     assert registry.get_template(tid).active is False
     registry.record_success(tid)  # 3 → promoted
     assert registry.get_template(tid).active is True
+
+
+def test_record_success_appends_runbook_evidence(registry):
+    tid = registry.create_candidate("repeat cleanup", make_steps(0))
+
+    registry.record_success(
+        tid,
+        receipt_id="receipt-2",
+        note="Validate with focused tests before reuse.",
+    )
+
+    runbook = registry.get_template(tid).to_runbook()
+    assert "receipt-2" in runbook["success_receipts"]
+    assert "Validate with focused tests before reuse." in runbook["operator_notes"]
 
 
 def test_match_after_promotion(registry):

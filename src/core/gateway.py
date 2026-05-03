@@ -207,7 +207,7 @@ main_orchestrator.work_ledger_store = work_ledger_store
 crusader_mode = CrusaderMode()
 crusader_adapter = CrusaderAdapter()
 
-# Business automation helpers are wired here so boot can inject runtime policy.
+# Self-build helpers are wired here so boot can inject runtime policy.
 forge_vault = SecretVault(data_dir="/home/lancelot/data")
 forge_sandbox = SandboxExecutor()
 forge_discovery = APIDiscoveryEngine(orchestrator=main_orchestrator)

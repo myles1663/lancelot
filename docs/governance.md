@@ -178,6 +178,8 @@ The Trust Ledger tracks how much trust each connector and capability has earned 
   <img src="images/fig6_trust_ledger.svg" alt="Trust Ledger — Graduation and Revocation" width="800">
 </p>
 
+![War Room — Trust Ledger Panel](images/war-room-trust-ledger.png)
+
 ### How Trust Is Earned
 
 Trust starts at zero. Every successful governed action increments the trust score for that connector/capability. Every failure, denial, or rollback affects the score.
@@ -214,6 +216,8 @@ The Soul can set maximum trust ceilings for specific capabilities. For example, 
 ## Approval Pattern Learning (APL)
 
 APL detects patterns in owner approval decisions and proposes automation rules. It learns *from the owner*, not from the model.
+
+![War Room — APL Learning Panel](images/war-room-apl-learning.png)
 
 ### How It Works
 
@@ -282,15 +286,15 @@ Mapping common AI agent failure modes to the specific Lancelot mechanism that bl
 **Defense:**
 - Memory writes are classified as T1 (reversible) with async verification
 - Risky memory edits land in quarantine — they don't affect behavior until promoted
-- All memory edits are commit-based with full rollback capability
-- The Soul is never stored in memory (memory references Soul version, never Soul content)
+- Memory edits are commit-based and rollback through retained core snapshots or persisted item undo logs
+- Raw Soul documents are not stored recursively in tiered memory; copied Soul YAML/content is quarantined and excluded from context
 
 ### Credential Exposure
 
 **Attack:** Secrets are leaked through logs, memory, or model outputs.
 
 **Defense:**
-- Secrets are stored in `.env` and sealed references, never in general memory
+- Secrets are stored in `.env` or the credential vault; detected credential material is redacted before general memory persistence
 - Frontier-bound PII handling follows the runtime frontier scrub policy. In `required` or `preferred` mode, Lancelot uses the local redaction lane before frontier API calls when the local model is ready for inference. `required` blocks frontier egress if local scrubbing is unavailable or if the local lane returns output that still contains detectable structured PII; `preferred` allows fallback and records the degraded privacy event. Frontier payload scrubbing now recurses through nested provider payload fields rather than only top-level text slots, and residual-PII validation normalizes zero-width characters plus common Unicode separator variants before matching, so structured PII hidden under arbitrary nested keys or lightly obfuscated separators is still caught before frontier egress. Large or semantically suspicious payloads can use the role-based scrub cascade: deterministic pre-scrub, local region finding, local segment verification, then deterministic residual validation before egress. The canonical runtime boundary for that logic is `LocalPIIScrubber` in `src/core/frontier_scrubber.py`.
 - Receipts sanitize inputs and outputs
 - Credential access is logged (enforced by Soul risk rule)

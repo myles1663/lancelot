@@ -130,3 +130,12 @@ def test_validate_llm_response_strips_learned_rules_and_sanitizes():
 
     assert "[Learned Rule]" not in result
     assert "[REDACTED]" in result
+
+
+def test_validate_llm_response_preserves_operator_emoji():
+    runtime = SimpleNamespace(sanitizer=SimpleNamespace(sanitize=lambda text: text))
+
+    result = validate_llm_response(runtime, "Done ✅\nNext step: review receipts 🔎")
+
+    assert "Done ✅" in result
+    assert "receipts 🔎" in result

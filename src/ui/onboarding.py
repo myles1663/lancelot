@@ -345,7 +345,7 @@ class OnboardingOrchestrator:
     def _bond_identity(self, user: str) -> str:
         """Creates USER.md and bonds identity."""
         try:
-            with open(self.user_file, "w", encoding="utf-8") as f:
+            with open(self.user_file, "w") as f:
                 f.write(f"# User Profile\n- Name: {user}\n- Role: Commander\n- Bonded: True")
 
             self.state = "FLAGSHIP_SELECTION"
@@ -936,7 +936,7 @@ class OnboardingOrchestrator:
         # Create restart flag
         flags_dir = os.path.join(self.data_dir, "FLAGS")
         os.makedirs(flags_dir, exist_ok=True)
-        with open(os.path.join(flags_dir, "RESTART_REQUIRED"), "w", encoding="utf-8") as f:
+        with open(os.path.join(flags_dir, "RESTART_REQUIRED"), "w") as f:
             f.write("CONFIG_UPDATED")
 
         # Advance to FINAL_CHECKS
@@ -1096,7 +1096,7 @@ class OnboardingOrchestrator:
 
                 flags_dir = os.path.join(self.data_dir, "FLAGS")
                 os.makedirs(flags_dir, exist_ok=True)
-                with open(os.path.join(flags_dir, "RESTART_REQUIRED"), "w", encoding="utf-8") as f:
+                with open(os.path.join(flags_dir, "RESTART_REQUIRED"), "w") as f:
                     f.write("CONFIG_UPDATED")
 
                 self.state = "FINAL_CHECKS"
@@ -1395,7 +1395,7 @@ class OnboardingOrchestrator:
 
         flags_dir = os.path.join(self.data_dir, "FLAGS")
         os.makedirs(flags_dir, exist_ok=True)
-        with open(os.path.join(flags_dir, "RESTART_REQUIRED"), "w", encoding="utf-8") as f:
+        with open(os.path.join(flags_dir, "RESTART_REQUIRED"), "w") as f:
             f.write("ONBOARDING_COMPLETE")
 
         return msg
@@ -1403,7 +1403,7 @@ class OnboardingOrchestrator:
     def _complete_onboarding(self):
         """Marks onboarding as complete in USER.md."""
         try:
-            with open(self.user_file, "a", encoding="utf-8") as f:
+            with open(self.user_file, "a") as f:
                 f.write("\n- OnboardingComplete: True")
             self.state = "READY"
         except Exception as exc:

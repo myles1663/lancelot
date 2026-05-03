@@ -1,6 +1,6 @@
 # Connectors
 
-**Feature Flag:** `FEATURE_CONNECTORS` (default: `false`, requires `FEATURE_TOOLS_FABRIC`)
+**Feature Flag:** `FEATURE_CONNECTORS` (default: `true`, requires `FEATURE_TOOLS_FABRIC`)
 **Codebase:** `src/connectors/`
 
 Connectors are governed integrations with external services. Every connector produces an HTTP request specification; the `ConnectorProxy` is the only component that makes actual HTTP calls. `GovernedConnectorProxy` adds risk classification, policy evaluation, trust tracking, and receipt emission.

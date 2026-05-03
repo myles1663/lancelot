@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-import fnmatch
+import ast
 import os
 import shutil
 import subprocess
@@ -36,9 +36,6 @@ RUNTIME_DATA_FILES = {
     ".coverage",
     "coverage.xml",
 }
-RUNTIME_DATA_GLOBS = (
-    "coverage*.json",
-)
 RUNTIME_DATA_SUFFIXES = (
     ".db",
     ".sqlite",
@@ -124,7 +121,6 @@ def check_no_tracked_runtime_data() -> None:
         path
         for path in tracked
         if path in RUNTIME_DATA_FILES
-        or any(fnmatch.fnmatch(path, pattern) for pattern in RUNTIME_DATA_GLOBS)
         or path.endswith(RUNTIME_DATA_SUFFIXES)
         or any(path.startswith(prefix) for prefix in RUNTIME_DATA_PREFIXES)
     )
@@ -141,7 +137,7 @@ def check_docker_excludes_runtime_data() -> None:
     ignore_text = dockerignore.read_text(encoding="utf-8", errors="ignore") if dockerignore.exists() else ""
     dockerfile_text = dockerfile.read_text(encoding="utf-8", errors="ignore") if dockerfile.exists() else ""
 
-    required_ignores = ("/data/", "/lancelot_data/", "/secrets/", "coverage.xml", "coverage*.json", "*.log")
+    required_ignores = ("/data/", "/lancelot_data/", "/secrets/", "coverage.xml", "*.log")
     missing_ignores = [entry for entry in required_ignores if entry not in ignore_text]
     if missing_ignores:
         print("Docker build context does not exclude runtime/operator data:")
@@ -176,8 +172,19 @@ def check_no_print_statements() -> None:
     for path in (ROOT / "src").rglob("*.py"):
         if any(part in EXCLUDED_PARTS for part in path.relative_to(ROOT).parts):
             continue
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        if "print(" in text:
+        text = path.read_text(encoding="utf-8-sig", errors="ignore")
+        try:
+            tree = ast.parse(text, filename=str(path))
+        except SyntaxError:
+            offenders.append(str(path.relative_to(ROOT)).replace("\\", "/"))
+            continue
+        has_print_call = any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "print"
+            for node in ast.walk(tree)
+        )
+        if has_print_call:
             offenders.append(str(path.relative_to(ROOT)).replace("\\", "/"))
     if offenders:
         print("Production Python files contain print():")

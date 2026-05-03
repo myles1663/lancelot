@@ -2,6 +2,7 @@
 HIVE Receipts — helper functions for emitting HIVE-specific receipts.
 
 Wraps the shared receipt system with HIVE-specific defaults.
+Provides HIVE-specific receipt helpers on top of the shared receipt service.
 """
 
 from __future__ import annotations

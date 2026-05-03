@@ -86,7 +86,6 @@ npm-debug.log*
 # Test outputs
 .coverage
 coverage.xml
-coverage*.json
 htmlcov/
 
 # Demo seed script (local use only)

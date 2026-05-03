@@ -72,7 +72,7 @@ def init_mcp_api(
 
 
 def shutdown_mcp_api() -> None:
-    """Clear MCP API runtime references for a hot-toggle shutdown."""
+    """Clear MCP API runtime references for hot-toggle shutdown."""
     global _registry, _evaluator, _proxy, _vault, _network_policy, _receipt_service
     _registry = None
     _evaluator = None

@@ -970,11 +970,11 @@ class ReceiptService(ReceiptQueryMixin):
         return [self._row_to_receipt(row) for row in cursor.fetchall()]
 
     def clear(self) -> None:
-        """Clear receipts for an explicit operator-requested setup reset."""
-        with self._lock:
-            with self._transaction() as conn:
-                conn.execute("DELETE FROM receipt_staging")
-                conn.execute("DELETE FROM receipts")
+        """Receipt logs are append-only; runtime clearing is not supported."""
+        raise ImmutableReceiptError(
+            "Finalized receipts are append-only and cannot be cleared at runtime. "
+            "Use external volume reset procedures only for a complete fresh install."
+        )
 
     def get_children(self, parent_id: str) -> List[Receipt]:
         """

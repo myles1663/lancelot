@@ -141,7 +141,7 @@ For plans that require execution, the three-agent loop runs:
 
 Each step generates a receipt linked to the parent plan via `parent_id` and `quest_id`, forming a traceable chain.
 
-**Deep Reasoning Loop** (`FEATURE_DEEP_REASONING_LOOP`): The execution loop includes pre-execution reasoning, structured governance feedback, and experiential learning.
+**Deep Reasoning Loop** (`FEATURE_DEEP_REASONING_LOOP`): When enabled, the execution loop includes a pre-execution reasoning pass and structured governance feedback. Task experience recording is no longer gated by this flag.
 
 **Deep Reasoning Pass.** Before the agentic loop begins, a dedicated reasoning pass analyzes the request using a deep model with high thinking budget. The orchestrator evaluates `_should_use_deep_reasoning()` triggers (request complexity, tool requirements, risk indicators) and, when triggered, calls `_build_reasoning_instruction()` to assemble a reasoning-focused system prompt. The `_deep_reasoning_pass()` method then calls `provider.generate()` with the deep model lane and elevated thinking tokens. The output is captured as a `ReasoningArtifact` (defined in `src/core/reasoning_artifact.py`) and injected as structured context into `_agentic_generate()`. This means Lancelot thinks deeply about what it needs to do — identifying capability gaps, anticipating risks, and forming a strategy — before it takes any action. The reasoning output is also scanned for `CAPABILITY GAP:` markers, which identify tools or skills the system lacks for the current task.
 
@@ -149,7 +149,9 @@ Each step generates a receipt linked to the parent plan via `parent_id` and `que
 
 **Governed Negotiation.** When governance blocks an action, the system no longer returns a generic `BLOCKED` message. Instead, it constructs a `GovernanceFeedback` dataclass (from `reasoning_artifact.py`) containing the blocked action, the policy rule that triggered the block, and a set of structured alternative approaches the model can pursue. This feedback is injected back into the agentic loop context, allowing the model to adapt its plan — choosing a lower-risk path, requesting approval, or decomposing the action — rather than stalling.
 
-**Task Experience Memory.** After task completion, the orchestrator calls `_record_task_experience()`, which stores a `TaskExperience` dataclass (from `reasoning_artifact.py`) in episodic memory under the `task_experience` namespace. Each experience record captures the original request, the reasoning artifact, capability gaps encountered, actions taken, the outcome, and a duration. On future requests, the context compiler can retrieve relevant past experiences, enabling Lancelot to learn from previous successes and failures — avoiding repeated mistakes and reusing strategies that worked.
+**Task Experience Memory.** After meaningful task completion, the orchestrator calls `_record_task_experience()`, which stores a `TaskExperience` dataclass (from `reasoning_artifact.py`) in episodic memory under the `task_experience` namespace. Each experience record captures the original request, optional reasoning artifact, capability gaps when available, tools used, files touched, receipts, approvals, retry count, outcome, and elapsed time. On future requests, the context compiler can retrieve relevant past experiences, enabling Lancelot to learn from previous successes and failures — avoiding repeated mistakes and reusing strategies that worked.
+
+Current task-experience behavior records meaningful completed tasks even when `FEATURE_DEEP_REASONING_LOOP` is disabled. The stored metadata includes optional reasoning artifacts, tools used/succeeded/failed, files touched, approvals, receipt IDs, operator/session/quest/channel, outcome, elapsed time, retry count, and workflow/template ID when available.
 
 **TaskRun Status Fix.** After `_execute_with_llm` succeeds in the agentic loop, the TaskRun status is explicitly updated to `SUCCEEDED`. This ensures that the TaskRun status accurately reflects the actual outcome of execution.
 
@@ -297,13 +299,13 @@ Lancelot maintains structured memory across four tiers:
 | **Episodic Memory** | Session-scoped | Conversation history, recent interactions |
 | **Archival Memory** | Long-term | Accumulated knowledge, searchable via FTS |
 
-**Commit-based editing:** Memory edits are applied through governed commits. Core block edits create snapshots before modification and can be rolled back through the memory admin path. Working, episodic, and archival item commits persist undo logs, allowing item-level rollback of inserts, updates, deletes, and rollback operations.
+**Commit-based editing:** Memory edits are applied through governed commits. Core block edits persist snapshots before modification and can be rolled back through the memory admin path while the snapshot is retained. Working, episodic, and archival item commits persist undo logs, allowing item-level rollback of inserts, updates, deletes, and rollback operations.
 
 **Quarantine:** Agent edits to allowed core blocks land in quarantine by default, owner-only core blocks reject agent edits outright, and retrieved memory that matches prompt-injection patterns is excluded from compiled context and surfaced for review.
 
 **Context compiler:** Before each LLM call, the context compiler assembles memory tiers into a token-budgeted context window. Priority is Core > Working > Episodic > Archival. Items that exceed the context budget, fall below confidence thresholds, are quarantined, or match prompt-injection patterns are excluded with an explicit reason. Included items record `last_retrieved_at`, giving compaction and scale policies evidence of which memories were actually useful. The orchestrator records the active objective into quest-scoped working memory before compilation, appends the compact Active Work Ledger state for long-running Command Center work, and the scheduler ensures working compaction with working-to-episodic promotion, journaled episodic summarization to archival, archival decay, and integrity audit jobs stay registered.
 
-For more details, see [Memory](memory.md).
+For more details, see [Memory](memory.md) and [Context Continuity](context-continuity.md).
 
 ### Skills (Modular Capabilities)
 
@@ -514,7 +516,7 @@ Connectors are governed integrations with external services (email, Slack, calen
 
 **Credential isolation:** 7 injection modes (Bearer, API Key, Basic, Bot Token, URL Token, OAuth 1.0a, composed Basic). Domain validation uses exact hostname matching against the connector's declared `target_domains`.
 
-**Feature flag:** `FEATURE_CONNECTORS` (default: false, requires `FEATURE_TOOLS_FABRIC`).
+**Feature flag:** `FEATURE_CONNECTORS` (default: true, requires `FEATURE_TOOLS_FABRIC`).
 
 For the full reference, see [Connectors](connectors.md).
 
@@ -624,7 +626,7 @@ The War Room is a React SPA (Vite + React 18 + TypeScript + Tailwind) providing 
 - **APL** — Approval pattern learning rules, proposals, confidence
 - **Receipts** — Searchable audit trail with drill-down traces
 - **Scheduler** — Active jobs, run history, skip reasons
-- **Memory** — Tier sizes, quarantine queue, recent commits
+- **Memory** - Tier sizes, quarantine queue, search, recent memory, and governed memory management
 
 The War Room communicates with Lancelot exclusively through the Gateway REST API — it has no direct access to internal objects.
 
@@ -652,7 +654,7 @@ Output:        Receipt generation → PII redaction → Structured output parsin
 - The model is treated as **untrusted logic** inside a governed system
 - Governance is enforced **outside the model** (Soul + Policy Engine)
 - Tool outputs are treated as **untrusted input** — never executed directly
-- Secrets are **never stored in memory**, never logged in plaintext, never sent to models unless explicitly required. OAuth tokens are encrypted at rest in the vault and refreshed via a thread-safe background daemon
+- Secrets are stored in `.env` or the credential vault, not in general memory. Detected credential material is redacted before memory persistence, receipts/logs scrub sensitive fields, and OAuth tokens are encrypted at rest in the vault with thread-safe background refresh.
 - All subsystems have **kill switches** (feature flags)
 
 For the full security model, see [Security Posture](security.md).
@@ -690,7 +692,7 @@ A core architectural principle: **any subsystem can be disabled without breaking
 | Incident Response | No incident auto-detection, playbook checklists, or PDF reports; receipt DAG and manual audit still available |
 | Soul Template Library | Always available (no feature flag). Depends on Soul Store, Soul Linter, Soul Amendments. Template registry and apply flow unavailable only if Soul subsystem itself is disabled |
 
-This is implemented through deployment-profile feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FEATURE_DEEP_REASONING_LOOP`, `FEATURE_GOOGLE_OAUTH`, `FEATURE_A2A`, `FEATURE_INCIDENT_RESPONSE`, etc.) that gate each subsystem. Process-local optional subsystems are hot-toggleable through the SubsystemManager; when disabled, route-gated API endpoints return appropriate "not available" responses.
+This is implemented through feature flags (`FEATURE_SOUL`, `FEATURE_SKILLS`, `FEATURE_DEEP_REASONING_LOOP`, `FEATURE_PROVIDER_SDK`, `FEATURE_ANTHROPIC_OAUTH`, `FEATURE_GOOGLE_OAUTH`, `FEATURE_A2A`, `FEATURE_INCIDENT_RESPONSE`, etc.) that gate each subsystem at initialization. When a subsystem is disabled, its code paths are skipped and its API endpoints return appropriate "not available" responses.
 
 ---
 

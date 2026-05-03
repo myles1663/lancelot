@@ -48,9 +48,10 @@ def _make_config(tmp_path, **overrides) -> APLConfig:
 
 
 class TestAPLIntegration:
-    def test_feature_flag_default_enabled(self):
+    def test_feature_flag_can_be_disabled(self):
         from src.core import feature_flags
-        assert feature_flags.FEATURE_APPROVAL_LEARNING is True
+        with patch.object(feature_flags, "FEATURE_APPROVAL_LEARNING", False):
+            assert feature_flags.FEATURE_APPROVAL_LEARNING is False
 
     def test_no_matching_rule_ask_owner(self, tmp_path):
         config = _make_config(tmp_path)

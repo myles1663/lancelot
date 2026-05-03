@@ -174,6 +174,48 @@ class WorkLedgerEvent:
         }
 
 
+@dataclass
+class SessionBrief:
+    brief_id: str
+    session_id: str = ""
+    operator_id: str = ""
+    reason: str = "session_recap"
+    objective: str = ""
+    summary: str = ""
+    completed_work: list[str] = field(default_factory=list)
+    pending_work: list[str] = field(default_factory=list)
+    blockers: list[str] = field(default_factory=list)
+    open_decisions: list[str] = field(default_factory=list)
+    files_touched: list[str] = field(default_factory=list)
+    approvals: list[str] = field(default_factory=list)
+    receipt_ids: list[str] = field(default_factory=list)
+    next_action: str = ""
+    known_risks: list[str] = field(default_factory=list)
+    quest_ids: list[str] = field(default_factory=list)
+    created_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "brief_id": self.brief_id,
+            "session_id": self.session_id,
+            "operator_id": self.operator_id,
+            "reason": self.reason,
+            "objective": self.objective,
+            "summary": self.summary,
+            "completed_work": self.completed_work,
+            "pending_work": self.pending_work,
+            "blockers": self.blockers,
+            "open_decisions": self.open_decisions,
+            "files_touched": self.files_touched,
+            "approvals": self.approvals,
+            "receipt_ids": self.receipt_ids,
+            "next_action": self.next_action,
+            "known_risks": self.known_risks,
+            "quest_ids": self.quest_ids,
+            "created_at": self.created_at,
+        }
+
+
 class WorkLedgerStore:
     """SQLite-backed active-work ledger with append-only event history."""
 
@@ -223,11 +265,33 @@ class WorkLedgerStore:
         created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS session_briefs (
+        brief_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL DEFAULT '',
+        operator_id TEXT NOT NULL DEFAULT '',
+        reason TEXT NOT NULL DEFAULT '',
+        objective TEXT NOT NULL DEFAULT '',
+        summary TEXT NOT NULL DEFAULT '',
+        completed_work TEXT NOT NULL DEFAULT '[]',
+        pending_work TEXT NOT NULL DEFAULT '[]',
+        blockers TEXT NOT NULL DEFAULT '[]',
+        open_decisions TEXT NOT NULL DEFAULT '[]',
+        files_touched TEXT NOT NULL DEFAULT '[]',
+        approvals TEXT NOT NULL DEFAULT '[]',
+        receipt_ids TEXT NOT NULL DEFAULT '[]',
+        next_action TEXT NOT NULL DEFAULT '',
+        known_risks TEXT NOT NULL DEFAULT '[]',
+        quest_ids TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_work_items_status ON active_work_items(status);
     CREATE INDEX IF NOT EXISTS idx_work_items_session ON active_work_items(session_id);
     CREATE INDEX IF NOT EXISTS idx_work_items_updated ON active_work_items(updated_at);
     CREATE INDEX IF NOT EXISTS idx_work_events_quest ON work_ledger_events(quest_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_work_checkpoints_quest ON work_checkpoints(quest_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_session_briefs_session ON session_briefs(session_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_session_briefs_operator ON session_briefs(operator_id, created_at);
     """
 
     def __init__(self, db_path: str):
@@ -269,6 +333,19 @@ class WorkLedgerStore:
             }
             for column, sql in migrations.items():
                 if column not in columns:
+                    conn.execute(sql)
+            brief_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(session_briefs)").fetchall()
+            }
+            brief_migrations = {
+                "objective": "ALTER TABLE session_briefs ADD COLUMN objective TEXT NOT NULL DEFAULT ''",
+                "blockers": "ALTER TABLE session_briefs ADD COLUMN blockers TEXT NOT NULL DEFAULT '[]'",
+                "next_action": "ALTER TABLE session_briefs ADD COLUMN next_action TEXT NOT NULL DEFAULT ''",
+                "known_risks": "ALTER TABLE session_briefs ADD COLUMN known_risks TEXT NOT NULL DEFAULT '[]'",
+            }
+            for column, sql in brief_migrations.items():
+                if column not in brief_columns:
                     conn.execute(sql)
 
     def upsert_work(
@@ -824,6 +901,267 @@ class WorkLedgerStore:
                 created.append(checkpoint)
         return created
 
+    @staticmethod
+    def _append_unique(target: list[str], value: Any, *, limit: int = 1000) -> None:
+        text = _preview(value, limit)
+        if text and text not in target:
+            target.append(text)
+
+    def create_session_brief(
+        self,
+        *,
+        session_id: str = "",
+        operator_id: str = "",
+        reason: str = "session_recap",
+        quest_id: str = "",
+        include_terminal: bool = True,
+        limit: int = 25,
+    ) -> SessionBrief:
+        """Persist a compact handoff summary for a session/operator.
+
+        A session brief is intentionally broader than a quest checkpoint. It
+        aggregates the latest work items, checkpoints, and receipt-backed ledger
+        events into the exact fields an operator needs when returning later:
+        what finished, what remains, what is blocked, and where the evidence is.
+        """
+        items: list[WorkItem] = []
+        if quest_id:
+            item = self.get_work(quest_id)
+            if item:
+                items.append(item)
+        if not items:
+            items = self.list_work(
+                session_id=session_id,
+                operator_id=operator_id,
+                include_terminal=include_terminal,
+                limit=limit,
+            )
+
+        completed_work: list[str] = []
+        pending_work: list[str] = []
+        blockers: list[str] = []
+        open_decisions: list[str] = []
+        files_touched: list[str] = []
+        approvals: list[str] = []
+        receipt_ids: list[str] = []
+        known_risks: list[str] = []
+        quest_ids: list[str] = []
+        objective_parts: list[str] = []
+
+        for item in items[: max(1, min(int(limit), 100))]:
+            self._append_unique(quest_ids, item.quest_id, limit=120)
+            if item.objective:
+                objective_parts.append(f"{item.quest_id}: {_preview(item.objective, 180)}")
+            if item.status in TERMINAL_STATUSES:
+                self._append_unique(
+                    completed_work,
+                    f"{item.quest_id} finished with status {item.status}",
+                    limit=300,
+                )
+            elif item.next_action:
+                self._append_unique(pending_work, item.next_action, limit=500)
+            if item.blocker:
+                self._append_unique(blockers, item.blocker, limit=500)
+                self._append_unique(open_decisions, item.blocker, limit=500)
+            if item.last_receipt_id:
+                self._append_unique(receipt_ids, item.last_receipt_id, limit=120)
+            metadata_risks = item.metadata.get("known_risks") or item.metadata.get("risks")
+            if isinstance(metadata_risks, str):
+                self._append_unique(known_risks, metadata_risks, limit=500)
+            elif isinstance(metadata_risks, list):
+                for risk in metadata_risks:
+                    self._append_unique(known_risks, risk, limit=500)
+
+            for checkpoint in self.list_checkpoints(item.quest_id, limit=3):
+                for entry in checkpoint.get("completed_work") or []:
+                    self._append_unique(completed_work, entry, limit=500)
+                for entry in checkpoint.get("pending_work") or []:
+                    self._append_unique(pending_work, entry, limit=500)
+                for entry in checkpoint.get("open_decisions") or []:
+                    self._append_unique(open_decisions, entry, limit=500)
+                for entry in checkpoint.get("files_touched") or []:
+                    self._append_unique(files_touched, entry, limit=300)
+                for entry in checkpoint.get("approvals") or []:
+                    self._append_unique(approvals, entry, limit=120)
+                for entry in checkpoint.get("receipt_ids") or []:
+                    self._append_unique(receipt_ids, entry, limit=120)
+
+            for event in self.list_events(item.quest_id, limit=40):
+                if event.receipt_id:
+                    self._append_unique(receipt_ids, event.receipt_id, limit=120)
+                metadata = event.metadata or {}
+                for key in ("path", "file", "target_path"):
+                    value = metadata.get(key)
+                    if isinstance(value, str):
+                        self._append_unique(files_touched, value, limit=300)
+                approval_id = metadata.get("approval_id") or metadata.get("approval_request_id")
+                if approval_id:
+                    self._append_unique(approvals, approval_id, limit=120)
+                if event.status == "completed" or "completed" in event.event_type:
+                    self._append_unique(completed_work, event.summary, limit=500)
+                if event.status == "blocked":
+                    self._append_unique(blockers, event.summary, limit=500)
+                    self._append_unique(open_decisions, event.summary, limit=500)
+                risk_value = metadata.get("risk") or metadata.get("known_risk")
+                if risk_value:
+                    self._append_unique(known_risks, risk_value, limit=500)
+                risk_values = metadata.get("risks") or metadata.get("known_risks")
+                if isinstance(risk_values, list):
+                    for risk in risk_values:
+                        self._append_unique(known_risks, risk, limit=500)
+                if any(marker in (event.summary or "").lower() for marker in ("risk", "degraded", "failed")):
+                    self._append_unique(known_risks, event.summary, limit=500)
+
+        if objective_parts:
+            summary = " | ".join(objective_parts[:5])
+            if len(objective_parts) > 5:
+                summary += f" | ... {len(objective_parts) - 5} more work items"
+        else:
+            summary = "No active or recent work items found for this session."
+
+        brief = SessionBrief(
+            brief_id=str(uuid.uuid4()),
+            session_id=_preview(session_id, 120),
+            operator_id=_preview(operator_id, 120),
+            reason=_preview(reason or "session_recap", 200),
+            objective=_preview(" | ".join(objective_parts[:8]), 1500),
+            summary=_preview(summary, 1500),
+            completed_work=completed_work[-20:],
+            pending_work=pending_work[-20:],
+            blockers=blockers[-20:],
+            open_decisions=open_decisions[-20:],
+            files_touched=files_touched[-50:],
+            approvals=approvals[-30:],
+            receipt_ids=receipt_ids[-60:],
+            next_action=_preview((pending_work[-1] if pending_work else ""), 500),
+            known_risks=known_risks[-20:],
+            quest_ids=quest_ids[-50:],
+            created_at=_utc_now(),
+        )
+        with self._transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO session_briefs (
+                    brief_id, session_id, operator_id, reason, summary,
+                    completed_work, pending_work, open_decisions, files_touched,
+                    approvals, receipt_ids, quest_ids, created_at, objective,
+                    blockers, next_action, known_risks
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    brief.brief_id,
+                    brief.session_id,
+                    brief.operator_id,
+                    brief.reason,
+                    brief.summary,
+                    _dumps(brief.completed_work),
+                    _dumps(brief.pending_work),
+                    _dumps(brief.open_decisions),
+                    _dumps(brief.files_touched),
+                    _dumps(brief.approvals),
+                    _dumps(brief.receipt_ids),
+                    _dumps(brief.quest_ids),
+                    brief.created_at,
+                    brief.objective,
+                    _dumps(brief.blockers),
+                    brief.next_action,
+                    _dumps(brief.known_risks),
+                ),
+            )
+        return brief
+
+    def latest_session_brief(
+        self,
+        *,
+        session_id: str = "",
+        operator_id: str = "",
+    ) -> Optional[SessionBrief]:
+        conditions: list[str] = []
+        params: list[Any] = []
+        if session_id:
+            conditions.append("session_id = ?")
+            params.append(session_id)
+        if operator_id:
+            conditions.append("operator_id = ?")
+            params.append(operator_id)
+        if not conditions:
+            return None
+        where = " OR ".join(conditions)
+        conn = self._get_connection()
+        row = conn.execute(
+            f"""
+            SELECT * FROM session_briefs
+             WHERE {where}
+             ORDER BY created_at DESC
+             LIMIT 1
+            """,
+            params,
+        ).fetchone()
+        return self._row_to_session_brief(row) if row else None
+
+    def list_session_briefs(
+        self,
+        *,
+        session_id: str = "",
+        operator_id: str = "",
+        limit: int = 10,
+    ) -> list[SessionBrief]:
+        conditions: list[str] = []
+        params: list[Any] = []
+        if session_id:
+            conditions.append("session_id = ?")
+            params.append(session_id)
+        if operator_id:
+            conditions.append("operator_id = ?")
+            params.append(operator_id)
+        where = f"WHERE {' OR '.join(conditions)}" if conditions else ""
+        params.append(max(1, min(int(limit), 50)))
+        conn = self._get_connection()
+        rows = conn.execute(
+            f"""
+            SELECT * FROM session_briefs
+             {where}
+             ORDER BY created_at DESC
+             LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return [self._row_to_session_brief(row) for row in rows]
+
+    def render_session_brief(self, brief: SessionBrief) -> str:
+        lines = ["=== LAST SESSION BRIEF ==="]
+        lines.append(f"Created: {brief.created_at}")
+        if brief.reason:
+            lines.append(f"Reason: {brief.reason}")
+        if brief.objective:
+            lines.append(f"Objective: {_preview(brief.objective, 600)}")
+        if brief.summary:
+            lines.append(f"Summary: {brief.summary}")
+        if brief.next_action:
+            lines.append(f"Next Action: {_preview(brief.next_action, 500)}")
+        if brief.completed_work:
+            lines.append("Complete:")
+            lines.extend(f"- {_preview(entry, 300)}" for entry in brief.completed_work[:8])
+        if brief.pending_work:
+            lines.append("Left:")
+            lines.extend(f"- {_preview(entry, 300)}" for entry in brief.pending_work[:8])
+        if brief.blockers:
+            lines.append("Blockers:")
+            lines.extend(f"- {_preview(entry, 300)}" for entry in brief.blockers[:8])
+        if brief.open_decisions:
+            lines.append("Open Decisions:")
+            lines.extend(f"- {_preview(entry, 300)}" for entry in brief.open_decisions[:8])
+        if brief.known_risks:
+            lines.append("Known Risks:")
+            lines.extend(f"- {_preview(entry, 300)}" for entry in brief.known_risks[:8])
+        if brief.files_touched:
+            lines.append("Files:")
+            lines.extend(f"- {_preview(entry, 200)}" for entry in brief.files_touched[:10])
+        if brief.receipt_ids:
+            lines.append("Receipt Evidence:")
+            lines.extend(f"- {receipt_id}" for receipt_id in brief.receipt_ids[-8:])
+        return "\n".join(lines)
+
     def render_context_block(
         self,
         *,
@@ -832,6 +1170,7 @@ class WorkLedgerStore:
         operator_id: str = "",
         max_items: int = 3,
         max_events: int = 8,
+        include_session_brief: bool = True,
     ) -> str:
         items: list[WorkItem] = []
         if quest_id:
@@ -845,8 +1184,13 @@ class WorkLedgerStore:
                 include_terminal=False,
                 limit=max_items,
             )
+        latest_brief = (
+            self.latest_session_brief(session_id=session_id, operator_id=operator_id)
+            if include_session_brief and (session_id or operator_id)
+            else None
+        )
         if not items:
-            return ""
+            return self.render_session_brief(latest_brief) if latest_brief else ""
 
         lines = ["=== ACTIVE WORK STATE ==="]
         for index, item in enumerate(items[:max_items], start=1):
@@ -886,6 +1230,9 @@ class WorkLedgerStore:
                 for event in events[-max_events:]:
                     prefix = event.phase or event.event_type
                     lines.append(f"- {_preview(prefix, 80)}: {_preview(event.summary, 300)}")
+        if latest_brief:
+            lines.append("")
+            lines.append(self.render_session_brief(latest_brief))
         return "\n".join(lines)
 
     def _row_to_work(self, row: sqlite3.Row) -> WorkItem:
@@ -935,6 +1282,27 @@ class WorkLedgerStore:
             "receipt_ids": _loads(row["receipt_ids"], []),
             "created_at": row["created_at"],
         }
+
+    def _row_to_session_brief(self, row: sqlite3.Row) -> SessionBrief:
+        return SessionBrief(
+            brief_id=row["brief_id"],
+            session_id=row["session_id"],
+            operator_id=row["operator_id"],
+            reason=row["reason"],
+            objective=row["objective"],
+            summary=row["summary"],
+            completed_work=_loads(row["completed_work"], []),
+            pending_work=_loads(row["pending_work"], []),
+            blockers=_loads(row["blockers"], []),
+            open_decisions=_loads(row["open_decisions"], []),
+            files_touched=_loads(row["files_touched"], []),
+            approvals=_loads(row["approvals"], []),
+            receipt_ids=_loads(row["receipt_ids"], []),
+            next_action=row["next_action"],
+            known_risks=_loads(row["known_risks"], []),
+            quest_ids=_loads(row["quest_ids"], []),
+            created_at=row["created_at"],
+        )
 
     def close(self) -> None:
         conn = getattr(self._local, "connection", None)

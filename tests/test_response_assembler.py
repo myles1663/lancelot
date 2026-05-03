@@ -161,6 +161,7 @@ Do the thing.
         assert "Migrate the database" in result.chat_response
         assert "Backup database" in result.chat_response
         assert "Create backup" in result.chat_response
+        assert "**Status:** 🧭 PLANNED" in result.chat_response
         # Assumptions routed to War Room
         war_types = [a.type for a in result.war_room_artifacts]
         assert ArtifactType.ASSUMPTIONS.value in war_types
@@ -211,6 +212,7 @@ Do the thing.
             limits={"duration": 300, "actions": 10},
         )
         assert "Permission required" in result
+        assert result.startswith("🛡️")
         assert "What I will do" in result
         assert "Edit config file" in result
         assert "MED" in result
