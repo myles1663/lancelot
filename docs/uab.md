@@ -4,6 +4,10 @@ Lancelot's framework-level desktop application control system — structured, re
 
 For the system architecture overview, see [Architecture](architecture.md). For security considerations, see [Security Posture](security.md). For operational procedures, see [UAB Runbook](operations/runbooks/uab.md).
 
+<p align="center">
+  <img src="images/war-room-tool-fabric.png" alt="War Room Tool Fabric with UAB provider health" width="900">
+</p>
+
 ---
 
 ## What UAB Is and Why
@@ -19,7 +23,7 @@ UAB connects to applications at the UI toolkit level — Chrome DevTools Protoco
 - **Receipt-traced** — every action produces a durable `AppControlReceipt`
 - **Performance-optimized** — smart caching with automatic invalidation on mutations
 
-**Feature flag:** `FEATURE_TOOLS_UAB` (default: `false`)
+**Runtime toggle:** `FEATURE_TOOLS_UAB` (default: `false`)
 
 ---
 

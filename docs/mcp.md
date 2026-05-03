@@ -1,6 +1,6 @@
 # MCP (Model Context Protocol) Governance
 
-**Feature Flag:** `FEATURE_MCP` (default: `false`)
+**Runtime toggle:** `FEATURE_MCP` (default: `false`)
 **Codebase:** `src/mcp/` (12 modules)
 
 Lancelot's MCP subsystem provides governed access to external MCP-compliant tool servers. Every invocation passes through an 8-gate governance pipeline — fail-closed at every gate, with mandatory receipt persistence as the final gate.

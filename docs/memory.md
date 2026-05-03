@@ -4,6 +4,10 @@ How Lancelot remembers — a tiered memory architecture with commit-based editin
 
 For how memory fits into the overall architecture, see [Architecture](architecture.md). For memory security specifics, see [Security Posture](security.md). For long-session resume behavior, chat compaction, and active-work state, see [Context Continuity](context-continuity.md).
 
+<p align="center">
+  <img src="images/war-room-memory.png" alt="War Room Memory Panel" width="900">
+</p>
+
 ---
 
 ## Why Not Just RAG?

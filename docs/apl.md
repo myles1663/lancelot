@@ -1,12 +1,16 @@
 # Approval Pattern Learning (APL)
 
-**Feature Flag:** `FEATURE_APPROVAL_LEARNING` (default: `true`, requires `FEATURE_RISK_TIERED_GOVERNANCE`)
+**Runtime toggle:** `FEATURE_APPROVAL_LEARNING` (default: `true`, requires `FEATURE_RISK_TIERED_GOVERNANCE`)
 **Codebase:** `src/core/governance/approval_learning/`
 **Configuration:** `config/approval_learning.yaml`
 
 APL learns from owner approval/denial decisions, detects repeating patterns, and auto-approves actions matching high-confidence rules. It reduces approval fatigue while maintaining safety guardrails.
 
 APL is a deterministic pattern and rule engine, not a statistical ML subsystem. It mines owner decision history for repeatable approval or denial patterns, scores them, and proposes explicit automation rules for operator review.
+
+<p align="center">
+  <img src="images/war-room-apl-learning.png" alt="War Room Approval Pattern Learning" width="900">
+</p>
 
 ---
 

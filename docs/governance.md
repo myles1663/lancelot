@@ -4,6 +4,10 @@ A deep dive into Lancelot's governance model — the thing that makes it differe
 
 For a system-level overview, see [Architecture](architecture.md). For the full security model, see [Security Posture](security.md).
 
+<p align="center">
+  <img src="images/war-room-governance-dashboard.png" alt="War Room Governance Dashboard" width="900">
+</p>
+
 ---
 
 ## Why Governance Matters

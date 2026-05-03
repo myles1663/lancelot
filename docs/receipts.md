@@ -2,6 +2,10 @@
 
 Lancelot's ground truth — every action produces a durable, auditable record. If there's no receipt, it didn't happen.
 
+<p align="center">
+  <img src="images/war-room-receipt-explorer.png" alt="War Room Receipt Explorer" width="900">
+</p>
+
 ---
 
 ## What Generates Receipts

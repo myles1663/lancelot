@@ -162,7 +162,7 @@ The War Room is the local operator console for governed execution, receipt revie
   <img src="docs/images/fig1_system_architecture.svg" alt="Lancelot system architecture" width="900">
 </p>
 
-The diagram shows the system boundary clearly: governance sits in front of execution, receipts capture outcomes, and feature-gated subsystems can be disabled without collapsing the entire stack.
+The diagram shows the system boundary clearly: governance sits in front of execution, receipts capture outcomes, and runtime-toggleable subsystems can be disabled without collapsing the entire stack.
 
 ## Proof Points
 
@@ -251,11 +251,24 @@ Lancelot was built through AI-assisted development. The engineering bar for the 
 
 For the full documentation index, architecture notes, subsystem guides, and operational references, see [docs/INDEX.md](docs/INDEX.md).
 
-Short architecture decision records:
+Start with the subsystem guides for implementation detail:
+
+- [War Room](docs/war-room.md)
+- [Governance](docs/governance.md)
+- [Receipts](docs/receipts.md)
+- [Memory](docs/memory.md)
+- [UAB](docs/uab.md)
+- [HIVE](docs/hive.md)
+- [Federation](docs/federation.md)
+- [A2A](docs/a2a.md)
+- [MCP Governance](docs/mcp.md)
+- [Kill Switches](docs/kill-switches.md)
+
+Architecture decision records are intentionally short design notes:
 
 - [Local-first, self-hosted control plane](docs/adr/0001-local-first-self-hosted.md)
 - [SQLite-backed receipts](docs/adr/0002-sqlite-receipts.md)
-- [Feature-gated subsystems](docs/adr/0003-feature-gated-subsystems.md)
+- [Runtime-toggleable governed subsystems](docs/adr/0003-runtime-toggleable-governed-subsystems.md)
 
 ## License
 

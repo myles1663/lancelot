@@ -1,6 +1,10 @@
-# Kill Switches (Feature Flags)
+# Kill Switches (Runtime Feature Flags)
 
 Lancelot uses hot-toggleable feature flags as kill switches for every high-risk subsystem. Each flag can be toggled at runtime via the War Room without container restart.
+
+<p align="center">
+  <img src="images/war-room-kill-switches.png" alt="War Room Kill Switches" width="900">
+</p>
 
 ---
 
