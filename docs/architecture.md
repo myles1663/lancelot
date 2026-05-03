@@ -10,6 +10,8 @@ For how to get the system running, see the [Quickstart](quickstart.md). For the 
 
 Lancelot is composed of independent, kill-switchable subsystems coordinated by a central orchestrator. Every subsystem can be disabled via feature flags without breaking the rest of the system.
 
+The top-level architecture diagram is intentionally runtime-oriented. It shows the control surfaces an operator actually interacts with: governed command ingress, model routing, receipts, durable memory/context, execution adapters, HIVE, A2A, MCP governance, UAB, federation, and runtime kill switches.
+
 The network allowlist is a first-class governance subsystem with a single canonical evaluator. Core outbound checks, Tool Fabric network policy, and the War Room allowlist editor all route through the same loader, matcher, and config path rather than maintaining separate interpretations of `config/network_allowlist.yaml`.
 
 Not every named governance concept is implemented as a single top-level package. Operator-critical controls such as the network allowlist and kill-switch contract are now centralized, while some supporting concepts remain intentionally clustered across a small set of focused modules. The plan artifact is implemented that way today: builder, renderer, and type modules form one bounded planning artifact cluster rather than a standalone API service.
@@ -17,7 +19,7 @@ Not every named governance concept is implemented as a single top-level package.
 **Orchestrator Decomposition:** The monolithic `orchestrator.py` has been decomposed into the orchestrator proper plus a `src/core/orch_helpers/` package containing 13 extracted pure functions across three modules: `intent_helpers.py` (6 functions), `safety_helpers.py` (5 functions), and `response_helpers.py` (2 functions). The orchestrator retains thin delegator methods that call the extracted helpers, preserving the existing call-site interface. The first extraction pass is conservative: only stateless pure functions were extracted; stateful methods and anything touching `self` remain in `orchestrator.py`.
 
 <p align="center">
-  <img src="images/fig1_system_architecture.svg" alt="Lancelot System Architecture — Subsystem Relationships and Data Flows" width="900">
+  <img src="images/fig1_system_architecture.svg" alt="Lancelot Runtime Architecture" width="900">
 </p>
 
 ---

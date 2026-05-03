@@ -54,7 +54,9 @@ This is deliberate. A blank table or a default status should no longer be treate
 
 ## Command Panel
 
-![War Room — Command Center](images/war-room-command-center.png)
+<p align="center">
+  <img src="images/war-room-command-center.png" alt="War Room Command Center" width="900">
+</p>
 
 The primary interaction interface — send messages to Lancelot and see governed responses.
 
@@ -93,6 +95,10 @@ Operational details for receipt-backed completion, approval context, workspace b
 
 ## Health Panel
 
+<p align="center">
+  <img src="images/war-room-health-dashboard.png" alt="War Room Health Panel" width="900">
+</p>
+
 System-wide health monitoring with subsystem-level detail.
 
 **Displays:**
@@ -120,7 +126,9 @@ System-wide health monitoring with subsystem-level detail.
 
 ## Governance Panel
 
-![War Room — Rule Properties](images/war-room-rule-properties.png)
+<p align="center">
+  <img src="images/war-room-governance-dashboard.png" alt="War Room Governance Panel" width="900">
+</p>
 
 Risk tier distribution, policy decisions, and the approval queue.
 
@@ -150,7 +158,9 @@ Actions: **Approve** (execute the action) or **Deny** (block and receipt the den
 
 ## Trust Panel
 
-![War Room — Trust Ledger](images/war-room-trust-ledger.png)
+<p align="center">
+  <img src="images/war-room-trust-ledger.png" alt="War Room Trust Ledger" width="900">
+</p>
 
 Per-connector trust scores, graduation history, and revocation alerts.
 
@@ -176,7 +186,9 @@ When a connector earns enough trust (e.g., 50 successful T3 actions), a graduati
 
 ## APL Panel
 
-![War Room — APL Learning](images/war-room-apl-learning.png)
+<p align="center">
+  <img src="images/war-room-apl-learning.png" alt="War Room Approval Learning Panel" width="900">
+</p>
 
 Approval Pattern Learning — detected patterns, active automation rules, and proposals.
 
@@ -204,6 +216,10 @@ When APL detects a consistent approval pattern (85%+ confidence after 20+ observ
 
 ## Receipt Explorer
 
+<p align="center">
+  <img src="images/war-room-receipt-explorer.png" alt="War Room Receipt Explorer" width="900">
+</p>
+
 Searchable audit trail of every action Lancelot has taken.
 
 **Features:**
@@ -222,6 +238,10 @@ Searchable audit trail of every action Lancelot has taken.
 ---
 
 ## Skills Panel
+
+<p align="center">
+  <img src="images/war-room-skills.png" alt="War Room Skills Panel" width="900">
+</p>
 
 Governed skill proposal review and install lifecycle.
 
@@ -248,7 +268,9 @@ Governed skill proposal review and install lifecycle.
 
 ## Connector Status
 
-![War Room — Connectors](images/war-room-connectors.png)
+<p align="center">
+  <img src="images/war-room-connectors.png" alt="War Room Connector Status" width="900">
+</p>
 
 Per-connector health, configuration, and usage metrics.
 
@@ -268,6 +290,10 @@ Per-connector health, configuration, and usage metrics.
 
 ## Cost Tracker
 
+<p align="center">
+  <img src="images/war-room-cost-tracker.png" alt="War Room Cost Tracker" width="900">
+</p>
+
 Provider usage, key status, and provider-side authentication controls.
 
 **Codex access path:**
@@ -285,7 +311,9 @@ Provider usage, key status, and provider-side authentication controls.
 
 ## Scheduler Panel
 
-![War Room — Scheduler](images/war-room-scheduler.png)
+<p align="center">
+  <img src="images/war-room-scheduler.png" alt="War Room Scheduler Panel" width="900">
+</p>
 
 Automated job management and execution history.
 
@@ -312,6 +340,10 @@ Automated job management and execution history.
 ---
 
 ## Memory Panel
+
+<p align="center">
+  <img src="images/war-room-memory.png" alt="War Room Memory Panel" width="900">
+</p>
 
 Memory tier overview, quarantine management, and commit history.
 
@@ -348,7 +380,9 @@ Actions: **Approve** (promote to active memory) or **Reject** (discard with rece
 
 ## Kill Switches
 
-![War Room — Service Dashboard with Kill Switches](images/war-room-service-dashboard.png)
+<p align="center">
+  <img src="images/war-room-kill-switches.png" alt="War Room Kill Switches" width="900">
+</p>
 
 Emergency controls for disabling subsystems.
 
@@ -377,6 +411,10 @@ The War Room kill-switch story is unified even when the underlying implementatio
 ---
 
 ## Setup & Recovery
+
+<p align="center">
+  <img src="images/war-room-setup-recovery.png" alt="War Room Setup and Recovery" width="900">
+</p>
 
 The system administration hub — 4 tabs covering all operational and destructive controls.
 
@@ -471,6 +509,10 @@ errors still log as warnings because they require operator attention.
 
 ## Hive Agent Mesh
 
+<p align="center">
+  <img src="images/war-room-hive-agent-mesh.png" alt="War Room HIVE Agent Mesh" width="900">
+</p>
+
 The Hive Agent Mesh page provides real-time monitoring and control of ephemeral sub-agents.
 
 **Access:** Available in the sidebar when `FEATURE_HIVE` is enabled.
@@ -544,6 +586,10 @@ This prevents the old failure mode where HIVE could look merely "idle" or "not i
 
 ## UAB Status Panel
 
+<p align="center">
+  <img src="images/war-room-tool-fabric.png" alt="War Room Tool Fabric and UAB Status" width="900">
+</p>
+
 The UAB daemon status panel appears on the **Kill Switches** page when `FEATURE_TOOLS_UAB` is enabled.
 
 ### What It Shows
@@ -568,6 +614,10 @@ The UAB panel appears automatically when the `FEATURE_TOOLS_UAB` flag is enabled
 ---
 
 ## Federation Overview
+
+<p align="center">
+  <img src="images/war-room-federation-overview.png" alt="War Room Federation Overview" width="900">
+</p>
 
 The Federation Overview page is now the operator-facing mesh health dashboard, not just a topology viewer.
 
@@ -602,6 +652,10 @@ That means the page can now reflect real federation control-plane degradation in
 ---
 
 ## Fleet Dashboard
+
+<p align="center">
+  <img src="images/war-room-fleet-dashboard.png" alt="War Room Fleet Dashboard" width="900">
+</p>
 
 The Fleet Dashboard is the multi-instance operator view for federated Lancelot deployments. It appears in the Federation navigation when both `FEATURE_FEDERATION=true` and `FEATURE_FEDERATION_DASHBOARD=true`.
 

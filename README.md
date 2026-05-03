@@ -162,7 +162,7 @@ The War Room is the local operator console for governed execution, receipt revie
   <img src="docs/images/fig1_system_architecture.svg" alt="Lancelot system architecture" width="900">
 </p>
 
-The diagram shows the system boundary clearly: governance sits in front of execution, receipts capture outcomes, and runtime-toggleable subsystems can be disabled without collapsing the entire stack.
+The diagram shows the runtime boundary clearly: operator channels enter through the governed core, execution flows through policy and capability checks, memory/context is durable and auditable, and runtime-toggleable subsystems can be enabled or disabled without collapsing the stack.
 
 ## Proof Points
 
