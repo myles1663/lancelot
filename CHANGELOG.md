@@ -7,6 +7,10 @@ external users and reviewers.
 
 ## [Unreleased]
 
+No unreleased changes.
+
+## [0.4.1] - 2026-05-03
+
 ### Added
 
 - Command Center chat now uses persisted asynchronous run records so long
