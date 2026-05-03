@@ -188,6 +188,15 @@ All feature flags are boolean: `true`/`1`/`yes` to enable, anything else to disa
 | `FEATURE_TASK_GRAPH_EXECUTION` | `true` | Task graph compilation |
 | `FEATURE_NETWORK_ALLOWLIST` | `true` | Network domain allowlist enforcement |
 | `FEATURE_VOICE_NOTES` | `true` | Voice note support |
+| `FEATURE_CONNECTORS` | `true` | External connector system |
+| `FEATURE_TRUST_LEDGER` | `true` | Progressive trust relaxation |
+| `FEATURE_SKILL_SECURITY_PIPELINE` | `true` | Security pipeline for new skills |
+| `FEATURE_APPROVAL_LEARNING` | `true` | Learn owner approval patterns |
+| `FEATURE_STRUCTURED_OUTPUT` | `true` | JSON schema output with receipt verification |
+| `FEATURE_CLAIM_VERIFICATION` | `true` | Cross-reference response claims against receipts |
+| `FEATURE_UNIFIED_CLASSIFICATION` | `true` | Single-call intent classification |
+| `FEATURE_TOOL_FLOW_STREAMING` | `true` | Real-time tool execution progress events |
+| `FEATURE_ACTION_CARDS` | `true` | Interactive approval/action buttons |
 | `FEATURE_RISK_TIERED_GOVERNANCE` | `true` | Risk-tiered governance master switch |
 | `FEATURE_POLICY_CACHE` | `true` | Boot-time policy compilation |
 | `FEATURE_ASYNC_VERIFICATION` | `true` | Async verification for T1 actions |

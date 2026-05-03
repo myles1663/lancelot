@@ -53,7 +53,7 @@ Lancelot uses hot-toggleable feature flags as kill switches for every high-risk 
 | `FEATURE_RESPONSE_ASSEMBLER` | true | Response formatting, citation injection, artifact extraction |
 | `FEATURE_EXECUTION_TOKENS` | true | Time-limited, permission-scoped execution tokens |
 | `FEATURE_TASK_GRAPH_EXECUTION` | true | Multi-step task planning with DAG execution |
-| `FEATURE_NETWORK_ALLOWLIST` | false | Domain-based network restrictions |
+| `FEATURE_NETWORK_ALLOWLIST` | true | Domain-based network restrictions |
 | `FEATURE_VOICE_NOTES` | true | Audio transcription |
 | `FEATURE_AGENTIC_LOOP` | true | Multi-step autonomous execution. *Requires: FEATURE_SKILLS* |
 | `FEATURE_LOCAL_AGENTIC` | true | Use local LLM for agentic steps. *Requires: FEATURE_AGENTIC_LOOP* |

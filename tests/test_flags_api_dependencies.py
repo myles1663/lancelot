@@ -386,6 +386,8 @@ async def test_toggle_and_set_flag_hot_toggle_and_error_paths(monkeypatch):
     response = await flags_api.set_flag("FEATURE_TOOL_FLOW_STREAMING", request=object(), value=False, _authz=None)
     assert response["enabled"] is False
     assert response["hot_toggled"] is False
+    assert response["hot_toggle_error"] == "stop failed"
+    assert "subsystem toggle failed" in response["message"]
 
     monkeypatch.setattr(ff, "set_flag", lambda name, value: (_ for _ in ()).throw(ValueError("bad flag")))
     response = await flags_api.set_flag("FEATURE_TOOL_FLOW_STREAMING", request=object(), value=True, _authz=None)

@@ -929,8 +929,15 @@ async def set_flag(
             hot_toggled, hot_toggle_mode = _apply_hot_toggle(name, value, current)
         except Exception as exc:
             logger.error("Hot-toggle failed for %s: %s", name, exc)
-            hot_toggled = False
-            hot_toggle_mode = _hot_toggle_mode_for_flag(name)
+            return {
+                "flag": name,
+                "enabled": value,
+                "restart_required": _restart_required_for_flag(name),
+                "hot_toggled": False,
+                "hot_toggle_mode": _hot_toggle_mode_for_flag(name),
+                "hot_toggle_error": str(exc),
+                "message": f"{name} set to {value} but subsystem toggle failed: {exc}",
+            }
 
         # Governance receipt
         from src.core.governance_receipts import emit_governance_receipt
