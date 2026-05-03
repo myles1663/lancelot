@@ -22,6 +22,7 @@ def test_runtime_data_patterns_are_public_release_blocked():
     assert "secrets/" in verifier.RUNTIME_DATA_PREFIXES
     assert ".sqlite" in verifier.RUNTIME_DATA_SUFFIXES
     assert "coverage.xml" in verifier.RUNTIME_DATA_FILES
+    assert "coverage*.json" in verifier.RUNTIME_DATA_GLOBS
 
 
 def test_internal_spec_and_blueprint_docs_are_public_release_blocked():
@@ -62,3 +63,4 @@ def test_dockerfile_does_not_copy_operator_runtime_state():
     assert "/lancelot_data/" in dockerignore
     assert "/data/" in dockerignore
     assert "/secrets/" in dockerignore
+    assert "coverage*.json" in dockerignore

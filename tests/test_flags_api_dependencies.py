@@ -58,6 +58,8 @@ async def test_get_flags_exposes_dependency_edges_for_graph_rendering():
         "FEATURE_HIVE",
         "FEATURE_TOOLS_UAB",
     ]
+    assert flags["FEATURE_RESPONSE_ASSEMBLER"]["hot_toggleable"] is True
+    assert flags["FEATURE_RESPONSE_ASSEMBLER"]["hot_toggle_mode"] == "dynamic"
 
 
 @pytest.mark.asyncio
@@ -196,7 +198,8 @@ async def test_set_flag_allows_enable_once_dependencies_are_satisfied(monkeypatc
 
     assert response["flag"] == "FEATURE_TOOLS_UAB"
     assert response["enabled"] is True
-    assert response["hot_toggled"] is False
+    assert response["hot_toggled"] is True
+    assert response["hot_toggle_mode"] == "dynamic"
     assert calls == [("FEATURE_TOOLS_UAB", True)]
 
 

@@ -8,6 +8,7 @@ local_models/weights/
 /lancelot_data/
 /secrets/
 coverage.xml
+coverage*.json
 *.log
 
 # Git

@@ -112,7 +112,6 @@ export function generateEnvContent(config) {
     'FEATURE_SKILLS=true',
     'FEATURE_HEALTH_MONITOR=true',
     'FEATURE_SCHEDULER=true',
-    'FEATURE_BAL=true',
     'FEATURE_CONNECTORS=true',
     'FEATURE_AGENTIC_LOOP=true',
     'FEATURE_LOCAL_AGENTIC=true',

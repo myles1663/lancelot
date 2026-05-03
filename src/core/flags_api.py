@@ -462,6 +462,8 @@ async def get_flags():
                     entry = {
                         "enabled": val,
                         "restart_required": attr in ff.RESTART_REQUIRED_FLAGS,
+                        "hot_toggleable": attr not in ff.RESTART_REQUIRED_FLAGS,
+                        "hot_toggle_mode": _hot_toggle_mode_for_flag(attr),
                         "description": _public_text(meta.get("description", "")),
                         "category": _public_text(meta.get("category", "Other")),
                         "requires": meta.get("requires", []),
@@ -747,6 +749,42 @@ def _restart_required_for_flag(name: str) -> bool:
     return name in getattr(ff, "RESTART_REQUIRED_FLAGS", frozenset())
 
 
+def _registered_subsystem_for_flag(name: str):
+    """Return the runtime subsystem registered for a flag, when one exists."""
+    try:
+        from subsystem_manager import subsystem_manager
+        return subsystem_manager.get_by_flag(name)
+    except Exception as exc:
+        logger.debug("Subsystem lookup failed for %s: %s", name, exc)
+        return None
+
+
+def _hot_toggle_mode_for_flag(name: str) -> str:
+    """Classify how a flag applies at runtime."""
+    if _restart_required_for_flag(name):
+        return "restart"
+    if _registered_subsystem_for_flag(name) is not None:
+        return "subsystem"
+    return "dynamic"
+
+
+def _apply_hot_toggle(name: str, value: bool, previous: bool) -> tuple[bool, str]:
+    """Apply lifecycle hot-toggle when needed and report the toggle mode."""
+    subsystem = _registered_subsystem_for_flag(name)
+    if subsystem is None:
+        return previous != value and not _restart_required_for_flag(name), "dynamic"
+
+    from subsystem_manager import subsystem_manager
+
+    if value and not subsystem_manager.is_running(subsystem.name):
+        subsystem_manager.start(subsystem.name)
+        return True, "subsystem"
+    if not value and subsystem_manager.is_running(subsystem.name):
+        subsystem_manager.stop(subsystem.name)
+        return True, "subsystem"
+    return previous != value and not _restart_required_for_flag(name), "subsystem"
+
+
 # ── Flag Toggle/Set Routes ───────────────────────────────────────────
 
 @router.post("/{name}/toggle")
@@ -758,8 +796,6 @@ async def toggle_flag(
     """Toggle a feature flag at runtime. Hot-toggles subsystems automatically."""
     try:
         import feature_flags as ff
-        from subsystem_manager import subsystem_manager
-
         # Determine what the new value will be before toggling
         current = getattr(ff, name, None)
         if current is None or not isinstance(current, bool):
@@ -773,26 +809,18 @@ async def toggle_flag(
 
         new_val = ff.toggle_flag(name)
 
-        # Hot-toggle: start or stop subsystem if one is registered for this flag
-        hot_toggled = False
-        subsystem = subsystem_manager.get_by_flag(name)
-        if subsystem:
-            try:
-                if new_val and not subsystem_manager.is_running(subsystem.name):
-                    subsystem_manager.start(subsystem.name)
-                    hot_toggled = True
-                elif not new_val and subsystem_manager.is_running(subsystem.name):
-                    subsystem_manager.stop(subsystem.name)
-                    hot_toggled = True
-            except Exception as exc:
-                logger.error("Hot-toggle failed for %s: %s", name, exc)
-                return {
-                    "flag": name,
-                    "enabled": new_val,
-                    "restart_required": _restart_required_for_flag(name),
-                    "hot_toggled": False,
-                    "message": f"{name} set to {new_val} but subsystem toggle failed: {exc}",
-                }
+        try:
+            hot_toggled, hot_toggle_mode = _apply_hot_toggle(name, new_val, current)
+        except Exception as exc:
+            logger.error("Hot-toggle failed for %s: %s", name, exc)
+            return {
+                "flag": name,
+                "enabled": new_val,
+                "restart_required": _restart_required_for_flag(name),
+                "hot_toggled": False,
+                "hot_toggle_mode": _hot_toggle_mode_for_flag(name),
+                "message": f"{name} set to {new_val} but subsystem toggle failed: {exc}",
+            }
 
         # Host Bridge lifecycle: auto-shutdown on disable, reachability check on enable
         agent_reachable = None
@@ -833,7 +861,7 @@ async def toggle_flag(
             _audit_logger.log_event(
                 "WARROOM_FLAG_TOGGLE",
                 f"Flag {name} toggled to {new_val}" + (
-                    " (hot-toggled)" if hot_toggled else ""
+                    f" ({hot_toggle_mode} hot-toggled)" if hot_toggled else ""
                 ),
                 user=_resolve_audit_user(request),
             )
@@ -845,7 +873,7 @@ async def toggle_flag(
             request,
             ActionType.KILL_SWITCH_LIFTED if new_val else ActionType.KILL_SWITCH_ISSUED,
             action_name="toggle_flag",
-            inputs={"flag": name, "new_value": new_val, "hot_toggled": hot_toggled},
+            inputs={"flag": name, "new_value": new_val, "hot_toggled": hot_toggled, "hot_toggle_mode": hot_toggle_mode},
         )
 
         result = {
@@ -853,8 +881,9 @@ async def toggle_flag(
             "enabled": new_val,
             "restart_required": _restart_required_for_flag(name),
             "hot_toggled": hot_toggled,
+            "hot_toggle_mode": hot_toggle_mode,
             "message": f"{name} set to {new_val}" + (
-                " (subsystem hot-toggled)" if hot_toggled else ""
+                f" ({hot_toggle_mode} hot-toggled)" if hot_toggled else ""
             ),
         }
         if agent_reachable is not None:
@@ -885,7 +914,9 @@ async def set_flag(
     """Set a feature flag to a specific value. Hot-toggles subsystems automatically."""
     try:
         import feature_flags as ff
-        from subsystem_manager import subsystem_manager
+        current = getattr(ff, name, None)
+        if current is None or not isinstance(current, bool):
+            return JSONResponse(status_code=400, content={"error": f"Unknown flag: {name}"})
 
         # Validate dependencies
         dep_error = _validate_flag_dependencies(name, value)
@@ -894,19 +925,12 @@ async def set_flag(
 
         ff.set_flag(name, value)
 
-        # Hot-toggle: start or stop subsystem if one is registered for this flag
-        hot_toggled = False
-        subsystem = subsystem_manager.get_by_flag(name)
-        if subsystem:
-            try:
-                if value and not subsystem_manager.is_running(subsystem.name):
-                    subsystem_manager.start(subsystem.name)
-                    hot_toggled = True
-                elif not value and subsystem_manager.is_running(subsystem.name):
-                    subsystem_manager.stop(subsystem.name)
-                    hot_toggled = True
-            except Exception as exc:
-                logger.error("Hot-toggle failed for %s: %s", name, exc)
+        try:
+            hot_toggled, hot_toggle_mode = _apply_hot_toggle(name, value, current)
+        except Exception as exc:
+            logger.error("Hot-toggle failed for %s: %s", name, exc)
+            hot_toggled = False
+            hot_toggle_mode = _hot_toggle_mode_for_flag(name)
 
         # Governance receipt
         from src.core.governance_receipts import emit_governance_receipt
@@ -915,7 +939,7 @@ async def set_flag(
             request,
             ActionType.KILL_SWITCH_LIFTED if value else ActionType.KILL_SWITCH_ISSUED,
             action_name="set_flag",
-            inputs={"flag": name, "value": value, "hot_toggled": hot_toggled},
+            inputs={"flag": name, "value": value, "hot_toggled": hot_toggled, "hot_toggle_mode": hot_toggle_mode},
         )
 
         return {
@@ -923,6 +947,7 @@ async def set_flag(
             "enabled": value,
             "restart_required": _restart_required_for_flag(name),
             "hot_toggled": hot_toggled,
+            "hot_toggle_mode": hot_toggle_mode,
         }
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})

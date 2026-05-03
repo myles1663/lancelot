@@ -165,7 +165,7 @@ The default deployment uses `LOCAL_LLM_URL` for every local-model role. Operator
 
 ### Feature Flags
 
-All feature flags are boolean: `true`/`1`/`yes` to enable, anything else to disable. All flags are **hot-toggleable** - changes take effect immediately without a container restart. Core subsystem flags (Soul, Skills, Scheduler, Health Monitor, Memory) use the SubsystemManager to lazily initialize or gracefully shut down their subsystems at runtime.
+All feature flags are boolean: `true`/`1`/`yes` to enable, anything else to disable. All flags are **hot-toggleable** - changes take effect immediately without a container restart. Lifecycle-backed subsystem flags use the SubsystemManager to lazily initialize or gracefully shut down runtime objects; policy, routing, and hygiene flags are dynamically applied by updating the live feature-flag module and persisted flag state.
 
 **Dependency enforcement:** Some flags have `requires` dependencies (e.g., `FEATURE_SCHEDULER` requires `FEATURE_SKILLS`). The API validates these before toggling - enabling a flag without its dependencies returns a 400 error. Disabling a flag that other enabled flags depend on is also blocked. See the War Room Kill Switches page for the full dependency graph.
 
