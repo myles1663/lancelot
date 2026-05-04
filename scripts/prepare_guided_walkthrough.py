@@ -10,10 +10,10 @@ from pathlib import Path
 
 
 REQUEST_TEXT = (
-    "Please create a backup of "
-    "/home/lancelot/workspace/guided-walkthrough/t3-delete-candidate.txt, "
-    "then delete the original only after the backup exists. Use governed "
-    "execution and wait for operator approval if the action is classified T3."
+    "Use repo_writer exactly once. workspace: /home/lancelot/workspace. "
+    "action: delete. path: guided-walkthrough/t3-delete-candidate.txt. "
+    "Do not use command_runner or service_runner. Wait for Commander approval "
+    "before deleting the file if required."
 )
 
 
@@ -24,17 +24,16 @@ It contains one disposable file:
 
 - t3-delete-candidate.txt
 
-The walkthrough asks Lancelot to back up that file and delete the original only
-after approval. Do not point the walkthrough at repository files, secrets, or
-personal documents.
+The walkthrough asks Lancelot to delete that file only after approval. Do not
+point the walkthrough at repository files, secrets, or personal documents.
 """
 
 
 DEMO_FILE_TEXT = """Lancelot guided walkthrough disposable file.
 
 This file exists so a reviewer can watch a governed destructive action move
-through classification, approval, execution, verification, and receipt review.
-It is safe to back up and delete.
+through classification, approval, execution, and receipt review. It is safe to
+delete.
 """
 
 
@@ -69,15 +68,14 @@ def prepare_walkthrough(workspace: Path, *, reset: bool = True) -> dict[str, Pat
     if reset and target_dir.exists():
         shutil.rmtree(target_dir)
 
-    backup_dir = target_dir / "backup"
     candidate = target_dir / "t3-delete-candidate.txt"
     request = target_dir / "walkthrough-request.txt"
     readme = target_dir / "README.md"
 
-    for path in (backup_dir, candidate, request, readme):
+    for path in (candidate, request, readme):
         ensure_inside(workspace, path)
 
-    backup_dir.mkdir(parents=True, exist_ok=True)
+    target_dir.mkdir(parents=True, exist_ok=True)
     candidate.write_text(DEMO_FILE_TEXT, encoding="utf-8")
     request.write_text(REQUEST_TEXT + "\n", encoding="utf-8")
     readme.write_text(README_TEXT, encoding="utf-8")
@@ -86,7 +84,6 @@ def prepare_walkthrough(workspace: Path, *, reset: bool = True) -> dict[str, Pat
         "workspace": workspace,
         "directory": target_dir,
         "candidate": candidate,
-        "backup_dir": backup_dir,
         "request": request,
     }
 
