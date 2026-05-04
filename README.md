@@ -50,6 +50,7 @@ python -m pytest -q tests/test_kill_switch_contract.py
 ```
 
 For a fuller command-by-command path, including live receipt-chain validation inside Docker, see the [Proof Walkthrough](docs/proof-walkthrough.md).
+For a screenshot-oriented story of one governed high-risk action from command to approval to receipt, see the [Guided Walkthrough](docs/guided-walkthrough.md).
 For release-candidate checks, dependency lockfiles, and Docker image pinning guidance, see [Release Verification](docs/release-verification.md).
 
 The latest release-readiness pass recorded `7,216 passed`, `24 skipped`, `31 deselected`, and `90.5085%` Python line coverage with:

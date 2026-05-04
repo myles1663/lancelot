@@ -12,6 +12,7 @@
 - [Architecture Overview](architecture.md)
 - [Architecture Decision Records](adr/README.md)
 - [Governance](governance.md)
+- [Guided Walkthrough](guided-walkthrough.md)
 - [Memory](memory.md)
 - [Context Continuity](context-continuity.md)
 - [Receipts](receipts.md)
