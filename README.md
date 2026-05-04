@@ -105,7 +105,7 @@ python -m pytest -q --cov=src --cov-report=term-missing --cov-report=json:covera
 
 ## Evaluation FAQ
 
-### Is Lancelot open source?
+### What License Is Lancelot Under?
 
 No. Lancelot is source-available under BSL 1.1. You can use, copy, modify, and redistribute it for non-production evaluation, development, and testing. Production use requires a commercial license. See [LICENSE](LICENSE) for the exact terms.
 
