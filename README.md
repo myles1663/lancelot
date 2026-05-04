@@ -1,6 +1,16 @@
 # Lancelot
 
-Lancelot is a self-hosted AI operator for technical users who want model-driven automation with hard policy boundaries. It can call tools, control desktop applications through a governed bridge, keep structured memory across long-running work, and write immutable receipts for governed actions. The design goal is simple: treat the model as untrusted planning logic inside a system that can remember, say no, require approval, and leave an audit trail.
+Lancelot is a governance-native runtime for AI agents.
+
+Most agent frameworks start with capability: tool calls, sub-agents, memory, app control, model routing, and interoperability. Governance is usually added later around the edges as prompts, policies, approvals, logs, or monitoring.
+
+Lancelot starts with governance. Policy, scoped authority, approval gates, kill switches, operator visibility, and receipt-chain auditability are part of the execution path itself. Standard agent capabilities are routed through that path instead of bypassing it.
+
+The model can propose actions. The runtime decides what is allowed, what requires approval, what gets blocked, and what must be recorded.
+
+The goal is not less capability for more safety. The goal is capable by design, governed by default.
+
+Lancelot can call tools, control desktop applications through a governed bridge, spawn scoped sub-agents, maintain structured memory across long-running work, route model calls, expose operator controls, and write immutable receipts for governed actions. These are not escape hatches around governance. They are governed execution surfaces.
 
 <p align="center">
   <img src="docs/images/war-room-command-center.png" alt="Lancelot War Room command center" width="900">
@@ -37,6 +47,16 @@ If you want to evaluate the system before reading every subsystem guide, start h
 
 - [Guided Walkthrough](docs/guided-walkthrough.md): screenshot flow showing a governed workspace file action moving from command, to approval, to execution, to receipt detail.
 - [Proof Walkthrough](docs/proof-walkthrough.md): command-by-command verification path for health checks, Docker runtime behavior, receipt-chain validation, and governance proof points.
+
+## Why Not Just Use An Existing Agent Framework?
+
+Existing agent frameworks are useful. They proved that teams want agents that can plan, use tools, delegate work, maintain memory, control apps, and interoperate with other systems.
+
+Lancelot is aimed at a different failure mode: capability and authority are often too tightly coupled. The same model that reasons about a task can also trigger actions that change files, call tools, control apps, or spend resources.
+
+Lancelot separates proposal from authority. The model proposes. The runtime governs. Actions pass through policy, scoped permissions, approval rules, kill switches, and receipt logging before execution.
+
+Governance-only wrappers fail if teams have to give up the capabilities they already need. Capability-first frameworks create risk when powerful actions run through soft boundaries. Lancelot is designed so teams do not have to choose between capable agents and governable agents.
 
 ## Verify the Governance Loop
 
