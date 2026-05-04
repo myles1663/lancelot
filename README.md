@@ -31,6 +31,13 @@ For installation details and provider-specific setup, see [docs/installation.md]
 
 Lancelot is built for developers, operators, and technical teams who need governed automation rather than a lightweight agent demo or consumer chatbot.
 
+## Walkthroughs
+
+If you want to evaluate the system before reading every subsystem guide, start here:
+
+- [Guided Walkthrough](docs/guided-walkthrough.md): screenshot flow showing a governed workspace file action moving from command, to approval, to execution, to receipt detail.
+- [Proof Walkthrough](docs/proof-walkthrough.md): command-by-command verification path for health checks, Docker runtime behavior, receipt-chain validation, and governance proof points.
+
 ## Verify the Governance Loop
 
 You can inspect the core guarantees without trusting a demo transcript. From a clone with the Python and frontend dependencies installed, these checks do not require a live frontier model account:
@@ -49,8 +56,6 @@ python -m pytest -q tests/test_kill_switch_contract.py
 (cd src/warroom && npm ci && npm run type-check && npm run build)
 ```
 
-For a fuller command-by-command path, including live receipt-chain validation inside Docker, see the [Proof Walkthrough](docs/proof-walkthrough.md).
-For a screenshot-oriented story of one governed high-risk action from command to approval to receipt, see the [Guided Walkthrough](docs/guided-walkthrough.md).
 For release-candidate checks, dependency lockfiles, and Docker image pinning guidance, see [Release Verification](docs/release-verification.md).
 
 The latest release-readiness pass recorded `7,216 passed`, `24 skipped`, `31 deselected`, and `90.5085%` Python line coverage with:
@@ -169,6 +174,8 @@ The diagram shows the runtime boundary clearly: operator channels enter through 
 
 Key guarantees are backed by contract tests you can run directly:
 
+- Guided approval flow: [docs/guided-walkthrough.md](docs/guided-walkthrough.md)
+- Live runtime proof path: [docs/proof-walkthrough.md](docs/proof-walkthrough.md)
 - Release verification: `python scripts/verify-public-release.py`
 - Full Python suite coverage baseline: `90.5085%` line coverage in the latest release-readiness pass
 - Receipt immutability and integrity-chain validation: [tests/test_receipts.py](tests/test_receipts.py)
