@@ -48,6 +48,11 @@ jobs:
         working-directory: installer
         run: npm ci
 
+      - name: Prepare runtime data directories
+        run: |
+          sudo mkdir -p /home/lancelot/data /home/lancelot/workspace
+          sudo chown -R "$USER:$USER" /home/lancelot
+
       - name: Collect metrics
         run: python scripts/collect-test-metrics.py --output docs/test-metrics.json
 
