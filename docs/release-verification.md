@@ -89,6 +89,22 @@ For casual evaluation, the documented defaults keep installation short. For cont
 
 The Dockerfile pins several build-time tools directly, including the `uv` version and Codex CLI package version. If you build images locally, prefer a clean checkout and capture the resulting image digest in your release notes.
 
+## Fresh Install And Prebuilt Image Smoke
+
+A source tree can pass verification while the public install path is still broken. For a release tag, verify the published images from a fresh clone:
+
+```bash
+git clone https://github.com/myles1663/lancelot.git lancelot-smoke
+cd lancelot-smoke
+git checkout <release-tag>
+docker compose pull lancelot-core local-llm
+docker compose up -d --no-build
+curl http://localhost:8000/health/live
+curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '{"text":"hello"}'
+```
+
+Record the image tag or digest used for the smoke. If the release workflow did not publish the expected GHCR images, the release is not install-ready through the default `npx create-lancelot` / `docker compose pull` path.
+
 ## Release Candidate Checklist
 
 - [ ] Public release verification passes.
@@ -97,6 +113,9 @@ The Dockerfile pins several build-time tools directly, including the `uv` versio
 - [ ] War Room typecheck and production build pass.
 - [ ] UAB build and tests pass.
 - [ ] Docker Compose config resolves.
+- [ ] Fresh-clone installer tests pass.
+- [ ] Release workflow publishes the expected prebuilt Docker images.
+- [ ] Fresh-clone prebuilt-image smoke passes with `docker compose up -d --no-build`.
 - [ ] Release notes list mature paths and known limitations.
 - [ ] Docker image tags or digests are recorded for the release.
 - [ ] The release is tagged from the public repository, not from the source working tree.
