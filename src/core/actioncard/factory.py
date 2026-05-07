@@ -377,6 +377,64 @@ class ActionCardFactory:
         except Exception as exc:
             logger.warning("Failed to emit actioncard_presented: %s", exc)
 
+    def from_procedural_recommendation(self, recommendation) -> ActionCard:
+        """Build an ActionCard for a proactive procedural recommendation."""
+        description = (
+            f"{recommendation.observation}\n\n"
+            f"{recommendation.risk_or_opportunity}\n\n"
+            f"{recommendation.recommendation}"
+        )
+        if recommendation.suggested_action:
+            description += f"\n\nSuggested action: {recommendation.suggested_action}"
+        if recommendation.evidence:
+            details = "\n".join(f"- {item}" for item in recommendation.evidence[:6])
+            description += f"\n\nDetails:\nScore: {recommendation.score}\nCategory: {recommendation.category}\nEvidence:\n{details}"
+
+        card = ActionCard(
+            card_type=ActionCardType.CHOICE.value,
+            title=recommendation.title,
+            description=description,
+            source_system="procedural_recommendations",
+            source_item_id=recommendation.recommendation_id,
+            quest_id=recommendation.quest_id or None,
+            expires_at=time.time() + _DEFAULT_EXPIRY_SECONDS,
+            metadata={
+                "category": recommendation.category,
+                "score": recommendation.score,
+                "delivery_mode": recommendation.delivery_mode,
+            },
+            buttons=[
+                ActionButton(
+                    id="accept",
+                    label="Useful",
+                    style=ActionButtonStyle.PRIMARY.value,
+                ),
+                ActionButton(
+                    id="make_sop",
+                    label="Draft SOP",
+                    style=ActionButtonStyle.PRIMARY.value,
+                ),
+                ActionButton(
+                    id="snooze",
+                    label="Snooze",
+                    style=ActionButtonStyle.SECONDARY.value,
+                ),
+                ActionButton(
+                    id="dismiss",
+                    label="Dismiss",
+                    style=ActionButtonStyle.SECONDARY.value,
+                ),
+            ],
+        )
+        self._store.save(card)
+        self._emit_presented(card)
+        logger.info(
+            "ActionCard created: procedural recommendation %s (card=%s)",
+            recommendation.recommendation_id,
+            card.short_id(),
+        )
+        return card
+
     def from_sentry_request(
         self,
         req_id: str,

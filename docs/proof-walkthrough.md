@@ -2,12 +2,28 @@
 
 This walkthrough gives skeptical reviewers a short path from "interesting claim" to "I can inspect the controls myself." It focuses on the default paths that are most mature today: receipts, scoped execution, kill switches, health/readiness, UAB routing tests, and the War Room build.
 
-## 1. Verify The Public Release Tree
+## Fast Path
 
-From a clean clone:
+If you want the shortest copy-paste proof path from a normal clone, run:
 
 ```bash
-python scripts/verify-public-release.py --skip-pytest --skip-uab --skip-docker --public-artifact
+python scripts/verify-public-release.py --skip-pytest --skip-uab --skip-docker
+python -m pytest -q tests/test_receipts.py tests/hive/test_runtime.py tests/test_kill_switch_contract.py
+npm --prefix src/warroom ci
+npm --prefix src/warroom run type-check
+npm --prefix src/warroom run build
+npm --prefix packages/uab ci
+npm --prefix packages/uab test
+```
+
+The sections below explain what each check proves and what it does not prove.
+
+## 1. Verify The Checkout
+
+From a normal development clone:
+
+```bash
+python scripts/verify-public-release.py --skip-pytest --skip-uab --skip-docker
 ```
 
 Expected result:
@@ -16,7 +32,15 @@ Expected result:
 Public release verification completed successfully.
 ```
 
-This check rejects tracked private/internal release artifacts, oversized source files, and production Python `print()` statements before a public source release is treated as clean.
+In a development checkout, this check verifies release-readiness invariants that should hold before public prep, including runtime data exclusions, Docker build-context exclusions, source-file size limits, and production Python `print()` statements.
+
+From a prepared public release artifact, run the stricter public-artifact guard:
+
+```bash
+python scripts/verify-public-release.py --skip-pytest --skip-uab --skip-docker --public-artifact
+```
+
+That stricter check is intended for the public release tree after maintainer-only docs and release-prep files have been excluded.
 
 ## 2. Verify Receipt Integrity
 
@@ -112,28 +136,46 @@ This contract verifies propagation and failure behavior around operator stop con
 The War Room frontend should typecheck and build:
 
 ```bash
-cd src/warroom
-npm ci
-npm run type-check
-npm run build
+npm --prefix src/warroom ci
+npm --prefix src/warroom run type-check
+npm --prefix src/warroom run build
 ```
 
 The Universal Application Bridge test suite covers route selection, fallback behavior, readiness polling, and action-risk taxonomy:
 
 ```bash
-cd packages/uab
-npm ci
-npm test
+npm --prefix packages/uab ci
+npm --prefix packages/uab test
 ```
 
 ## 7. Verify Compose Configuration
 
 The Docker Compose file should resolve without requiring a local `.env` file:
 
+Bash:
+
 ```bash
 if [ ! -f .env ]; then cp .env.example .env && cleanup_env=1; fi
 docker compose config --quiet
+compose_status=$?
 if [ "${cleanup_env:-0}" = "1" ]; then rm .env; fi
+exit "$compose_status"
+```
+
+PowerShell:
+
+```powershell
+$createdEnv = $false
+if (-not (Test-Path .env)) {
+  Copy-Item .env.example .env
+  $createdEnv = $true
+}
+docker compose config --quiet
+$composeStatus = $LASTEXITCODE
+if ($createdEnv) {
+  Remove-Item .env
+}
+exit $composeStatus
 ```
 
 No output means Compose accepted the configuration.

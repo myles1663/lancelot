@@ -7,6 +7,14 @@ import type { ReceiptItem } from '@/api/receipts'
 import { fetchPendingActionCards } from '@/api/actioncards'
 import { fetchGovernanceApprovals } from '@/api/governance'
 import type { ApprovalItem } from '@/api/governance'
+import {
+  acceptProceduralRecommendation,
+  convertProceduralRecommendationToSop,
+  dismissProceduralRecommendation,
+  fetchProceduralRecommendations,
+  snoozeProceduralRecommendation,
+} from '@/api/proceduralRecommendations'
+import type { ProceduralRecommendation } from '@/api/proceduralRecommendations'
 import type { ActionCardData } from '@/types/api'
 import { StatusDot } from '@/components'
 import { ChatInterface } from './command/ChatInterface'
@@ -53,14 +61,31 @@ export function CommandCenter() {
     fetcher: fetchPendingActionCards,
     interval: 10000,
   })
+  const { data: recommendationData, error: recommendationError, refetch: refreshRecommendations } = usePolling({
+    fetcher: useCallback(() => fetchProceduralRecommendations({ status: 'pending', limit: 4 }), []),
+    interval: 15000,
+  })
 
   const receipts: ReceiptItem[] = receiptsData?.receipts ?? []
   const approvals: ApprovalItem[] = approvalsData?.approvals ?? []
   const actionCards: ActionCardData[] = actionCardsData?.cards.filter(card => !card.resolved) ?? []
+  const recommendations: ProceduralRecommendation[] = recommendationData?.recommendations ?? []
   const todayCount = statsData?.stats?.total_receipts ?? 0
   const failedTodayCount = statsData?.stats?.by_status?.['failure'] ?? 0
   const pendingActionCount = approvals.length + actionCards.length
   const pendingUnavailable = Boolean(approvalsError || actionCardsError)
+  const recommendationUnavailable = Boolean(recommendationError)
+
+  const handleRecommendationAction = useCallback(
+    async (id: string, action: 'accept' | 'dismiss' | 'snooze' | 'sop') => {
+      if (action === 'accept') await acceptProceduralRecommendation(id)
+      if (action === 'dismiss') await dismissProceduralRecommendation(id)
+      if (action === 'snooze') await snoozeProceduralRecommendation(id)
+      if (action === 'sop') await convertProceduralRecommendationToSop(id)
+      refreshRecommendations()
+    },
+    [refreshRecommendations],
+  )
 
   return (
     <div>
@@ -185,6 +210,69 @@ export function CommandCenter() {
                     {pendingActionCount - 4} more pending item{pendingActionCount - 4 === 1 ? '' : 's'}.
                   </p>
                 )}
+              </div>
+            )}
+          </section>
+
+          <section className="bg-surface-card border border-border-default rounded-lg p-4">
+            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">Procedural Recommendations</h3>
+            {recommendationUnavailable ? (
+              <p className="text-sm text-state-degraded">Recommendation data unavailable</p>
+            ) : recommendations.length === 0 ? (
+              <p className="text-sm text-text-muted">No pending recommendations</p>
+            ) : (
+              <div className="space-y-3">
+                {recommendations.map((item) => (
+                  <div
+                    key={item.recommendation_id}
+                    className="rounded-md border border-border-default bg-surface-card-elevated px-3 py-2"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-mono uppercase tracking-wider text-accent-secondary">
+                        {item.category.replace(/_/g, ' ')}
+                      </span>
+                      <span className="text-[10px] font-mono text-text-muted">
+                        {item.score}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs font-medium text-text-primary">
+                      {item.title}
+                    </p>
+                    <p className="mt-1 text-xs leading-relaxed text-text-secondary">
+                      {item.recommendation}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleRecommendationAction(item.recommendation_id, 'accept')}
+                        className="rounded border border-accent-primary bg-accent-primary/10 px-2 py-1 text-[11px] font-medium text-accent-primary hover:bg-accent-primary/20"
+                      >
+                        Useful
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRecommendationAction(item.recommendation_id, 'sop')}
+                        className="rounded border border-accent-secondary bg-accent-secondary/10 px-2 py-1 text-[11px] font-medium text-accent-secondary hover:bg-accent-secondary/20"
+                      >
+                        Draft SOP
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRecommendationAction(item.recommendation_id, 'snooze')}
+                        className="rounded border border-border-default px-2 py-1 text-[11px] font-medium text-text-secondary hover:bg-surface-input"
+                      >
+                        Snooze
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRecommendationAction(item.recommendation_id, 'dismiss')}
+                        className="rounded border border-border-default px-2 py-1 text-[11px] font-medium text-text-secondary hover:bg-surface-input"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </section>

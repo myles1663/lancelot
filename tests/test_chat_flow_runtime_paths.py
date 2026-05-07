@@ -1,4 +1,5 @@
 import sys
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -69,12 +70,15 @@ def _runtime():
     runtime.receipt_service = SimpleNamespace(created=[], updated=[])
     runtime.receipt_service.create = lambda receipt: runtime.receipt_service.created.append(receipt)
     runtime.receipt_service.update = lambda receipt: runtime.receipt_service.updated.append(receipt)
+    runtime.procedural_recommendation_store = None
+    runtime.actioncard_factory = None
     runtime.task_store = None
     runtime.plan_compiler = None
     runtime.assembler = None
     runtime.usage_tracker = None
     runtime._memory_enabled = False
     runtime.context_compiler = None
+    runtime.data_dir = tempfile.gettempdir()
     runtime.local_model = SimpleNamespace(is_healthy=lambda: False)
     runtime.model_name = "fast-model"
     runtime.rules_context = ""
@@ -111,6 +115,7 @@ def _stable_flags(monkeypatch):
     monkeypatch.setattr(feature_flags, "FEATURE_DEEP_REASONING_LOOP", False, raising=False)
     monkeypatch.setattr(feature_flags, "FEATURE_COMPETITIVE_SCAN", False, raising=False)
     monkeypatch.setattr(feature_flags, "FEATURE_MEMORY_VNEXT", False, raising=False)
+    monkeypatch.setattr(feature_flags, "FEATURE_PROCEDURAL_RECOMMENDATIONS", False, raising=False)
     monkeypatch.setattr(chat_flow, "create_receipt", lambda *_args, **_kwargs: _Receipt())
 
 
@@ -340,6 +345,36 @@ def test_auto_escalation_and_failure_receipt_paths(monkeypatch):
     response = chat_flow.chat(runtime, "answer")
     assert response == "Error generating response: provider down"
     assert runtime.receipt_service.updated[-1].failed[0] == "provider down"
+
+
+def test_procedural_recommendation_hook_appends_inline_nudge_and_receipt(monkeypatch):
+    monkeypatch.setattr(chat_flow, "classify_intent", lambda _message: chat_flow.IntentType.KNOWLEDGE_REQUEST)
+    monkeypatch.setattr(feature_flags, "FEATURE_PROCEDURAL_RECOMMENDATIONS", True, raising=False)
+
+    runtime = _runtime()
+    runtime._text_only_generate.return_value = "Public release plan drafted."
+
+    response = chat_flow.chat(
+        runtime,
+        "We are getting ready to publish this GitHub repo as a public release and ship it.",
+        channel="warroom",
+        session_id="session-1",
+        operator_id="operator-1",
+    )
+
+    assert response.startswith("Public release plan drafted.")
+    assert "One thing worth calling out:" in response
+    assert "CI checks" in response
+    recommendation_receipts = [
+        receipt
+        for receipt in runtime.receipt_service.created
+        if getattr(receipt, "action_type", "") == "procedural_recommendation"
+    ]
+    assert len(recommendation_receipts) == 1
+    receipt = recommendation_receipts[0]
+    assert receipt.outputs["category"] == "software_development"
+    assert receipt.outputs["delivery_mode"] == "action_offer"
+    assert receipt.metadata["surfaced_inline"] is True
 
 
 def test_helper_branches_for_approval_tool_detection_and_work_context():

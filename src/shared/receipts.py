@@ -135,6 +135,7 @@ class ActionType(str, Enum):
     INCIDENT_CLOSED = "incident_closed"
     INCIDENT_FALSE_POSITIVE = "incident_false_positive"
     PLAYBOOK_UPDATED = "playbook_updated"
+    PROCEDURAL_RECOMMENDATION = "procedural_recommendation"
 
 
 class ReceiptStatus(str, Enum):

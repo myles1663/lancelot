@@ -245,6 +245,7 @@ class LancelotOrchestrator:
         self._memory_enabled = False
         self.context_compiler = None
         self.work_ledger_store = None
+        self.procedural_recommendation_store = None
 
         # Runtime bridge for streamed tool-execution events.
         self.toolflow_emitter = None

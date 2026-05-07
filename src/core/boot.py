@@ -356,6 +356,12 @@ async def boot(app, config):
             logger.warning("ActionCard API router mount failed: %s", e)
 
         try:
+            from procedural_recommendations_api import router as procedural_recommendations_router
+            app.include_router(procedural_recommendations_router)
+        except Exception as e:
+            logger.warning("Procedural recommendations API router mount failed: %s", e)
+
+        try:
             from boot_observability_support import mount_observability_routers
             mount_observability_routers(app, logger=logger)
         except Exception as e:
@@ -571,6 +577,24 @@ async def boot(app, config):
                 logger.warning("Compliance Export API skipped: receipt service not available")
         except Exception as e:
             logger.warning(f"Compliance Export API initialization failed: {e}")
+
+        try:
+            from feature_flags import FEATURE_PROCEDURAL_RECOMMENDATIONS
+            if FEATURE_PROCEDURAL_RECOMMENDATIONS:
+                from procedural_recommendations import ProceduralRecommendationStore
+                from procedural_recommendations_api import init_procedural_recommendations_api
+
+                _procedural_recommendation_store = ProceduralRecommendationStore(
+                    data_dir=main_orchestrator.data_dir
+                )
+                main_orchestrator.procedural_recommendation_store = _procedural_recommendation_store
+                init_procedural_recommendations_api(_procedural_recommendation_store)
+                app.state.procedural_recommendation_store = _procedural_recommendation_store
+                logger.info("Procedural recommendations initialized.")
+            else:
+                logger.info("Procedural recommendations disabled by feature flag.")
+        except Exception as e:
+            logger.warning("Procedural recommendations initialization failed: %s", e)
     
         _trust_ledger_inst = getattr(main_orchestrator, 'trust_ledger', None)
         _rule_engine_inst = None
@@ -777,7 +801,30 @@ async def boot(app, config):
                     _ac_resolver.register_handler("skills", _skills_handler)
                 except Exception as _e:
                     logger.debug("Skills handler not available for ActionCards: %s", _e)
-    
+
+                try:
+                    from procedural_recommendations_api import resolve_recommendation_action
+                    from procedural_recommendations_api import bind_procedural_recommendations_actioncard_store
+
+                    bind_procedural_recommendations_actioncard_store(_ac_store)
+
+                    def _procedural_recommendation_handler(recommendation_id, button_id, **context):
+                        return resolve_recommendation_action(
+                            recommendation_id,
+                            button_id,
+                            operator_id=context.get("operator_id", "") or "",
+                            session_id=context.get("session_id", "") or "",
+                            actor=context.get("actor", "") or "",
+                            channel="actioncard",
+                        )
+
+                    _ac_resolver.register_handler(
+                        "procedural_recommendations",
+                        _procedural_recommendation_handler,
+                    )
+                except Exception as _e:
+                    logger.debug("Procedural recommendation handler not available for ActionCards: %s", _e)
+
                 init_actioncard_api(_ac_store, _ac_resolver)
     
                 app.state.actioncard_store = _ac_store
@@ -933,6 +980,29 @@ async def boot(app, config):
                 card_resolver.register_handler("skills", _skills_handler)
             except Exception as exc:
                 logger.debug("Skills handler not available for ActionCards: %s", exc)
+
+            try:
+                from procedural_recommendations_api import resolve_recommendation_action
+                from procedural_recommendations_api import bind_procedural_recommendations_actioncard_store
+
+                bind_procedural_recommendations_actioncard_store(card_store)
+
+                def _procedural_recommendation_handler(recommendation_id, button_id, **context):
+                    return resolve_recommendation_action(
+                        recommendation_id,
+                        button_id,
+                        operator_id=context.get("operator_id", "") or "",
+                        session_id=context.get("session_id", "") or "",
+                        actor=context.get("actor", "") or "",
+                        channel="actioncard",
+                    )
+
+                card_resolver.register_handler(
+                    "procedural_recommendations",
+                    _procedural_recommendation_handler,
+                )
+            except Exception as exc:
+                logger.debug("Procedural recommendation handler not available for ActionCards: %s", exc)
 
             init_actioncard_api(card_store, card_resolver)
             app.state.actioncard_store = card_store

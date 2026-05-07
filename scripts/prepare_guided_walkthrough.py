@@ -12,8 +12,7 @@ from pathlib import Path
 REQUEST_TEXT = (
     "Use repo_writer exactly once. workspace: /home/lancelot/workspace. "
     "action: delete. path: guided-walkthrough/t3-delete-candidate.txt. "
-    "Do not use command_runner or service_runner. Wait for Commander approval "
-    "before deleting the file if required."
+    "Do not use command_runner or service_runner."
 )
 
 
@@ -24,8 +23,8 @@ It contains one disposable file:
 
 - t3-delete-candidate.txt
 
-The walkthrough asks Lancelot to delete that file only after approval. Do not
-point the walkthrough at repository files, secrets, or personal documents.
+The walkthrough asks Lancelot to delete that file through the governed runtime.
+Do not point the walkthrough at repository files, secrets, or personal documents.
 """
 
 
