@@ -9,6 +9,24 @@ external users and reviewers.
 
 No unreleased changes.
 
+## [0.4.2] - 2026-05-07
+
+### Added
+
+- War Room Command Center now surfaces procedural recommendations that can be
+  accepted, dismissed, snoozed, or converted into governed ActionCards.
+- Procedural recommendations are operator-scoped, sensitivity-aware, and
+  respect runtime kill-switch controls.
+- Recommendation persistence now restores pending visibility when snoozes
+  expire, so temporary deferral does not permanently hide useful suggestions.
+- Release verification now includes explicit fresh-clone installer checks and
+  prebuilt-image smoke gates before a release is considered install-ready.
+
+### Changed
+
+- Public release notes now call out the recommendation proof tests and the
+  prebuilt-image verification path for release operators.
+
 ## [0.4.1] - 2026-05-03
 
 ### Added
