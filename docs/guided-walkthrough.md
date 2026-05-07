@@ -18,6 +18,22 @@ If you are running inside the core container, prepare the container workspace di
 docker compose exec lancelot-core python scripts/prepare_guided_walkthrough.py --workspace /home/lancelot/workspace
 ```
 
+Before running the guided action, verify that the disposable file is visible inside the container workspace.
+
+Bash:
+
+```bash
+docker compose exec lancelot-core test -f /home/lancelot/workspace/guided-walkthrough/t3-delete-candidate.txt
+```
+
+PowerShell:
+
+```powershell
+docker compose exec lancelot-core python -c "from pathlib import Path; raise SystemExit(0 if Path('/home/lancelot/workspace/guided-walkthrough/t3-delete-candidate.txt').exists() else 1)"
+```
+
+Expected result: no output and exit code `0`.
+
 The script creates:
 
 ```text
@@ -34,7 +50,7 @@ The target file is intentionally disposable. Do not change the walkthrough to po
 Open the War Room Command Center and paste the generated request:
 
 ```text
-Use repo_writer exactly once. workspace: /home/lancelot/workspace. action: delete. path: guided-walkthrough/t3-delete-candidate.txt. Do not use command_runner or service_runner. Wait for Commander approval before deleting the file if required.
+Use repo_writer exactly once. workspace: /home/lancelot/workspace. action: delete. path: guided-walkthrough/t3-delete-candidate.txt. Do not use command_runner or service_runner.
 ```
 
 This is a deliberately small request with a destructive step. The expected behavior is not "do it instantly." The expected behavior is that Lancelot narrows the scope to one workspace file operation, pauses for approval, executes only the approved scope, and leaves receipts.

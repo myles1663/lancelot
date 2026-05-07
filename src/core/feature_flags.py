@@ -51,6 +51,9 @@ Competitive intelligence environment variables:
 Deep reasoning environment variables:
     FEATURE_DEEP_REASONING_LOOP      - default: false (deep reasoning pass before agentic execution)
 
+Procedural recommendation environment variables:
+    FEATURE_PROCEDURAL_RECOMMENDATIONS - default: false (restrained procedural nudges)
+
 Google OAuth environment variables:
     FEATURE_GOOGLE_OAUTH             - default: false (Google OAuth 2.0 for Gmail + Calendar)
 
@@ -226,6 +229,9 @@ FEATURE_COMPETITIVE_SCAN: bool = _env_bool("FEATURE_COMPETITIVE_SCAN", default=F
 # Deep reasoning before action
 FEATURE_DEEP_REASONING_LOOP: bool = _env_bool("FEATURE_DEEP_REASONING_LOOP", default=False)  # Reasoning-only LLM pass before agentic loop
 
+# Proactive procedural recommendations
+FEATURE_PROCEDURAL_RECOMMENDATIONS: bool = _env_bool("FEATURE_PROCEDURAL_RECOMMENDATIONS", default=False)  # Restrained procedural nudges and auditable candidates
+
 # Google OAuth flow for Gmail + Calendar connectors
 FEATURE_GOOGLE_OAUTH: bool = _env_bool("FEATURE_GOOGLE_OAUTH", default=False)  # OAuth 2.0 Authorization Code + PKCE for Gmail and Google Calendar
 
@@ -321,6 +327,7 @@ def reload_flags() -> None:
     global FEATURE_STRUCTURED_OUTPUT, FEATURE_CLAIM_VERIFICATION, FEATURE_UNIFIED_CLASSIFICATION
     global FEATURE_GITHUB_SEARCH, FEATURE_COMPETITIVE_SCAN
     global FEATURE_DEEP_REASONING_LOOP
+    global FEATURE_PROCEDURAL_RECOMMENDATIONS
     global FEATURE_GOOGLE_OAUTH
     global FEATURE_TOOL_FLOW_STREAMING, FEATURE_ACTION_CARDS
     global FEATURE_HIVE, FEATURE_HIVE_UAB
@@ -387,6 +394,9 @@ def reload_flags() -> None:
 
     # Deep reasoning
     FEATURE_DEEP_REASONING_LOOP = _env_bool("FEATURE_DEEP_REASONING_LOOP", default=False)
+
+    # Proactive procedural recommendations
+    FEATURE_PROCEDURAL_RECOMMENDATIONS = _env_bool("FEATURE_PROCEDURAL_RECOMMENDATIONS", default=False)
 
     # Google OAuth
     FEATURE_GOOGLE_OAUTH = _env_bool("FEATURE_GOOGLE_OAUTH", default=False)

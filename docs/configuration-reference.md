@@ -197,6 +197,8 @@ All feature flags are boolean: `true`/`1`/`yes` to enable, anything else to disa
 | `FEATURE_UNIFIED_CLASSIFICATION` | `true` | Single-call intent classification |
 | `FEATURE_TOOL_FLOW_STREAMING` | `true` | Real-time tool execution progress events |
 | `FEATURE_ACTION_CARDS` | `true` | Interactive approval/action buttons |
+| `FEATURE_PROCEDURAL_RECOMMENDATIONS` | `false` | Restrained procedural recommendations with auditable receipts |
+| `LANCELOT_PROCEDURAL_RECOMMENDATION_SENSITIVITY` | `balanced` | Procedural recommendation threshold mode: `low`, `balanced`, or `high` |
 | `FEATURE_RISK_TIERED_GOVERNANCE` | `true` | Risk-tiered governance master switch |
 | `FEATURE_POLICY_CACHE` | `true` | Boot-time policy compilation |
 | `FEATURE_ASYNC_VERIFICATION` | `true` | Async verification for T1 actions |

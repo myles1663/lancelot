@@ -73,6 +73,7 @@ async def test_get_flags_has_operator_metadata_and_clean_public_text():
         "FEATURE_GOOGLE_OAUTH",
         "FEATURE_INCIDENT_RESPONSE",
         "FEATURE_OBSERVABILITY",
+        "FEATURE_PROCEDURAL_RECOMMENDATIONS",
         "FEATURE_TIME_TRAVEL",
         "FEATURE_TOOL_FLOW_STREAMING",
     ]:

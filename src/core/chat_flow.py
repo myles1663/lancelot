@@ -820,7 +820,12 @@ def chat(
                 "competitive_scan_preprocessing_failed",
                 extra={"error": str(e)},
             )        # Use the agentic loop for research and tool-backed knowledge requests.
-        from feature_flags import FEATURE_AGENTIC_LOOP, FEATURE_LOCAL_AGENTIC, FEATURE_DEEP_REASONING_LOOP
+        from feature_flags import (
+            FEATURE_AGENTIC_LOOP,
+            FEATURE_LOCAL_AGENTIC,
+            FEATURE_DEEP_REASONING_LOOP,
+            FEATURE_PROCEDURAL_RECOMMENDATIONS,
+        )
         # When file_parts present (images/PDFs), skip local model — no vision support
         has_vision_input = bool(file_parts)
         # Use unified classifier result for continuation if available
@@ -1047,6 +1052,35 @@ def chat(
                 extra={"message_chars": len(user_message)},
             )
             sanitized_response = _short_acknowledgement_response()
+
+        if FEATURE_PROCEDURAL_RECOMMENDATIONS:
+            try:
+                from procedural_recommendations import (
+                    RecommendationContext,
+                    apply_procedural_recommendations,
+                )
+
+                _recommendation_decision = apply_procedural_recommendations(
+                    RecommendationContext(
+                        user_message=user_message,
+                        response_text=sanitized_response,
+                        history=list(getattr(self.context_env, "history", []) or []),
+                        tool_receipts=getattr(self, "_last_tool_receipts", []),
+                        channel=channel,
+                        quest_id=getattr(self, "_current_quest_id", "") or "",
+                        session_id=getattr(self, "_current_session_id", "") or "",
+                        operator_id=getattr(self, "_current_operator_id", "") or "",
+                    ),
+                    receipt_service=getattr(self, "receipt_service", None),
+                    recommendation_store=getattr(self, "procedural_recommendation_store", None),
+                    actioncard_factory=getattr(self, "actioncard_factory", None),
+                )
+                sanitized_response = _recommendation_decision.response_text
+            except Exception as e:
+                _gov_logger.warning(
+                    "procedural_recommendation_hook_failed",
+                    extra={"error": str(e)},
+                )
 
         # Store competitive scan in episodic memory (post-processing)
         if _competitive_target and sanitized_response:

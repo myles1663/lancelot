@@ -15,6 +15,11 @@ def test_prepare_walkthrough_creates_disposable_workspace(tmp_path: Path):
     assert paths["directory"] == tmp_path / "guided-walkthrough"
     assert paths["candidate"].read_text(encoding="utf-8").startswith("Lancelot guided walkthrough")
     assert paths["request"].read_text(encoding="utf-8").strip() == REQUEST_TEXT
+    readme_text = (paths["directory"] / "README.md").read_text(encoding="utf-8")
+    assert "repo_writer exactly once" in REQUEST_TEXT
+    assert "approval" not in REQUEST_TEXT.lower()
+    assert "commander" not in REQUEST_TEXT.lower()
+    assert "after approval" not in readme_text.lower()
 
 
 def test_prepare_walkthrough_reset_removes_prior_artifacts(tmp_path: Path):

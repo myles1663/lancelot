@@ -116,6 +116,9 @@ class ActionCardResolver:
             logger.error("ActionCard handler error for %s: %s", card.source_system, exc)
             return {"status": "error", "message": str(exc)}
 
+        if result.get("status") == "error":
+            return result
+
         # Mark resolved in store
         self._store.resolve(card.card_id, button_id, channel)
 

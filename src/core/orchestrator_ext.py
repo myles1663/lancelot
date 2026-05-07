@@ -95,6 +95,21 @@ def _build_system_instruction(self, crusader_mode=False):
         "saved to their profile."
     )
 
+    proactive_note = ""
+    try:
+        from feature_flags import FEATURE_PROCEDURAL_RECOMMENDATIONS
+        if FEATURE_PROCEDURAL_RECOMMENDATIONS:
+            proactive_note = (
+                "\n\nPROCEDURAL RECOMMENDATIONS:\n"
+                "Watch for recurring procedural gaps, avoidable risk, inefficient workflows, "
+                "missing professional standards, tool-mode mismatches, or work becoming repeatable. "
+                "Do not interrupt constantly. Surface a concise recommendation only when the likely "
+                "benefit in quality, time, reliability, credibility, or risk reduction is meaningful. "
+                "Keep the user's current task primary."
+            )
+    except Exception as exc:
+        _logging.warning("Failed to resolve procedural recommendation instruction note: %s", exc)
+
     # 4. REASONING PRINCIPLES
     honesty = (
         "REASONING PRINCIPLES — How you think matters more than what you do:\n\n"
@@ -222,7 +237,7 @@ def _build_system_instruction(self, crusader_mode=False):
     except Exception as exc:
         _logging.warning("Failed to build connector status note for system prompt: %s", exc)
 
-    instruction = f"{persona}\n\n{self_awareness}\n\n{self_knowledge}\n\n{rules}\n\n{guardrails}\n\n{honesty}\n\n{expression}{channel_note}{host_bridge_note}{connector_status_note}"
+    instruction = f"{persona}\n\n{self_awareness}\n\n{self_knowledge}\n\n{rules}\n\n{guardrails}{proactive_note}\n\n{honesty}\n\n{expression}{channel_note}{host_bridge_note}{connector_status_note}"
 
     # Crusader Mode overlay
     if crusader_mode:

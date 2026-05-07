@@ -129,6 +129,20 @@ class TestActionCardResolver:
         assert result["status"] == "error"
         assert "DB connection failed" in result["message"]
 
+    def test_handler_error_does_not_resolve_card(self, resolver, store):
+        """Handler-level authorization failures must not consume the card."""
+        card = _make_card(store)
+        handler = MagicMock(return_value={"status": "error", "message": "Not visible"})
+        resolver.register_handler("governance", handler)
+
+        result = resolver.resolve(card.card_id, "approve", "warroom")
+
+        assert result["status"] == "error"
+        updated = store.get(card.card_id)
+        assert updated.resolved is False
+        resolver._event_bus.publish_sync.assert_not_called()
+        resolver._receipt_service.create.assert_not_called()
+
     def test_expired_card_rejected(self, resolver, store):
         """resolve() rejects expired cards."""
         card = _make_card(store, expires_at=time.time() - 1)

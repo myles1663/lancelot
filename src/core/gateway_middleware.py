@@ -21,6 +21,7 @@ SUBSYSTEM_GATES = (
     ("/api/incidents", "FEATURE_INCIDENT_RESPONSE"),
     ("/api/playbooks", "FEATURE_INCIDENT_RESPONSE"),
     ("/api/actioncards", "FEATURE_ACTION_CARDS"),
+    ("/api/procedural-recommendations", "FEATURE_PROCEDURAL_RECOMMENDATIONS"),
 )
 
 

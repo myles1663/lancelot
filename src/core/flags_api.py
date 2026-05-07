@@ -299,6 +299,13 @@ FLAG_META = {
         "conflicts": [],
         "warning": "Adds one fast-model API call per incoming message for classification (~100 input tokens). Falls back to keyword classifier if the API call fails. Monitor unified classifier logs for accuracy.",
     },
+    "FEATURE_PROCEDURAL_RECOMMENDATIONS": {
+        "description": "Procedural Recommendations. Adds restrained, auditable operating-pattern suggestions to chat and War Room when the current work looks repeatable, release-sensitive, or better handled by a formal workflow.",
+        "category": "Intelligence",
+        "requires": [],
+        "conflicts": [],
+        "warning": "Operator-facing suggestions can feel noisy if tuned poorly. Disable this switch immediately if recommendations interrupt more than they assist.",
+    },
 
     # ── Competitive Intelligence ──────────────────────────────────
     "FEATURE_GITHUB_SEARCH": {
