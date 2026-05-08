@@ -1,17 +1,17 @@
 {
-  "branch": "codex/public-fix-test-metrics-runtime-dirs",
-  "commit": "56e0081e",
+  "branch": "main",
+  "commit": "fbebd44",
   "display": {
     "headline_label": "Runnable tests tracked",
     "headline_tests": 7391,
     "test_files": 394
   },
-  "generated_at": "2026-05-08T19:18:41Z",
+  "generated_at": "2026-05-08T19:32:06Z",
   "metrics": {
     "installer": {
       "cancelled": 0,
       "command": "npm test",
-      "duration_ms": 5432,
+      "duration_ms": 3667,
       "failed": 0,
       "passed": 9,
       "skipped": 0,
@@ -25,8 +25,8 @@
       "cancelled": 0,
       "command": "npm test",
       "daemon_dispatcher_passed": true,
-      "dist_entries": 213,
-      "duration_ms": 34580,
+      "dist_entries": 209,
+      "duration_ms": 31033,
       "failed": 0,
       "passed": 44,
       "skipped": 0,
