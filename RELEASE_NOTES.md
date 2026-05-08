@@ -1,17 +1,21 @@
 # Release Notes
 
-## Current Public Release: 0.4.2
+## Current Public Release: 0.4.3
 
-Lancelot 0.4.2 adds operator-scoped procedural recommendations to the War Room
-and tightens the release path around fresh-install and prebuilt-image
-verification. The core path remains self-hosted: requests enter through the
-gateway, policy and Soul constraints are checked before execution, approved
-work runs through governed tools or UAB routes, and outcomes are written as
-immutable receipts.
+Lancelot 0.4.3 is a security-and-bug patch release. It remediates locked
+Python dependency advisories, refreshes the public security overview with the
+May 2026 audit evidence, and fixes an order-dependent Approval Pattern
+Learning feature-flag test. The core path remains self-hosted: requests enter
+through the gateway, policy and Soul constraints are checked before execution,
+approved work runs through governed tools or UAB routes, and outcomes are
+written as immutable receipts.
 
 ### What To Inspect First
 
 - `README.md` for the quickstart and architecture summary.
+- `docs/security-overview.md` for the current dependency audit and security
+  posture snapshot.
+- `CHANGELOG.md` for the 0.4.3 security remediation and verification summary.
 - The Command Center recommendations panel for low-interruption procedural
   suggestions that can be accepted, dismissed, snoozed, or converted into
   governed ActionCards.

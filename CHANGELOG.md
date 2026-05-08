@@ -9,6 +9,31 @@ external users and reviewers.
 
 No unreleased changes.
 
+## [0.4.3] - 2026-05-08
+
+### Security
+
+- Remediated locked Python dependency advisories by upgrading GitPython,
+  lxml, python-dotenv, and python-multipart in `uv.lock`.
+- Raised the direct `python-multipart` runtime floor to `>=0.0.27` in both
+  `pyproject.toml` and the legacy `requirements.txt` compatibility file.
+- Updated the public security overview with the May 2026 audit snapshot,
+  dependency audit evidence, and OWASP A06 vulnerable-components posture.
+
+### Fixed
+
+- Fixed an order-dependent Approval Pattern Learning feature-flag test by
+  isolating persisted flag overrides before asserting environment-variable
+  behavior.
+
+### Verification
+
+- Full Python suite: 7,314 passed, 24 skipped, 31 deselected.
+- Full Python line coverage: 90.3600%.
+- Installer Node tests: 9 passed.
+- Universal Application Bridge build and tests: 44 passed.
+- War Room production build: passed.
+
 ## [0.4.2] - 2026-05-07
 
 ### Added

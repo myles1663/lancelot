@@ -30,10 +30,15 @@ class TestFeatureFlag:
 
     def test_env_true(self):
         from src.core import feature_flags
-        with patch.dict(os.environ, {"FEATURE_APPROVAL_LEARNING": "true"}):
+        previous_state = feature_flags.persisted_flag_state_snapshot()
+        try:
+            feature_flags.clear_persisted_flag_state("FEATURE_APPROVAL_LEARNING")
+            with patch.dict(os.environ, {"FEATURE_APPROVAL_LEARNING": "true"}):
+                feature_flags.reload_flags()
+                assert feature_flags.FEATURE_APPROVAL_LEARNING is True
+        finally:
+            feature_flags.replace_persisted_flag_state(previous_state)
             feature_flags.reload_flags()
-            assert feature_flags.FEATURE_APPROVAL_LEARNING is True
-        feature_flags.reload_flags()
 
 
 class TestDetectionConfig:

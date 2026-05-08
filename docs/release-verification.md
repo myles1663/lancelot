@@ -54,8 +54,8 @@ python -m pytest -q --cov=src --cov-report=term-missing --cov-report=json:covera
 The latest release-readiness pass recorded:
 
 ```text
-7,216 passed, 24 skipped, 31 deselected
-90.5085% Python line coverage
+7,314 passed, 24 skipped, 31 deselected
+90.3600% Python line coverage
 ```
 
 Then verify the UI and UAB surfaces:

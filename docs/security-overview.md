@@ -2,10 +2,11 @@
 
 ## Security Architecture of a Governed Autonomous AI System
 
-**Document Version:** 1.1
-**System Version:** v7.4 (v0.2.25)
+**Document Version:** 1.2
+**System Version:** v0.4.3
 **Classification:** Public
 **Author:** Myles Russell Hamilton
+**Last Security Audit:** May 8, 2026
 
 ---
 
@@ -25,7 +26,7 @@ Project Lancelot is a **Governed Autonomous System (GAS)** — an AI agent that 
 
 ### 1.1 Scope
 
-This overview covers the security architecture and controls implemented in Lancelot v7.4 (v0.2.25), including:
+This overview covers the security architecture and controls implemented in Lancelot v0.4.3, including:
 
 - **Authentication and authorization** across all API, WebSocket, and Telegram interfaces
 - **Input validation and prompt injection defense** at the gateway and orchestrator layers
@@ -43,6 +44,8 @@ Lancelot exhibits a **mature defense-in-depth architecture** with strong contain
 
 A comprehensive internal security assessment identified 15 findings across all severity levels. As of v0.2.25, **all 15 findings have been remediated** across three releases, covering authentication hardening, CORS restrictions, security headers, WebSocket authentication, OAuth token handling, scheduler approval workflows, network configuration, audit integrity, rate limiter memory management, file I/O safety, Docker socket isolation, encryption at rest guidance, skill runtime sandboxing, vault key management, and host execution documentation.
 
+The May 2026 security refresh added a dependency audit against the locked Python environment and all Node package roots. The audit initially identified 6 known advisories in 4 locked Python packages. Those were remediated by upgrading GitPython, lxml, python-dotenv, and python-multipart in `uv.lock`, and by raising the direct `python-multipart` floor in `pyproject.toml` and `requirements.txt`. Post-remediation Python and Node dependency audits report no known vulnerabilities in the audited dependency sets.
+
 ### 1.3 Key Strengths
 
 - Constitutional governance model (Soul) with versioned, linted, owner-gated amendments
@@ -57,6 +60,25 @@ A comprehensive internal security assessment identified 15 findings across all s
 - Thread-safe resource governance with atomic file writes
 - Docker socket proxy for restricted Docker API access
 - Non-builtin skill execution sandboxed in Docker containers
+
+### 1.4 Current Audit Snapshot
+
+The latest internal audit used dependency advisory checks plus the repository's security-focused automated tests. This is not a substitute for an independent penetration test, but it is the current project evidence baseline.
+
+| Area | Evidence | Result |
+|------|----------|--------|
+| Python locked dependencies | `uv export --frozen --no-hashes` followed by `pip-audit` | No known vulnerabilities after remediation |
+| Node dependencies | `npm audit --json` in `installer`, `packages/uab`, and `src/warroom` | 0 info, low, moderate, high, or critical vulnerabilities |
+| Security regression tests | 579 tests across security, hardening, host bridge, OAuth/network guardrail, MCP guardrail, memory injection, frontier scrubber, router auth, and control-plane auth suites | 579 passed |
+
+Remediated package versions:
+
+| Package | Previous Locked Version | Remediated Version | Finding Count |
+|---------|-------------------------|--------------------|---------------|
+| GitPython | 3.1.46 | 3.1.50 | 3 |
+| lxml | 6.0.2 | 6.1.0 | 1 |
+| python-dotenv | 1.2.1 | 1.2.2 | 1 |
+| python-multipart | 0.0.26 | 0.0.27 | 1 |
 
 ---
 
@@ -374,7 +396,7 @@ Stage 6: Trust Initialization
 | **A03: Injection** | Strong | InputSanitizer with anti-obfuscation normalization, PolicyEngine command denylist with shlex tokenization, path traversal detection with encoded variant handling. |
 | **A04: Insecure Design** | Strong | Constitutional governance (Soul), policy engine with risk tiers, receipt-based accountability, defense-in-depth architecture. |
 | **A05: Security Misconfiguration** | Strong | CORS restricted to explicit methods/headers. Security headers middleware. Feature flags and subsystem gates properly configured. |
-| **A06: Vulnerable Components** | Not Assessed | Dependencies use minimum version bounds. Recommendation: enable automated vulnerability scanning in CI. |
+| **A06: Vulnerable Components** | Strong | Locked Python dependencies and all Node package roots were audited during the May 2026 refresh. Initial Python findings were remediated and post-remediation `pip-audit` / `npm audit` results report no known vulnerabilities. Recommendation: keep automated dependency vulnerability scanning in CI. |
 | **A07: Auth Failures** | Partial | HMAC-SHA256 constant-time comparison is correct. Single static tokens; no MFA. |
 | **A08: Software/Data Integrity** | Strong | Fernet encryption, atomic writes, finalized receipt hash chaining, and file/change hashing in batch and export paths. |
 | **A09: Logging/Monitoring** | Strong | Comprehensive receipt system, structured audit logging with previous-entry hash chaining in `AuditLogger`, and thread-safe governance counters. |
@@ -411,6 +433,17 @@ Lancelot's governance architecture aligns with several NIST AI RMF practices:
 | **Confidentiality (CC9)** | Strong | Vault encryption strong; volume-level encryption documented as deployment requirement. |
 | **Privacy** | N/A | Single-owner system; no multi-tenant data handling. |
 
+### 4.5 Audit Evidence Snapshot
+
+| Evidence Item | Status |
+|---------------|--------|
+| Locked Python dependency audit | Pass after dependency remediation |
+| Installer Node dependency audit | Pass |
+| Universal Application Bridge Node dependency audit | Pass |
+| War Room Node dependency audit | Pass |
+| Security-focused pytest suite | Pass, 579 tests |
+| Remaining caveat | Results are advisory-database and test-suite based; they do not claim independent penetration-test coverage. |
+
 ---
 
 ## 5. Glossary
@@ -435,4 +468,4 @@ Lancelot's governance architecture aligns with several NIST AI RMF practices:
 *This security overview summarizes the public threat model and remediation posture for Project Lancelot. It is intended as an operator-facing reference for the current runtime.*
 
 **Author:** Myles Russell Hamilton
-**Date:** February 21, 2026
+**Date:** May 8, 2026
