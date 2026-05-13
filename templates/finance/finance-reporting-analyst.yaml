@@ -104,3 +104,13 @@ scheduling_boundaries:
     Scheduled financial jobs may not execute irreversible actions
     autonomously. Report generation runs require healthy data
     source connections.
+
+risk_overrides:
+  - {capability: "connector.finance.submit_regulatory_filing", min_tier: "T3", reason: "Regulatory filings require high-risk approval."}
+  - {capability: "connector.finance.modify_financial_record", min_tier: "T3", reason: "Financial source records cannot be modified autonomously."}
+trust_ceilings:
+  - {capability: "connector.finance.submit_regulatory_filing", max_graduation: "T3", reason: "Regulatory filings cannot graduate below high-risk approval."}
+data_boundaries:
+  - {name: "financial_reporting_data", classification: "financial_pii", allowed_access: ["read_financial_data", "generate_report"], prohibited_access: ["modify_financial_record", "external_data_export"], external_transmission_allowed: false, bulk_export_requires_approval: true, reason: "Financial reports may contain sensitive financial and personal data."}
+external_transmission_rules:
+  - {name: "financial_report_export", applies_to: ["external_data_export", "connector.finance.submit_regulatory_filing"], requires_approval_tier: "T3", pii_scrubbing_required: true, reason: "Financial reports and filings require approval before external transmission."}

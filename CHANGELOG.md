@@ -9,6 +9,44 @@ external users and reviewers.
 
 No unreleased changes.
 
+## [0.4.4] - 2026-05-13
+
+### Added
+
+- Added a governed Soul template library spanning customer support,
+  education, executive, finance, healthcare, HR, IT security, legal,
+  marketing, operations, and sales operating patterns.
+- Added structured Soul governance fields for risk overrides, trust ceilings,
+  connector policies, data boundaries, external transmission rules, and
+  kill-switch rules.
+- Added a Soul behavior evaluator and operator-managed behavior contracts so
+  expected allowed, approval-required, and blocked outcomes can be tested from
+  the War Room.
+- Expanded the War Room Soul viewer with template browsing, editable
+  governance controls, behavior evaluation, and contract run visibility.
+
+### Changed
+
+- Connector governance now enforces Soul connector policies, including
+  recipient/channel constraints, approval and scrubbing requirements, and
+  durable daily send caps for outbound connector operations.
+- Soul diagnostic endpoints now require `soul.admin`, so behavior evaluation
+  and behavior-contract inspection fail closed for non-admin sessions.
+
+### Verification
+
+- Full Python suite: 7,359 passed, 24 skipped, 31 deselected.
+- Full Python line coverage: 90.3194%.
+- Focused Soul/governance suite: 108 passed.
+- Installer Node tests: 9 passed.
+- Universal Application Bridge build and tests: 44 passed.
+- War Room type-check and production build: passed.
+- Docker Compose config validation: passed.
+- Live Soul admin smoke: War Room login/Soul shell served, 38 templates
+  loaded, representative finance template detail loaded, evaluator decisions
+  matched expectations, non-admin diagnostics were denied, and behavior
+  contract run passed 2/2.
+
 ## [0.4.3] - 2026-05-08
 
 ### Security

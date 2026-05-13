@@ -27,6 +27,7 @@ class ConnectorRuntime:
         policy_engine: Any = None,
         receipt_service: Any = None,
         trust_ledger: Any = None,
+        soul: Any = None,
     ) -> None:
         self.registry = registry
         self.vault = vault
@@ -46,7 +47,15 @@ class ConnectorRuntime:
             policy_engine=policy_engine,
             receipt_service=receipt_service,
             trust_ledger=trust_ledger,
+            soul=soul,
         )
+
+    def update_soul(self, soul: Any) -> None:
+        """Update connector-layer and classifier Soul policy."""
+        if hasattr(self.governed_proxy, "update_soul"):
+            self.governed_proxy.update_soul(soul)
+        if hasattr(self.governed_proxy._classifier, "update_soul"):
+            self.governed_proxy._classifier.update_soul(soul)
 
     def register_connector(self, connector_id: str) -> None:
         """Register classifier defaults for a connector's operations."""

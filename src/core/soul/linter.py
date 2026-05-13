@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import List
+from typing import List, Optional
 
 from src.core.soul.store import Soul, SoulStoreError
 
@@ -212,6 +212,153 @@ def _check_memory_ethics_present(soul: Soul) -> List[LintIssue]:
     return []
 
 
+def _tier_value(value: str) -> Optional[int]:
+    text = str(value).strip().upper()
+    if text.startswith("T"):
+        text = text[1:]
+    if text.isdigit():
+        number = int(text)
+        if 0 <= number <= 3:
+            return number
+    return None
+
+
+def _check_billing_requires_approval(soul: Soul) -> List[LintIssue]:
+    """Billing and funds-movement capabilities must be approval-gated."""
+    billing_terms = (
+        "billing",
+        "payment",
+        "transfer",
+        "stripe",
+        "quote",
+        "discount",
+        "payroll",
+        "invoice",
+    )
+    requires_approval = " ".join(soul.autonomy_posture.requires_approval).lower()
+    risk_override_text = " ".join(
+        f"{item.capability} {item.min_tier}" for item in soul.risk_overrides
+    ).lower()
+    relevant_text = f"{requires_approval} {risk_override_text}"
+
+    mentions_billing = any(term in relevant_text for term in billing_terms)
+    if not mentions_billing:
+        return []
+
+    approval_gate = any(term in requires_approval for term in billing_terms)
+    t2_or_higher_floor = any(
+        any(term in item.capability.lower() for term in billing_terms)
+        and (_tier_value(item.min_tier) or 0) >= 2
+        for item in soul.risk_overrides
+    )
+
+    if not approval_gate and not t2_or_higher_floor:
+        return [
+            LintIssue(
+                rule="billing_requires_approval",
+                severity=LintSeverity.CRITICAL,
+                message=(
+                    "Billing, payment, transfer, quote, discount, invoice, "
+                    "or payroll capabilities must be approval-gated or have "
+                    "a T2/T3 risk override."
+                ),
+            )
+        ]
+    return []
+
+
+def _check_external_transmission_rules(soul: Soul) -> List[LintIssue]:
+    """External transmission rules must require meaningful approval."""
+    issues: List[LintIssue] = []
+    for rule in soul.external_transmission_rules:
+        tier = _tier_value(rule.requires_approval_tier)
+        if tier is None or tier < 2:
+            issues.append(
+                LintIssue(
+                    rule="external_transmission_requires_approval",
+                    severity=LintSeverity.CRITICAL,
+                    message=(
+                        f"external_transmission_rules.{rule.name} must "
+                        "require T2 or T3 approval."
+                    ),
+                )
+            )
+        if not rule.pii_scrubbing_required:
+            issues.append(
+                LintIssue(
+                    rule="external_transmission_pii_scrubbing",
+                    severity=LintSeverity.WARNING,
+                    message=(
+                        f"external_transmission_rules.{rule.name} should "
+                        "require PII scrubbing."
+                    ),
+                )
+            )
+    return issues
+
+
+def _check_data_boundaries(soul: Soul) -> List[LintIssue]:
+    """Sensitive data boundaries must block autonomous bulk export."""
+    issues: List[LintIssue] = []
+    sensitive_terms = ("pii", "phi", "ferpa", "financial", "student", "patient")
+    for boundary in soul.data_boundaries:
+        text = f"{boundary.name} {boundary.classification}".lower()
+        if not any(term in text for term in sensitive_terms):
+            continue
+        if not boundary.bulk_export_requires_approval:
+            issues.append(
+                LintIssue(
+                    rule="sensitive_bulk_export_requires_approval",
+                    severity=LintSeverity.CRITICAL,
+                    message=(
+                        f"data_boundaries.{boundary.name} covers sensitive "
+                        "data and must require approval for bulk export."
+                    ),
+                )
+            )
+    return issues
+
+
+def _check_kill_switch_rules_enforced(soul: Soul) -> List[LintIssue]:
+    """Kill switch rules must be enforced when declared."""
+    return [
+        LintIssue(
+            rule="kill_switch_rules_enforced",
+            severity=LintSeverity.CRITICAL,
+            message=f"kill_switch_rules.{rule.name} must be enforced.",
+        )
+        for rule in soul.kill_switch_rules
+        if not rule.enforced
+    ]
+
+
+def _check_messaging_no_spam(soul: Soul) -> List[LintIssue]:
+    """Outbound connector policies must include anti-spam controls."""
+    issues: List[LintIssue] = []
+    for connector, policy in soul.connector_policies.items():
+        looks_outbound = any(
+            token in connector.lower()
+            for token in ("email", "slack", "social", "sms", "telegram", "teams")
+        )
+        if not looks_outbound:
+            continue
+        has_rate_limit = policy.max_sends_per_day is not None
+        has_scope_limit = bool(policy.verified_recipients or policy.allowed_channels)
+        has_review_gate = policy.require_content_verification or policy.approval_required_for_send
+        if not (has_rate_limit and (has_scope_limit or has_review_gate)):
+            issues.append(
+                LintIssue(
+                    rule="messaging_no_spam",
+                    severity=LintSeverity.CRITICAL,
+                    message=(
+                        f"connector_policies.{connector} must define a send "
+                        "rate limit and recipient/channel or review controls."
+                    ),
+                )
+            )
+    return issues
+
+
 # ---------------------------------------------------------------------------
 # Registry of all checks
 # ---------------------------------------------------------------------------
@@ -222,6 +369,11 @@ _CHECKS = [
     _check_scheduling_no_autonomous_irreversible,
     _check_approval_channels_exist,
     _check_memory_ethics_present,
+    _check_billing_requires_approval,
+    _check_external_transmission_rules,
+    _check_data_boundaries,
+    _check_kill_switch_rules_enforced,
+    _check_messaging_no_spam,
 ]
 
 

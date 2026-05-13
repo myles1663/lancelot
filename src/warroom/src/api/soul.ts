@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from './client'
+import { apiGet, apiPost, apiPut } from './client'
 import type {
   SoulStatusResponse,
   SoulContentResponse,
@@ -7,6 +7,10 @@ import type {
   SoulTemplateListResponse,
   SoulTemplateDetail,
   SoulTemplateApplyResponse,
+  SoulEvaluateResponse,
+  SoulBehaviorContractCase,
+  SoulBehaviorContractResponse,
+  SoulBehaviorContractRunResponse,
 } from '@/types/api'
 
 /** GET /soul/status — Active version + pending proposals */
@@ -17,6 +21,26 @@ export function fetchSoulStatus() {
 /** GET /soul/content — Full active soul document + raw YAML */
 export function fetchSoulContent() {
   return apiGet<SoulContentResponse>('/soul/content')
+}
+
+export function evaluateSoulCapability(
+  capability: string,
+  scope = 'workspace',
+  target?: string,
+) {
+  return apiPost<SoulEvaluateResponse>('/soul/evaluate', { capability, scope, target })
+}
+
+export function fetchSoulBehaviorContract() {
+  return apiGet<SoulBehaviorContractResponse>('/soul/behavior-contract')
+}
+
+export function saveSoulBehaviorContract(cases: SoulBehaviorContractCase[]) {
+  return apiPut<SoulBehaviorContractResponse>('/soul/behavior-contract', { cases })
+}
+
+export function runSoulBehaviorContract() {
+  return apiPost<SoulBehaviorContractRunResponse>('/soul/behavior-contract/run')
 }
 
 /** POST /soul/propose — Create amendment proposal from edited YAML */

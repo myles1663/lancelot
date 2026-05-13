@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import logo from '../assets/logo.jpeg'
+import logo from '../assets/logo.png'
 
 interface NavItem {
   label: string
@@ -108,7 +108,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             <img
               src={logo}
               alt="Lancelot"
-              className="w-12 h-12 rounded-lg object-cover"
+              className="w-24 h-24 object-contain"
             />
             <div>
               <h1 className="text-sm font-semibold text-text-primary tracking-wide">LANCELOT OS</h1>
