@@ -1,17 +1,17 @@
 {
-  "branch": "master",
-  "commit": "82259ac",
+  "branch": "main",
+  "commit": "9ea3e21",
   "display": {
     "headline_label": "Runnable tests tracked",
     "headline_tests": 7436,
     "test_files": 396
   },
-  "generated_at": "2026-05-13T01:40:25Z",
+  "generated_at": "2026-05-13T15:02:14Z",
   "metrics": {
     "installer": {
       "cancelled": 0,
       "command": "npm test",
-      "duration_ms": 4185,
+      "duration_ms": 3598,
       "failed": 0,
       "passed": 9,
       "skipped": 0,
@@ -26,7 +26,7 @@
       "command": "npm test",
       "daemon_dispatcher_passed": true,
       "dist_entries": 209,
-      "duration_ms": 91693,
+      "duration_ms": 31023,
       "failed": 0,
       "passed": 44,
       "skipped": 0,
@@ -51,5 +51,5 @@
   },
   "project": "lancelot",
   "schema_version": 1,
-  "version": "0.4.3"
+  "version": "0.4.4"
 }
