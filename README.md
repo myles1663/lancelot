@@ -135,6 +135,12 @@ No. The recommended posture is local-first and self-hosted. For production-style
 
 The governance layer evaluates every agent action against policy before execution. It combines Soul-defined constraints, risk classification, approval requirements, and kill switches so the model cannot bypass the system with prompt text alone.
 
+### Soul Template Library
+
+The Soul Template Library provides 38 governed role templates for common finance, healthcare, legal, HR, IT security, sales, support, operations, marketing, executive, and education workflows. These are complete Soul starting points, not prompt packs: each one carries autonomy posture, approval gates, risk overrides, trust ceilings, data boundaries, connector policies, and kill-switch rules where the role needs them.
+
+Operators manage templates in the War Room Soul Viewer/Soul Inspector. Applying a template does not silently mutate the active Soul. It creates a Soul amendment proposal, the evaluator and linter check the resulting document, and the operator must approve and activate the proposal before it becomes active. See [Soul Template Library](docs/soul-templates.md) and [Authoring Souls](docs/authoring-souls.md).
+
 ### UAB
 
 The Universal Application Bridge gives Lancelot a governed path to desktop application control. It routes operations through framework-aware hooks and fallbacks so app automation stays explicit, inspectable, and policy-bound instead of being treated like a generic tool call.
@@ -283,6 +289,8 @@ Start with the subsystem guides for implementation detail:
 
 - [War Room](docs/war-room.md)
 - [Governance](docs/governance.md)
+- [Soul Template Library](docs/soul-templates.md)
+- [Authoring Souls](docs/authoring-souls.md)
 - [Receipts](docs/receipts.md)
 - [Memory](docs/memory.md)
 - [UAB](docs/uab.md)

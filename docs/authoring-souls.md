@@ -82,6 +82,27 @@ scheduling_boundaries:
 
 ---
 
+## Using Templates As Starting Points
+
+For common operating roles, start with the [Soul Template Library](soul-templates.md)
+instead of authoring a Soul from a blank file. Templates are complete Soul
+documents with an additional `_template_metadata` block for catalog display,
+industry grouping, author/version information, and tags.
+
+The template loader strips `_template_metadata` before validating the Soul
+document. Everything below the metadata block must still satisfy the normal
+Soul schema and linter invariants. Applying a template in the War Room creates
+a Soul amendment proposal; it does not change the active Soul until an operator
+reviews, approves, and activates that proposal.
+
+Use template customizations for local deployment values such as mission wording,
+approval timeouts, verified recipients, connector limits, and data boundary
+labels. If you need to change the actual governance posture of a built-in role,
+review the full generated Soul diff and run evaluator behavior contracts before
+activation.
+
+---
+
 ## Schema Reference
 
 ### `version` (required)
