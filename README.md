@@ -78,7 +78,7 @@ python -m pytest -q tests/test_kill_switch_contract.py
 
 For release-candidate checks, dependency lockfiles, and Docker image pinning guidance, see [Release Verification](docs/release-verification.md).
 
-The latest release-readiness pass recorded `7,314 passed`, `24 skipped`, `31 deselected`, and `90.3600%` Python line coverage with:
+The latest release-readiness pass recorded `7,359 passed`, `24 skipped`, `31 deselected`, and `90.3194%` Python line coverage with:
 
 ```bash
 python -m pytest -q --cov=src --cov-report=term-missing --cov-report=json:coverage-full.json
@@ -197,7 +197,7 @@ Key guarantees are backed by contract tests you can run directly:
 - Guided approval flow: [docs/guided-walkthrough.md](docs/guided-walkthrough.md)
 - Live runtime proof path: [docs/proof-walkthrough.md](docs/proof-walkthrough.md)
 - Release verification: `python scripts/verify-public-release.py`
-- Full Python suite coverage baseline: `90.3600%` line coverage in the latest release-readiness pass
+- Full Python suite coverage baseline: `90.3194%` line coverage in the latest release-readiness pass
 - Receipt immutability and integrity-chain validation: [tests/test_receipts.py](tests/test_receipts.py)
 - HIVE scoped execution and boundary enforcement: [tests/hive/test_runtime.py](tests/hive/test_runtime.py)
 - Kill switch propagation and fail-closed behavior: [tests/test_kill_switch_contract.py](tests/test_kill_switch_contract.py)

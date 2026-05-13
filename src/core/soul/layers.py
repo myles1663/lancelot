@@ -278,6 +278,30 @@ def merge_soul(base: Soul, overlays: List[SoulOverlay]) -> Soul:
         tone_invariants=merged_tone_invariants,
         memory_ethics=merged_memory_ethics,
         scheduling_boundaries=_build_scheduling_boundaries(base, merged_sched_description),
+        risk_overrides=[
+            _dump_model(rule)
+            for rule in getattr(base, "risk_overrides", [])
+        ],
+        trust_ceilings=[
+            _dump_model(rule)
+            for rule in getattr(base, "trust_ceilings", [])
+        ],
+        connector_policies={
+            connector: _dump_model(policy)
+            for connector, policy in getattr(base, "connector_policies", {}).items()
+        },
+        data_boundaries=[
+            _dump_model(boundary)
+            for boundary in getattr(base, "data_boundaries", [])
+        ],
+        external_transmission_rules=[
+            _dump_model(rule)
+            for rule in getattr(base, "external_transmission_rules", [])
+        ],
+        kill_switch_rules=[
+            _dump_model(rule)
+            for rule in getattr(base, "kill_switch_rules", [])
+        ],
         spawn_budget=_dump_model(base.spawn_budget),
         mcp_permissions=[
             _dump_model(p)

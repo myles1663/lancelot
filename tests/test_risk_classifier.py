@@ -175,6 +175,41 @@ def test_soul_no_downgrade(soul_classifier):
     assert profile.tier == RiskTier.T3_IRREVERSIBLE
 
 
+def test_soul_risk_override_escalates_with_wildcard(config):
+    soul = {
+        "risk_overrides": [
+            {
+                "capability": "fs.*",
+                "min_tier": "T2",
+                "reason": "Filesystem actions require review.",
+            },
+        ],
+    }
+    classifier = RiskClassifier(config.risk_classification, soul=soul)
+
+    profile = classifier.classify("fs.read", "workspace")
+
+    assert profile.tier == RiskTier.T2_CONTROLLED
+    assert profile.soul_escalation == "Filesystem actions require review."
+
+
+def test_soul_risk_override_cannot_downgrade_default_t3(config):
+    soul = {
+        "risk_overrides": [
+            {
+                "capability": "net.post",
+                "min_tier": "T1",
+                "reason": "This lower floor must not reduce default risk.",
+            },
+        ],
+    }
+    classifier = RiskClassifier(config.risk_classification, soul=soul)
+
+    profile = classifier.classify("net.post", "workspace")
+
+    assert profile.tier == RiskTier.T3_IRREVERSIBLE
+
+
 def test_no_soul_no_escalation(classifier):
     """Without Soul, pattern escalation doesn't apply for soul-specific rules."""
     profile = classifier.classify("fs.write", "workspace", "data.secret")

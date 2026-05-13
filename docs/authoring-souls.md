@@ -161,9 +161,9 @@ Limits on automated job execution:
 
 ---
 
-## The Five Invariants
+## Soul Linter Invariants
 
-The Soul linter checks five constitutional invariants. CRITICAL failures block activation:
+The Soul linter checks constitutional invariants. CRITICAL failures block activation:
 
 | # | Invariant | Severity | What It Checks |
 |---|-----------|----------|---------------|
@@ -172,6 +172,11 @@ The Soul linter checks five constitutional invariants. CRITICAL failures block a
 | 3 | **scheduling_no_autonomous_irreversible** | CRITICAL | `scheduling_boundaries.no_autonomous_irreversible` is `true` |
 | 4 | **approval_channels_required** | CRITICAL | `approval_rules.channels` has at least one entry |
 | 5 | **memory_ethics_required** | WARNING | `memory_ethics` has at least one rule |
+| 6 | **billing_requires_approval** | CRITICAL | Billing, payment, transfer, quote, discount, invoice, and payroll capabilities are approval-gated |
+| 7 | **external_transmission_requires_approval** | CRITICAL | External transmission rules require T2 or T3 approval |
+| 8 | **sensitive_bulk_export_requires_approval** | CRITICAL | Sensitive data boundaries require approval for bulk export |
+| 9 | **kill_switch_rules_enforced** | CRITICAL | Declared kill-switch rules are enforced |
+| 10 | **messaging_no_spam** | CRITICAL | Outbound connector policies define rate limits and recipient/channel or review controls |
 
 If any CRITICAL invariant fails, the Soul cannot be activated. The previous version remains in effect.
 

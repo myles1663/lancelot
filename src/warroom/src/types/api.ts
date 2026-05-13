@@ -426,6 +426,55 @@ export interface SoulSchedulingBoundaries {
   description: string
 }
 
+export interface SoulRiskOverride {
+  capability: string
+  min_tier: string
+  reason: string
+}
+
+export interface SoulTrustCeiling {
+  capability: string
+  max_graduation: string
+  reason: string
+}
+
+export interface SoulConnectorPolicy {
+  verified_recipients: string[]
+  allowed_channels: string[]
+  restrict_dm: boolean
+  max_sends_per_day?: number | null
+  require_content_verification: boolean
+  pii_scrubbing_required: boolean
+  approval_required_for_send: boolean
+}
+
+export interface SoulDataBoundary {
+  name: string
+  classification: string
+  allowed_access: string[]
+  prohibited_access: string[]
+  external_transmission_allowed: boolean
+  bulk_export_requires_approval: boolean
+  reason: string
+}
+
+export interface SoulExternalTransmissionRule {
+  name: string
+  applies_to: string[]
+  requires_approval_tier: string
+  pii_scrubbing_required: boolean
+  allowed_destinations: string[]
+  reason: string
+}
+
+export interface SoulKillSwitchRule {
+  name: string
+  trigger: string
+  action: string
+  enforced: boolean
+  reason: string
+}
+
 export interface SoulDocument {
   version: string
   mission: string
@@ -436,12 +485,60 @@ export interface SoulDocument {
   tone_invariants: string[]
   memory_ethics: string[]
   scheduling_boundaries: SoulSchedulingBoundaries
+  risk_overrides: SoulRiskOverride[]
+  trust_ceilings: SoulTrustCeiling[]
+  connector_policies: Record<string, SoulConnectorPolicy>
+  data_boundaries: SoulDataBoundary[]
+  external_transmission_rules: SoulExternalTransmissionRule[]
+  kill_switch_rules: SoulKillSwitchRule[]
 }
 
 export interface SoulContentResponse {
   soul: SoulDocument
   raw_yaml: string
   active_overlays?: SoulOverlayInfo[]
+}
+
+export interface SoulEvaluateResponse {
+  capability: string
+  scope: string
+  target?: string | null
+  decision: 'allowed' | 'requires_approval' | 'blocked'
+  risk_tier: string
+  requires_approval: boolean
+  blocked: boolean
+  requires_sync_verify: boolean
+  reasons: string[]
+  matched_controls: string[]
+}
+
+export interface SoulBehaviorContractCase {
+  id: string
+  label: string
+  capability: string
+  scope: string
+  target?: string | null
+  expected: 'allowed' | 'requires_approval' | 'blocked'
+}
+
+export interface SoulBehaviorContractResponse {
+  version: string
+  cases: SoulBehaviorContractCase[]
+}
+
+export interface SoulBehaviorContractRunResult extends SoulEvaluateResponse {
+  id: string
+  label: string
+  expected: 'allowed' | 'requires_approval' | 'blocked'
+  passed: boolean
+}
+
+export interface SoulBehaviorContractRunResponse {
+  version: string
+  count: number
+  passed: number
+  failed: number
+  results: SoulBehaviorContractRunResult[]
 }
 
 export interface SoulProposeResponse {

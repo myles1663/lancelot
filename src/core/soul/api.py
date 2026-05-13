@@ -19,8 +19,11 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from typing import Optional
+from pathlib import Path
+from typing import Literal, Optional
+from uuid import uuid4
 
+import json
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -43,6 +46,7 @@ from src.core.soul.amendments import (
     save_proposals,
 )
 from src.core.soul.linter import lint, lint_or_raise
+from src.core.soul.behavior import evaluate_soul_behavior
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +69,31 @@ class ProposeAmendmentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     proposed_yaml: str = ""
+
+
+class EvaluateSoulRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capability: str
+    scope: str = "workspace"
+    target: Optional[str] = None
+
+
+class BehaviorContractCase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = ""
+    label: str
+    capability: str
+    scope: str = "workspace"
+    target: Optional[str] = None
+    expected: Literal["allowed", "requires_approval", "blocked"]
+
+
+class SaveBehaviorContractRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cases: list[BehaviorContractCase]
 
 
 def init_soul_actioncards(factory) -> None:
@@ -155,6 +184,71 @@ def _set_soul_dir(soul_dir: str) -> None:
     _SOUL_DIR = soul_dir
 
 
+def _behavior_contracts_file() -> Path:
+    from src.core.soul.store import _resolve_soul_dir
+
+    d = _resolve_soul_dir(_SOUL_DIR)
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "behavior_contracts.json"
+
+
+def _load_behavior_contracts() -> dict:
+    path = _behavior_contracts_file()
+    if not path.exists():
+        return {"versions": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("versions", {}), dict):
+            return data
+    except Exception as exc:
+        logger.warning("Failed to load behavior contracts: %s", exc)
+    return {"versions": {}}
+
+
+def _save_behavior_contracts(data: dict) -> None:
+    path = _behavior_contracts_file()
+    path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _contract_for_version(version: str) -> dict:
+    data = _load_behavior_contracts()
+    versions = data.setdefault("versions", {})
+    contract = versions.get(version)
+    if not isinstance(contract, dict):
+        contract = {"version": version, "cases": []}
+    cases = contract.get("cases", [])
+    if not isinstance(cases, list):
+        cases = []
+    return {"version": version, "cases": cases}
+
+
+def _normalize_contract_cases(cases: list[BehaviorContractCase]) -> list[dict]:
+    normalized = []
+    seen = set()
+    for case in cases:
+        label = case.label.strip()
+        capability = case.capability.strip()
+        scope = case.scope.strip() or "workspace"
+        target = case.target.strip() if case.target and case.target.strip() else None
+        if not label:
+            raise HTTPException(status_code=400, detail="Contract case label is required")
+        if not capability:
+            raise HTTPException(status_code=400, detail="Contract case capability is required")
+        key = (capability, scope, target or "", case.expected)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append({
+            "id": case.id.strip() or uuid4().hex[:12],
+            "label": label,
+            "capability": capability,
+            "scope": scope,
+            "target": target,
+            "expected": case.expected,
+        })
+    return normalized
+
+
 async def _parse_request_model(request: Request, model_cls: type[BaseModel]) -> BaseModel:
     try:
         payload = await request.json()
@@ -216,8 +310,11 @@ async def soul_status():
         version = get_active_version(_SOUL_DIR)
         versions = list_versions(_SOUL_DIR)
         proposals = list_proposals(_SOUL_DIR)
-        pending = [p.model_dump() for p in proposals
-                   if p.status == ProposalStatus.PENDING]
+        actionable = [
+            p.model_dump()
+            for p in proposals
+            if p.status in {ProposalStatus.PENDING, ProposalStatus.APPROVED}
+        ]
 
         # Load active overlays
         active_overlays = _get_active_overlays()
@@ -225,7 +322,7 @@ async def soul_status():
         return {
             "active_version": version,
             "available_versions": versions,
-            "pending_proposals": pending,
+            "pending_proposals": actionable,
             "active_overlays": active_overlays,
         }
     except SoulStoreError as exc:
@@ -270,8 +367,133 @@ async def soul_content():
 
 
 # ---------------------------------------------------------------------------
+# POST /soul/evaluate - explain active Soul behavior for one capability
+# ---------------------------------------------------------------------------
+
+@router.post("/evaluate")
+async def evaluate_soul(request: Request):
+    """Evaluate a capability against the active merged Soul.
+
+    This is a read-only diagnostic endpoint for War Room smoke tests and
+    operator review. It does not execute the requested capability.
+    """
+    if not _verify_owner(request):
+        raise HTTPException(status_code=403, detail="Owner identity required")
+
+    try:
+        body = await _parse_request_model(request, EvaluateSoulRequest)
+        if not body.capability.strip():
+            raise HTTPException(status_code=400, detail="capability is required")
+
+        soul = _load_merged_active_soul()
+        decision = evaluate_soul_behavior(
+            soul,
+            body.capability,
+            scope=body.scope,
+            target=body.target,
+        )
+        return decision.to_dict()
+    except HTTPException:
+        raise
+    except SoulStoreError as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+    except Exception as exc:
+        logger.error("evaluate_soul error: %s", exc)
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
 # POST /soul/propose — create amendment proposal from edited YAML
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Behavior contracts - operator-managed expected behavior for active Soul
+# ---------------------------------------------------------------------------
+
+@router.get("/behavior-contract")
+async def get_behavior_contract(request: Request):
+    """Return the behavior contract for the active Soul version."""
+    if not _verify_owner(request):
+        raise HTTPException(status_code=403, detail="Owner identity required")
+
+    try:
+        version = get_active_version(_SOUL_DIR)
+        return _contract_for_version(version)
+    except SoulStoreError as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+@router.put("/behavior-contract")
+async def save_behavior_contract(request: Request):
+    """Save expected behavior cases for the active Soul version.
+
+    This updates operator QA expectations only. It does not mutate or activate
+    the Soul constitution.
+    """
+    if not _verify_owner(request):
+        raise HTTPException(status_code=403, detail="Owner identity required")
+
+    try:
+        body = await _parse_request_model(request, SaveBehaviorContractRequest)
+        version = get_active_version(_SOUL_DIR)
+        data = _load_behavior_contracts()
+        versions = data.setdefault("versions", {})
+        contract = {
+            "version": version,
+            "cases": _normalize_contract_cases(body.cases),
+        }
+        versions[version] = contract
+        _save_behavior_contracts(data)
+        return contract
+    except HTTPException:
+        raise
+    except SoulStoreError as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+    except Exception as exc:
+        logger.error("save_behavior_contract error: %s", exc)
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+@router.post("/behavior-contract/run")
+async def run_behavior_contract(request: Request):
+    """Evaluate all saved contract cases against the active merged Soul."""
+    if not _verify_owner(request):
+        raise HTTPException(status_code=403, detail="Owner identity required")
+
+    try:
+        version = get_active_version(_SOUL_DIR)
+        contract = _contract_for_version(version)
+        soul = _load_merged_active_soul()
+        results = []
+        for case in contract["cases"]:
+            decision = evaluate_soul_behavior(
+                soul,
+                case["capability"],
+                scope=case.get("scope") or "workspace",
+                target=case.get("target"),
+            )
+            result = decision.to_dict()
+            result.update({
+                "id": case["id"],
+                "label": case["label"],
+                "expected": case["expected"],
+                "passed": result["decision"] == case["expected"],
+            })
+            results.append(result)
+
+        return {
+            "version": version,
+            "count": len(results),
+            "passed": sum(1 for result in results if result["passed"]),
+            "failed": sum(1 for result in results if not result["passed"]),
+            "results": results,
+        }
+    except SoulStoreError as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+    except Exception as exc:
+        logger.error("run_behavior_contract error: %s", exc)
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
 
 @router.post("/propose")
 async def propose_amendment(request: Request):

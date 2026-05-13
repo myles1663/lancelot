@@ -195,6 +195,42 @@ class TestCreateProposal:
         assert loaded[0].id == p1.id
         assert loaded[1].id == p2.id
 
+    def test_same_version_amendment_is_assigned_next_version(self, tmp_path):
+        soul_dir = _write_soul_dir(tmp_path, active="v1")
+        proposed_yaml = yaml.dump(_soul_dict("v1", mission="Amended mission."))
+
+        proposal = create_proposal("v1", proposed_yaml, soul_dir=soul_dir)
+
+        assert proposal.proposed_version == "v2"
+        assert 'version: "v2"' in proposal.proposed_yaml
+        assert "changed: version" in proposal.diff_summary
+        assert "changed: mission" in proposal.diff_summary
+
+    def test_version_assignment_skips_existing_actionable_proposals(self, tmp_path):
+        soul_dir = _write_soul_dir(tmp_path, active="v1")
+        pending = create_proposal("v1", yaml.dump(_soul_dict("v1", mission="First.")), soul_dir=soul_dir)
+
+        second = create_proposal("v1", yaml.dump(_soul_dict("v1", mission="Second.")), soul_dir=soul_dir)
+
+        assert pending.proposed_version == "v2"
+        assert second.proposed_version == "v3"
+        assert 'version: "v3"' in second.proposed_yaml
+
+    def test_explicit_conflicting_version_is_reassigned(self, tmp_path):
+        soul_dir = _write_soul_dir(
+            tmp_path,
+            versions={
+                "v1": _soul_dict("v1"),
+                "v2": _soul_dict("v2"),
+            },
+            active="v1",
+        )
+
+        proposal = create_proposal("v1", yaml.dump(_soul_dict("v2", mission="Conflicting.")), soul_dir=soul_dir)
+
+        assert proposal.proposed_version == "v3"
+        assert 'version: "v3"' in proposal.proposed_yaml
+
 
 # ===================================================================
 # list_proposals / get_proposal
@@ -238,8 +274,29 @@ class TestPersistence:
 
         save_proposals([SoulAmendmentProposal(proposed_version="v2")])
 
-        assert (runtime_data / "soul_proposals.json").exists()
+        assert (runtime_data / "soul" / "soul_proposals.json").exists()
+        assert not (runtime_data / "soul_proposals.json").exists()
         assert not (tmp_path / "data" / "soul_proposals.json").exists()
+
+    def test_runtime_proposals_migrate_from_unsorted(self, tmp_path, monkeypatch):
+        soul_dir = _write_soul_dir(tmp_path, active="v1")
+        runtime_data = tmp_path / "runtime_data"
+        legacy_dir = runtime_data / "Unsorted"
+        legacy_dir.mkdir(parents=True)
+        legacy_proposal = SoulAmendmentProposal(proposed_version="v2")
+        (legacy_dir / "soul_proposals.json").write_text(
+            json.dumps([legacy_proposal.model_dump()], default=str),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("SOUL_DIR", soul_dir)
+        monkeypatch.setenv("LANCELOT_DATA_DIR", str(runtime_data))
+
+        proposals = list_proposals()
+
+        assert [p.id for p in proposals] == [legacy_proposal.id]
+        migrated = runtime_data / "soul" / "soul_proposals.json"
+        assert migrated.exists()
+        assert json.loads(migrated.read_text(encoding="utf-8"))[0]["id"] == legacy_proposal.id
 
     def test_proposals_file_is_valid_json(self, tmp_path):
         soul_dir = _write_soul_dir(tmp_path, active="v1")

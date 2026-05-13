@@ -107,3 +107,15 @@ scheduling_boundaries:
     Scheduled compliance scans may not execute irreversible actions.
     Monitoring jobs require healthy connections to transaction data
     sources and compliance rule databases.
+
+risk_overrides:
+  - {capability: "connector.compliance.file_sar", min_tier: "T3", reason: "Regulatory suspicious activity filings require high-risk approval."}
+  - {capability: "connector.compliance.suspend_account", min_tier: "T3", reason: "Account suspension is an externally consequential action."}
+trust_ceilings:
+  - {capability: "connector.compliance.*", max_graduation: "T2", reason: "Compliance operations must retain review gates."}
+data_boundaries:
+  - {name: "financial_compliance_evidence", classification: "financial_pii", allowed_access: ["scan_transactions", "generate_compliance_report"], prohibited_access: ["modify_compliance_rule", "delete_evidence"], external_transmission_allowed: false, bulk_export_requires_approval: true, reason: "Compliance evidence may contain sensitive financial and personal data."}
+external_transmission_rules:
+  - {name: "regulatory_compliance_escalation", applies_to: ["connector.compliance.file_sar", "escalate_to_regulator"], requires_approval_tier: "T3", pii_scrubbing_required: true, reason: "Regulatory escalation requires approval and scrubbed evidence."}
+kill_switch_rules:
+  - {name: "compliance_evidence_deletion", trigger: "attempted_delete_or_modify_compliance_evidence", action: "halt_and_escalate", enforced: true, reason: "Compliance evidence must remain immutable."}

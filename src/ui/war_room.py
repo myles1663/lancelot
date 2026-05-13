@@ -153,7 +153,9 @@ if len(st.session_state.messages) == 0:
 # Sidebar: Live Logs
 with st.sidebar:
     # Render project branding when the asset is present.
-    logo_path = os.path.join(STATIC_DIR, "logo.jpeg")
+    logo_path = os.path.join(STATIC_DIR, "logo.png")
+    if not os.path.exists(logo_path):
+        logo_path = os.path.join(STATIC_DIR, "logo.jpeg")
     if os.path.exists(logo_path):
         st.image(logo_path, use_container_width=True)
 

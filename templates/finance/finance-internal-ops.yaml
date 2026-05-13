@@ -113,3 +113,14 @@ scheduling_boundaries:
     Scheduled payment and operations jobs may not execute irreversible
     actions autonomously. Payment batch runs require healthy banking
     connections and completed reconciliation.
+
+risk_overrides:
+  - {capability: "connector.finance.execute_payment", min_tier: "T3", reason: "Payment execution is an irreversible financial transaction."}
+  - {capability: "connector.finance.billing_adjustment", min_tier: "T3", reason: "Billing adjustments require owner approval."}
+  - {capability: "connector.finance.onboard_vendor", min_tier: "T2", reason: "Vendor onboarding requires review."}
+trust_ceilings:
+  - {capability: "connector.finance.execute_payment", max_graduation: "T3", reason: "Payment execution cannot graduate below high-risk approval."}
+data_boundaries:
+  - {name: "internal_finance_operations_data", classification: "financial_pii", allowed_access: ["classify_invoice", "prepare_payment_batch", "vendor_lookup"], prohibited_access: ["execute_payment", "modify_payment_terms", "billing_adjustment"], external_transmission_allowed: false, bulk_export_requires_approval: true, reason: "Internal finance operations contain sensitive vendor and payment data."}
+external_transmission_rules:
+  - {name: "payment_execution", applies_to: ["connector.finance.execute_payment", "execute_payment"], requires_approval_tier: "T3", pii_scrubbing_required: true, reason: "Payment instructions require approval before external execution."}

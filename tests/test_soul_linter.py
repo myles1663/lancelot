@@ -259,6 +259,99 @@ class TestMemoryEthics:
 
 
 # ===================================================================
+# structured governance invariants
+# ===================================================================
+
+class TestStructuredGovernanceInvariants:
+
+    def test_external_transmission_below_t2_is_critical(self):
+        soul = Soul(**_minimal_soul_dict(
+            external_transmission_rules=[
+                {
+                    "name": "customer_export",
+                    "applies_to": ["connector.email.send"],
+                    "requires_approval_tier": "T1",
+                },
+            ],
+        ))
+
+        issues = lint(soul)
+        rule_issues = [
+            i for i in issues
+            if i.rule == "external_transmission_requires_approval"
+        ]
+        assert len(rule_issues) == 1
+        assert rule_issues[0].severity == LintSeverity.CRITICAL
+
+    def test_sensitive_boundary_bulk_export_without_approval_is_critical(self):
+        soul = Soul(**_minimal_soul_dict(
+            data_boundaries=[
+                {
+                    "name": "patient_phi",
+                    "classification": "PHI",
+                    "bulk_export_requires_approval": False,
+                },
+            ],
+        ))
+
+        issues = lint(soul)
+        rule_issues = [
+            i for i in issues
+            if i.rule == "sensitive_bulk_export_requires_approval"
+        ]
+        assert len(rule_issues) == 1
+        assert rule_issues[0].severity == LintSeverity.CRITICAL
+
+    def test_disabled_kill_switch_rule_is_critical(self):
+        soul = Soul(**_minimal_soul_dict(
+            kill_switch_rules=[
+                {
+                    "name": "bulk_export",
+                    "trigger": "bulk_export_attempt",
+                    "enforced": False,
+                },
+            ],
+        ))
+
+        issues = lint(soul)
+        rule_issues = [
+            i for i in issues
+            if i.rule == "kill_switch_rules_enforced"
+        ]
+        assert len(rule_issues) == 1
+        assert rule_issues[0].severity == LintSeverity.CRITICAL
+
+    def test_outbound_connector_without_spam_controls_is_critical(self):
+        soul = Soul(**_minimal_soul_dict(
+            connector_policies={
+                "email": {
+                    "verified_recipients": ["*@example.com"],
+                },
+            },
+        ))
+
+        issues = lint(soul)
+        rule_issues = [i for i in issues if i.rule == "messaging_no_spam"]
+        assert len(rule_issues) == 1
+        assert rule_issues[0].severity == LintSeverity.CRITICAL
+
+    def test_outbound_connector_with_spam_controls_passes(self):
+        soul = Soul(**_minimal_soul_dict(
+            connector_policies={
+                "email": {
+                    "verified_recipients": ["*@example.com"],
+                    "max_sends_per_day": 10,
+                    "require_content_verification": True,
+                },
+            },
+        ))
+
+        issues = lint(soul)
+        rule_issues = [i for i in issues if i.rule == "messaging_no_spam"]
+        assert rule_issues == []
+
+
+# ===================================================================
 # lint_or_raise behaviour
 # ===================================================================
 

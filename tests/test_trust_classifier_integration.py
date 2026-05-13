@@ -1,5 +1,5 @@
 """
-Tests for Prompts 44-45: Trust ↔ RiskClassifier + GovernedConnectorProxy Wiring.
+Tests for Prompts 44-45: Trust â†” RiskClassifier + GovernedConnectorProxy Wiring.
 """
 
 import os
@@ -45,7 +45,7 @@ def risk_config():
     })
 
 
-# ── Prompt 44: Trust ↔ RiskClassifier ────────────────────────────
+# â”€â”€ Prompt 44: Trust â†” RiskClassifier â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestTrustClassifierIntegration:
     def test_without_trust_returns_default(self, risk_config):
@@ -78,6 +78,29 @@ class TestTrustClassifierIntegration:
         assert profile.tier == RiskTier.T1_REVERSIBLE
 
     @patch("src.core.feature_flags.FEATURE_TRUST_LEDGER", True)
+    def test_soul_trust_ceiling_blocks_graduation(self, risk_config, ledger):
+        """Soul trust ceilings keep graduated trust from dropping below floor."""
+        rec = ledger.get_or_create_record(
+            "connector.slack.post_message", "workspace",
+            RiskTier.T2_CONTROLLED,
+        )
+        rec.current_tier = RiskTier.T0_INERT
+
+        soul = {
+            "trust_ceilings": [
+                {
+                    "capability": "connector.slack.*",
+                    "max_graduation": "T2",
+                    "reason": "Public messages retain review gates.",
+                },
+            ],
+        }
+        classifier = RiskClassifier(risk_config, soul=soul, trust_ledger=ledger)
+        profile = classifier.classify("connector.slack.post_message", scope="workspace")
+
+        assert profile.tier == RiskTier.T2_CONTROLLED
+
+    @patch("src.core.feature_flags.FEATURE_TRUST_LEDGER", True)
     def test_soul_minimum_blocks_trust(self, risk_config, ledger):
         """Soul minimum T2 blocks trust lowering to T1.
 
@@ -101,28 +124,18 @@ class TestTrustClassifierIntegration:
         }]}}
         classifier = RiskClassifier(risk_config, soul=soul, trust_ledger=ledger)
         profile = classifier.classify("connector.slack.post_message", scope="workspace")
-        # Soul escalated to T2. Trust sees T1 < T2, so trust would lower it.
-        # But trust can only lower from a HIGHER tier. Since Soul raised to T2
-        # and trust has T1, trust says effective=T1 which IS lower than T2.
-        # The net result is T1. But that's wrong — Soul should win.
-        # Actually the spec says "trust can only LOWER" — meaning trust adjustments
-        # only apply if effective < current_tier (after soul). If soul raised to T2
-        # and trust says T1, then T1 < T2 so trust applies.
-        # The SOUL MINIMUM is enforced on the TrustRecord side (can_graduate=False),
-        # so the record should never have reached T1 if soul_minimum=T2.
-        # Since we manually forced it, the classifier trusts the ledger value.
-        # This test validates that the Soul escalation runs BEFORE trust, so
-        # trust only lowers from the soul-adjusted tier.
-        assert profile.tier == RiskTier.T1_REVERSIBLE
+        # Soul floors are enforced after trust, so a manually lowered trust
+        # record cannot bypass a current Soul minimum.
+        assert profile.tier == RiskTier.T2_CONTROLLED
 
     @patch("src.core.feature_flags.FEATURE_TRUST_LEDGER", True)
     def test_full_loop_graduation(self, risk_config, ledger):
-        """Full loop: register ops → N successes → approve → classifier returns lower."""
+        """Full loop: register ops â†’ N successes â†’ approve â†’ classifier returns lower."""
         cap = "connector.slack.post_message"
         scope = "workspace"
         ledger.get_or_create_record(cap, scope, RiskTier.T2_CONTROLLED)
 
-        # 100 successes for T2→T1
+        # 100 successes for T2â†’T1
         for _ in range(100):
             ledger.record_success(cap, scope)
 
@@ -148,7 +161,7 @@ class TestTrustClassifierIntegration:
 
     @patch("src.core.feature_flags.FEATURE_TRUST_LEDGER", True)
     def test_trust_never_raises(self, risk_config, ledger):
-        """Trust NEVER raises a tier. Default T1, trust T2 → classifier returns T1."""
+        """Trust NEVER raises a tier. Default T1, trust T2 â†’ classifier returns T1."""
         # Config has T0 default for read_channels
         rec = ledger.get_or_create_record(
             "connector.slack.read_channels", "workspace",
@@ -195,7 +208,7 @@ class TestInitializeFromConnector:
         assert rec.soul_minimum_tier == RiskTier.T1_REVERSIBLE
 
 
-# ── Prompt 45: Trust ↔ GovernedConnectorProxy ────────────────────
+# â”€â”€ Prompt 45: Trust â†” GovernedConnectorProxy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestGovernedProxyTrust:
     """Tests that GovernedConnectorProxy updates trust ledger on execute."""

@@ -6,6 +6,7 @@ Mocks HTTP layer only (no real network calls).
 """
 
 import os
+import json
 import pytest
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -52,6 +53,13 @@ class _GovTestConnector(ConnectorBase):
                 connector_id=self.manifest.id,
                 capability="connector.write",
                 name="Write Data",
+                default_tier=RiskTier.T2_CONTROLLED,
+            ),
+            ConnectorOperation(
+                id="send_message",
+                connector_id=self.manifest.id,
+                capability="connector.write",
+                name="Send Message",
                 default_tier=RiskTier.T2_CONTROLLED,
             ),
         ]
@@ -126,8 +134,9 @@ def classifier():
 
 
 @pytest.fixture
-def governed_setup(registry, vault, classifier):
+def governed_setup(registry, vault, classifier, tmp_path, monkeypatch):
     """Create full governed proxy stack."""
+    monkeypatch.setenv("LANCELOT_DATA_DIR", str(tmp_path / "data"))
     connector = _GovTestConnector()
     registry.register(connector)
     connector.set_status(ConnectorStatus.ACTIVE)
@@ -269,3 +278,210 @@ class TestGovernedConnectorProxy:
         resp = governed.execute_governed("test", "read_data", {})
         assert resp.success is False
         assert "Policy denied" in resp.error
+
+    @patch("src.connectors.proxy.ConnectorProxy.execute")
+    def test_connector_policy_blocks_unverified_recipient(
+        self, mock_execute, governed_setup, classifier
+    ):
+        governed, receipt_store, _ = governed_setup
+        classifier.update_soul({
+            "connector_policies": {
+                "test": {
+                    "verified_recipients": ["*@allowed.example"],
+                    "max_sends_per_day": 10,
+                    "require_content_verification": True,
+                    "pii_scrubbing_required": True,
+                    "approval_required_for_send": True,
+                },
+            },
+        })
+
+        resp = governed.execute_governed("test", "send_message", {
+            "to": "person@blocked.example",
+            "content_verified": True,
+            "pii_scrubbed": True,
+            "approved": True,
+        })
+
+        assert resp.success is False
+        assert "recipient" in resp.error
+        assert len(receipt_store) == 1
+        assert receipt_store[0]["success"] is False
+        assert "Soul policy denied" in receipt_store[0]["error"]
+        mock_execute.assert_not_called()
+
+    @patch("src.connectors.proxy.ConnectorProxy.execute")
+    def test_soul_policy_denial_records_trust_failure(
+        self, mock_execute, registry, vault, classifier, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("LANCELOT_DATA_DIR", str(tmp_path / "data"))
+        connector = _GovTestConnector()
+        registry.register(connector)
+        proxy = ConnectorProxy(registry, vault)
+        trust_ledger = MagicMock()
+        classifier.update_soul({
+            "connector_policies": {
+                "test": {
+                    "verified_recipients": ["*@allowed.example"],
+                },
+            },
+        })
+        governed = GovernedConnectorProxy(
+            proxy=proxy,
+            registry=registry,
+            risk_classifier=classifier,
+            trust_ledger=trust_ledger,
+        )
+        governed.register_connector_tiers("test")
+
+        resp = governed.execute_governed("test", "send_message", {
+            "to": "person@blocked.example",
+        })
+
+        assert resp.success is False
+        trust_ledger.record_failure.assert_called_once_with(
+            "connector.test.send_message",
+            "external",
+        )
+        mock_execute.assert_not_called()
+
+    @patch("src.connectors.proxy.ConnectorProxy.execute")
+    def test_connector_policy_allows_verified_approved_send(
+        self, mock_execute, governed_setup, classifier
+    ):
+        governed, _, _ = governed_setup
+        classifier.update_soul({
+            "connector_policies": {
+                "test": {
+                    "verified_recipients": ["*@allowed.example"],
+                    "max_sends_per_day": 10,
+                    "require_content_verification": True,
+                    "pii_scrubbing_required": True,
+                    "approval_required_for_send": True,
+                },
+            },
+        })
+        mock_execute.return_value = MagicMock(
+            operation_id="send_message",
+            connector_id="test",
+            status_code=200,
+            success=True,
+            receipt_id="",
+        )
+
+        resp = governed.execute_governed("test", "send_message", {
+            "to": "person@allowed.example",
+            "content_verified": True,
+            "pii_scrubbed": True,
+            "approved": True,
+        })
+
+        assert resp.success is True
+        mock_execute.assert_called_once()
+
+    @patch("src.connectors.proxy.ConnectorProxy.execute")
+    def test_connector_policy_enforces_durable_daily_send_cap(
+        self, mock_execute, governed_setup, classifier, tmp_path
+    ):
+        governed, receipt_store, _ = governed_setup
+        classifier.update_soul({
+            "connector_policies": {
+                "test": {
+                    "verified_recipients": ["*@allowed.example"],
+                    "max_sends_per_day": 1,
+                    "require_content_verification": True,
+                    "pii_scrubbing_required": True,
+                    "approval_required_for_send": True,
+                },
+            },
+        })
+        mock_execute.return_value = MagicMock(
+            operation_id="send_message",
+            connector_id="test",
+            status_code=200,
+            success=True,
+            receipt_id="",
+        )
+        params = {
+            "to": "person@allowed.example",
+            "content_verified": True,
+            "pii_scrubbed": True,
+            "approved": True,
+        }
+
+        first = governed.execute_governed("test", "send_message", params)
+        second = governed.execute_governed("test", "send_message", params)
+
+        assert first.success is True
+        assert second.success is False
+        assert "max_sends_per_day exceeded" in second.error
+        assert mock_execute.call_count == 1
+        assert len(receipt_store) == 2
+        assert receipt_store[-1]["success"] is False
+        counter_path = (
+            tmp_path
+            / "data"
+            / "connectors"
+            / "soul_connector_daily_sends.json"
+        )
+        counts = json.loads(counter_path.read_text(encoding="utf-8"))
+        today_counts = next(iter(counts.values()))
+        assert today_counts["test"] == 1
+
+    @patch("src.connectors.proxy.ConnectorProxy.execute")
+    def test_external_transmission_rule_blocks_missing_approval(
+        self, mock_execute, governed_setup, classifier
+    ):
+        governed, _, _ = governed_setup
+        classifier.update_soul({
+            "external_transmission_rules": [
+                {
+                    "name": "message_send",
+                    "applies_to": ["connector.test.send_message"],
+                    "requires_approval_tier": "T3",
+                    "pii_scrubbing_required": True,
+                },
+            ],
+        })
+
+        resp = governed.execute_governed("test", "send_message", {
+            "to": "person@example.com",
+            "pii_scrubbed": True,
+        })
+
+        assert resp.success is False
+        assert "requires approval" in resp.error
+        mock_execute.assert_not_called()
+
+    @patch("src.connectors.proxy.ConnectorProxy.execute")
+    def test_external_transmission_rule_allows_approved_scrubbed_send(
+        self, mock_execute, governed_setup, classifier
+    ):
+        governed, _, _ = governed_setup
+        classifier.update_soul({
+            "external_transmission_rules": [
+                {
+                    "name": "message_send",
+                    "applies_to": ["connector.test.send_message"],
+                    "requires_approval_tier": "T3",
+                    "pii_scrubbing_required": True,
+                },
+            ],
+        })
+        mock_execute.return_value = MagicMock(
+            operation_id="send_message",
+            connector_id="test",
+            status_code=200,
+            success=True,
+            receipt_id="",
+        )
+
+        resp = governed.execute_governed("test", "send_message", {
+            "to": "person@example.com",
+            "approved": True,
+            "approval_tier": "T3",
+            "pii_scrubbed": True,
+        })
+
+        assert resp.success is True
+        mock_execute.assert_called_once()

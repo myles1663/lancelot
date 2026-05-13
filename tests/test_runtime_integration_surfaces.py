@@ -52,6 +52,49 @@ def make_soul() -> Soul:
             "max_job_duration_seconds": 60,
             "description": "base schedule",
         },
+        risk_overrides=[
+            {
+                "capability": "connector.compliance.file_sar",
+                "min_tier": "T3",
+                "reason": "Regulatory filings require approval.",
+            },
+        ],
+        trust_ceilings=[
+            {
+                "capability": "connector.compliance.*",
+                "max_graduation": "T2",
+                "reason": "Compliance operations retain review gates.",
+            },
+        ],
+        data_boundaries=[
+            {
+                "name": "financial_evidence",
+                "classification": "financial_pii",
+                "allowed_access": ["scan"],
+                "prohibited_access": ["delete"],
+                "external_transmission_allowed": False,
+                "bulk_export_requires_approval": True,
+                "reason": "Contains sensitive financial data.",
+            },
+        ],
+        external_transmission_rules=[
+            {
+                "name": "regulatory_escalation",
+                "applies_to": ["file_sar"],
+                "requires_approval_tier": "T3",
+                "pii_scrubbing_required": True,
+                "reason": "External regulatory contact.",
+            },
+        ],
+        kill_switch_rules=[
+            {
+                "name": "evidence_delete",
+                "trigger": "delete_evidence",
+                "action": "halt_and_escalate",
+                "enforced": True,
+                "reason": "Evidence is immutable.",
+            },
+        ],
         spawn_budget={"max_concurrent_spawns": 3},
         mcp_permissions=[{"server_id": "github", "allowed_tools": ["search"], "risk_tier": "T1"}],
         fork_permissions={"allow_fork": False},
@@ -421,10 +464,16 @@ scheduling_boundaries: No unattended market actions.
     assert "precise money language" in merged.tone_invariants
     assert "reconcile receipts" in merged.autonomy_posture.allowed_autonomous
     assert "No unattended market actions" in merged.scheduling_boundaries.description
+    assert len(merged.risk_overrides) == 1
+    assert len(merged.trust_ceilings) == 1
+    assert len(merged.data_boundaries) == 1
+    assert len(merged.external_transmission_rules) == 1
+    assert len(merged.kill_switch_rules) == 1
 
     monkeypatch.setattr("src.core.soul.layers.load_active_soul", lambda soul_dir: base)
     active = load_active_soul_with_overlays(str(tmp_path), {"FEATURE_FINANCE"})
     assert any(rule.name == "wire-transfer" for rule in active.risk_rules)
+    assert active.risk_overrides[0].capability == "connector.compliance.file_sar"
 
     monkeypatch.setattr("src.core.soul.layers.load_overlays", lambda *_args, **_kwargs: [])
     assert load_active_soul_with_overlays(str(tmp_path), set()) is base

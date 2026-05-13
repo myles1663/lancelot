@@ -163,6 +163,21 @@ class TestSoulStatus:
         data = resp.json()
         assert len(data["pending_proposals"]) == 1
 
+    def test_returns_approved_proposals_for_activation(self, client):
+        c, soul_dir = client
+        proposed_yaml = yaml.dump(_soul_dict("v2"))
+        proposal = create_proposal("v1", proposed_yaml, soul_dir=soul_dir)
+        proposals = list_proposals(soul_dir)
+        proposals[0].status = ProposalStatus.APPROVED
+        save_proposals(proposals, soul_dir)
+
+        resp = c.get("/soul/status", headers=_owner_headers())
+        data = resp.json()
+
+        assert len(data["pending_proposals"]) == 1
+        assert data["pending_proposals"][0]["id"] == proposal.id
+        assert data["pending_proposals"][0]["status"] == "approved"
+
     def test_status_and_content_return_safe_errors_when_store_fails(self, client, monkeypatch):
         c, _ = client
         monkeypatch.setattr(soul_api_module, "get_active_version", lambda soul_dir: (_ for _ in ()).throw(soul_api_module.SoulStoreError("active missing")))
@@ -206,6 +221,188 @@ class TestSoulStatus:
         assert content.status_code == 200
         assert content.json()["soul"] == {"version": "merged"}
         assert content.json()["active_overlays"][0]["autonomy_additions"] == 2
+
+
+class TestSoulEvaluate:
+
+    def test_evaluate_requires_owner(self, client):
+        c, _ = client
+
+        resp = c.post(
+            "/soul/evaluate",
+            headers=_non_owner_headers(),
+            json={"capability": "classify_intent"},
+        )
+
+        assert resp.status_code in {401, 403}
+
+    def test_evaluate_returns_active_soul_decision(self, client):
+        c, soul_dir = client
+        finance_soul = _soul_dict(
+            "v2",
+            autonomy_posture={
+                "level": "supervised",
+                "description": "Finance monitor.",
+                "allowed_autonomous": ["scan_transactions"],
+                "requires_approval": ["deploy", "delete", "file_sar"],
+            },
+            risk_overrides=[
+                {
+                    "capability": "connector.compliance.file_sar",
+                    "min_tier": "T3",
+                    "reason": "SAR filing requires approval.",
+                },
+            ],
+            data_boundaries=[
+                {
+                    "name": "financial_evidence",
+                    "classification": "financial_pii",
+                    "allowed_access": ["scan_transactions"],
+                    "prohibited_access": ["modify_compliance_rule"],
+                    "external_transmission_allowed": False,
+                    "bulk_export_requires_approval": True,
+                    "reason": "Evidence is immutable.",
+                },
+            ],
+            kill_switch_rules=[
+                {
+                    "name": "evidence_tamper",
+                    "trigger": "attempted_delete_or_modify_compliance_evidence",
+                    "action": "halt_and_escalate",
+                    "enforced": True,
+                    "reason": "Stop evidence tampering.",
+                },
+            ],
+        )
+        versions_dir = Path(soul_dir) / "soul_versions"
+        (versions_dir / "soul_v2.yaml").write_text(yaml.dump(finance_soul), encoding="utf-8")
+        Path(soul_dir, "ACTIVE").write_text("v2", encoding="utf-8")
+
+        allowed = c.post(
+            "/soul/evaluate",
+            headers=_owner_headers(),
+            json={"capability": "scan_transactions"},
+        )
+        approval = c.post(
+            "/soul/evaluate",
+            headers=_owner_headers(),
+            json={"capability": "connector.compliance.file_sar"},
+        )
+        blocked = c.post(
+            "/soul/evaluate",
+            headers=_owner_headers(),
+            json={"capability": "attempted_delete_or_modify_compliance_evidence"},
+        )
+
+        assert allowed.status_code == 200
+        assert allowed.json()["decision"] == "allowed"
+        assert approval.status_code == 200
+        assert approval.json()["decision"] == "requires_approval"
+        assert approval.json()["risk_tier"] == "T3"
+        assert blocked.status_code == 200
+        assert blocked.json()["decision"] == "blocked"
+        assert "kill_switch:evidence_tamper" in blocked.json()["matched_controls"]
+
+    def test_evaluate_rejects_empty_capability(self, client):
+        c, _ = client
+
+        resp = c.post(
+            "/soul/evaluate",
+            headers=_owner_headers(),
+            json={"capability": "  "},
+        )
+
+        assert resp.status_code == 400
+
+
+class TestSoulBehaviorContract:
+
+    def test_contract_read_and_run_require_owner(self, client):
+        c, _ = client
+
+        read = c.get("/soul/behavior-contract", headers=_non_owner_headers())
+        run = c.post("/soul/behavior-contract/run", headers=_non_owner_headers())
+
+        assert read.status_code in {401, 403}
+        assert run.status_code in {401, 403}
+
+    def test_contract_can_be_saved_loaded_and_run(self, client):
+        c, soul_dir = client
+        contract_cases = [
+            {
+                "label": "Allow classify",
+                "capability": "classify_intent",
+                "scope": "workspace",
+                "expected": "allowed",
+            },
+            {
+                "label": "Approve delete",
+                "capability": "delete",
+                "scope": "workspace",
+                "expected": "requires_approval",
+            },
+        ]
+
+        saved = c.put(
+            "/soul/behavior-contract",
+            headers=_owner_headers(),
+            json={"cases": contract_cases},
+        )
+        loaded = c.get("/soul/behavior-contract", headers=_owner_headers())
+        run = c.post("/soul/behavior-contract/run", headers=_owner_headers())
+
+        assert saved.status_code == 200
+        assert saved.json()["version"] == "v1"
+        assert len(saved.json()["cases"]) == 2
+        assert saved.json()["cases"][0]["id"]
+        assert loaded.status_code == 200
+        assert loaded.json()["cases"][1]["label"] == "Approve delete"
+        assert run.status_code == 200
+        assert run.json()["count"] == 2
+        assert run.json()["passed"] == 2
+        assert run.json()["failed"] == 0
+
+        contract_path = Path(soul_dir) / "behavior_contracts.json"
+        assert contract_path.exists()
+
+    def test_contract_run_reports_failures(self, client):
+        c, _ = client
+        saved = c.put(
+            "/soul/behavior-contract",
+            headers=_owner_headers(),
+            json={
+                "cases": [
+                    {
+                        "label": "Wrong expectation",
+                        "capability": "delete",
+                        "expected": "allowed",
+                    }
+                ]
+            },
+        )
+        run = c.post("/soul/behavior-contract/run", headers=_owner_headers())
+
+        assert saved.status_code == 200
+        assert run.status_code == 200
+        assert run.json()["passed"] == 0
+        assert run.json()["failed"] == 1
+        assert run.json()["results"][0]["decision"] == "requires_approval"
+
+    def test_contract_save_requires_owner_and_valid_cases(self, client):
+        c, _ = client
+        forbidden = c.put(
+            "/soul/behavior-contract",
+            headers=_non_owner_headers(),
+            json={"cases": []},
+        )
+        missing_label = c.put(
+            "/soul/behavior-contract",
+            headers=_owner_headers(),
+            json={"cases": [{"label": " ", "capability": "classify_intent", "expected": "allowed"}]},
+        )
+
+        assert forbidden.status_code in {401, 403}
+        assert missing_label.status_code == 400
 
 
 class TestProposeAmendment:

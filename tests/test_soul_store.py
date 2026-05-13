@@ -126,6 +126,73 @@ class TestSoulModel:
         soul = Soul(**_minimal_soul_dict())
         assert len(soul.memory_ethics) >= 1
 
+    def test_structured_governance_fields_parse(self):
+        soul = Soul(**_minimal_soul_dict(
+            risk_overrides=[
+                {
+                    "capability": "connector.bank.external_transfer",
+                    "min_tier": 3,
+                    "reason": "External funds movement requires approval.",
+                },
+            ],
+            trust_ceilings=[
+                {
+                    "capability": "connector.bank.external_transfer",
+                    "max_graduation": "T3",
+                    "reason": "Funds movement cannot graduate below T3.",
+                },
+            ],
+            connector_policies={
+                "email": {
+                    "verified_recipients": ["*@example.com"],
+                    "max_sends_per_day": 10,
+                    "require_content_verification": True,
+                },
+            },
+            data_boundaries=[
+                {
+                    "name": "customer_pii",
+                    "classification": "PII",
+                    "allowed_access": ["read_customer"],
+                    "bulk_export_requires_approval": True,
+                    "reason": "Customer data is sensitive.",
+                },
+            ],
+            external_transmission_rules=[
+                {
+                    "name": "customer_export",
+                    "applies_to": ["connector.email.send"],
+                    "requires_approval_tier": 2,
+                    "pii_scrubbing_required": True,
+                },
+            ],
+            kill_switch_rules=[
+                {
+                    "name": "bulk_export",
+                    "trigger": "bulk_export_attempt",
+                },
+            ],
+        ))
+
+        assert soul.risk_overrides[0].min_tier == "T3"
+        assert soul.trust_ceilings[0].max_graduation == "T3"
+        assert soul.connector_policies["email"].max_sends_per_day == 10
+        assert soul.data_boundaries[0].classification == "PII"
+        assert soul.external_transmission_rules[0].requires_approval_tier == "T2"
+        assert soul.kill_switch_rules[0].action == "halt_and_escalate"
+
+    def test_structured_governance_rejects_invalid_tier(self):
+        with pytest.raises(Exception):
+            Soul(**_minimal_soul_dict(
+                risk_overrides=[
+                    {
+                        "capability": "connector.bank.external_transfer",
+                        "min_tier": "T4",
+                        "reason": "Invalid tier.",
+                    },
+                ],
+            ))
+
 
 # ===================================================================
 # Loading from real soul/ directory
@@ -187,6 +254,15 @@ class TestGetActiveVersion:
         monkeypatch.setenv("SOUL_DIR", soul_dir)
 
         assert get_active_version() == "v1"
+
+    def test_uses_runtime_data_soul_dir_when_configured(self, tmp_path, monkeypatch):
+        runtime_data = tmp_path / "runtime_data"
+        monkeypatch.delenv("SOUL_DIR", raising=False)
+        monkeypatch.setenv("LANCELOT_DATA_DIR", str(runtime_data))
+
+        assert get_active_version() == "v1"
+        assert (runtime_data / "soul" / "ACTIVE").exists()
+        assert (runtime_data / "soul" / "soul_versions" / "soul_v1.yaml").exists()
 
     def test_reads_active_pointer(self, tmp_path):
         soul_dir = _write_soul_dir(tmp_path, active="v1\n")

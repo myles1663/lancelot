@@ -40,6 +40,8 @@ class RiskClassifier:
         self._defaults: dict[str, RiskTier] = {}
         self._soul = soul
         self._soul_escalations: list[dict] = []
+        self._soul_risk_overrides: list[dict] = []
+        self._soul_trust_ceilings: list[dict] = []
         self._trust_ledger = trust_ledger
 
         # Build default tier lookup
@@ -94,11 +96,15 @@ class RiskClassifier:
 
         # Step 3: Soul escalation overrides (Soul floor — can only raise)
         soul_result = self._check_soul_escalation(capability, scope, target)
+        final_floor: Optional[RiskTier] = None
         if soul_result is not None:
             escalated_tier, reason = soul_result
             if escalated_tier > tier:
                 tier = escalated_tier
                 soul_escalation = reason
+                final_floor = escalated_tier
+            elif escalated_tier == tier:
+                final_floor = escalated_tier
 
         # Step 4: Trust Ledger adjustment (can only LOWER, never raise)
         if self._trust_ledger is not None:
@@ -107,6 +113,11 @@ class RiskClassifier:
                 if feature_flags.FEATURE_TRUST_LEDGER:
                     effective = self._trust_ledger.get_effective_tier(capability, scope)
                     if effective is not None and effective < tier:
+                        ceiling = self._check_trust_ceiling(capability)
+                        if ceiling is not None:
+                            effective = max(effective, ceiling)
+                        if final_floor is not None:
+                            effective = max(effective, final_floor)
                         tier = effective
             except Exception as e:
                 logger.warning("Trust ledger check failed: %s", e)
@@ -151,6 +162,8 @@ class RiskClassifier:
         """Re-parse soul escalation rules after a Soul amendment."""
         self._soul = soul
         self._soul_escalations = []
+        self._soul_risk_overrides = []
+        self._soul_trust_ceilings = []
         if soul:
             self._parse_soul_escalations(soul)
 
@@ -164,15 +177,56 @@ class RiskClassifier:
                 governance = soul.governance if soul.governance else {}
 
             if not governance:
-                return
+                governance = {}
 
             escalations = governance.get("escalations", [])
-            if not isinstance(escalations, list):
-                return
+            if isinstance(escalations, list):
+                self._soul_escalations = escalations
 
-            self._soul_escalations = escalations
+            self._soul_risk_overrides = self._get_soul_list(
+                soul,
+                "risk_overrides",
+            )
+            self._soul_trust_ceilings = self._get_soul_list(
+                soul,
+                "trust_ceilings",
+            )
         except Exception as e:
             logger.warning("Failed to parse Soul escalations: %s", e)
+
+    def _get_soul_list(self, soul, field_name: str) -> list[dict]:
+        """Extract a list field from dict or Pydantic Soul objects."""
+        value = None
+        if isinstance(soul, dict):
+            value = soul.get(field_name)
+        elif hasattr(soul, field_name):
+            value = getattr(soul, field_name)
+
+        if not value:
+            return []
+
+        result: list[dict] = []
+        for item in value:
+            if isinstance(item, dict):
+                result.append(item)
+            elif hasattr(item, "model_dump"):
+                result.append(item.model_dump())
+        return result
+
+    def _parse_tier(self, value) -> Optional[RiskTier]:
+        """Parse int, digit string, or T0-T3 label into a RiskTier."""
+        try:
+            if isinstance(value, str):
+                text = value.strip().upper()
+                if text.startswith("T"):
+                    text = text[1:]
+                return RiskTier(int(text))
+            return RiskTier(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _matches_capability(self, pattern: str, capability: str) -> bool:
+        return pattern == capability or fnmatch.fnmatch(capability, pattern)
 
     def _check_soul_escalation(
         self,
@@ -185,6 +239,14 @@ class RiskClassifier:
         Returns:
             Tuple of (escalated_tier, reason) if a rule matches, else None.
         """
+        for rule in self._soul_risk_overrides:
+            rule_capability = rule.get("capability", "")
+            if not self._matches_capability(rule_capability, capability):
+                continue
+            tier = self._parse_tier(rule.get("min_tier"))
+            if tier is not None:
+                return tier, rule.get("reason", "Soul risk override")
+
         for rule in self._soul_escalations:
             if rule.get("capability") != capability:
                 continue
@@ -207,3 +269,17 @@ class RiskClassifier:
                         continue
 
         return None
+
+    def _check_trust_ceiling(self, capability: str) -> Optional[RiskTier]:
+        """Return the strongest Soul trust floor for a capability."""
+        floor: Optional[RiskTier] = None
+        for rule in self._soul_trust_ceilings:
+            rule_capability = rule.get("capability", "")
+            if not self._matches_capability(rule_capability, capability):
+                continue
+            tier = self._parse_tier(rule.get("max_graduation"))
+            if tier is None:
+                continue
+            if floor is None or tier > floor:
+                floor = tier
+        return floor

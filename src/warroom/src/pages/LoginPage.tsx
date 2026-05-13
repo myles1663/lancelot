@@ -9,7 +9,7 @@ import {
   type AuthConfigResponse,
 } from '@/api/auth'
 import { ApiClientError } from '@/api/client'
-import logo from '@/assets/logo.jpeg'
+import logo from '@/assets/logo.png'
 import { getErrorMessage } from '@/utils/errors'
 
 function isSafeReturnPath(value: unknown): value is string {
@@ -134,7 +134,7 @@ export function LoginPage() {
           <img
             src={logo}
             alt="Lancelot"
-            className="w-20 h-20 rounded-xl object-cover mb-4 shadow-lg"
+            className="w-52 h-52 object-contain mb-4"
           />
           <h1 className="text-lg font-semibold text-text-primary tracking-widest">
             LANCELOT
@@ -283,7 +283,7 @@ export function LoginPage() {
         <img
           src={logo}
           alt="Lancelot"
-          className="w-20 h-20 rounded-xl object-cover mb-4 shadow-lg"
+          className="w-52 h-52 object-contain mb-4"
         />
         <h1 className="text-lg font-semibold text-text-primary tracking-widest">
           LANCELOT

@@ -8,6 +8,7 @@
 import logging
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -17,6 +18,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SOUL_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "soul")
+_RUNTIME_SOUL_DATA_DIR = "soul"
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +50,96 @@ class SchedulingBoundaries(BaseModel):
     no_autonomous_irreversible: bool = True
     require_ready_state: bool = True
     description: str = ""
+
+
+def _normalize_tier_label(value: Any) -> str:
+    """Normalize tier values to T0-T3 labels."""
+    if isinstance(value, int):
+        return f"T{value}"
+    text = str(value).strip().upper()
+    if text.isdigit():
+        return f"T{text}"
+    return text
+
+
+class RiskOverride(BaseModel):
+    """Soul-defined minimum risk tier for a capability pattern.
+
+    These are floors: they can raise the classifier's default tier but
+    cannot lower it.
+    """
+
+    capability: str
+    min_tier: str = Field(default="T3", pattern=r"^T[0-3]$")
+    reason: str
+
+    @field_validator("min_tier", mode="before")
+    @classmethod
+    def normalize_min_tier(cls, value: Any) -> str:
+        return _normalize_tier_label(value)
+
+
+class TrustCeiling(BaseModel):
+    """Minimum tier that trust graduation may not go below."""
+
+    capability: str
+    max_graduation: str = Field(default="T2", pattern=r"^T[0-3]$")
+    reason: str
+
+    @field_validator("max_graduation", mode="before")
+    @classmethod
+    def normalize_max_graduation(cls, value: Any) -> str:
+        return _normalize_tier_label(value)
+
+
+class ConnectorPolicy(BaseModel):
+    """Connector-specific behavioral controls enforced by connector layers."""
+
+    verified_recipients: List[str] = Field(default_factory=list)
+    allowed_channels: List[str] = Field(default_factory=list)
+    restrict_dm: bool = False
+    max_sends_per_day: Optional[int] = Field(default=None, ge=0)
+    require_content_verification: bool = False
+    pii_scrubbing_required: bool = False
+    approval_required_for_send: bool = False
+
+
+class DataBoundary(BaseModel):
+    """Data access and disclosure boundary for regulated or sensitive data."""
+
+    name: str
+    classification: str
+    allowed_access: List[str] = Field(default_factory=list)
+    prohibited_access: List[str] = Field(default_factory=list)
+    external_transmission_allowed: bool = False
+    bulk_export_requires_approval: bool = True
+    reason: str = ""
+
+
+class ExternalTransmissionRule(BaseModel):
+    """Rules for data or message movement outside the controlled system."""
+
+    name: str
+    applies_to: List[str] = Field(default_factory=list)
+    requires_approval_tier: str = Field(default="T3", pattern=r"^T[0-3]$")
+    pii_scrubbing_required: bool = True
+    allowed_destinations: List[str] = Field(default_factory=list)
+    reason: str = ""
+
+    @field_validator("requires_approval_tier", mode="before")
+    @classmethod
+    def normalize_requires_approval_tier(cls, value: Any) -> str:
+        return _normalize_tier_label(value)
+
+
+class KillSwitchRule(BaseModel):
+    """Condition that halts execution and escalates to the owner."""
+
+    name: str
+    trigger: str
+    action: str = "halt_and_escalate"
+    enforced: bool = True
+    reason: str = ""
 
 
 class MCPPermission(BaseModel):
@@ -221,6 +313,35 @@ class Soul(BaseModel):
     scheduling_boundaries: SchedulingBoundaries = Field(
         default_factory=SchedulingBoundaries,
     )
+    risk_overrides: List[RiskOverride] = Field(
+        default_factory=list,
+        description=(
+            "Per-capability minimum risk tiers. Patterns use fnmatch-style "
+            "wildcards and can only raise runtime risk."
+        ),
+    )
+    trust_ceilings: List[TrustCeiling] = Field(
+        default_factory=list,
+        description=(
+            "Minimum tier floors that trust graduation may not go below."
+        ),
+    )
+    connector_policies: Dict[str, ConnectorPolicy] = Field(
+        default_factory=dict,
+        description="Connector-specific recipient, channel, and send controls.",
+    )
+    data_boundaries: List[DataBoundary] = Field(
+        default_factory=list,
+        description="Regulated or sensitive data access boundaries.",
+    )
+    external_transmission_rules: List[ExternalTransmissionRule] = Field(
+        default_factory=list,
+        description="Controls for data or message movement outside the system.",
+    )
+    kill_switch_rules: List[KillSwitchRule] = Field(
+        default_factory=list,
+        description="Execution-stop rules for critical safety triggers.",
+    )
     spawn_budget: SpawnBudgetGovernance = Field(
         default_factory=SpawnBudgetGovernance,
     )
@@ -297,7 +418,45 @@ def _resolve_soul_dir(soul_dir: Optional[str] = None) -> Path:
     env_soul_dir = os.getenv("SOUL_DIR")
     if env_soul_dir:
         return Path(env_soul_dir).resolve()
+    runtime_data_dir = os.getenv("LANCELOT_DATA_DIR", "").strip()
+    if runtime_data_dir:
+        runtime_soul_dir = (Path(runtime_data_dir) / _RUNTIME_SOUL_DATA_DIR).resolve()
+        _ensure_runtime_soul_dir(runtime_soul_dir)
+        return runtime_soul_dir
     return Path(_DEFAULT_SOUL_DIR).resolve()
+
+
+def _ensure_runtime_soul_dir(runtime_soul_dir: Path) -> None:
+    """Seed writable runtime Soul storage from packaged defaults if needed."""
+    versions_dir = runtime_soul_dir / "soul_versions"
+    if versions_dir.exists() and any(versions_dir.glob("soul_*.yaml")):
+        return
+
+    packaged_soul_dir = Path(_DEFAULT_SOUL_DIR).resolve()
+    runtime_soul_dir.mkdir(parents=True, exist_ok=True)
+
+    for name in ("ACTIVE", "soul.yaml"):
+        src = packaged_soul_dir / name
+        dst = runtime_soul_dir / name
+        if src.exists() and not dst.exists():
+            shutil.copy2(src, dst)
+
+    packaged_versions = packaged_soul_dir / "soul_versions"
+    if packaged_versions.exists():
+        versions_dir.mkdir(parents=True, exist_ok=True)
+        for src in packaged_versions.glob("soul_*.yaml"):
+            dst = versions_dir / src.name
+            if not dst.exists():
+                shutil.copy2(src, dst)
+
+    packaged_overlays = packaged_soul_dir / "overlays"
+    if packaged_overlays.exists():
+        overlays_dir = runtime_soul_dir / "overlays"
+        overlays_dir.mkdir(parents=True, exist_ok=True)
+        for src in packaged_overlays.glob("*.yaml"):
+            dst = overlays_dir / src.name
+            if not dst.exists():
+                shutil.copy2(src, dst)
 
 
 def get_active_version(soul_dir: Optional[str] = None) -> str:
