@@ -156,6 +156,37 @@ Actions: **Approve** (execute the action) or **Deny** (block and receipt the den
 
 ---
 
+## Soul Viewer / Soul Inspector
+
+The Soul Viewer/Soul Inspector is where operators inspect the active Soul,
+review amendment proposals, and manage the Soul Template Library.
+
+**Displays:**
+- Active Soul version and governance sections
+- Amendment proposals, diffs, approval state, and activation controls
+- Template browser with industry filtering, metadata, YAML preview, and source role details
+- Editable customization fields for local values such as mission text, approval timeouts, verified recipients, connector limits, and data boundary labels
+- Behavior contract/evaluator results for expected allow, approval-required, and denial outcomes
+
+**Template workflow:**
+1. Select a template from the library.
+2. Inspect autonomy posture, approval gates, risk overrides, trust ceilings, data boundaries, external transmission rules, and kill-switch rules.
+3. Edit only the customizations needed for the deployment.
+4. Run evaluator checks for representative behavior.
+5. Apply the template as a Soul amendment proposal.
+6. Review the proposal diff, approve it, and activate it.
+
+Applying a template does not directly mutate the active Soul. The runtime changes
+only after the proposal is approved and activated, and the resulting change is
+auditable through the normal Soul and receipt paths.
+
+**What to watch for:**
+- A template that grants the right task ability can still be wrong for the deployment if connector recipients, data boundaries, or approval timeouts are too broad.
+- Behavior contracts should include at least one allowed action, one approval-required action, and one action expected to be denied or halted.
+- If a template behaves unexpectedly, roll back to the prior Soul version and re-propose a narrower customization.
+
+---
+
 ## Trust Panel
 
 <p align="center">
