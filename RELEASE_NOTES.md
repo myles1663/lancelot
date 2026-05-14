@@ -1,24 +1,27 @@
 # Release Notes
 
-## Current Public Release: 0.4.4
+## Current Public Release: 0.4.5
 
-Lancelot 0.4.4 adds the governed Soul template library and the War Room
-operator controls needed to inspect, adapt, and test Soul behavior before
-runtime use. The release includes structured governance fields for domain
-templates, a read-only Soul behavior evaluator, operator-managed behavior
-contracts, connector-policy enforcement, and admin-gated Soul diagnostics. The
-core path remains self-hosted: requests enter through the gateway, policy and
-Soul constraints are checked before execution, approved work runs through
-governed tools or UAB routes, and outcomes are written as immutable receipts.
+Lancelot 0.4.5 adds operator inspection and management for installed skills in
+the War Room. Operators can inspect an installed skill's manifest, permissions,
+risk posture, source proposal linkage, pipeline evidence, receipts contract,
+implementation, tests, and artifact hashes before relying on it. Installed
+skills can also be enabled or disabled through governed War Room controls that
+emit durable `TOOL_ENABLED` and `TOOL_DISABLED` receipts. The core path remains
+self-hosted: requests enter through the gateway, policy and Soul constraints
+are checked before execution, approved work runs through governed tools or UAB
+routes, and outcomes are written as immutable receipts.
 
 ### What To Inspect First
 
 - `README.md` for the quickstart and architecture summary.
 - `docs/security-overview.md` for the current dependency audit and security
   posture snapshot.
-- `CHANGELOG.md` for the 0.4.4 Soul Governance Library verification summary.
+- `CHANGELOG.md` for the 0.4.5 skill inspector verification summary.
 - `docs/soul-templates.md` for the built-in template library and structured
   governance fields.
+- The War Room Skills panel for installed-skill inspection, source proposal
+  review, runtime contract review, and governed enable/disable controls.
 - The War Room Soul viewer for template browsing, editable governance controls,
   behavior evaluation, and behavior-contract runs.
 - The Command Center recommendations panel for low-interruption procedural
@@ -40,6 +43,9 @@ governed tools or UAB routes, and outcomes are written as immutable receipts.
 - `tests/test_soul_template_library.py`, `tests/test_soul_behavior.py`, and
   `tests/test_soul_api.py` for Soul template loading, evaluator decisions,
   behavior contracts, and admin authorization.
+- `tests/test_skills_api.py`, `tests/test_skill_factory.py`,
+  `tests/test_skill_registry.py`, and `tests/test_skill_executor.py` for skill
+  inspection, installation, registry, execution, and governed toggle paths.
 - `tests/test_connector_proxy_governance.py` for connector policy enforcement,
   denial receipts, trust failure recording, and durable daily send caps.
 - `packages/uab/tests/*.test.mjs` for UAB route fallback, permission-risk
@@ -48,8 +54,8 @@ governed tools or UAB routes, and outcomes are written as immutable receipts.
 ### Known Limits
 
 - The default install emphasizes governance, receipts, health checks,
-  Soul template governance, procedural recommendations, structured memory, and
-  the core tool bridge.
+  skill inspection, Soul template governance, procedural recommendations,
+  structured memory, and the core tool bridge.
 - HIVE, Federation, MCP governance, A2A, Time Travel, Observability, and parts
   of UAB are implemented behind runtime kill switches and should be evaluated
   as separate subsystem paths.
