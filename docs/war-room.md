@@ -281,19 +281,25 @@ Governed skill proposal review and install lifecycle.
 - Runtime permissions, derived security capabilities, target domains, and vault-key declarations
 - Stage-by-stage security pipeline evidence (manifest validation, static analysis, sandbox test, owner review)
 - Runtime/security manifests, generated implementation code, generated tests, and artifact hashes
-- Installed dynamic-skill inventory beside the proposal queue
+- Installed skill inventory beside the proposal queue
+- Installed-skill inspector with manifest, risk, permissions, inputs/outputs, signature state, source proposal, pipeline history, implementation code, tests, and artifact hashes where available
+- Enable/disable controls for installed skills; these actions are protected by `skills.admin` and emit governance receipts
 
 **Operator workflow:**
 1. Review the proposal contract first: permissions, capabilities, domains, vault keys, and risk.
 2. Inspect the pipeline evidence. `review_failed` means the artifact never became install-ready.
 3. Approve only proposals whose reviewed artifact hashes and stage output match the intended use.
 4. Install only after approval. Installation re-validates the same artifact package before it reaches the live registry.
+5. Inspect installed skills after installation to confirm the runtime manifest and installed artifact match the reviewed proposal.
+6. Disable a skill from the installed-skill inspector if its behavior is unexpected, its source proposal is unclear, or its permissions are no longer appropriate.
 
 **What to watch for:**
 - Unexpected domains or vault keys on low-risk skills
 - Capability expansion that does not match the runtime permission list
 - Stage failures in `static_analysis` or `sandbox_test`
 - Install blocks caused by artifact hash drift after approval
+- Installed skills with no linked proposal history; these are usually system skills or older registry entries and should be reviewed by manifest and ownership
+- Unsigned user or marketplace skills that need extra scrutiny before remaining enabled
 
 ---
 

@@ -7,7 +7,12 @@ external users and reviewers.
 
 ## [Unreleased]
 
-No unreleased changes.
+### Added
+
+- Added War Room installed-skill inspection with manifest, permissions, risk,
+  source proposal, pipeline evidence, implementation, tests, and artifact
+  hash visibility.
+- Added governed War Room enable/disable controls for installed skills.
 
 ## [0.4.4] - 2026-05-13
 

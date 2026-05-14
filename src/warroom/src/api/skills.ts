@@ -1,5 +1,5 @@
 import { apiGet, apiPost } from './client'
-import type { SkillProposalsResponse, SkillProposalDetail, SkillsListResponse } from '@/types/api'
+import type { SkillProposalsResponse, SkillProposalDetail, SkillsListResponse, InstalledSkillDetail } from '@/types/api'
 
 /** GET /api/skills/proposals — list all skill proposals */
 export function fetchSkillProposals() {
@@ -35,4 +35,16 @@ export function installSkillProposal(proposalId: string) {
 /** GET /api/skills — list all installed skills */
 export function fetchInstalledSkills() {
   return apiGet<SkillsListResponse>('/api/skills')
+}
+
+export function fetchInstalledSkill(name: string) {
+  return apiGet<InstalledSkillDetail>(`/api/skills/${encodeURIComponent(name)}`)
+}
+
+export function enableInstalledSkill(name: string) {
+  return apiPost<InstalledSkillDetail>(`/api/skills/${encodeURIComponent(name)}/enable`)
+}
+
+export function disableInstalledSkill(name: string) {
+  return apiPost<InstalledSkillDetail>(`/api/skills/${encodeURIComponent(name)}/disable`)
 }
