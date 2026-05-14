@@ -10,6 +10,12 @@ The Skills subsystem manages modular, permissioned capabilities.
 - Persistence: `data/skills_registry.json`
 - Install via `install_skill(manifest_path)`
 - Enable/disable via War Room or registry API
+- Inspect installed skills in the War Room Skills panel. The inspector shows
+  runtime manifest fields, permissions, risk, inputs/outputs, signature state,
+  source proposal linkage, pipeline history, implementation code, tests, and
+  artifact hashes where available.
+- War Room enable/disable actions require `skills.admin` and emit governance
+  receipts using the tool enable/disable receipt path with `subsystem=skills`.
 
 ## Skill Factory
 - Proposals stored in `data/skill_proposals.json`
@@ -33,5 +39,6 @@ The Skills subsystem manages modular, permissioned capabilities.
 ### Troubleshooting
 - **Install fails**: Check runtime manifest, security manifest, and proposal artifact hashes
 - **Review failed**: Open the Skills panel and inspect `static_analysis` or `sandbox_test` stage output
-- **Skill disabled**: Re-enable via `enable_skill(name)` or War Room
+- **Skill disabled**: Open the installed-skill inspector and re-enable after confirming the manifest, source proposal, and permissions are expected
+- **No proposal history**: System skills and older registry entries may not have a linked proposal; inspect ownership, manifest path, signature state, and code artifact before leaving the skill enabled
 - **Marketplace restricted**: Check verify_marketplace_permissions() output
