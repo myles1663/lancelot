@@ -7,12 +7,27 @@ external users and reviewers.
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-05-14
+
 ### Added
 
 - Added War Room installed-skill inspection with manifest, permissions, risk,
   source proposal, pipeline evidence, implementation, tests, and artifact
   hash visibility.
 - Added governed War Room enable/disable controls for installed skills.
+
+### Verification
+
+- Full Python suite: 7,361 passed, 24 skipped, 31 deselected.
+- Full Python line coverage: 90.2644%.
+- Focused skills suite: 44 passed.
+- War Room type-check and production build: passed.
+- Universal Application Bridge build and tests: passed in public CI.
+- Docker Compose config validation: passed.
+- Public artifact guard: passed.
+- Local deployment smoke: health endpoint served, War Room Skills page served,
+  protected Skills API remained auth-gated, and the built War Room bundle
+  included skill Inspect, source-proposal, enable, and disable controls.
 
 ## [0.4.4] - 2026-05-13
 

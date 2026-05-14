@@ -188,7 +188,7 @@ For a full release-readiness view, run:
 python -m pytest -q --cov=src --cov-report=term-missing --cov-report=json:coverage-full.json
 ```
 
-The latest release-readiness pass recorded `7,314 passed`, `24 skipped`, `31 deselected`, and `90.3600%` Python line coverage.
+The latest release-readiness pass recorded `7,361 passed`, `24 skipped`, `31 deselected`, and `90.2644%` Python line coverage.
 
 ## What This Does Not Prove
 
