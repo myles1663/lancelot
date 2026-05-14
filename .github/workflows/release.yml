@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Extract version from tag
         id: version
@@ -35,10 +35,10 @@ jobs:
           fi
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -46,7 +46,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -55,7 +55,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push core Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
@@ -66,7 +66,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build and push local model Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./local_models
           file: ./local_models/Dockerfile
@@ -82,7 +82,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=local-llm
 
       - name: Build and push CUDA local model Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./local_models
           file: ./local_models/Dockerfile
@@ -98,7 +98,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=local-llm-cuda
 
       - name: Build and push Prism local model Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./local_models
           file: ./local_models/Dockerfile.prism
@@ -128,7 +128,7 @@ jobs:
           EOF
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: false
           body_path: release-body.md
