@@ -1,17 +1,17 @@
 {
   "branch": "main",
-  "commit": "9cb59a2",
+  "commit": "dcb0605",
   "display": {
     "headline_label": "Runnable tests tracked",
-    "headline_tests": 7436,
+    "headline_tests": 7438,
     "test_files": 396
   },
-  "generated_at": "2026-05-13T20:02:57Z",
+  "generated_at": "2026-05-14T16:58:19Z",
   "metrics": {
     "installer": {
       "cancelled": 0,
       "command": "npm test",
-      "duration_ms": 3718,
+      "duration_ms": 3757,
       "failed": 0,
       "passed": 9,
       "skipped": 0,
@@ -26,7 +26,7 @@
       "command": "npm test",
       "daemon_dispatcher_passed": true,
       "dist_entries": 209,
-      "duration_ms": 31042,
+      "duration_ms": 31256,
       "failed": 0,
       "passed": 44,
       "skipped": 0,
@@ -36,16 +36,16 @@
       "todo": 0
     },
     "python": {
-      "collected": 7414,
+      "collected": 7416,
       "command": "python -m pytest --collect-only -q",
       "deselected": 31,
-      "selected": 7383,
+      "selected": 7385,
       "status": "collected",
       "test_files": 381
     },
     "totals": {
       "test_files": 396,
-      "tracked_tests": 7436,
+      "tracked_tests": 7438,
       "verified_node_passes": 53
     }
   },
