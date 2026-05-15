@@ -7,6 +7,15 @@ external users and reviewers.
 
 ## [Unreleased]
 
+### Added
+
+- Added a standalone React War Room visual walkthrough with current
+  screenshot navigation, operator explanations, governance notes, receipt
+  evidence, refresh tracking, and mobile/tablet-friendly navigation.
+- Added fresh War Room walkthrough captures for Soul templates, Memory
+  Manager samples, incidents, federation graph and audit, compliance export,
+  Context Efficiency diagnostics, and Time-Travel Debugger.
+
 ## [0.4.5] - 2026-05-14
 
 ### Added
