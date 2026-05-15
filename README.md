@@ -165,6 +165,9 @@ The receipt system is the audit trail. Actions are staged, finalized into an imm
 
 The War Room is the local operator console for governed execution, receipt review, kill-switch control, and runtime health.
 
+For a navigable screenshot library of the console, see the
+[War Room Visual Walkthrough](docs/war-room-visual-walkthrough.md).
+
 <table>
   <tr>
     <td width="50%">
