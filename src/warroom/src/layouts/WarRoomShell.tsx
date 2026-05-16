@@ -93,10 +93,11 @@ function WarRoomShellInner() {
   useKeyboardShortcuts()
 
   return (
-    <div className="min-h-screen bg-surface-bg text-text-primary">
+    <div className="fixed inset-0 h-screen h-[100dvh] overflow-hidden bg-surface-bg text-text-primary">
       <Header
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed(false)}
+        notificationCount={notifications.filter(n => !n.read).length}
       />
 
       <Sidebar
@@ -106,8 +107,8 @@ function WarRoomShellInner() {
 
       {/* Primary content area */}
       <main
-        className={`pt-14 pb-20 lg:pb-16 transition-all duration-200 ${
-          sidebarCollapsed ? 'pl-0' : 'lg:pl-60'
+        className={`fixed left-0 right-0 top-14 bottom-12 overflow-y-auto overscroll-contain transition-[left] duration-200 ${
+          sidebarCollapsed ? 'lg:left-0' : 'lg:left-60'
         }`}
       >
         <div className="p-4 sm:p-6 max-w-[1600px] mx-auto">

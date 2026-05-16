@@ -1,5 +1,11 @@
 import { apiGet, apiPost } from './client'
-import type { SkillProposalsResponse, SkillProposalDetail, SkillsListResponse, InstalledSkillDetail } from '@/types/api'
+import type {
+  InstalledSkillDetail,
+  InstalledSkillToggleResponse,
+  SkillProposalsResponse,
+  SkillProposalDetail,
+  SkillsListResponse,
+} from '@/types/api'
 
 /** GET /api/skills/proposals — list all skill proposals */
 export function fetchSkillProposals() {
@@ -37,14 +43,17 @@ export function fetchInstalledSkills() {
   return apiGet<SkillsListResponse>('/api/skills')
 }
 
-export function fetchInstalledSkill(name: string) {
-  return apiGet<InstalledSkillDetail>(`/api/skills/${encodeURIComponent(name)}`)
+/** GET /api/skills/:name — inspect one installed skill */
+export function fetchInstalledSkill(skillName: string) {
+  return apiGet<InstalledSkillDetail>(`/api/skills/${encodeURIComponent(skillName)}`)
 }
 
-export function enableInstalledSkill(name: string) {
-  return apiPost<InstalledSkillDetail>(`/api/skills/${encodeURIComponent(name)}/enable`)
+/** POST /api/skills/:name/enable — enable one installed skill */
+export function enableInstalledSkill(skillName: string) {
+  return apiPost<InstalledSkillToggleResponse>(`/api/skills/${encodeURIComponent(skillName)}/enable`)
 }
 
-export function disableInstalledSkill(name: string) {
-  return apiPost<InstalledSkillDetail>(`/api/skills/${encodeURIComponent(name)}/disable`)
+/** POST /api/skills/:name/disable — disable one installed skill */
+export function disableInstalledSkill(skillName: string) {
+  return apiPost<InstalledSkillToggleResponse>(`/api/skills/${encodeURIComponent(skillName)}/disable`)
 }

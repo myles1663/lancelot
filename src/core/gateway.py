@@ -1378,6 +1378,29 @@ def readiness_check():
     )
 
 
+@app.post("/api/warroom/client-error")
+async def warroom_client_error(request: Request):
+    """Record War Room browser-side failures for operator debugging."""
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    def _short(value: Any, limit: int = 2000) -> str:
+        text = str(value or "")
+        return text[:limit]
+
+    logger.error(
+        "warroom_client_error kind=%s href=%s ua=%s message=%s stack=%s",
+        _short(payload.get("kind"), 80),
+        _short(payload.get("href"), 300),
+        _short(payload.get("user_agent"), 500),
+        _short(payload.get("message"), 1000),
+        _short(payload.get("stack"), 3000),
+    )
+    return {"status": "recorded"}
+
+
 from ucp_connector import UCPConnector
 
 ucp_connector = UCPConnector(audit_logger=main_orchestrator.audit_logger)

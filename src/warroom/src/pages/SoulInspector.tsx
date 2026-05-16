@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { usePolling, usePageTitle } from '@/hooks'
 import { fetchSoulStatus, fetchCrusaderStatus } from '@/api'
-import { fetchSoulContent, proposeSoulAmendment, approveSoulProposal, activateSoulProposal, fetchSoulTemplates, fetchSoulTemplateDetail, applySoulTemplate, evaluateSoulCapability, fetchSoulBehaviorContract, saveSoulBehaviorContract, runSoulBehaviorContract } from '@/api/soul'
+import { fetchSoulContent, proposeSoulAmendment, approveSoulProposal, activateSoulProposal, activateSoulVersion, fetchSoulTemplates, fetchSoulTemplateDetail, applySoulTemplate, evaluateSoulCapability, fetchSoulBehaviorContract, saveSoulBehaviorContract, runSoulBehaviorContract } from '@/api/soul'
 import { ConfirmDialog } from '@/components'
 import { formatTimestamp } from '@/utils/dateFormat'
 import type {
@@ -21,7 +21,21 @@ import type {
   SoulEvaluateResponse,
   SoulBehaviorContractCase,
   SoulBehaviorContractRunResponse,
+  SoulVersionSource,
 } from '@/types/api'
+
+function soulSourceLabel(source?: SoulVersionSource) {
+  if (!source) return 'source unknown'
+  if (source.kind === 'template' && source.template_name) return `template: ${source.template_name}`
+  if (source.kind === 'proposal' && source.author) return `proposal by ${source.author}`
+  if (source.kind === 'baseline') return 'baseline'
+  return source.kind
+}
+
+type SoulConfirmAction =
+  | { type: 'approve'; id: string }
+  | { type: 'activate'; id: string }
+  | { type: 'activate-version'; version: string }
 
 // ── Collapsible Section ─────────────────────────────────────────────
 function Section({ title, children, defaultOpen = true }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
@@ -1677,7 +1691,7 @@ export function SoulInspector() {
   const [contentLoading, setContentLoading] = useState(true)
   const [tab, setTab] = useState<'view' | 'edit' | 'templates'>('view')
   const [actionLoading, setActionLoading] = useState<string | null>(null)
-  const [confirmAction, setConfirmAction] = useState<{ type: 'approve' | 'activate'; id: string } | null>(null)
+  const [confirmAction, setConfirmAction] = useState<SoulConfirmAction | null>(null)
   const [actionResult, setActionResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
   const crusaderActive = crusaderStatus?.crusader_mode ?? false
@@ -1698,16 +1712,21 @@ export function SoulInspector() {
 
   const handleProposalAction = async () => {
     if (!confirmAction) return
-    setActionLoading(confirmAction.id)
+    const loadingKey = confirmAction.type === 'activate-version' ? confirmAction.version : confirmAction.id
+    setActionLoading(loadingKey)
     setActionResult(null)
     try {
       if (confirmAction.type === 'approve') {
         await approveSoulProposal(confirmAction.id)
         setActionResult({ type: 'success', message: `Proposal ${confirmAction.id} approved. You can now activate it.` })
-      } else {
+      } else if (confirmAction.type === 'activate') {
         const res = await activateSoulProposal(confirmAction.id)
         setActionResult({ type: 'success', message: `Soul activated: ${res.active_version ?? 'new version'}` })
         loadContent() // refresh the viewer
+      } else {
+        const res = await activateSoulVersion(confirmAction.version)
+        setActionResult({ type: 'success', message: `Soul activated: ${res.active_version ?? confirmAction.version}` })
+        loadContent()
       }
       refetchStatus()
     } catch (err: unknown) {
@@ -1729,6 +1748,7 @@ export function SoulInspector() {
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-state-healthy" />
             <span className="text-sm font-mono font-bold text-text-primary">{statusData.active_version}</span>
+            <span className="text-[10px] text-text-muted">{soulSourceLabel(statusData.active_source)}</span>
           </div>
         )}
       </div>
@@ -1932,19 +1952,36 @@ export function SoulInspector() {
               <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
                 Available Versions ({statusData.available_versions.length})
               </h3>
-              <div className="flex flex-wrap gap-2">
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 {statusData.available_versions.map(v => (
                   <div
                     key={v}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-mono ${
+                    className={`flex items-center justify-between gap-3 px-3 py-2 rounded border text-xs ${
                       v === statusData.active_version
-                        ? 'bg-accent-primary/10 border border-accent-primary/30 text-accent-primary font-semibold'
-                        : 'bg-surface-card-elevated border border-border-default text-text-secondary'
+                        ? 'bg-accent-primary/10 border-accent-primary/30 text-accent-primary'
+                        : 'bg-surface-card-elevated border-border-default text-text-secondary'
                     }`}
                   >
-                    {v}
-                    {v === statusData.active_version && (
-                      <span className="text-[9px] uppercase tracking-wider">active</span>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-semibold">{v}</span>
+                        {v === statusData.active_version && (
+                          <span className="text-[9px] uppercase tracking-wider">active</span>
+                        )}
+                      </div>
+                      <p className="truncate text-[10px] text-text-muted">
+                        {soulSourceLabel(statusData.version_sources?.[v])}
+                      </p>
+                    </div>
+                    {v !== statusData.active_version && (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmAction({ type: 'activate-version', version: v })}
+                        disabled={crusaderActive || actionLoading === v}
+                        className="shrink-0 px-2 py-1 text-[10px] font-medium rounded bg-accent-primary/15 text-accent-primary hover:bg-accent-primary/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        Activate
+                      </button>
                     )}
                   </div>
                 ))}
@@ -1960,9 +1997,11 @@ export function SoulInspector() {
         description={
           confirmAction?.type === 'approve'
             ? `Approve amendment proposal ${confirmAction?.id ?? ''}? This marks it ready for activation.`
-            : `Activate proposal ${confirmAction?.id ?? ''}? This will change the active soul version. The soul linter will validate the change before activation.`
+            : confirmAction?.type === 'activate-version'
+              ? `Activate existing soul version ${confirmAction.version}? This will switch the active soul and the linter will validate the target version before activation.`
+              : `Activate proposal ${confirmAction?.id ?? ''}? This will change the active soul version. The soul linter will validate the change before activation.`
         }
-        variant={confirmAction?.type === 'activate' ? 'destructive' : 'default'}
+        variant={confirmAction?.type === 'activate' || confirmAction?.type === 'activate-version' ? 'destructive' : 'default'}
         confirmLabel={confirmAction?.type === 'approve' ? 'Approve' : 'Activate'}
         onConfirm={handleProposalAction}
         onCancel={() => setConfirmAction(null)}

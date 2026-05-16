@@ -75,6 +75,7 @@ export function CommandCenter() {
   const pendingActionCount = approvals.length + actionCards.length
   const pendingUnavailable = Boolean(approvalsError || actionCardsError)
   const recommendationUnavailable = Boolean(recommendationError)
+  const recommendationCount = recommendations.length
 
   const handleRecommendationAction = useCallback(
     async (id: string, action: 'accept' | 'dismiss' | 'snooze' | 'sop') => {
@@ -88,11 +89,54 @@ export function CommandCenter() {
   )
 
   return (
-    <div>
-      <h2 className="text-lg font-semibold text-text-primary mb-6">Command Center</h2>
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div className="space-y-5">
+      <section className="overflow-hidden rounded-lg border border-border-default bg-surface-card">
+        <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5">
+          <div className="max-w-3xl">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-accent-primary">
+              Command
+            </p>
+            <h2 className="mt-1 text-xl font-semibold text-text-primary">Command Center</h2>
+            <p className="mt-1 text-sm leading-relaxed text-text-secondary">
+              Review live work, continue approved runs, and handle operator decisions from one focused surface.
+            </p>
+          </div>
+          <Link
+            to="/receipts"
+            className="self-start rounded border border-border-default bg-surface-card-elevated px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:text-text-primary"
+          >
+            Receipt Trail
+          </Link>
+        </div>
+        <div className="grid grid-cols-2 border-t border-border-default bg-surface-card-elevated/45 lg:grid-cols-4">
+          <div className="border-r border-border-default p-3">
+            <p className="text-[10px] uppercase tracking-wider text-text-muted">Pending Review</p>
+            <p className={`mt-1 font-mono text-lg font-semibold ${pendingActionCount ? 'text-state-degraded' : 'text-state-healthy'}`}>
+              {pendingUnavailable ? '--' : pendingActionCount}
+            </p>
+          </div>
+          <div className="border-r border-border-default p-3">
+            <p className="text-[10px] uppercase tracking-wider text-text-muted">Actions Today</p>
+            <p className="mt-1 font-mono text-lg font-semibold text-text-primary">{todayCount}</p>
+          </div>
+          <div className="border-r border-border-default p-3">
+            <p className="text-[10px] uppercase tracking-wider text-text-muted">Failed Today</p>
+            <p className={`mt-1 font-mono text-lg font-semibold ${failedTodayCount > 0 ? 'text-state-error' : 'text-state-healthy'}`}>
+              {failedTodayCount}
+            </p>
+          </div>
+          <div className="p-3">
+            <p className="text-[10px] uppercase tracking-wider text-text-muted">Recommendations</p>
+            <p className={`mt-1 font-mono text-lg font-semibold ${recommendationCount ? 'text-accent-secondary' : 'text-text-primary'}`}>
+              {recommendationUnavailable ? '--' : recommendationCount}
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
         {/* Left column: 2/3 width */}
-        <div className="lg:col-span-2 space-y-6">
+        <div className="space-y-5 lg:col-span-2">
           {/* Active work ledger */}
           <ActiveWorkPanel />
 
@@ -101,7 +145,12 @@ export function CommandCenter() {
 
           {/* Recent Activity Feed */}
           <section className="bg-surface-card border border-border-default rounded-lg p-4">
-            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">Recent Activity</h3>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="text-sm font-medium uppercase tracking-wider text-text-secondary">Recent Activity</h3>
+              <Link to="/receipts" className="text-[11px] font-medium text-accent-primary hover:text-accent-primary/80">
+                View all
+              </Link>
+            </div>
             {receipts.length === 0 ? (
               <p className="text-sm text-text-muted">No recent activity</p>
             ) : (
@@ -140,27 +189,14 @@ export function CommandCenter() {
         </div>
 
         {/* Right column: 1/3 width */}
-        <div className="space-y-6">
-          {/* Fleet dashboard entry */}
+        <div className="space-y-5 lg:sticky lg:top-16 lg:self-start">
           <section className="bg-surface-card border border-border-default rounded-lg p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">Multi-Agent Dashboard</h3>
-                <p className="mt-1 text-xs text-text-muted">
-                  Fleet health, approvals, trust proposals, and instance entry points
-                </p>
-              </div>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="text-sm font-medium uppercase tracking-wider text-text-secondary">Pending Actions</h3>
+              <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${pendingActionCount ? 'bg-state-degraded/15 text-state-degraded' : 'bg-state-healthy/15 text-state-healthy'}`}>
+                {pendingUnavailable ? '--' : pendingActionCount}
+              </span>
             </div>
-            <Link
-              to="/federation/fleet"
-              className="mt-4 inline-flex w-full items-center justify-center rounded border border-accent-primary bg-accent-primary/10 px-3 py-2 text-sm font-medium text-accent-primary hover:bg-accent-primary/20"
-            >
-              Open Fleet Dashboard
-            </Link>
-          </section>
-
-          <section className="bg-surface-card border border-border-default rounded-lg p-4">
-            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">Pending Actions</h3>
             {pendingUnavailable ? (
               <p className="text-sm text-state-degraded">Pending action data unavailable</p>
             ) : pendingActionCount === 0 ? (
@@ -214,8 +250,34 @@ export function CommandCenter() {
             )}
           </section>
 
+          {/* Controls Panel */}
+          <ControlsPanel />
+
+          {/* Fleet dashboard entry */}
           <section className="bg-surface-card border border-border-default rounded-lg p-4">
-            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">Procedural Recommendations</h3>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">Fleet Command</h3>
+                <p className="mt-1 text-xs text-text-muted">
+                  Fleet health, approvals, trust proposals, and instance entry points
+                </p>
+              </div>
+            </div>
+            <Link
+              to="/federation/fleet"
+              className="mt-4 inline-flex w-full items-center justify-center rounded border border-accent-primary bg-accent-primary/10 px-3 py-2 text-sm font-medium text-accent-primary hover:bg-accent-primary/20"
+            >
+              Open Fleet Dashboard
+            </Link>
+          </section>
+
+          <section className="bg-surface-card border border-border-default rounded-lg p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">Procedural Recommendations</h3>
+              <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${recommendationCount ? 'bg-accent-secondary/15 text-accent-secondary' : 'bg-surface-input text-text-muted'}`}>
+                {recommendationUnavailable ? '--' : recommendationCount}
+              </span>
+            </div>
             {recommendationUnavailable ? (
               <p className="text-sm text-state-degraded">Recommendation data unavailable</p>
             ) : recommendations.length === 0 ? (
@@ -275,34 +337,6 @@ export function CommandCenter() {
                 ))}
               </div>
             )}
-          </section>
-
-          {/* Controls Panel */}
-          <ControlsPanel />
-
-          {/* Quick Stats */}
-          <section className="bg-surface-card border border-border-default rounded-lg p-4">
-            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">Quick Stats</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <span className="text-[10px] uppercase tracking-wider text-text-muted">Actions Today</span>
-                <p className="text-xl font-mono font-bold text-text-primary">{todayCount}</p>
-              </div>
-              <div>
-                <span className="text-[10px] uppercase tracking-wider text-text-muted">Approvals</span>
-                <p className="text-xl font-mono font-bold text-text-primary">{approvals.length}</p>
-              </div>
-              <div>
-                <span className="text-[10px] uppercase tracking-wider text-text-muted">Action Cards</span>
-                <p className="text-xl font-mono font-bold text-text-primary">{actionCards.length}</p>
-              </div>
-              <div>
-                <span className="text-[10px] uppercase tracking-wider text-text-muted">Failed Today</span>
-                <p className={`text-xl font-mono font-bold ${failedTodayCount > 0 ? 'text-state-error' : 'text-text-primary'}`}>
-                  {failedTodayCount}
-                </p>
-              </div>
-            </div>
           </section>
         </div>
       </div>

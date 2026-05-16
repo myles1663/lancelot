@@ -22,6 +22,7 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    target: 'es2018',
   },
   server: {
     port: 5173,

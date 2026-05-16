@@ -1,21 +1,58 @@
-import { useState, useRef, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useRef, useEffect, useMemo } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { Bell, KeyRound, LogOut, Menu, User } from 'lucide-react'
 import { VitalsBar } from './VitalsBar'
 import { logout } from '@/api/auth'
 import { ChangePasswordModal } from '@/components/ChangePasswordModal'
 import { getErrorMessage } from '@/utils/errors'
 import { emitWarRoomNotification } from '@/utils/notifications'
 
+const HEADER_ROUTES = [
+  { path: '/command', label: 'Command Center', section: 'Command' },
+  { path: '/scheduler', label: 'Scheduler', section: 'Command' },
+  { path: '/governance', label: 'Governance Dashboard', section: 'Governance' },
+  { path: '/trust', label: 'Trust Ledger', section: 'Governance' },
+  { path: '/apl', label: 'Approval Learning', section: 'Governance' },
+  { path: '/a2a', label: 'A2A Protocol', section: 'Governance' },
+  { path: '/compliance', label: 'Compliance Export', section: 'Governance' },
+  { path: '/soul', label: 'Soul Inspector', section: 'Memory & Soul' },
+  { path: '/memory/manage', label: 'Governed Memory Manager', section: 'Memory & Soul' },
+  { path: '/memory/context', label: 'Context Efficiency', section: 'Memory & Soul' },
+  { path: '/memory', label: 'Memory', section: 'Memory & Soul' },
+  { path: '/skills', label: 'Skills', section: 'Memory & Soul' },
+  { path: '/hive', label: 'HIVE Agent Mesh', section: 'Operations' },
+  { path: '/receipts', label: 'Receipt Explorer', section: 'Operations' },
+  { path: '/tools', label: 'Tool Fabric', section: 'Operations' },
+  { path: '/incidents', label: 'Incident Response', section: 'Operations' },
+  { path: '/federation/fleet', label: 'Fleet Dashboard', section: 'Operations' },
+  { path: '/federation/graph', label: 'Graph Builder', section: 'Operations' },
+  { path: '/federation/audit', label: 'Federation Audit Trail', section: 'Operations' },
+  { path: '/federation', label: 'Federation Overview', section: 'Operations' },
+  { path: '/health', label: 'Health', section: 'System' },
+  { path: '/setup', label: 'Setup & Recovery', section: 'System' },
+  { path: '/connectors', label: 'Connectors', section: 'System' },
+  { path: '/costs', label: 'Cost Tracker', section: 'System' },
+  { path: '/flags', label: 'Kill Switches', section: 'System' },
+  { path: '/timetravel', label: 'Time-Travel Debugger', section: 'System' },
+]
+
 interface HeaderProps {
   sidebarCollapsed: boolean
   onToggleSidebar: () => void
+  notificationCount: number
 }
 
-export function Header({ sidebarCollapsed, onToggleSidebar }: HeaderProps) {
+export function Header({ sidebarCollapsed, onToggleSidebar, notificationCount }: HeaderProps) {
   const navigate = useNavigate()
+  const location = useLocation()
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+  const pageContext = useMemo(() => {
+    return HEADER_ROUTES.find((route) =>
+      location.pathname === route.path || location.pathname.startsWith(`${route.path}/`),
+    ) ?? { label: 'War Room', section: 'Lancelot OS' }
+  }, [location.pathname])
 
   // Close menu on outside click
   useEffect(() => {
@@ -46,40 +83,44 @@ export function Header({ sidebarCollapsed, onToggleSidebar }: HeaderProps) {
         {sidebarCollapsed && (
           <button
             onClick={onToggleSidebar}
-            className="p-1.5 text-text-muted hover:text-text-primary transition-colors"
+            className="rounded-md p-1.5 text-text-muted transition-colors hover:bg-surface-card-elevated hover:text-text-primary"
             aria-label="Open sidebar"
           >
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-              <path d="M3 5H15M3 9H15M3 13H15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
+            <Menu className="h-[18px] w-[18px]" strokeWidth={1.8} aria-hidden="true" />
           </button>
         )}
 
+        <div className="hidden min-w-[150px] max-w-[240px] shrink-0 border-r border-border-default pr-4 md:block">
+          <p className="truncate text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">
+            {pageContext.section}
+          </p>
+          <h1 className="truncate text-sm font-semibold leading-tight text-text-primary">
+            {pageContext.label}
+          </h1>
+        </div>
+
+        <div className="hidden flex-1 justify-center xl:flex">
+          <div className="flex items-center gap-2 rounded-md border border-border-default bg-surface-bg/40 px-3 py-1.5">
+            <span className="text-xs font-semibold tracking-[0.2em] text-text-primary">LANCELOT</span>
+            <span className="h-3 w-px bg-border-active" />
+            <span className="text-xs font-semibold tracking-[0.2em] text-accent-primary">WAR ROOM</span>
+          </div>
+        </div>
+
         {/* Live Vitals Bar */}
-        <VitalsBar />
+        <div className="flex min-w-0 flex-1 justify-end xl:max-w-[420px] 2xl:max-w-[640px]">
+          <VitalsBar />
+        </div>
 
         {/* Notification badge + User menu */}
         <div className="flex items-center gap-2">
-          <button className="relative p-2 text-text-muted hover:text-text-primary transition-colors">
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-              <path
-                d="M13.5 6.75C13.5 5.56 13.03 4.42 12.18 3.57C11.33 2.72 10.19 2.25 9 2.25C7.81 2.25 6.67 2.72 5.82 3.57C4.97 4.42 4.5 5.56 4.5 6.75C4.5 12 2.25 13.5 2.25 13.5H15.75C15.75 13.5 13.5 12 13.5 6.75Z"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <path
-                d="M10.3 15.75C10.17 15.98 9.98 16.17 9.74 16.3C9.51 16.44 9.26 16.5 9 16.5C8.74 16.5 8.49 16.44 8.26 16.3C8.02 16.17 7.83 15.98 7.7 15.75"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-state-error text-white text-[9px] font-bold rounded-full flex items-center justify-center">
-              0
-            </span>
+          <button className="relative rounded-md p-2 text-text-muted transition-colors hover:bg-surface-card-elevated hover:text-text-primary" aria-label="Notifications">
+            <Bell className="h-[18px] w-[18px]" strokeWidth={1.8} aria-hidden="true" />
+            {notificationCount > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-state-error px-1 text-[9px] font-bold text-white">
+                {notificationCount > 9 ? '9+' : notificationCount}
+              </span>
+            )}
           </button>
 
           {/* User avatar / menu */}
@@ -89,10 +130,7 @@ export function Header({ sidebarCollapsed, onToggleSidebar }: HeaderProps) {
               className="w-8 h-8 rounded-full bg-accent-primary/20 text-accent-primary text-xs font-semibold flex items-center justify-center hover:bg-accent-primary/30 transition-colors"
               aria-label="User menu"
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M8 8C9.65 8 11 6.65 11 5C11 3.35 9.65 2 8 2C6.35 2 5 3.35 5 5C5 6.65 6.35 8 8 8Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M13.5 14C13.5 11.5 11.04 9.5 8 9.5C4.96 9.5 2.5 11.5 2.5 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
+              <User className="h-4 w-4" strokeWidth={1.8} aria-hidden="true" />
             </button>
 
             {userMenuOpen && (
@@ -104,11 +142,7 @@ export function Header({ sidebarCollapsed, onToggleSidebar }: HeaderProps) {
                   }}
                   className="w-full text-left px-4 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-surface-card-elevated transition-colors flex items-center gap-2"
                 >
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                    <path d="M7.58 1.17L8.41 3.41L10.83 3.83L9.17 5.42L9.58 7.83L7.58 6.75L5.58 7.83L5.99 5.42L4.33 3.83L6.75 3.41L7.58 1.17Z" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"/>
-                    <rect x="2" y="9" width="10" height="3.5" rx="1" stroke="currentColor" strokeWidth="1"/>
-                    <circle cx="5" cy="10.75" r="0.75" fill="currentColor"/>
-                  </svg>
+                  <KeyRound className="h-3.5 w-3.5" strokeWidth={1.8} aria-hidden="true" />
                   Change Password
                 </button>
                 <div className="border-t border-border-default my-1" />
@@ -116,11 +150,7 @@ export function Header({ sidebarCollapsed, onToggleSidebar }: HeaderProps) {
                   onClick={handleSignOut}
                   className="w-full text-left px-4 py-2 text-sm text-state-error hover:bg-state-error/5 transition-colors flex items-center gap-2"
                 >
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                    <path d="M5.25 12.25H2.92C2.61 12.25 2.32 12.13 2.1 11.9C1.88 11.68 1.75 11.39 1.75 11.08V2.92C1.75 2.61 1.88 2.32 2.1 2.1C2.32 1.88 2.61 1.75 2.92 1.75H5.25" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                    <path d="M9.33 9.92L12.25 7L9.33 4.08" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                    <path d="M12.25 7H5.25" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
+                  <LogOut className="h-3.5 w-3.5" strokeWidth={1.8} aria-hidden="true" />
                   Sign Out
                 </button>
               </div>

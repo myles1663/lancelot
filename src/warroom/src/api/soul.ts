@@ -58,6 +58,11 @@ export function activateSoulProposal(proposalId: string) {
   return apiPost<SoulProposalActionResponse>(`/soul/proposals/${proposalId}/activate`)
 }
 
+/** POST /soul/versions/:version/activate — Activate an existing retained version */
+export function activateSoulVersion(version: string) {
+  return apiPost<SoulProposalActionResponse>(`/soul/versions/${encodeURIComponent(version)}/activate`)
+}
+
 /** GET /soul/templates — List available Soul templates */
 export function fetchSoulTemplates(industry?: string) {
   const params = industry ? `?industry=${encodeURIComponent(industry)}` : ''
