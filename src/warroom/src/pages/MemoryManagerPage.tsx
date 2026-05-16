@@ -57,6 +57,59 @@ function blockPreview(block: CoreBlock | undefined): string {
   return block.content.trim() || 'No content stored in this block yet.'
 }
 
+type MemoryTileTone = 'healthy' | 'warning' | 'muted' | 'accent'
+
+const memoryTileToneClass: Record<MemoryTileTone, string> = {
+  healthy: 'border-state-healthy/30 bg-state-healthy/10 text-state-healthy',
+  warning: 'border-state-warning/30 bg-state-warning/10 text-state-warning',
+  muted: 'border-border-default bg-surface-card-elevated text-text-muted',
+  accent: 'border-accent-primary/30 bg-accent-primary/10 text-accent-primary',
+}
+
+function MemoryStatTile({
+  label,
+  value,
+  detail,
+  tone = 'muted',
+}: {
+  label: string
+  value: string | number
+  detail: string
+  tone?: MemoryTileTone
+}) {
+  return (
+    <div className={`rounded-lg border px-4 py-3 ${memoryTileToneClass[tone]}`}>
+      <div className="text-[10px] font-medium uppercase tracking-wider opacity-80">{label}</div>
+      <div className="mt-2 text-2xl font-semibold text-text-primary">{value}</div>
+      <div className="mt-1 text-xs text-text-muted">{detail}</div>
+    </div>
+  )
+}
+
+function WorkflowCard({
+  title,
+  label,
+  detail,
+  tone = 'muted',
+}: {
+  title: string
+  label: string
+  detail: string
+  tone?: MemoryTileTone
+}) {
+  return (
+    <div className={`rounded-lg border px-4 py-3 ${memoryTileToneClass[tone]}`}>
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
+        <span className="rounded border border-current/30 px-2 py-0.5 text-[10px] font-mono uppercase">
+          {label}
+        </span>
+      </div>
+      <p className="mt-2 text-xs leading-5 text-text-muted">{detail}</p>
+    </div>
+  )
+}
+
 export function MemoryManagerPage() {
   usePageTitle('Governed Memory Manager')
 
@@ -95,6 +148,12 @@ export function MemoryManagerPage() {
   const recentCommits = commits?.commits ?? []
 
   const blockOptions = useMemo(() => Object.keys(coreBlocks), [coreBlocks])
+  const quarantineTotal = quarantinedCoreBlocks.length + quarantinedItems.length
+  const recentTierLabel = recentItems.length === 1 ? 'item' : 'items'
+  const commitLabel = recentCommits.length === 1 ? 'commit' : 'commits'
+  const currentBlockTokenLabel = currentBlock
+    ? `${currentBlock.token_count} / ${currentBlock.token_budget} tokens`
+    : 'No block selected'
 
   useEffect(() => {
     let active = true
@@ -204,26 +263,70 @@ export function MemoryManagerPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-semibold text-text-primary">Governed Memory Manager</h2>
-          <p className="text-sm text-text-muted mt-2">
-            Operator-scoped memory actions live here so the main Memory page stays focused on inspection.
-          </p>
+      <div className="rounded-lg border border-border-default bg-surface-card p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="max-w-3xl">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-accent-primary">
+              Memory Governance
+            </div>
+            <h2 className="mt-2 text-2xl font-semibold text-text-primary">Governed Memory Manager</h2>
+            <p className="mt-2 text-sm leading-6 text-text-muted">
+              Review quarantined memory, make governed core block edits, and audit recent changes from one operator
+              workspace.
+            </p>
+          </div>
+          <Link
+            to="/memory"
+            className="inline-flex w-fit items-center px-4 py-2 text-sm rounded-md border border-border-default text-text-primary hover:border-border-active"
+          >
+            Back to Memory
+          </Link>
         </div>
-        <Link
-          to="/memory"
-          className="inline-flex items-center px-4 py-2 text-sm rounded-md border border-border-default text-text-primary hover:border-border-active"
-        >
-          Back to Memory
-        </Link>
+
+        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <MemoryStatTile
+            label="Operator"
+            value={operatorName}
+            detail="Identity applied to governed commits and review actions."
+            tone="accent"
+          />
+          <MemoryStatTile
+            label="Core Blocks"
+            value={blockOptions.length}
+            detail={currentBlock ? `Editing ${selectedBlock}` : 'No editable block loaded.'}
+          />
+          <MemoryStatTile
+            label="Quarantine"
+            value={quarantineTotal}
+            detail={quarantineTotal === 0 ? 'No pending review backlog.' : 'Operator review required.'}
+            tone={quarantineTotal === 0 ? 'healthy' : 'warning'}
+          />
+          <MemoryStatTile
+            label="Recent Activity"
+            value={recentCommits.length}
+            detail={`${recentItems.length} recent tiered ${recentTierLabel}, ${recentCommits.length} ${commitLabel}.`}
+          />
+        </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3 text-xs text-text-muted font-mono">
-        <span>operator {operatorName}</span>
-        <span>quarantine {quarantinedCoreBlocks.length + quarantinedItems.length}</span>
-        <span>recent items {recentItems.length}</span>
-        <span>recent commits {recentCommits.length}</span>
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+        <WorkflowCard
+          title="Edit Core Blocks"
+          label={currentBlockTokenLabel}
+          detail="Use commit messages and required reasons when changing durable core memory."
+          tone="accent"
+        />
+        <WorkflowCard
+          title="Review Quarantine"
+          label={`${quarantinedCoreBlocks.length} core / ${quarantinedItems.length} tiered`}
+          detail="Approve high-confidence memory or reject unsafe entries while preserving the audit trail."
+          tone={quarantineTotal === 0 ? 'healthy' : 'warning'}
+        />
+        <WorkflowCard
+          title="Audit History"
+          label={`${recentCommits.length} ${commitLabel}`}
+          detail="Inspect recent actions and roll back committed core memory changes when needed."
+        />
       </div>
 
       {error ? (
@@ -239,15 +342,15 @@ export function MemoryManagerPage() {
       ) : null}
 
       <section className="bg-surface-card border border-border-default rounded-lg p-4">
-        <div className="flex items-center justify-between gap-3 mb-4">
+        <div className="flex flex-col gap-3 mb-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">Core Block Editor</h3>
             <p className="text-xs text-text-muted mt-1">
               Governed owner edits flow through a committed memory change, not an inline overwrite.
             </p>
           </div>
-          <span className="text-xs font-mono text-text-muted">
-            {currentBlock ? `${currentBlock.token_count} / ${currentBlock.token_budget} tokens` : 'No block selected'}
+          <span className="w-fit rounded border border-border-default bg-surface-input px-3 py-1 text-xs font-mono text-text-muted">
+            {currentBlockTokenLabel}
           </span>
         </div>
 
@@ -326,9 +429,17 @@ export function MemoryManagerPage() {
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <section className="bg-surface-card border border-border-default rounded-lg p-4">
-          <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-4">
-            Quarantined Core Blocks ({quarantinedCoreBlocks.length})
-          </h3>
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">
+                Quarantined Core Blocks
+              </h3>
+              <p className="mt-1 text-xs text-text-muted">Durable memory changes waiting for explicit approval.</p>
+            </div>
+            <span className="rounded border border-border-default bg-surface-input px-2 py-1 text-xs font-mono text-text-muted">
+              {quarantinedCoreBlocks.length}
+            </span>
+          </div>
           {quarantinedCoreBlocks.length === 0 ? (
             <p className="text-sm text-text-muted">No quarantined core blocks.</p>
           ) : (
@@ -376,9 +487,17 @@ export function MemoryManagerPage() {
         </section>
 
         <section className="bg-surface-card border border-border-default rounded-lg p-4">
-          <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-4">
-            Quarantined Tiered Items ({quarantinedItems.length})
-          </h3>
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">
+                Quarantined Tiered Items
+              </h3>
+              <p className="mt-1 text-xs text-text-muted">Working, episodic, and archival items needing review.</p>
+            </div>
+            <span className="rounded border border-border-default bg-surface-input px-2 py-1 text-xs font-mono text-text-muted">
+              {quarantinedItems.length}
+            </span>
+          </div>
           {quarantinedItems.length === 0 ? (
             <p className="text-sm text-text-muted">No quarantined tiered items.</p>
           ) : (
@@ -446,9 +565,17 @@ export function MemoryManagerPage() {
       </div>
 
       <section className="bg-surface-card border border-border-default rounded-lg p-4">
-        <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-4">
-          Recent Tiered Memory Actions
-        </h3>
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">
+              Recent Tiered Memory Actions
+            </h3>
+            <p className="mt-1 text-xs text-text-muted">Latest operator-visible memory items across active tiers.</p>
+          </div>
+          <span className="rounded border border-border-default bg-surface-input px-2 py-1 text-xs font-mono text-text-muted">
+            {recentItems.length}
+          </span>
+        </div>
         {recentItems.length === 0 ? (
           <p className="text-sm text-text-muted">No recent working, episodic, or archival items are available.</p>
         ) : (
@@ -502,9 +629,17 @@ export function MemoryManagerPage() {
       </section>
 
       <section className="bg-surface-card border border-border-default rounded-lg p-4">
-        <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-4">
-          Recent Commit History
-        </h3>
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">
+              Recent Commit History
+            </h3>
+            <p className="mt-1 text-xs text-text-muted">Committed governed edits and rollback candidates.</p>
+          </div>
+          <span className="rounded border border-border-default bg-surface-input px-2 py-1 text-xs font-mono text-text-muted">
+            {recentCommits.length}
+          </span>
+        </div>
         {recentCommits.length === 0 ? (
           <p className="text-sm text-text-muted">No committed governed memory changes have been recorded yet.</p>
         ) : (

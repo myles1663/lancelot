@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Activity, Database, Gauge, MemoryStick, Search, Zap } from 'lucide-react'
 import { compileContext } from '@/api'
-import { MetricCard } from '@/components'
 import { usePageTitle } from '@/hooks'
 import type { CompileContextResponse } from '@/types/api'
 
@@ -24,6 +24,44 @@ function renderReasons(reasons: unknown): Array<[string, number]> {
     .map(([key, value]) => [key, numberMetric(value)] as [string, number])
     .filter(([, value]) => value > 0)
     .sort((a, b) => b[1] - a[1])
+}
+
+type EfficiencyTileTone = 'accent' | 'healthy' | 'warning' | 'muted'
+
+const efficiencyTileToneClass: Record<EfficiencyTileTone, string> = {
+  accent: 'border-accent-primary/30 bg-accent-primary/10 text-accent-primary',
+  healthy: 'border-state-healthy/30 bg-state-healthy/10 text-state-healthy',
+  warning: 'border-state-warning/30 bg-state-warning/10 text-state-warning',
+  muted: 'border-border-default bg-surface-card-elevated text-text-muted',
+}
+
+function EfficiencyTile({
+  label,
+  value,
+  detail,
+  tone = 'muted',
+}: {
+  label: string
+  value: string | number
+  detail: string
+  tone?: EfficiencyTileTone
+}) {
+  return (
+    <div className={`rounded-lg border px-4 py-3 ${efficiencyTileToneClass[tone]}`}>
+      <div className="text-[10px] font-medium uppercase tracking-wider opacity-80">{label}</div>
+      <div className="mt-2 text-2xl font-semibold text-text-primary">{value}</div>
+      <div className="mt-1 text-xs leading-5 text-text-muted">{detail}</div>
+    </div>
+  )
+}
+
+function FieldRow({ label, value, tone = 'text-text-primary' }: { label: string; value: string | number; tone?: string }) {
+  return (
+    <div className="flex justify-between gap-3">
+      <span className="text-text-muted">{label}</span>
+      <span className={`font-mono ${tone}`}>{value}</span>
+    </div>
+  )
 }
 
 export function ContextEfficiency() {
@@ -69,22 +107,71 @@ export function ContextEfficiency() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-semibold text-text-primary">Context Efficiency</h2>
-          <p className="text-sm text-text-muted mt-2">
-            Inspect how Lancelot budgets core context, dynamic memory, retrieval misses, and reusable task evidence.
-          </p>
+      <div className="rounded-lg border border-border-default bg-surface-card p-5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="max-w-3xl">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-accent-primary">
+              Memory Diagnostics
+            </div>
+            <h2 className="mt-2 text-2xl font-semibold text-text-primary">Context Efficiency</h2>
+            <p className="mt-2 text-sm leading-6 text-text-muted">
+              Compile a task preview to inspect token budget pressure, memory inclusion, retrieval misses, and reusable
+              task evidence before the session grows.
+            </p>
+          </div>
+          <Link
+            to="/memory"
+            className="inline-flex w-fit items-center gap-2 px-4 py-2 text-sm rounded-md border border-border-default text-text-primary hover:border-border-active"
+          >
+            <MemoryStick className="h-4 w-4" aria-hidden="true" />
+            Memory Overview
+          </Link>
         </div>
-        <Link
-          to="/memory"
-          className="inline-flex items-center px-4 py-2 text-sm rounded-md border border-border-default text-text-primary hover:border-border-active"
-        >
-          Memory
-        </Link>
+
+        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <EfficiencyTile
+            label="Diagnostic State"
+            value={result ? 'Ready' : 'Idle'}
+            detail={result ? `Context ${result.context_id}` : 'Run a diagnostic to populate telemetry.'}
+            tone={result ? 'healthy' : 'muted'}
+          />
+          <EfficiencyTile
+            label="Budget Used"
+            value={result ? percentMetric(efficiency.budget_used_ratio) : '--'}
+            detail="Share of available context budget consumed."
+            tone={numberMetric(efficiency.budget_used_ratio) > 0.8 ? 'warning' : 'accent'}
+          />
+          <EfficiencyTile
+            label="Retrieval Miss"
+            value={result ? percentMetric(efficiency.retrieval_miss_rate) : '--'}
+            detail="Candidate retrieval misses in this compile."
+            tone={numberMetric(efficiency.retrieval_miss_rate) > 0.2 ? 'warning' : 'healthy'}
+          />
+          <EfficiencyTile
+            label="Compaction"
+            value={result ? numberMetric(efficiency.compaction_savings_tokens).toLocaleString() : '--'}
+            detail="Estimated tokens saved by compaction."
+          />
+        </div>
       </div>
 
       <section className="bg-surface-card border border-border-default rounded-lg p-4">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Gauge className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+              <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">Diagnostic Input</h3>
+            </div>
+            <p className="mt-1 text-xs text-text-muted">
+              Objective is required. Quest and search query narrow the context preview when available.
+            </p>
+          </div>
+          {result ? (
+            <span className="rounded border border-border-default bg-surface-input px-2 py-1 text-xs font-mono text-text-muted">
+              {result.context_id}
+            </span>
+          ) : null}
+        </div>
         <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_220px] gap-4">
           <label className="block">
             <span className="block text-xs font-medium uppercase tracking-wider text-text-secondary mb-2">
@@ -123,15 +210,18 @@ export function ContextEfficiency() {
             </label>
           </div>
         </div>
-        <div className="mt-4 flex items-center gap-3">
+        <div className="mt-4 flex flex-wrap items-center gap-3">
           <button
             onClick={handleCompile}
             disabled={busy}
-            className="px-4 py-2 bg-accent-primary text-white text-sm rounded-md hover:bg-accent-primary/80 disabled:opacity-60"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-accent-primary text-white text-sm rounded-md hover:bg-accent-primary/80 disabled:opacity-60"
           >
+            <Zap className="h-4 w-4" aria-hidden="true" />
             {busy ? 'Compiling...' : 'Run Diagnostic'}
           </button>
-          {result ? <span className="text-xs font-mono text-text-muted">context {result.context_id}</span> : null}
+          <span className="text-xs text-text-muted">
+            Results are a preview of the context efficiency telemetry written into compile receipts.
+          </span>
         </div>
         {error ? (
           <div className="mt-4 rounded-lg border border-state-error/40 bg-state-error/10 px-4 py-3 text-sm text-state-error">
@@ -142,47 +232,61 @@ export function ContextEfficiency() {
 
       {result ? (
         <>
-          <div className="grid grid-cols-2 xl:grid-cols-5 gap-4">
-            <MetricCard label="Context Tokens" value={numberMetric(efficiency.total_context_tokens)} />
-            <MetricCard label="Budget Used" value={percentMetric(efficiency.budget_used_ratio)} />
-            <MetricCard label="Static Tokens" value={numberMetric(efficiency.static_context_tokens)} />
-            <MetricCard label="Dynamic Tokens" value={numberMetric(efficiency.dynamic_context_tokens)} />
-            <MetricCard label="Retrieval Miss" value={percentMetric(efficiency.retrieval_miss_rate)} />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <EfficiencyTile
+              label="Context Tokens"
+              value={numberMetric(efficiency.total_context_tokens).toLocaleString()}
+              detail="Total compiled context."
+              tone="accent"
+            />
+            <EfficiencyTile
+              label="Static Tokens"
+              value={numberMetric(efficiency.static_context_tokens).toLocaleString()}
+              detail="Core and system material."
+            />
+            <EfficiencyTile
+              label="Dynamic Tokens"
+              value={numberMetric(efficiency.dynamic_context_tokens).toLocaleString()}
+              detail="Memory and retrieval content."
+            />
+            <EfficiencyTile
+              label="Included Hits"
+              value={numberMetric(efficiency.memory_hits_included).toLocaleString()}
+              detail="Memory hits admitted."
+              tone="healthy"
+            />
+            <EfficiencyTile
+              label="Excluded Hits"
+              value={numberMetric(efficiency.memory_hits_excluded).toLocaleString()}
+              detail="Memory hits held out."
+              tone={numberMetric(efficiency.memory_hits_excluded) > 0 ? 'warning' : 'muted'}
+            />
           </div>
 
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
             <section className="bg-surface-card border border-border-default rounded-lg p-4">
-              <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                Memory Hits
-              </h3>
+              <div className="mb-3 flex items-center gap-2">
+                <Database className="h-4 w-4 text-state-healthy" aria-hidden="true" />
+                <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">
+                  Memory Hits
+                </h3>
+              </div>
               <div className="space-y-3 text-sm">
-                <div className="flex justify-between gap-3">
-                  <span className="text-text-muted">Considered</span>
-                  <span className="font-mono text-text-primary">{numberMetric(efficiency.memory_hits_considered)}</span>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <span className="text-text-muted">Included</span>
-                  <span className="font-mono text-state-healthy">{numberMetric(efficiency.memory_hits_included)}</span>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <span className="text-text-muted">Excluded</span>
-                  <span className="font-mono text-state-warning">{numberMetric(efficiency.memory_hits_excluded)}</span>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <span className="text-text-muted">Working included</span>
-                  <span className="font-mono text-text-primary">{numberMetric(efficiency.working_memory_hits_included)}</span>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <span className="text-text-muted">Retrieval included</span>
-                  <span className="font-mono text-text-primary">{numberMetric(efficiency.retrieval_hits_included)}</span>
-                </div>
+                <FieldRow label="Considered" value={numberMetric(efficiency.memory_hits_considered)} />
+                <FieldRow label="Included" value={numberMetric(efficiency.memory_hits_included)} tone="text-state-healthy" />
+                <FieldRow label="Excluded" value={numberMetric(efficiency.memory_hits_excluded)} tone="text-state-warning" />
+                <FieldRow label="Working included" value={numberMetric(efficiency.working_memory_hits_included)} />
+                <FieldRow label="Retrieval included" value={numberMetric(efficiency.retrieval_hits_included)} />
               </div>
             </section>
 
             <section className="bg-surface-card border border-border-default rounded-lg p-4">
-              <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                Token Breakdown
-              </h3>
+              <div className="mb-3 flex items-center gap-2">
+                <Activity className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+                <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">
+                  Token Breakdown
+                </h3>
+              </div>
               <div className="space-y-3">
                 {Object.entries(tokenBreakdown).map(([section, tokens]) => {
                   const percent = numberMetric(sectionPercentages[section]) * 100
@@ -205,34 +309,39 @@ export function ContextEfficiency() {
             </section>
 
             <section className="bg-surface-card border border-border-default rounded-lg p-4">
-              <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                Reuse And Cache
-              </h3>
+              <div className="mb-3 flex items-center gap-2">
+                <Zap className="h-4 w-4 text-state-warning" aria-hidden="true" />
+                <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">
+                  Reuse And Cache
+                </h3>
+              </div>
               <div className="space-y-3 text-sm">
-                <div className="flex justify-between gap-3">
-                  <span className="text-text-muted">Cache eligible</span>
-                  <span className="font-mono text-text-primary">{cacheEligibility?.eligible ? 'yes' : 'no'}</span>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <span className="text-text-muted">Template hits</span>
-                  <span className="font-mono text-text-primary">{numberMetric(templateReuse?.template_hits)}</span>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <span className="text-text-muted">Template hit rate</span>
-                  <span className="font-mono text-text-primary">{percentMetric(templateReuse?.template_hit_rate)}</span>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <span className="text-text-muted">Compaction savings</span>
-                  <span className="font-mono text-text-primary">{numberMetric(efficiency.compaction_savings_tokens)} tokens</span>
-                </div>
+                <FieldRow label="Cache eligible" value={cacheEligibility?.eligible ? 'yes' : 'no'} />
+                <FieldRow label="Template hits" value={numberMetric(templateReuse?.template_hits)} />
+                <FieldRow label="Template hit rate" value={percentMetric(templateReuse?.template_hit_rate)} />
+                <FieldRow
+                  label="Compaction savings"
+                  value={`${numberMetric(efficiency.compaction_savings_tokens).toLocaleString()} tokens`}
+                />
               </div>
             </section>
           </div>
 
           <section className="bg-surface-card border border-border-default rounded-lg p-4">
-            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-              Exclusions
-            </h3>
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Search className="h-4 w-4 text-state-warning" aria-hidden="true" />
+                  <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">
+                    Exclusions
+                  </h3>
+                </div>
+                <p className="mt-1 text-xs text-text-muted">Why candidate memory was held out of this compile.</p>
+              </div>
+              <span className="rounded border border-border-default bg-surface-input px-2 py-1 text-xs font-mono text-text-muted">
+                {exclusionReasons.length}
+              </span>
+            </div>
             {exclusionReasons.length === 0 ? (
               <p className="text-sm text-text-muted">No candidate exclusions were recorded for this compile.</p>
             ) : (
@@ -249,9 +358,15 @@ export function ContextEfficiency() {
         </>
       ) : (
         <section className="bg-surface-card border border-border-default rounded-lg p-4">
-          <p className="text-sm text-text-muted">
-            Run a diagnostic to produce the same context efficiency telemetry that is written into compile receipts.
-          </p>
+          <div className="flex items-start gap-3">
+            <Gauge className="mt-0.5 h-4 w-4 text-accent-primary" aria-hidden="true" />
+            <div>
+              <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">No Diagnostic Yet</h3>
+              <p className="mt-1 text-sm text-text-muted">
+                Run a diagnostic to produce the same context efficiency telemetry that is written into compile receipts.
+              </p>
+            </div>
+          </div>
         </section>
       )}
     </div>

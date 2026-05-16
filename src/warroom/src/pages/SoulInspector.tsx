@@ -32,6 +32,36 @@ function soulSourceLabel(source?: SoulVersionSource) {
   return source.kind
 }
 
+type SoulWorkflow = {
+  id: 'view' | 'edit' | 'templates'
+  label: string
+  kicker: string
+  description: string
+}
+
+const SOUL_WORKFLOWS: [SoulWorkflow, ...SoulWorkflow[]] = [
+  {
+    id: 'view',
+    label: 'Constitution',
+    kicker: 'Inspect and test',
+    description: 'Read the active Soul, review governed controls, and run behavior checks.',
+  },
+  {
+    id: 'edit',
+    label: 'YAML Editor',
+    kicker: 'Propose amendments',
+    description: 'Create governed amendment proposals against the active constitution.',
+  },
+  {
+    id: 'templates',
+    label: 'Templates',
+    kicker: 'Apply patterns',
+    description: 'Browse or apply reusable Soul operating patterns as proposals.',
+  },
+]
+
+const DEFAULT_SOUL_WORKFLOW = SOUL_WORKFLOWS[0]
+
 type SoulConfirmAction =
   | { type: 'approve'; id: string }
   | { type: 'activate'; id: string }
@@ -1739,19 +1769,43 @@ export function SoulInspector() {
   }
 
   const proposals = statusData?.pending_proposals ?? []
+  const activeWorkflow = SOUL_WORKFLOWS.find(workflow => workflow.id === tab) ?? DEFAULT_SOUL_WORKFLOW
+  const approvedProposalCount = proposals.filter(proposal => proposal.status === 'approved').length
+  const pendingProposalCount = proposals.filter(proposal => proposal.status === 'pending').length
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-lg font-semibold text-text-primary">Soul Inspector</h2>
-        {statusData && (
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-state-healthy" />
-            <span className="text-sm font-mono font-bold text-text-primary">{statusData.active_version}</span>
-            <span className="text-[10px] text-text-muted">{soulSourceLabel(statusData.active_source)}</span>
+      <section className="mb-6 overflow-hidden rounded-lg border border-border-default bg-surface-card">
+        <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="max-w-3xl">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">Governance</p>
+            <h2 className="mt-1 text-xl font-semibold text-text-primary">Soul Inspector</h2>
+            <p className="mt-2 text-sm leading-relaxed text-text-secondary">
+              Inspect the active constitution, test behavior gates, create amendment proposals, and apply governed templates.
+            </p>
           </div>
-        )}
-      </div>
+          {statusData && (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:min-w-[34rem]">
+              <div className="rounded-md border border-border-default bg-surface-card-elevated px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">Active Version</p>
+                <p className="mt-1 truncate font-mono text-sm font-semibold text-text-primary">{statusData.active_version}</p>
+              </div>
+              <div className="rounded-md border border-border-default bg-surface-card-elevated px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">Source</p>
+                <p className="mt-1 truncate text-xs text-text-secondary">{soulSourceLabel(statusData.active_source)}</p>
+              </div>
+              <div className="rounded-md border border-border-default bg-surface-card-elevated px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">Open Proposals</p>
+                <p className="mt-1 font-mono text-sm font-semibold text-text-primary">{proposals.length}</p>
+              </div>
+              <div className="rounded-md border border-border-default bg-surface-card-elevated px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">Versions</p>
+                <p className="mt-1 font-mono text-sm font-semibold text-text-primary">{statusData.available_versions.length}</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* Crusader Mode Banner */}
       {crusaderActive && (
@@ -1804,41 +1858,37 @@ export function SoulInspector() {
       ) : (
         <div className="space-y-6">
           {/* View / Edit tabs */}
-          <div className="flex gap-1 bg-surface-card border border-border-default rounded-lg p-1">
-            <button
-              onClick={() => setTab('view')}
-              className={`flex-1 px-4 py-1.5 rounded text-xs font-medium transition-colors ${
-                tab === 'view'
-                  ? 'bg-accent-primary text-white'
-                  : 'text-text-muted hover:text-text-primary'
-              }`}
-            >
-              Constitution Viewer
-            </button>
-            <button
-              onClick={() => setTab('edit')}
-              className={`flex-1 px-4 py-1.5 rounded text-xs font-medium transition-colors ${
-                tab === 'edit'
-                  ? 'bg-accent-primary text-white'
-                  : 'text-text-muted hover:text-text-primary'
-              }`}
-            >
-              YAML Editor
-            </button>
-            <button
-              onClick={() => setTab('templates')}
-              className={`flex-1 px-4 py-1.5 rounded text-xs font-medium transition-colors ${
-                tab === 'templates'
-                  ? 'bg-accent-primary text-white'
-                  : 'text-text-muted hover:text-text-primary'
-              }`}
-            >
-              Templates
-            </button>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+            {SOUL_WORKFLOWS.map(workflow => (
+              <button
+                key={workflow.id}
+                onClick={() => setTab(workflow.id)}
+                className={`rounded-lg border p-3 text-left transition-colors ${
+                  tab === workflow.id
+                    ? 'border-accent-primary bg-accent-primary/10'
+                    : 'border-border-default bg-surface-card hover:border-accent-primary/50'
+                }`}
+              >
+                <p className={`text-[10px] font-semibold uppercase tracking-wider ${
+                  tab === workflow.id ? 'text-accent-primary' : 'text-text-muted'
+                }`}>
+                  {workflow.kicker}
+                </p>
+                <h3 className="mt-1 text-sm font-semibold text-text-primary">{workflow.label}</h3>
+                <p className="mt-1 text-xs leading-relaxed text-text-muted">{workflow.description}</p>
+              </button>
+            ))}
           </div>
 
           {/* Tab content */}
           <section className="bg-surface-card border border-border-default rounded-lg p-4">
+            <div className="mb-4 flex flex-col gap-1 border-b border-border-default pb-3 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">{activeWorkflow.kicker}</p>
+                <h3 className="text-sm font-semibold text-text-primary">{activeWorkflow.label}</h3>
+              </div>
+              <p className="text-xs text-text-muted">{activeWorkflow.description}</p>
+            </div>
             {tab === 'view' ? (
               <SoulViewer
                 soul={content.soul}
@@ -1863,9 +1913,16 @@ export function SoulInspector() {
 
           {/* Pending Proposals */}
           <section className="bg-surface-card border border-border-default rounded-lg p-4">
-            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-              Pending Proposals ({proposals.length})
-            </h3>
+            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">Change Control</p>
+                <h3 className="text-sm font-semibold text-text-primary">Amendment Proposals</h3>
+              </div>
+              <div className="flex flex-wrap gap-2 text-[10px] text-text-muted">
+                <span className="rounded border border-border-default bg-surface-input px-2 py-1">{pendingProposalCount} pending</span>
+                <span className="rounded border border-border-default bg-surface-input px-2 py-1">{approvedProposalCount} approved</span>
+              </div>
+            </div>
 
             {actionResult && (
               <div className={`mb-3 p-2 rounded border text-[11px] leading-relaxed ${
@@ -1949,9 +2006,15 @@ export function SoulInspector() {
           {/* Available Versions */}
           {statusData && statusData.available_versions.length > 0 && (
             <section className="bg-surface-card border border-border-default rounded-lg p-4">
-              <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                Available Versions ({statusData.available_versions.length})
-              </h3>
+              <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">Rollback Surface</p>
+                  <h3 className="text-sm font-semibold text-text-primary">Available Versions</h3>
+                </div>
+                <span className="w-fit rounded border border-border-default bg-surface-input px-2 py-1 text-[10px] text-text-muted">
+                  {statusData.available_versions.length} retained
+                </span>
+              </div>
               <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 {statusData.available_versions.map(v => (
                   <div
