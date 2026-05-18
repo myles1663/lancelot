@@ -62,6 +62,16 @@ export async function validateApiKey(provider, apiKey) {
       return { valid: false, error: `Unexpected response: ${res.status}` };
     }
 
+    if (provider === 'deepseek') {
+      const res = await fetch('https://api.deepseek.com/models', {
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(timeout),
+      });
+      if (res.ok) return { valid: true };
+      if (res.status === 401) return { valid: false, error: 'Invalid API key' };
+      return { valid: false, error: `Unexpected response: ${res.status}` };
+    }
+
     return { valid: false, error: `Unknown provider: ${provider}` };
   } catch (e) {
     // Network error — don't block install, key might still be valid

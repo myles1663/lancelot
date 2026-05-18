@@ -178,6 +178,33 @@ class TestSoulStatus:
         assert data["pending_proposals"][0]["id"] == proposal.id
         assert data["pending_proposals"][0]["status"] == "approved"
 
+    def test_status_returns_version_sources_from_activated_template_proposals(self, client):
+        c, soul_dir = client
+        proposed_yaml = yaml.dump(_soul_dict("v2", mission="Template mission."))
+        proposal = create_proposal(
+            "v1",
+            proposed_yaml,
+            author="template:finance-compliance-monitor",
+            soul_dir=soul_dir,
+        )
+        proposals = list_proposals(soul_dir)
+        proposals[0].status = ProposalStatus.ACTIVATED
+        save_proposals(proposals, soul_dir)
+
+        versions_dir = Path(soul_dir) / "soul_versions"
+        (versions_dir / "soul_v2.yaml").write_text(proposed_yaml, encoding="utf-8")
+        Path(soul_dir, "ACTIVE").write_text("v2", encoding="utf-8")
+
+        resp = c.get("/soul/status", headers=_owner_headers())
+        data = resp.json()
+
+        assert resp.status_code == 200
+        assert data["active_source"]["kind"] == "template"
+        assert data["active_source"]["template_name"] == "finance-compliance-monitor"
+        assert data["active_source"]["proposal_id"] == proposal.id
+        assert data["version_sources"]["v1"]["kind"] == "baseline"
+        assert data["version_sources"]["v2"]["template_name"] == "finance-compliance-monitor"
+
     def test_status_and_content_return_safe_errors_when_store_fails(self, client, monkeypatch):
         c, _ = client
         monkeypatch.setattr(soul_api_module, "get_active_version", lambda soul_dir: (_ for _ in ()).throw(soul_api_module.SoulStoreError("active missing")))
@@ -691,6 +718,67 @@ class TestActivateProposal:
         save_proposals(proposals, soul_dir)
         invalid_yaml = c.post(f"/soul/proposals/{bad.id}/activate", headers=_owner_headers())
         assert invalid_yaml.status_code == 422
+
+
+class TestActivateExistingVersion:
+
+    def test_owner_can_activate_existing_version_and_refresh_runtime(self, client, monkeypatch):
+        c, soul_dir = client
+        versions_dir = Path(soul_dir) / "soul_versions"
+        (versions_dir / "soul_v2.yaml").write_text(
+            yaml.dump(_soul_dict("v2", mission="Existing v2 mission.")),
+            encoding="utf-8",
+        )
+        Path(soul_dir, "ACTIVE").write_text("v2", encoding="utf-8")
+        seen = {}
+        emitted = []
+        init_soul_runtime(lambda soul: seen.setdefault("version", soul.version))
+        monkeypatch.setattr(
+            "src.core.governance_receipts.emit_governance_receipt",
+            lambda *args, **kwargs: emitted.append((args, kwargs)),
+        )
+
+        resp = c.post("/soul/versions/v1/activate", headers=_owner_headers())
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "activated"
+        assert resp.json()["active_version"] == "v1"
+        assert resp.json()["previous_version"] == "v2"
+        assert get_active_version(soul_dir) == "v1"
+        assert seen["version"] == "v1"
+        assert emitted
+        assert emitted[0][1]["inputs"]["previous_version"] == "v2"
+        assert emitted[0][1]["inputs"]["target_version"] == "v1"
+        assert emitted[0][1]["inputs"]["source"] == "version_history"
+
+    def test_activate_existing_version_requires_owner(self, client):
+        c, soul_dir = client
+        versions_dir = Path(soul_dir) / "soul_versions"
+        (versions_dir / "soul_v2.yaml").write_text(yaml.dump(_soul_dict("v2")), encoding="utf-8")
+
+        resp = c.post("/soul/versions/v2/activate", headers=_non_owner_headers())
+
+        assert resp.status_code in {401, 403}
+        assert get_active_version(soul_dir) == "v1"
+
+    def test_activate_existing_version_rolls_back_when_runtime_refresh_fails(self, client):
+        c, soul_dir = client
+        versions_dir = Path(soul_dir) / "soul_versions"
+        (versions_dir / "soul_v2.yaml").write_text(yaml.dump(_soul_dict("v2")), encoding="utf-8")
+        init_soul_runtime(lambda soul: (_ for _ in ()).throw(RuntimeError("reload failed")))
+
+        resp = c.post("/soul/versions/v2/activate", headers=_owner_headers())
+
+        assert resp.status_code == 500
+        assert get_active_version(soul_dir) == "v1"
+
+    def test_activate_existing_version_rejects_unknown_version(self, client):
+        c, soul_dir = client
+
+        resp = c.post("/soul/versions/v99/activate", headers=_owner_headers())
+
+        assert resp.status_code == 404
+        assert get_active_version(soul_dir) == "v1"
 
 
 # ===================================================================

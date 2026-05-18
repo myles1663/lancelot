@@ -67,6 +67,16 @@ export const PROVIDERS = {
     validationUrl: 'https://integrate.api.nvidia.com/v1/models',
     signupUrl: 'https://build.nvidia.com/',
   },
+  deepseek: {
+    name: 'DeepSeek',
+    envVar: 'DEEPSEEK_API_KEY',
+    envProvider: 'deepseek',
+    recommended: false,
+    description: 'DeepSeek V4 via OpenAI-compatible API',
+    keyPrefix: '',
+    validationUrl: 'https://api.deepseek.com/models',
+    signupUrl: 'https://platform.deepseek.com/',
+  },
 };
 
 export const COMMS = {

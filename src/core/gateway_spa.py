@@ -16,7 +16,14 @@ def mount_war_room_spa(app: FastAPI, *, logger) -> None:
 
     def _serve_warroom_index():
         html = (warroom_dist / "index.html").read_text(encoding="utf-8")
-        return HTMLResponse(html)
+        return HTMLResponse(
+            html,
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
 
     def _redirect_to_warroom() -> RedirectResponse:
         return RedirectResponse(url="/war-room/", status_code=307)

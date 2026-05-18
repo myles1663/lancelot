@@ -225,6 +225,8 @@ def test_installed_skill_detail_exposes_contract_and_source_proposal():
     assert body["name"] == "demo_skill"
     assert body["permissions"] == ["read_input", "write_output"]
     assert body["risk"] == "medium"
+    assert body["manifest"]["name"] == "demo_skill"
+    assert body["manifest_source"] == "registry"
     assert body["source_proposal"]["id"] == "proposal-1"
     assert body["source_proposal"]["pipeline_stage_results"]["owner_review"]["status"] == "approved"
     assert "name: demo_skill" in body["manifest_yaml"]

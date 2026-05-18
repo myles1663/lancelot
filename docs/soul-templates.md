@@ -218,7 +218,10 @@ machine-enforceable controls:
 
 Applying a template mutates the active Soul only after approval and
 activation. The apply step prepares a proposal; it does not silently
-switch the runtime policy.
+switch the runtime policy. After activation, War Room can infer and display
+template provenance from the activated proposal author, so an active `v2`
+created from a finance template is labeled with that template source in the
+Soul Inspector.
 
 ---
 

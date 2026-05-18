@@ -8,9 +8,16 @@ import { apiGet, apiPost } from './client'
 
 export interface TimeTravelStatus {
   enabled: boolean
+  engine_ready?: boolean
+  quest_executor_ready?: boolean
+  snapshot_reader_ready?: boolean
+  receipt_service_ready?: boolean
   soul_version: string | null
   fork_allowed: boolean
   require_approval_tier: number
+  runtime_degraded?: boolean
+  degraded_reasons?: string[]
+  runtime_errors?: string[]
 }
 
 export interface ReceiptNode {

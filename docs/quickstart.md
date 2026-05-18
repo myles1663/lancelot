@@ -18,6 +18,7 @@ Before you start, make sure you have:
   - [Anthropic](https://console.anthropic.com/) (pay-as-you-go)
   - [xAI](https://console.x.ai/) (Grok, pay-as-you-go)
   - [NVIDIA Nemotron](https://build.nvidia.com/) (NIM API, free tier available)
+  - [DeepSeek](https://platform.deepseek.com/)
 
 ---
 
@@ -33,7 +34,7 @@ The installer walks you through each step interactively:
 
 1. **Prerequisites check** — verifies Docker, Git, disk space, RAM, GPU
 2. **Install location** — where to put Lancelot (default: `./lancelot`)
-3. **LLM provider** — select Gemini, OpenAI, Anthropic, xAI, or NVIDIA and configure API key or OAuth when available
+3. **LLM provider** — select Gemini, OpenAI, Anthropic, xAI, NVIDIA, or DeepSeek and configure API key or OAuth when available
 4. **Communications** — optionally configure a messaging channel: Telegram or Google Chat (you can skip this)
 5. **War Room auth** — choose local credentials or enterprise OIDC
 6. **Repository clone** — pulls the latest code from GitHub

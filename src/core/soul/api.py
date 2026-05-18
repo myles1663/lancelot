@@ -34,6 +34,7 @@ from src.core.auth_api import get_api_key_identity, request_has_capability, reso
 from src.core.soul.store import (
     Soul,
     SoulStoreError,
+    _resolve_soul_dir,
     get_active_version,
     set_active_version,
     list_versions,
@@ -287,6 +288,106 @@ def _get_active_overlays() -> list:
         return []
 
 
+def _version_source_from_proposal(proposal) -> dict:
+    author = proposal.author or ""
+    if author.startswith("template:"):
+        return {
+            "kind": "template",
+            "template_name": author.removeprefix("template:"),
+            "proposal_id": proposal.id,
+            "created_at": proposal.created_at,
+        }
+    return {
+        "kind": "proposal",
+        "author": author or "unknown",
+        "proposal_id": proposal.id,
+        "created_at": proposal.created_at,
+    }
+
+
+def _build_version_sources(proposals: list, versions: list[str]) -> dict:
+    sources = {
+        version: {"kind": "baseline"}
+        for version in versions
+    }
+    for proposal in proposals:
+        if proposal.status != ProposalStatus.ACTIVATED:
+            continue
+        if proposal.proposed_version not in sources:
+            continue
+        sources[proposal.proposed_version] = _version_source_from_proposal(proposal)
+    return sources
+
+
+def _validate_soul_version_for_activation(version: str) -> Soul:
+    d = _resolve_soul_dir(_SOUL_DIR)
+    version_file = d / "soul_versions" / f"soul_{version}.yaml"
+    if not version_file.exists():
+        raise HTTPException(status_code=404, detail=f"Soul version not found: {version}")
+
+    try:
+        proposed_dict = yaml.safe_load(version_file.read_text(encoding="utf-8"))
+        soul = Soul(**proposed_dict)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Soul version validation failed for {version}: {exc}",
+        ) from exc
+
+    try:
+        lint_or_raise(soul)
+    except SoulStoreError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return soul
+
+
+def _emit_soul_version_receipt(
+    request: Request,
+    *,
+    previous_version: str,
+    active_version: str,
+    source: str,
+    soul: Optional[Soul] = None,
+    proposal_id: Optional[str] = None,
+) -> None:
+    try:
+        from src.core.governance_receipts import emit_governance_receipt
+        from src.shared.receipts import ActionType
+
+        soul_version_hash = active_version
+        if soul is not None:
+            try:
+                from src.federation.soul_compat import hash_soul
+                soul_version_hash = hash_soul(soul)
+            except Exception as hash_exc:
+                logger.debug("Failed to hash Soul version %s: %s", active_version, hash_exc)
+
+        emit_governance_receipt(
+            request,
+            ActionType.SOUL_VERSION_PINNED,
+            action_name="activate_soul_version",
+            inputs={
+                "previous_version": previous_version,
+                "target_version": active_version,
+                "soul_version_hash": soul_version_hash,
+                "source": source,
+                "proposal_id": proposal_id,
+            },
+            outputs={
+                "active_version": active_version,
+            },
+            metadata={
+                "soul_version_hash": soul_version_hash,
+                "previous_version": previous_version,
+                "source": source,
+            },
+        )
+    except Exception as exc:
+        logger.warning("Failed to emit Soul version activation receipt: %s", exc)
+
+
 def _load_merged_active_soul() -> Soul:
     """Load the active Soul and apply any currently enabled overlays."""
     from src.core.soul.store import load_active_soul
@@ -310,6 +411,7 @@ async def soul_status():
         version = get_active_version(_SOUL_DIR)
         versions = list_versions(_SOUL_DIR)
         proposals = list_proposals(_SOUL_DIR)
+        version_sources = _build_version_sources(proposals, versions)
         actionable = [
             p.model_dump()
             for p in proposals
@@ -322,6 +424,8 @@ async def soul_status():
         return {
             "active_version": version,
             "available_versions": versions,
+            "active_source": version_sources.get(version, {"kind": "unknown"}),
+            "version_sources": version_sources,
             "pending_proposals": actionable,
             "active_overlays": active_overlays,
         }
@@ -666,8 +770,72 @@ async def activate_proposal(proposal_id: str, request: Request):
 
     logger.info("soul_activated: proposal=%s, version=%s",
                 target.id, soul.version)
+    _emit_soul_version_receipt(
+        request,
+        previous_version=previous_version,
+        active_version=soul.version,
+        source="proposal",
+        soul=soul,
+        proposal_id=target.id,
+    )
     return {
         "status": "activated",
         "proposal_id": target.id,
         "active_version": soul.version,
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /soul/versions/{version}/activate
+# ---------------------------------------------------------------------------
+
+@router.post("/versions/{version}/activate")
+async def activate_existing_version(version: str, request: Request):
+    """Activate an existing Soul version after owner confirmation.
+
+    This is the governed rollback/switch path for already-retained versions.
+    It validates the target Soul with the linter, updates the ACTIVE pointer,
+    and refreshes live runtime subscribers. If runtime refresh fails, the
+    ACTIVE pointer is rolled back to the prior version.
+    """
+    if not _verify_owner(request):
+        raise HTTPException(status_code=403, detail="Owner identity required")
+
+    with _proposals_lock:
+        previous_version = get_active_version(_SOUL_DIR)
+        if version == previous_version:
+            return {
+                "status": "unchanged",
+                "proposal_id": None,
+                "active_version": version,
+                "previous_version": previous_version,
+            }
+
+        soul = _validate_soul_version_for_activation(version)
+        set_active_version(soul.version, _SOUL_DIR)
+
+        if _runtime_reload_callback is not None:
+            try:
+                runtime_soul = _load_merged_active_soul()
+                _runtime_reload_callback(runtime_soul)
+            except Exception as exc:
+                set_active_version(previous_version, _SOUL_DIR)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Activated Soul version {soul.version} on disk but failed to refresh runtime: {exc}",
+                ) from exc
+
+    logger.info("soul_version_activated: version=%s previous=%s", soul.version, previous_version)
+    _emit_soul_version_receipt(
+        request,
+        previous_version=previous_version,
+        active_version=soul.version,
+        source="version_history",
+        soul=soul,
+    )
+    return {
+        "status": "activated",
+        "proposal_id": None,
+        "active_version": soul.version,
+        "previous_version": previous_version,
     }

@@ -45,6 +45,14 @@ PROVIDERS = {
         "signup": "https://build.nvidia.com/",
         "description": "Nemotron models via NIM, free tier available",
     },
+    "deepseek": {
+        "name": "DeepSeek",
+        "env_var": "DEEPSEEK_API_KEY",
+        "env_provider": "deepseek",
+        "prefix": "",
+        "signup": "https://platform.deepseek.com/",
+        "description": "DeepSeek V4 via OpenAI-compatible API",
+    },
     "openai-codex": {
         "name": "OpenAI (Codex/Pro)",
         "env_var": None,

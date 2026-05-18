@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
+import { Activity, IdCard, Network, RadioTower, Send, ShieldCheck, Users } from 'lucide-react'
 import { usePolling, usePageTitle } from '@/hooks'
-import { MetricCard, EmptyState } from '@/components'
+import { EmptyState } from '@/components'
 import { formatRelativeTime, formatTimestamp } from '@/utils/dateFormat'
 import {
   fetchA2AStatus,
@@ -80,6 +81,35 @@ function TrustBadge({ tier, label }: { tier: number; label: string }) {
     <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${style}`}>
       {label} T{tier}
     </span>
+  )
+}
+
+type A2ATileTone = 'accent' | 'healthy' | 'warning' | 'muted'
+
+const a2aTileToneClass: Record<A2ATileTone, string> = {
+  accent: 'border-accent-primary/30 bg-accent-primary/10 text-accent-primary',
+  healthy: 'border-state-healthy/30 bg-state-healthy/10 text-state-healthy',
+  warning: 'border-state-warning/30 bg-state-warning/10 text-state-warning',
+  muted: 'border-border-default bg-surface-card-elevated text-text-muted',
+}
+
+function A2ATile({
+  label,
+  value,
+  detail,
+  tone = 'muted',
+}: {
+  label: string
+  value: string | number
+  detail: string
+  tone?: A2ATileTone
+}) {
+  return (
+    <div className={`rounded-lg border px-4 py-3 ${a2aTileToneClass[tone]}`}>
+      <div className="text-[10px] font-medium uppercase tracking-wider opacity-80">{label}</div>
+      <div className="mt-2 text-2xl font-semibold text-text-primary">{value}</div>
+      <div className="mt-1 text-xs leading-5 text-text-muted">{detail}</div>
+    </div>
   )
 }
 
@@ -639,6 +669,10 @@ export function A2AManagement() {
   const [error, setError] = useState<string | null>(null)
 
   const agents = agentList?.agents ?? []
+  const activeAgents = agents.filter((agent) => agent.status === 'active')
+  const inboundAgents = agents.filter((agent) => agent.direction === 'inbound' || agent.direction === 'both')
+  const outboundAgents = agents.filter((agent) => agent.direction === 'outbound' || agent.direction === 'both')
+  const unverifiedAgents = agents.filter((agent) => agent.card_status !== 'verified')
 
   // Apply client-side filters
   const filteredAgents = agents.filter((a) => {
@@ -669,8 +703,19 @@ export function A2AManagement() {
   // Disabled state
   if (!statusLoading && !a2aEnabled) {
     return (
-      <div className="p-6">
-        <h2 className="text-xl font-semibold text-text-primary mb-2">A2A Protocol</h2>
+      <div className="space-y-6">
+        <div className="rounded-lg border border-border-default bg-surface-card p-5">
+          <div className="flex items-center gap-2">
+            <Network className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-accent-primary">
+              Agent-to-Agent Protocol
+            </div>
+          </div>
+          <h2 className="mt-2 text-2xl font-semibold text-text-primary">A2A Protocol</h2>
+          <p className="mt-2 text-sm leading-6 text-text-muted">
+            Register, verify, delegate to, and audit peer agents through governed A2A controls.
+          </p>
+        </div>
         <div className="bg-surface-card border border-border-default rounded-lg p-6 text-center text-text-muted">
           A2A Protocol is disabled. Enable <code className="text-xs bg-surface-input px-1.5 py-0.5 rounded">FEATURE_A2A</code> and configure
           <code className="text-xs bg-surface-input px-1.5 py-0.5 rounded ml-1">a2a_permissions</code> in the Soul to activate.
@@ -686,27 +731,74 @@ export function A2AManagement() {
   ]
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h2 className="text-xl font-semibold text-text-primary">A2A Protocol</h2>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-400 border border-indigo-500/30">
-            A2A v0.2
-          </span>
-          {status?.inbound_enabled && (
-            <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">INBOUND</span>
-          )}
-          {status?.outbound_enabled && (
-            <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">OUTBOUND</span>
-          )}
+      <div className="rounded-lg border border-border-default bg-surface-card p-5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="max-w-3xl">
+            <div className="flex items-center gap-2">
+              <Network className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-accent-primary">
+                Agent-to-Agent Protocol
+              </div>
+            </div>
+            <h2 className="mt-2 text-2xl font-semibold text-text-primary">A2A Protocol</h2>
+            <p className="mt-2 text-sm leading-6 text-text-muted">
+              Register peer agents, verify their agent cards, delegate governed work, and audit A2A receipts from one
+              operator surface.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <span className="rounded border border-indigo-500/30 bg-indigo-500/15 px-2 py-1 text-[10px] font-mono text-indigo-400">
+              A2A v0.2
+            </span>
+            <span className={`rounded border px-2 py-1 text-[10px] font-mono ${status?.inbound_enabled ? 'border-blue-500/30 bg-blue-500/10 text-blue-400' : 'border-border-default bg-surface-input text-text-muted'}`}>
+              INBOUND {status?.inbound_enabled ? 'ON' : 'OFF'}
+            </span>
+            <span className={`rounded border px-2 py-1 text-[10px] font-mono ${status?.outbound_enabled ? 'border-amber-500/30 bg-amber-500/10 text-amber-400' : 'border-border-default bg-surface-input text-text-muted'}`}>
+              OUTBOUND {status?.outbound_enabled ? 'ON' : 'OFF'}
+            </span>
+            {activeTab === 'registry' && (
+              <button onClick={() => setShowRegister(true)}
+                className="inline-flex items-center gap-2 rounded bg-accent-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-primary/90">
+                <Users className="h-4 w-4" aria-hidden="true" />
+                Register Agent
+              </button>
+            )}
+          </div>
         </div>
-        {activeTab === 'registry' && (
-          <button onClick={() => setShowRegister(true)}
-            className="px-4 py-2 text-sm font-medium rounded bg-accent-primary text-white hover:bg-accent-primary/90 transition-colors">
-            + Register Agent
-          </button>
-        )}
+
+        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <A2ATile
+            label="Registered Agents"
+            value={status?.registered_agents ?? agents.length}
+            detail={`${activeAgents.length} active in the current registry.`}
+            tone="accent"
+          />
+          <A2ATile
+            label="Inbound"
+            value={status?.inbound_enabled ? 'On' : 'Off'}
+            detail={`${inboundAgents.length} agent${inboundAgents.length === 1 ? '' : 's'} can receive traffic.`}
+            tone={status?.inbound_enabled ? 'healthy' : 'muted'}
+          />
+          <A2ATile
+            label="Outbound"
+            value={status?.outbound_enabled ? 'On' : 'Off'}
+            detail={`${outboundAgents.length} agent${outboundAgents.length === 1 ? '' : 's'} can receive delegation.`}
+            tone={status?.outbound_enabled ? 'healthy' : 'muted'}
+          />
+          <A2ATile
+            label="Unverified Cards"
+            value={unverifiedAgents.length}
+            detail="Agent cards needing verification or refresh."
+            tone={unverifiedAgents.length > 0 ? 'warning' : 'healthy'}
+          />
+          <A2ATile
+            label="Max Depth"
+            value={status?.max_delegation_depth ?? 0}
+            detail="Configured delegation chain limit."
+          />
+        </div>
       </div>
 
       {error && (
@@ -716,24 +808,18 @@ export function A2AManagement() {
         </div>
       )}
 
-      {/* Metrics Bar */}
-      <div className="grid grid-cols-5 gap-3">
-        <MetricCard label="Registered Agents" value={status?.registered_agents ?? 0} />
-        <MetricCard label="Active" value={agents.filter((a) => a.status === 'active').length} />
-        <MetricCard label="Inbound" value={status?.inbound_enabled ? 'Enabled' : 'Disabled'} />
-        <MetricCard label="Outbound" value={status?.outbound_enabled ? 'Enabled' : 'Disabled'} />
-        <MetricCard label="Max Delegation Depth" value={status?.max_delegation_depth ?? 0} />
-      </div>
-
       {/* Tab Bar */}
-      <div className="flex gap-1 border-b border-border-default">
+      <div className="flex flex-wrap gap-2 border-b border-border-default">
         {tabs.map((tab) => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
               activeTab === tab.id
                 ? 'border-accent-primary text-accent-primary'
                 : 'border-transparent text-text-muted hover:text-text-primary'
             }`}>
+            {tab.id === 'registry' ? <Users className="h-4 w-4" aria-hidden="true" /> : null}
+            {tab.id === 'card' ? <IdCard className="h-4 w-4" aria-hidden="true" /> : null}
+            {tab.id === 'activity' ? <Activity className="h-4 w-4" aria-hidden="true" /> : null}
             {tab.label}
             {tab.count != null && <span className="ml-1.5 text-xs text-text-muted">({tab.count})</span>}
           </button>
@@ -742,11 +828,17 @@ export function A2AManagement() {
 
       {/* Tab Content */}
       {activeTab === 'registry' && (
-        <div className="grid grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
           {/* Agent List — 3 cols */}
-          <div className="col-span-3 space-y-3">
+          <div className="space-y-3 xl:col-span-3">
             {/* Filters */}
-            <div className="flex items-center gap-2">
+            <div className="rounded-lg border border-border-default bg-surface-card p-3">
+              <div className="mb-3 flex items-center gap-2">
+                <RadioTower className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+                <h3 className="text-sm font-medium uppercase tracking-wider text-text-secondary">Agent Registry</h3>
+                <span className="ml-auto text-xs text-text-muted">{filteredAgents.length} agent{filteredAgents.length !== 1 ? 's' : ''}</span>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row">
               <select value={filterDirection} onChange={(e) => setFilterDirection(e.target.value)}
                 className="bg-surface-input border border-border-default rounded px-2 py-1.5 text-xs text-text-primary focus:outline-none">
                 <option value="">All Directions</option>
@@ -770,11 +862,11 @@ export function A2AManagement() {
                 <option value="lancelot">Lancelot</option>
                 <option value="unknown">Unknown</option>
               </select>
-              <span className="text-xs text-text-muted ml-auto">{filteredAgents.length} agent{filteredAgents.length !== 1 ? 's' : ''}</span>
+              </div>
             </div>
 
             {/* Agent Table */}
-            <div className="bg-surface-card border border-border-default rounded-lg overflow-hidden">
+            <div className="bg-surface-card border border-border-default rounded-lg overflow-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border-default bg-surface-card-elevated">
@@ -838,7 +930,7 @@ export function A2AManagement() {
           </div>
 
           {/* Detail Panel — 2 cols */}
-          <div className="col-span-2">
+          <div className="xl:col-span-2">
             {detailedAgent ? (
               <AgentDetail
                 agent={detailedAgent}
@@ -856,6 +948,36 @@ export function A2AManagement() {
 
       {activeTab === 'card' && <AgentCardTab />}
       {activeTab === 'activity' && <ActivityTab />}
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div className="rounded-lg border border-border-default bg-surface-card p-4">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4 text-state-healthy" aria-hidden="true" />
+            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">Card Trust</h3>
+          </div>
+          <p className="mt-2 text-xs leading-5 text-text-muted">
+            Verified agent cards are the baseline signal before delegation or inbound trust should be considered.
+          </p>
+        </div>
+        <div className="rounded-lg border border-border-default bg-surface-card p-4">
+          <div className="flex items-center gap-2">
+            <Send className="h-4 w-4 text-state-warning" aria-hidden="true" />
+            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">Delegation Surface</h3>
+          </div>
+          <p className="mt-2 text-xs leading-5 text-text-muted">
+            Outbound agents can receive delegated tasks only when active and inside the configured delegation depth.
+          </p>
+        </div>
+        <div className="rounded-lg border border-border-default bg-surface-card p-4">
+          <div className="flex items-center gap-2">
+            <Activity className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">Receipt Trail</h3>
+          </div>
+          <p className="mt-2 text-xs leading-5 text-text-muted">
+            A2A activity receipts provide the audit trail for peer communication and delegated work outcomes.
+          </p>
+        </div>
+      </div>
 
       {/* Register Dialog */}
       {showRegister && (

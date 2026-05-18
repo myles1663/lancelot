@@ -932,8 +932,11 @@ def _init_provider(self):
     elif provider_name == "openai-codex":
         auth_token = self._get_openai_codex_oauth_token()
     has_codex_cli_auth = provider_name == "openai-codex" and self._has_openai_codex_cli_auth()
+    has_local_endpoint = provider_name == "local-openai" and bool(
+        os.getenv("LOCAL_OPENAI_BASE_URL", "").strip()
+    )
 
-    if api_key or auth_token or has_codex_cli_auth:
+    if api_key or auth_token or has_codex_cli_auth or has_local_endpoint:
         try:
             self.provider = create_provider(
                 provider_name, api_key, mode=provider_mode, auth_token=auth_token,

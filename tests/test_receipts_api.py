@@ -75,6 +75,14 @@ class _FakeReceiptService:
         self.search_calls.append(kwargs)
         return list(self.search_result)
 
+    def count(self, **kwargs):
+        self.count_call = kwargs
+        return len(self.list_result)
+
+    def count_search(self, **kwargs):
+        self.count_search_call = kwargs
+        return len(self.search_result)
+
     def get_stats(self, **kwargs):
         self.stats_calls.append(kwargs)
         return dict(self.stats_result)
@@ -133,6 +141,7 @@ def test_list_receipts_supports_degraded_list_and_search_paths():
             "action_type": "verification",
             "status": "success",
             "quest_id": "quest-1",
+            "risk_tier": 2,
             "since": "2026-04-18T00:00:00Z",
             "until": "2026-04-19T00:00:00Z",
         },
@@ -146,21 +155,84 @@ def test_list_receipts_supports_degraded_list_and_search_paths():
             "action_type": "verification",
             "status": "success",
             "quest_id": "quest-1",
+            "risk_tier": 2,
             "since": "2026-04-18T00:00:00Z",
             "until": "2026-04-19T00:00:00Z",
         }
     ]
+    assert service.count_call == {
+        "action_type": "verification",
+        "status": "success",
+        "quest_id": "quest-1",
+        "risk_tier": 2,
+        "since": "2026-04-18T00:00:00Z",
+        "until": "2026-04-19T00:00:00Z",
+    }
 
-    searched = client.get("/api/receipts", params={"q": "search_hit", "action_type": "verification", "limit": 5})
+    searched = client.get(
+        "/api/receipts",
+        params={
+            "q": "search_hit",
+            "action_type": "verification",
+            "status": "success",
+            "quest_id": "quest-search",
+            "risk_tier": 1,
+            "limit": 5,
+            "offset": 5,
+        },
+    )
     assert searched.status_code == 200
     assert searched.json()["receipts"][0]["id"] == "r-3"
+    assert searched.json()["total"] == 1
     assert service.search_calls == [
         {
             "query": "search_hit",
             "limit": 5,
+            "offset": 5,
             "action_types": ["verification"],
+            "status": "success",
+            "quest_id": "quest-search",
+            "risk_tier": 1,
+            "since": None,
+            "until": None,
         }
     ]
+    assert service.count_search_call == {
+        "query": "search_hit",
+        "action_types": ["verification"],
+        "status": "success",
+        "quest_id": "quest-search",
+        "risk_tier": 1,
+        "since": None,
+        "until": None,
+    }
+
+    service.list_result = [_receipt("r-tier", tier=1)]
+    tier_search = client.get("/api/receipts", params={"q": "tier 1", "limit": 5})
+    assert tier_search.status_code == 200
+    assert tier_search.json()["receipts"][0]["id"] == "r-tier"
+    assert service.list_calls[-1] == {
+        "limit": 5,
+        "offset": 0,
+        "action_type": None,
+        "status": None,
+        "quest_id": None,
+        "risk_tier": 1,
+        "since": None,
+        "until": None,
+    }
+    assert service.count_call == {
+        "action_type": None,
+        "status": None,
+        "quest_id": None,
+        "risk_tier": 1,
+        "since": None,
+        "until": None,
+    }
+
+    tier_alias = client.get("/api/receipts", params={"tier": "T2", "limit": 5})
+    assert tier_alias.status_code == 200
+    assert service.list_calls[-1]["risk_tier"] == 2
 
 
 def test_list_and_stats_return_safe_errors_on_service_exceptions():

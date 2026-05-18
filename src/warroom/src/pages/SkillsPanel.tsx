@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { usePolling, usePageTitle } from '@/hooks'
 import {
   fetchSkillProposal,
@@ -13,7 +13,7 @@ import {
 } from '@/api'
 import { MetricCard, StatusDot } from '@/components'
 import { formatDateOnly, formatTimestamp } from '@/utils/dateFormat'
-import type { SkillProposalDetail, InstalledSkillDetail } from '@/types/api'
+import type { InstalledSkillDetail, SkillProposalDetail } from '@/types/api'
 
 const STATUS_STATES: Record<string, 'healthy' | 'degraded' | 'error' | 'inactive'> = {
   pending: 'degraded',
@@ -58,18 +58,74 @@ function describeStage(stageData: unknown): string {
   return 'Recorded'
 }
 
+function proposalPipelineState(proposal: { pipeline_passed: boolean; pipeline_failed_at_stage: string | null }): 'healthy' | 'degraded' | 'error' {
+  if (proposal.pipeline_passed) return 'healthy'
+  if (proposal.pipeline_failed_at_stage) return 'error'
+  return 'degraded'
+}
+
+function proposalPipelineLabel(proposal: { pipeline_passed: boolean; pipeline_failed_at_stage: string | null }) {
+  if (proposal.pipeline_passed) return 'ready for approval'
+  if (proposal.pipeline_failed_at_stage) return `blocked at ${proposal.pipeline_failed_at_stage}`
+  return 'checks pending'
+}
+
+function manifestSourceTone(source: string): 'healthy' | 'degraded' | 'inactive' {
+  if (source === 'registry' || source === 'builtin') return 'healthy'
+  if (source === 'missing') return 'degraded'
+  return 'inactive'
+}
+
+function manifestSourceMessage(source: string) {
+  if (source === 'registry') return 'Manifest loaded from the installed registry package.'
+  if (source === 'builtin') return 'Manifest loaded from the built-in skill contract.'
+  if (source === 'missing') return 'No manifest is available for this registry entry.'
+  return 'Manifest source is not classified.'
+}
+
 function renderJson(value: unknown, emptyLabel: string) {
-  if (value === null || value === undefined || (Array.isArray(value) && value.length === 0)) {
-    return <span className="text-xs text-text-muted">{emptyLabel}</span>
+  if (value == null) {
+    return emptyLabel
   }
-  if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value as Record<string, unknown>).length === 0) {
-    return <span className="text-xs text-text-muted">{emptyLabel}</span>
-  }
+  return JSON.stringify(value, null, 2)
+}
+
+function StatTile({ label, value, tone = 'neutral' }: { label: string; value: ReactNode; tone?: 'neutral' | 'healthy' | 'warning' | 'error' }) {
+  const toneClass =
+    tone === 'healthy'
+      ? 'text-state-healthy'
+      : tone === 'warning'
+        ? 'text-state-degraded'
+        : tone === 'error'
+          ? 'text-state-error'
+          : 'text-text-primary'
   return (
-    <pre className="max-h-56 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-[11px] text-text-muted">
-      {JSON.stringify(value, null, 2)}
-    </pre>
+    <div className="border-t border-border-default bg-surface-card-elevated/50 px-4 py-3 lg:border-l lg:border-t-0 first:lg:border-l-0">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">{label}</p>
+      <p className={`mt-1 font-mono text-lg font-semibold ${toneClass}`}>{value}</p>
+    </div>
   )
+}
+
+function DetailRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-1 gap-1 border-b border-border-default/40 py-2 last:border-b-0 sm:grid-cols-[9rem_1fr]">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">{label}</span>
+      <div className="min-w-0 text-xs text-text-primary">{children}</div>
+    </div>
+  )
+}
+
+function skillOwnershipClass(ownership: string) {
+  if (ownership === 'system') return 'bg-accent-primary/10 text-accent-primary'
+  if (ownership === 'marketplace') return 'bg-state-degraded/10 text-state-degraded'
+  return 'bg-state-healthy/10 text-state-healthy'
+}
+
+function shouldUseCompactSkillsView() {
+  if (typeof window === 'undefined') return false
+  const params = new URLSearchParams(window.location.search)
+  return params.get('compact') === '1'
 }
 
 export function SkillsPanel() {
@@ -81,11 +137,22 @@ export function SkillsPanel() {
   const [selectedSkill, setSelectedSkill] = useState<InstalledSkillDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [actionMessage, setActionMessage] = useState<string | null>(null)
+  const [compactRender, setCompactRender] = useState(shouldUseCompactSkillsView)
 
   const pendingCount = proposals?.proposals.filter((p) => p.status === 'pending').length ?? 0
   const blockedCount = proposals?.proposals.filter((p) => p.status === 'review_failed').length ?? 0
   const approvedCount = proposals?.proposals.filter((p) => p.status === 'approved').length ?? 0
   const installedCount = skills?.skills.filter((s) => s.ownership !== 'system').length ?? 0
+  const enabledCount = skills?.skills.filter((s) => s.enabled).length ?? 0
+
+  useEffect(() => {
+    const evaluate = () => {
+      setCompactRender(shouldUseCompactSkillsView())
+    }
+    evaluate()
+    window.addEventListener('resize', evaluate)
+    return () => window.removeEventListener('resize', evaluate)
+  }, [])
 
   const viewProposal = async (id: string) => {
     try {
@@ -137,9 +204,11 @@ export function SkillsPanel() {
     setActionMessage(null)
     try {
       const detail = shouldEnable ? await enableInstalledSkill(name) : await disableInstalledSkill(name)
-      setSelectedSkill(detail)
       setActionMessage(`${detail.name} ${detail.enabled ? 'enabled' : 'disabled'}.`)
       refreshSkills()
+      if (selectedSkill?.name === name) {
+        setSelectedSkill(detail)
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Action failed'
       setActionMessage(`Error: ${message}`)
@@ -148,58 +217,53 @@ export function SkillsPanel() {
     }
   }
 
-  return (
-    <div>
-      <h2 className="mb-6 text-lg font-semibold text-text-primary">Governed Skill Pipeline</h2>
+  if (compactRender) {
+    const proposalItems = proposals?.proposals ?? []
+    const skillItems = skills?.skills ?? []
 
-      <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4">
-        <MetricCard label="Pending Review" value={pendingCount} />
-        <MetricCard label="Review Failed" value={blockedCount} />
-        <MetricCard label="Approved" value={approvedCount} />
-        <MetricCard label="Installed Custom" value={installedCount} />
-      </div>
-
-      {actionMessage && (
-        <div className="mb-4 rounded-md border border-border-default bg-surface-card-elevated p-3 text-sm text-text-primary">
-          {actionMessage}
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+    return (
+      <div className="space-y-4">
         <section className="rounded-lg border border-border-default bg-surface-card p-4">
-          <h3 className="mb-3 text-sm font-medium uppercase tracking-wider text-text-secondary">
-            Proposal Queue
-          </h3>
-          {!proposals || proposals.proposals.length === 0 ? (
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">Operations</p>
+          <h2 className="mt-1 text-lg font-semibold text-text-primary">Governed Skill Pipeline</h2>
+          <p className="mt-2 text-sm leading-relaxed text-text-secondary">
+            Review proposed skills and inspect installed runtime capabilities.
+          </p>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <StatTile label="Pending" value={pendingCount} tone={pendingCount > 0 ? 'warning' : 'neutral'} />
+            <StatTile label="Failed" value={blockedCount} tone={blockedCount > 0 ? 'error' : 'neutral'} />
+            <StatTile label="Approved" value={approvedCount} tone={approvedCount > 0 ? 'healthy' : 'neutral'} />
+            <StatTile label="Enabled" value={enabledCount} />
+          </div>
+        </section>
+
+        {actionMessage && (
+          <div className="rounded-md border border-border-default bg-surface-card-elevated p-3 text-sm text-text-primary">
+            {actionMessage}
+          </div>
+        )}
+
+        <section className="rounded-lg border border-border-default bg-surface-card p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-text-primary">Proposal Queue</h3>
+            <span className="rounded border border-border-default bg-surface-input px-2 py-1 text-[10px] text-text-muted">
+              {proposalItems.length}
+            </span>
+          </div>
+          {proposalItems.length === 0 ? (
             <p className="text-sm text-text-muted">No governed skill proposals are waiting for review.</p>
           ) : (
             <div className="space-y-2">
-              {proposals.proposals.map((proposal) => (
+              {proposalItems.map((proposal) => (
                 <button
                   key={proposal.id}
                   type="button"
                   onClick={() => viewProposal(proposal.id)}
-                  className="w-full rounded-md bg-surface-card-elevated p-3 text-left transition-all hover:ring-1 hover:ring-accent-primary/30"
+                  className="w-full rounded-md border border-border-default bg-surface-card-elevated p-3 text-left"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="truncate text-sm font-mono text-text-primary">{proposal.name}</span>
-                        <StatusDot state={STATUS_STATES[proposal.status] ?? 'inactive'} label={proposal.status} />
-                        <StatusDot
-                          state={proposal.pipeline_passed ? 'healthy' : 'error'}
-                          label={proposal.pipeline_passed ? 'pipeline passed' : proposal.pipeline_failed_at_stage ?? 'pipeline blocked'}
-                        />
-                      </div>
-                      <p className="mt-1 truncate text-[11px] text-text-muted">{proposal.description || 'No description'}</p>
-                      <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-text-muted">
-                        <span>Risk: {proposal.risk}</span>
-                        <span>Source: {proposal.source}</span>
-                        {proposal.credential_keys.length > 0 && <span>Vault: {proposal.credential_keys.join(', ')}</span>}
-                      </div>
-                    </div>
-                    <span className="whitespace-nowrap text-[10px] text-text-muted">{formatDateOnly(proposal.created_at)}</span>
-                  </div>
+                  <p className="break-all text-sm font-mono text-text-primary">{proposal.name}</p>
+                  <p className="mt-1 text-xs text-text-secondary">{proposal.status} / {proposal.risk}</p>
+                  <p className="mt-1 text-xs leading-relaxed text-text-muted">{proposal.description || 'No description'}</p>
                 </button>
               ))}
             </div>
@@ -207,45 +271,41 @@ export function SkillsPanel() {
         </section>
 
         <section className="rounded-lg border border-border-default bg-surface-card p-4">
-          <h3 className="mb-3 text-sm font-medium uppercase tracking-wider text-text-secondary">
-            Installed Skills
-          </h3>
-          {!skills ? (
-            <p className="text-sm text-text-muted">Loading installed skills…</p>
-          ) : skills.skills.length === 0 ? (
-            <p className="text-sm text-text-muted">No installed skills are registered.</p>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-text-primary">Installed Skills</h3>
+            <span className="rounded border border-border-default bg-surface-input px-2 py-1 text-[10px] text-text-muted">
+              {skillItems.length}
+            </span>
+          </div>
+          {skillItems.length === 0 ? (
+            <p className="text-sm text-text-muted">Loading installed skills...</p>
           ) : (
             <div className="space-y-2">
-              {skills.skills.map((skill) => (
-                <div key={skill.name} className="rounded-md bg-surface-card-elevated p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="truncate text-sm font-mono text-text-primary">{skill.name}</span>
-                        <span className="text-[10px] font-mono text-text-muted">v{skill.version}</span>
-                        <StatusDot state={skill.enabled ? 'healthy' : 'inactive'} label={skill.enabled ? 'enabled' : 'disabled'} />
-                      </div>
-                      <p className="mt-1 line-clamp-2 text-[11px] text-text-muted">{skill.description || 'No manifest description available'}</p>
-                      <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-text-muted">
-                        <span>Risk: {skill.risk || 'unknown'}</span>
-                        <span>Permissions: {skill.permissions.length || 0}</span>
-                        <span
-                          className={`rounded px-1.5 py-0.5 font-mono ${
-                            skill.ownership === 'system'
-                              ? 'bg-accent-primary/10 text-accent-primary'
-                              : 'bg-state-success/10 text-state-success'
-                          }`}
-                        >
-                          {skill.ownership}
-                        </span>
-                      </div>
-                    </div>
+              {skillItems.map((skill) => (
+                <div key={skill.name} className="rounded-md border border-border-default bg-surface-card-elevated p-3">
+                  <p className="break-all text-sm font-mono text-text-primary">{skill.name}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+                    <span>v{skill.version}</span>
+                    <span>{skill.ownership}</span>
+                    <span>{skill.enabled ? 'enabled' : 'disabled'}</span>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       type="button"
                       onClick={() => viewInstalledSkill(skill.name)}
-                      className="rounded-md bg-surface-input px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:text-text-primary"
+                      className="rounded-md border border-border-default px-3 py-1.5 text-xs font-medium text-text-secondary"
                     >
                       Inspect
+                    </button>
+                    <button
+                      type="button"
+                      disabled={loading}
+                      onClick={() => handleInstalledSkillToggle(skill.name, !skill.enabled)}
+                      className={`rounded-md px-3 py-1.5 text-xs font-medium disabled:opacity-50 ${
+                        skill.enabled ? 'bg-state-error/10 text-state-error' : 'bg-state-healthy/10 text-state-healthy'
+                      }`}
+                    >
+                      {skill.enabled ? 'Disable' : 'Enable'}
                     </button>
                   </div>
                 </div>
@@ -253,12 +313,215 @@ export function SkillsPanel() {
             </div>
           )}
         </section>
+
+        {selectedProposal && (
+          <section className="rounded-lg border border-border-default bg-surface-card p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="break-all text-sm font-semibold text-text-primary">{selectedProposal.name}</h3>
+                <p className="mt-1 text-xs text-text-muted">{selectedProposal.description || 'No description'}</p>
+              </div>
+              <button type="button" onClick={() => setSelectedProposal(null)} className="text-xs text-text-muted">
+                Close
+              </button>
+            </div>
+            <div className="mt-4 space-y-2 text-xs text-text-secondary">
+              <p>Status: {selectedProposal.status}</p>
+              <p>Pipeline: {selectedProposal.pipeline_passed ? 'passed' : selectedProposal.pipeline_failed_at_stage ?? 'blocked'}</p>
+              <p>Permissions: {selectedProposal.permissions.join(', ') || 'none'}</p>
+              <p>Capabilities: {selectedProposal.approved_capabilities.join(', ') || 'none'}</p>
+            </div>
+            <pre className="mt-4 max-h-72 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs text-text-primary">
+              {selectedProposal.manifest_yaml || '(no runtime manifest)'}
+            </pre>
+          </section>
+        )}
+
+        {selectedSkill && (
+          <section className="rounded-lg border border-border-default bg-surface-card p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="break-all text-sm font-semibold text-text-primary">{selectedSkill.name}</h3>
+                <p className="mt-1 text-xs text-text-muted">{selectedSkill.description || 'Installed skill registry record.'}</p>
+              </div>
+              <button type="button" onClick={() => setSelectedSkill(null)} className="text-xs text-text-muted">
+                Close
+              </button>
+            </div>
+            <div className="mt-4 space-y-2 text-xs text-text-secondary">
+              <p>Version: {selectedSkill.version}</p>
+              <p>Status: {selectedSkill.enabled ? 'enabled' : 'disabled'}</p>
+              <p>Ownership: {selectedSkill.ownership}</p>
+              <p>Signature: {selectedSkill.signature_state}</p>
+              <p>Risk: {selectedSkill.risk || 'not declared'}</p>
+              <p>Manifest source: {selectedSkill.manifest_source}</p>
+              <p className="break-all">Manifest path: {selectedSkill.manifest_path || 'not recorded'}</p>
+            </div>
+            <div className="mt-4">
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Permissions</p>
+              {renderPills(selectedSkill.permissions ?? [], 'No permissions declared')}
+            </div>
+            <pre className="mt-4 max-h-48 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs text-text-primary">
+              {renderJson({ inputs: selectedSkill.inputs, outputs: selectedSkill.outputs }, '(no contract declared)')}
+            </pre>
+            <pre className="mt-4 max-h-72 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs text-text-primary">
+              {renderJson(selectedSkill.manifest, '(no manifest stored for this registry entry)')}
+            </pre>
+          </section>
+        )}
       </div>
+    )
+  }
+
+  return (
+    <div className="space-y-5">
+      <section className="overflow-hidden rounded-lg border border-border-default bg-surface-card">
+        <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="max-w-3xl">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-primary">Operations</p>
+            <h2 className="mt-1 text-xl font-semibold text-text-primary">Governed Skill Pipeline</h2>
+            <p className="mt-2 text-sm leading-relaxed text-text-secondary">
+              Review proposed skills, inspect installed runtime capabilities, and enable or disable skills without leaving the War Room.
+            </p>
+          </div>
+          <div className="rounded-md border border-accent-primary/25 bg-accent-primary/10 px-3 py-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-accent-primary">Installed Enabled</p>
+            <p className="mt-1 font-mono text-lg font-semibold text-text-primary">{enabledCount}</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4">
+          <StatTile label="Pending Review" value={pendingCount} tone={pendingCount > 0 ? 'warning' : 'neutral'} />
+          <StatTile label="Review Failed" value={blockedCount} tone={blockedCount > 0 ? 'error' : 'neutral'} />
+          <StatTile label="Approved" value={approvedCount} tone={approvedCount > 0 ? 'healthy' : 'neutral'} />
+          <StatTile label="Non-System Installed" value={installedCount} />
+        </div>
+      </section>
+
+      {actionMessage && (
+        <div className="rounded-md border border-border-default bg-surface-card-elevated p-3 text-sm text-text-primary">
+          {actionMessage}
+        </div>
+      )}
+
+      <section className="rounded-lg border border-border-default bg-surface-card p-4">
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">Pipeline Intake</p>
+            <h3 className="text-sm font-semibold text-text-primary">Proposal Queue</h3>
+          </div>
+          <span className="w-fit rounded-md border border-border-default bg-surface-input px-2 py-1 text-[10px] font-mono text-text-muted">
+            {proposals?.total ?? 0} proposals
+          </span>
+        </div>
+        {!proposals || proposals.proposals.length === 0 ? (
+          <p className="rounded-md border border-border-default bg-surface-card-elevated p-3 text-sm text-text-muted">
+            No governed skill proposals are waiting for review.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {proposals.proposals.map((proposal) => (
+              <button
+                key={proposal.id}
+                type="button"
+                onClick={() => viewProposal(proposal.id)}
+                className="w-full rounded-md border border-border-default bg-surface-card-elevated p-3 text-left transition-all hover:border-accent-primary/50 hover:bg-surface-input/40"
+              >
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="break-all text-sm font-mono text-text-primary">{proposal.name}</span>
+                      <StatusDot state={STATUS_STATES[proposal.status] ?? 'inactive'} label={proposal.status} />
+                      <StatusDot
+                        state={proposalPipelineState(proposal)}
+                        label={proposalPipelineLabel(proposal)}
+                      />
+                    </div>
+                    <p className="mt-1 text-xs leading-relaxed text-text-muted">{proposal.description || 'No description'}</p>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] text-text-muted sm:grid-cols-4">
+                      <span className="rounded border border-border-default bg-surface-input px-2 py-1">Risk: {proposal.risk}</span>
+                      <span className="rounded border border-border-default bg-surface-input px-2 py-1">Source: {proposal.source}</span>
+                      <span className="rounded border border-border-default bg-surface-input px-2 py-1">
+                        Permissions: {proposal.permissions.length}
+                      </span>
+                      <span className="rounded border border-border-default bg-surface-input px-2 py-1">
+                        Vault keys: {proposal.credential_keys.length}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2 text-[10px] text-text-muted">
+                    <span>{formatDateOnly(proposal.created_at)}</span>
+                    <span className="rounded border border-border-default px-2 py-1 text-text-secondary">Inspect</span>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-lg border border-border-default bg-surface-card p-4">
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">Runtime Registry</p>
+            <h3 className="text-sm font-semibold text-text-primary">Installed Skills</h3>
+          </div>
+          <span className="w-fit rounded-md border border-border-default bg-surface-input px-2 py-1 text-[10px] font-mono text-text-muted">
+            {skills?.total ?? 0} installed
+          </span>
+        </div>
+        {!skills || skills.skills.length === 0 ? (
+          <p className="rounded-md border border-border-default bg-surface-card-elevated p-3 text-sm text-text-muted">
+            Loading installed skills...
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
+            {skills.skills.map((skill) => (
+              <div key={skill.name} className="rounded-md border border-border-default bg-surface-card-elevated p-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="break-all text-sm font-mono text-text-primary">{skill.name}</span>
+                      <span className="text-[10px] font-mono text-text-muted">v{skill.version}</span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className={`rounded px-1.5 py-0.5 text-[10px] font-mono ${skillOwnershipClass(skill.ownership)}`}>
+                        {skill.ownership}
+                      </span>
+                      <StatusDot state={skill.enabled ? 'healthy' : 'inactive'} label={skill.enabled ? 'enabled' : 'disabled'} />
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => viewInstalledSkill(skill.name)}
+                      className="rounded-md border border-border-default px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:border-accent-primary/60 hover:text-text-primary"
+                    >
+                      Inspect
+                    </button>
+                    <button
+                      type="button"
+                      disabled={loading}
+                      onClick={() => handleInstalledSkillToggle(skill.name, !skill.enabled)}
+                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
+                        skill.enabled
+                          ? 'bg-state-error/10 text-state-error hover:bg-state-error/20'
+                          : 'bg-state-healthy/10 text-state-healthy hover:bg-state-healthy/20'
+                      }`}
+                    >
+                      {skill.enabled ? 'Disable' : 'Enable'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       {selectedProposal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="mx-4 flex max-h-[88vh] w-full max-w-5xl flex-col rounded-lg border border-border-default bg-surface-card shadow-xl">
-            <div className="flex items-start justify-between border-b border-border-default p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[88vh] w-full max-w-6xl flex-col rounded-lg border border-border-default bg-surface-card shadow-xl">
+            <div className="flex items-start justify-between gap-4 border-b border-border-default p-4">
               <div>
                 <h3 className="text-base font-semibold text-text-primary">{selectedProposal.name}</h3>
                 <p className="mt-0.5 text-xs text-text-muted">{selectedProposal.description || 'No description'}</p>
@@ -267,10 +530,9 @@ export function SkillsPanel() {
                 type="button"
                 onClick={() => setSelectedProposal(null)}
                 className="p-1.5 text-text-muted transition-colors hover:text-text-primary"
+                aria-label="Close proposal detail"
               >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                </svg>
+                X
               </button>
             </div>
 
@@ -414,7 +676,7 @@ export function SkillsPanel() {
                     type="button"
                     onClick={() => handleAction('approve', selectedProposal.id)}
                     disabled={loading}
-                    className="rounded-md bg-state-success/10 px-3 py-1.5 text-xs font-medium text-state-success transition-colors hover:bg-state-success/20 disabled:opacity-50"
+                    className="rounded-md bg-state-healthy/10 px-3 py-1.5 text-xs font-medium text-state-healthy transition-colors hover:bg-state-healthy/20 disabled:opacity-50"
                   >
                     Approve
                   </button>
@@ -443,66 +705,101 @@ export function SkillsPanel() {
       )}
 
       {selectedSkill && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="mx-4 flex max-h-[88vh] w-full max-w-5xl flex-col rounded-lg border border-border-default bg-surface-card shadow-xl">
-            <div className="flex items-start justify-between border-b border-border-default p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[88vh] w-full max-w-5xl flex-col rounded-lg border border-border-default bg-surface-card shadow-xl">
+            <div className="flex items-start justify-between gap-4 border-b border-border-default p-4">
               <div>
                 <h3 className="text-base font-semibold text-text-primary">{selectedSkill.name}</h3>
-                <p className="mt-0.5 text-xs text-text-muted">{selectedSkill.description || 'No manifest description available'}</p>
+                <p className="mt-0.5 text-xs text-text-muted">Installed skill registry record and manifest detail.</p>
               </div>
               <button
                 type="button"
                 onClick={() => setSelectedSkill(null)}
                 className="p-1.5 text-text-muted transition-colors hover:text-text-primary"
+                aria-label="Close installed skill detail"
               >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                </svg>
+                X
               </button>
             </div>
 
             <div className="flex-1 overflow-y-auto p-4">
               <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+                <MetricCard label="Version" value={selectedSkill.version} />
                 <MetricCard label="Status" value={selectedSkill.enabled ? 'enabled' : 'disabled'} />
-                <MetricCard label="Risk" value={selectedSkill.risk || 'unknown'} />
-                <MetricCard label="Ownership" value={selectedSkill.ownership || 'unknown'} />
-                <MetricCard label="Signature" value={selectedSkill.signature_state || 'unknown'} />
+                <MetricCard label="Ownership" value={selectedSkill.ownership} />
+                <MetricCard label="Signature" value={selectedSkill.signature_state} />
               </div>
 
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                <section className="rounded-lg border border-border-default bg-surface-card-elevated p-4">
-                  <h4 className="mb-3 text-xs font-medium uppercase tracking-wider text-text-secondary">
-                    Runtime Contract
+              <section className="rounded-lg border border-border-default bg-surface-card-elevated p-4">
+                <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <h4 className="text-xs font-medium uppercase tracking-wider text-text-secondary">
+                    Registry Detail
                   </h4>
-                  <div className="space-y-4">
-                    <div>
-                      <p className="mb-2 text-[11px] uppercase tracking-wider text-text-muted">Permissions</p>
-                      {renderPills(selectedSkill.permissions, 'No runtime permissions declared')}
-                    </div>
-                    <div>
-                      <p className="mb-2 text-[11px] uppercase tracking-wider text-text-muted">Inputs</p>
-                      {renderJson(selectedSkill.inputs, 'No inputs declared')}
-                    </div>
-                    <div>
-                      <p className="mb-2 text-[11px] uppercase tracking-wider text-text-muted">Outputs</p>
-                      {renderJson(selectedSkill.outputs, 'No outputs declared')}
-                    </div>
-                    <div className="grid grid-cols-1 gap-2 text-xs text-text-muted">
-                      <span>Required brain: {selectedSkill.required_brain || 'not declared'}</span>
-                      <span>Scheduler eligible: {selectedSkill.scheduler_eligible ? 'yes' : 'no'}</span>
-                      {selectedSkill.installed_at && <span>Installed: {formatTimestamp(selectedSkill.installed_at)}</span>}
-                      {selectedSkill.manifest_path && <span className="break-all">Manifest path: {selectedSkill.manifest_path}</span>}
-                    </div>
-                  </div>
-                </section>
+                  <StatusDot state={manifestSourceTone(selectedSkill.manifest_source)} label={selectedSkill.manifest_source} />
+                </div>
+                <div className="mb-3 rounded-md border border-border-default bg-surface-input px-3 py-2 text-xs text-text-secondary">
+                  {manifestSourceMessage(selectedSkill.manifest_source)}
+                </div>
+                <DetailRow label="Description">
+                  <span className="text-text-secondary">{selectedSkill.description || 'No description declared'}</span>
+                </DetailRow>
+                <DetailRow label="Risk">
+                  <span className="font-mono text-[11px] text-text-secondary">{selectedSkill.risk || 'not declared'}</span>
+                </DetailRow>
+                <DetailRow label="Permissions">
+                  {renderPills(selectedSkill.permissions ?? [], 'No permissions declared')}
+                </DetailRow>
+                <DetailRow label="Manifest Source">
+                  <span className="font-mono text-[11px] text-text-secondary">{selectedSkill.manifest_source}</span>
+                </DetailRow>
+                <DetailRow label="Installed At">{formatTimestamp(selectedSkill.installed_at)}</DetailRow>
+                <DetailRow label="Manifest Path">
+                  <span className="break-all font-mono text-[11px] text-text-secondary">
+                    {selectedSkill.manifest_path || 'Not recorded for this skill'}
+                  </span>
+                </DetailRow>
+                <DetailRow label="Enabled">
+                  <StatusDot state={selectedSkill.enabled ? 'healthy' : 'inactive'} label={selectedSkill.enabled ? 'enabled' : 'disabled'} />
+                </DetailRow>
+              </section>
 
+              <section className="mt-6 rounded-lg border border-border-default bg-surface-card-elevated p-4">
+                <h4 className="mb-3 text-xs font-medium uppercase tracking-wider text-text-secondary">
+                  Capability Contract
+                </h4>
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  <div>
+                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Inputs</p>
+                    <pre className="max-h-64 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs font-mono text-text-primary">
+                      {renderJson(selectedSkill.inputs, '(no inputs declared)')}
+                    </pre>
+                  </div>
+                  <div>
+                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Outputs</p>
+                    <pre className="max-h-64 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs font-mono text-text-primary">
+                      {renderJson(selectedSkill.outputs, '(no outputs declared)')}
+                    </pre>
+                  </div>
+                </div>
+              </section>
+
+              <section className="mt-6">
+                <h4 className="mb-2 text-xs font-medium uppercase tracking-wider text-text-secondary">
+                  Manifest
+                </h4>
+                <pre className="max-h-[28rem] overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs font-mono text-text-primary">
+                  {renderJson(selectedSkill.manifest, '(no manifest stored for this registry entry)')}
+                </pre>
+              </section>
+
+              <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
                 <section className="rounded-lg border border-border-default bg-surface-card-elevated p-4">
                   <h4 className="mb-3 text-xs font-medium uppercase tracking-wider text-text-secondary">
                     Pipeline Position
                   </h4>
                   {selectedSkill.source_proposal ? (
                     <div className="space-y-4">
-                      <div className="grid grid-cols-2 gap-3 text-xs text-text-muted">
+                      <div className="grid grid-cols-1 gap-2 text-xs text-text-muted sm:grid-cols-2">
                         <span>Proposal: {selectedSkill.source_proposal.id}</span>
                         <span>Status: {selectedSkill.source_proposal.status}</span>
                         <span>Source: {selectedSkill.source_proposal.source || 'unknown'}</span>
@@ -511,12 +808,14 @@ export function SkillsPanel() {
                         {selectedSkill.source_proposal.installed_at && <span>Installed: {formatTimestamp(selectedSkill.source_proposal.installed_at)}</span>}
                       </div>
                       <div>
-                        <p className="mb-2 text-[11px] uppercase tracking-wider text-text-muted">Approved Capabilities</p>
+                        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Approved Capabilities</p>
                         {renderPills(selectedSkill.source_proposal.approved_capabilities, 'No approved capabilities recorded')}
                       </div>
                       <div>
-                        <p className="mb-2 text-[11px] uppercase tracking-wider text-text-muted">Pipeline Stages</p>
-                        {renderJson(selectedSkill.source_proposal.pipeline_stage_results, 'No pipeline stage history recorded')}
+                        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Pipeline Stages</p>
+                        <pre className="max-h-56 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs font-mono text-text-primary">
+                          {renderJson(selectedSkill.source_proposal.pipeline_stage_results, '(no pipeline stage history recorded)')}
+                        </pre>
                       </div>
                     </div>
                   ) : (
@@ -525,22 +824,22 @@ export function SkillsPanel() {
                     </p>
                   )}
                 </section>
-              </div>
 
-              <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
-                <section>
-                  <h4 className="mb-2 text-xs font-medium uppercase tracking-wider text-text-secondary">
-                    Runtime Manifest
+                <section className="rounded-lg border border-border-default bg-surface-card-elevated p-4">
+                  <h4 className="mb-3 text-xs font-medium uppercase tracking-wider text-text-secondary">
+                    Runtime Metadata
                   </h4>
-                  <pre className="max-h-72 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs font-mono text-text-primary">
-                    {selectedSkill.manifest_yaml || '(no runtime manifest available)'}
-                  </pre>
-                </section>
-                <section>
-                  <h4 className="mb-2 text-xs font-medium uppercase tracking-wider text-text-secondary">
-                    Receipts Contract
-                  </h4>
-                  {renderJson(selectedSkill.receipts, 'No receipt config declared')}
+                  <div className="space-y-2 text-xs text-text-muted">
+                    <p>Required brain: {selectedSkill.required_brain || 'not declared'}</p>
+                    <p>Scheduler eligible: {selectedSkill.scheduler_eligible ? 'yes' : 'no'}</p>
+                    <p>Sentry requirements: {selectedSkill.sentry_requirements.length}</p>
+                  </div>
+                  <div className="mt-4">
+                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Receipt Contract</p>
+                    <pre className="max-h-56 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs font-mono text-text-primary">
+                      {renderJson(selectedSkill.receipts, '(no receipt config declared)')}
+                    </pre>
+                  </div>
                 </section>
               </div>
 
@@ -568,7 +867,9 @@ export function SkillsPanel() {
                   <h4 className="mb-3 text-xs font-medium uppercase tracking-wider text-text-secondary">
                     Proposal Artifact Hashes
                   </h4>
-                  {renderJson(selectedSkill.source_proposal.artifact_hashes, 'No artifact hashes recorded')}
+                  <pre className="max-h-56 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs font-mono text-text-primary">
+                    {renderJson(selectedSkill.source_proposal.artifact_hashes, '(no artifact hashes recorded)')}
+                  </pre>
                 </section>
               )}
             </div>
@@ -576,12 +877,12 @@ export function SkillsPanel() {
             <div className="flex items-center justify-end gap-2 border-t border-border-default p-4">
               <button
                 type="button"
-                onClick={() => handleInstalledSkillToggle(selectedSkill.name, !selectedSkill.enabled)}
                 disabled={loading}
+                onClick={() => handleInstalledSkillToggle(selectedSkill.name, !selectedSkill.enabled)}
                 className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
                   selectedSkill.enabled
                     ? 'bg-state-error/10 text-state-error hover:bg-state-error/20'
-                    : 'bg-state-success/10 text-state-success hover:bg-state-success/20'
+                    : 'bg-state-healthy/10 text-state-healthy hover:bg-state-healthy/20'
                 }`}
               >
                 {selectedSkill.enabled ? 'Disable Skill' : 'Enable Skill'}

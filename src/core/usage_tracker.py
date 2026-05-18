@@ -9,8 +9,9 @@ Supports two recording paths:
     2. ``record_simple(model, tokens)`` — lightweight path for direct LLM
        calls that bypass the ModelRouter.
 
-When a ``UsagePersistence`` is attached via ``set_persistence()``, every
-record is also written to disk for cross-restart survival.
+When a ``UsagePersistence`` is attached via ``set_persistence()``, the
+tracker hydrates from the persisted current month and every new record is
+written back to disk for cross-restart survival.
 
 Cost rates are loaded dynamically from config/model_profiles.yaml when
 available, with a built-in fallback dictionary for known models.
@@ -58,8 +59,14 @@ _FALLBACK_COST_PER_1K: dict[str, float] = {
     "nvidia/nemotron-nano-9b-v2": 0.00016,
     "nvidia/llama-3.3-nemotron-super-49b-v1": 0.0004,
     "nvidia/llama-3.1-nemotron-70b-instruct": 0.0012,
+    # DeepSeek
+    "deepseek-v4-flash": 0.00028,
+    "deepseek-v4-pro": 0.00087,
     # Local (free)
     "local-llm": 0.0,
+    "local-fast": 0.0,
+    "local-deep": 0.0,
+    "local-cache": 0.0,
     "bonsai-1.7b": 0.0,
     "bonsai-8b": 0.0,
     "ternary-bonsai-8b": 0.0,
@@ -156,7 +163,72 @@ class UsageTracker:
     def set_persistence(self, persistence) -> None:
         """Attach a UsagePersistence instance for disk-backed tracking."""
         self._persistence = persistence
+        self._hydrate_from_persistence()
         logger.info("UsageTracker: persistence layer attached")
+
+    def _hydrate_from_persistence(self) -> None:
+        """Restore current-month counters from disk when the tracker is empty."""
+        if self._total_requests or self._lanes or self._models:
+            return
+        if self._persistence is None or not hasattr(self._persistence, "get_current_month"):
+            return
+
+        try:
+            month = self._persistence.get_current_month()
+        except Exception as exc:
+            logger.warning("UsageTracker: persistence hydration failed: %s", exc)
+            return
+
+        by_lane = month.get("by_lane") or {}
+        by_model = month.get("by_model") or {}
+        total_requests = int(month.get("total_requests") or 0)
+        if not by_lane and not by_model and total_requests <= 0:
+            return
+
+        for lane_name, data in by_lane.items():
+            if not isinstance(data, dict):
+                continue
+            self._lanes[lane_name] = LaneUsage(
+                requests=int(data.get("requests") or data.get("calls") or 0),
+                successes=int(data.get("successes") or 0),
+                failures=int(data.get("failures") or 0),
+                total_tokens_est=int(
+                    data.get("total_tokens_est")
+                    or data.get("tokens_est")
+                    or data.get("tokens")
+                    or 0
+                ),
+                total_cost_est=float(
+                    data.get("total_cost_est")
+                    or data.get("estimated_cost")
+                    or data.get("cost")
+                    or 0.0
+                ),
+                total_elapsed_ms=float(data.get("total_elapsed_ms") or 0.0),
+            )
+
+        for model_name, data in by_model.items():
+            if not isinstance(data, dict):
+                continue
+            self._models[model_name] = {
+                "requests": int(data.get("requests") or data.get("calls") or 0),
+                "tokens": int(data.get("tokens") or data.get("tokens_est") or 0),
+                "cost": round(float(data.get("cost") or data.get("estimated_cost") or 0.0), 6),
+            }
+
+        self._total_requests = total_requests or sum(
+            lane.requests for lane in self._lanes.values()
+        )
+        month_key = month.get("month")
+        if isinstance(month_key, str) and len(month_key) == 7:
+            self._started_at = f"{month_key}-01T00:00:00+00:00"
+        logger.info(
+            "UsageTracker: hydrated persisted usage month=%s requests=%s lanes=%s models=%s",
+            month_key or "unknown",
+            self._total_requests,
+            len(self._lanes),
+            len(self._models),
+        )
 
     # ------------------------------------------------------------------
     # Recording
@@ -201,7 +273,14 @@ class UsageTracker:
         # Persist to disk if available
         if self._persistence:
             try:
-                self._persistence.record(model, est_tokens, est_cost)
+                self._persistence.record(
+                    model,
+                    est_tokens,
+                    est_cost,
+                    lane=lane,
+                    success=success,
+                    elapsed_ms=elapsed_ms,
+                )
             except Exception as exc:
                 logger.warning("UsageTracker: persistence write failed: %s", exc)
 
@@ -235,7 +314,7 @@ class UsageTracker:
 
         if self._persistence:
             try:
-                self._persistence.record(model, tokens, est_cost)
+                self._persistence.record(model, tokens, est_cost, lane=lane, success=True)
             except Exception as exc:
                 logger.warning("UsageTracker: persistence write failed: %s", exc)
 

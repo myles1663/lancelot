@@ -386,17 +386,28 @@ export interface SoulOverlayInfo {
   autonomy_additions: number
 }
 
+export interface SoulVersionSource {
+  kind: 'baseline' | 'template' | 'proposal' | 'unknown'
+  template_name?: string
+  author?: string
+  proposal_id?: string
+  created_at?: string
+}
+
 export interface SoulStatusResponse {
   active_version: string
   available_versions: string[]
+  active_source?: SoulVersionSource
+  version_sources?: Record<string, SoulVersionSource>
   pending_proposals: SoulProposal[]
   active_overlays?: SoulOverlayInfo[]
 }
 
 export interface SoulProposalActionResponse {
   status: string
-  proposal_id: string
+  proposal_id?: string | null
   active_version?: string
+  previous_version?: string
 }
 
 export interface SoulAutonomyPosture {
@@ -1021,6 +1032,8 @@ export interface InstalledSkillSourceProposal {
 
 export interface InstalledSkillDetail extends InstalledSkill {
   manifest_path: string
+  manifest: Record<string, unknown> | null
+  manifest_source: string
   manifest_yaml: string
   execute_code: string
   test_code: string

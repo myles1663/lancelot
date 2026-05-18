@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import types
+import builtins
 
 import yaml
 from fastapi import FastAPI
@@ -173,11 +174,18 @@ def test_connector_routes_reject_unknown_connector_ids(tmp_path, monkeypatch):
 def test_set_backend_validates_options_and_reregisters(tmp_path, monkeypatch):
     registry = _Registry()
     registry.items["fake"] = object()
+    receipt_calls = []
     client, config_path = _client(
         tmp_path,
         monkeypatch,
         config={"connectors": {"fake": {"enabled": True, "backend": "a"}}},
         registry=registry,
+    )
+    monkeypatch.setattr(
+        "src.core.governance_receipts.emit_governance_receipt",
+        lambda request, action_type, action_name, inputs=None, **kwargs: receipt_calls.append(
+            (action_type.value, action_name, inputs)
+        ),
     )
 
     invalid_connector = client.post("/api/connectors/other/backend", json={"backend": "a"})
@@ -189,6 +197,40 @@ def test_set_backend_validates_options_and_reregisters(tmp_path, monkeypatch):
     assert valid.json() == {"connector_id": "fake", "backend": "b"}
     assert "fake" in registry.unregistered
     assert yaml.safe_load(config_path.read_text(encoding="utf-8"))["connectors"]["fake"]["backend"] == "b"
+    assert receipt_calls == [
+        (
+            "connector_backend_changed",
+            "set_connector_backend",
+            {
+                "connector_id": "fake",
+                "previous_backend": "a",
+                "backend": "b",
+                "enabled": True,
+            },
+        )
+    ]
+
+
+def test_set_backend_reports_unwritable_config(tmp_path, monkeypatch):
+    client, _ = _client(
+        tmp_path,
+        monkeypatch,
+        config={"connectors": {"fake": {"enabled": True, "backend": "a"}}},
+    )
+
+    real_open = builtins.open
+
+    def blocked_open(*args, **kwargs):
+        if args and str(args[0]).endswith("connectors.yaml") and "w" in args[1]:
+            raise PermissionError("read-only config")
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", blocked_open)
+
+    response = client.post("/api/connectors/fake/backend", json={"backend": "b"})
+
+    assert response.status_code == 503
+    assert "not writable" in response.json()["detail"]
 
 
 def test_instantiate_connector_returns_none_for_unknown_or_failed_import(monkeypatch):

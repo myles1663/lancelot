@@ -6,6 +6,7 @@ Public API:
 """
 
 import logging
+import os
 from typing import Optional
 
 from providers.base import ProviderAuthError, ProviderClient
@@ -20,6 +21,8 @@ API_KEY_VARS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "xai": "XAI_API_KEY",
     "nvidia": "NVIDIA_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "local-openai": "LOCAL_OPENAI_API_KEY",
 }
 
 
@@ -33,7 +36,8 @@ def create_provider(
     """Factory to create the right ProviderClient based on provider name.
 
     Args:
-        provider_name: One of "gemini", "openai", "openai-codex", "anthropic", "xai", "nvidia".
+        provider_name: One of "gemini", "openai", "openai-codex", "anthropic",
+            "xai", "nvidia", "deepseek", "local-openai".
         api_key: The API key for the provider.
         mode: "sdk" (full SDK features) or "api" (lightweight). Default: "sdk".
         auth_token: OAuth bearer token (Anthropic or OpenAI Codex, takes priority over api_key).
@@ -84,7 +88,83 @@ def create_provider(
         from providers.nvidia_client import NvidiaProviderClient
         return NvidiaProviderClient(api_key=api_key, **kwargs)
 
+    elif provider_name == "deepseek":
+        from providers.base import ModelInfo
+        from providers.openai_compatible_client import OpenAICompatibleProviderClient
+
+        return OpenAICompatibleProviderClient(
+            provider_name="deepseek",
+            api_key=api_key,
+            base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+            known_models=[
+                ModelInfo(
+                    id="deepseek-v4-flash",
+                    display_name="DeepSeek V4 Flash",
+                    context_window=1_000_000,
+                    supports_tools=True,
+                    input_cost_per_1k=0.00014,
+                    output_cost_per_1k=0.00028,
+                    capability_tier="fast",
+                ),
+                ModelInfo(
+                    id="deepseek-v4-pro",
+                    display_name="DeepSeek V4 Pro",
+                    context_window=1_000_000,
+                    supports_tools=True,
+                    input_cost_per_1k=0.000435,
+                    output_cost_per_1k=0.00087,
+                    capability_tier="deep",
+                ),
+            ],
+            model_filter=lambda model_id: model_id.startswith("deepseek-"),
+            **kwargs,
+        )
+
+    elif provider_name == "local-openai":
+        from providers.base import ModelInfo
+        from providers.openai_compatible_client import OpenAICompatibleProviderClient
+
+        base_url = kwargs.pop("base_url", "") or os.getenv("LOCAL_OPENAI_BASE_URL", "")
+        context_window = _int_env("LOCAL_OPENAI_CONTEXT_WINDOW", 32768)
+        supports_tools = os.getenv("LOCAL_OPENAI_SUPPORTS_TOOLS", "true").strip().lower() not in {
+            "0", "false", "no", "off",
+        }
+        fast_model = os.getenv("LOCAL_OPENAI_FAST_MODEL", "local-fast")
+        deep_model = os.getenv("LOCAL_OPENAI_DEEP_MODEL", fast_model)
+        cache_model = os.getenv("LOCAL_OPENAI_CACHE_MODEL", fast_model)
+        known_models = []
+        for model_id, tier in (
+            (fast_model, "fast"),
+            (deep_model, "deep"),
+            (cache_model, "fast"),
+        ):
+            if model_id and not any(model.id == model_id for model in known_models):
+                known_models.append(ModelInfo(
+                    id=model_id,
+                    display_name=model_id,
+                    context_window=context_window,
+                    supports_tools=supports_tools,
+                    input_cost_per_1k=0.0,
+                    output_cost_per_1k=0.0,
+                    capability_tier=tier,
+                ))
+
+        return OpenAICompatibleProviderClient(
+            provider_name="local-openai",
+            api_key=api_key,
+            base_url=base_url,
+            known_models=known_models,
+            **kwargs,
+        )
+
     raise ValueError(
         f"Unknown provider: '{provider_name}'. "
         f"Available: {', '.join(API_KEY_VARS.keys())}"
     )
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default

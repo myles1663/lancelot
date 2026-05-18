@@ -1,4 +1,20 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import {
+  Activity,
+  AlertTriangle,
+  CheckCircle2,
+  ExternalLink,
+  FileCheck2,
+  Gauge,
+  GitPullRequestArrow,
+  Network,
+  RadioTower,
+  ShieldCheck,
+  Siren,
+  Users,
+  WalletCards,
+  XCircle,
+} from 'lucide-react'
 import { usePageTitle, usePolling } from '@/hooks'
 import {
   approveFederationDashboardApproval,
@@ -10,7 +26,6 @@ import {
   type FleetDashboardInstance,
   type FleetTrustProposal,
 } from '@/api/federation'
-import { MetricCard } from '@/components/MetricCard'
 import { PageLoader } from '@/components/PageLoader'
 import { formatRelativeTime, formatTimestamp } from '@/utils/dateFormat'
 import { getErrorMessage } from '@/utils/errors'
@@ -77,6 +92,16 @@ function formatPct(value: number): string {
   return `${Math.round(value)}%`
 }
 
+function readableThreshold(value: string): string {
+  return value.replace(/_/g, ' ')
+}
+
+function thresholdTone(threshold: string): 'healthy' | 'warning' | 'error' {
+  if (threshold === 'normal') return 'healthy'
+  if (threshold === 'warning' || threshold === 'spawn_restricted') return 'warning'
+  return 'error'
+}
+
 function instanceGridClass(count: number): string {
   if (count <= 1) return 'grid grid-cols-1 gap-4 lg:max-w-2xl'
   if (count === 2) return 'grid grid-cols-1 gap-4 lg:grid-cols-2 xl:max-w-5xl'
@@ -103,26 +128,57 @@ function DetailPill({ label, value, tone = 'muted' }: {
   )
 }
 
+function FleetMetric({
+  label,
+  value,
+  detail,
+  icon,
+  tone = 'muted',
+}: {
+  label: string
+  value: string | number
+  detail: string
+  icon: ReactNode
+  tone?: 'muted' | 'healthy' | 'warning' | 'error' | 'accent'
+}) {
+  const toneClass = {
+    muted: 'border-border-default bg-surface-card text-text-muted',
+    healthy: 'border-state-healthy/30 bg-state-healthy/10 text-state-healthy',
+    warning: 'border-state-warning/30 bg-state-warning/10 text-state-warning',
+    error: 'border-state-error/30 bg-state-error/10 text-state-error',
+    accent: 'border-accent-primary/30 bg-accent-primary/10 text-accent-primary',
+  }[tone]
+
+  return (
+    <div className={`min-w-0 rounded-lg border p-4 ${toneClass}`}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-[10px] font-medium uppercase tracking-wider opacity-80">{label}</div>
+        <div className="shrink-0">{icon}</div>
+      </div>
+      <div className="mt-3 truncate text-2xl font-semibold leading-tight text-text-primary" title={String(value)}>
+        {value}
+      </div>
+      <div className="mt-1 text-xs leading-5 text-text-muted">{detail}</div>
+    </div>
+  )
+}
+
 function InstanceCard({ instance }: { instance: FleetDashboardInstance }) {
   const style = STATE_STYLES[instance.state]
   const approvalTone = instance.pending_approvals > 0 ? 'warning' : 'muted'
   const proposalTone = instance.trust_proposals > 0 ? 'warning' : 'muted'
-  const budgetTone = instance.budget_threshold === 'normal'
-    ? 'healthy'
-    : instance.budget_threshold === 'warning' || instance.budget_threshold === 'spawn_restricted'
-      ? 'warning'
-      : 'error'
+  const budgetTone = thresholdTone(instance.budget_threshold)
   const commandCenterUrl = instance.command_center_url || (instance.is_self ? '/war-room/command' : '')
 
   return (
-    <article className={`min-h-[28rem] min-w-0 rounded-lg border bg-surface-card p-5 ${style.border}`}>
+    <article className={`min-w-0 rounded-lg border bg-surface-card p-5 ${style.border}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
             <span className={`h-2.5 w-2.5 rounded-full ${style.dot}`} />
             <h2 className="truncate text-sm font-semibold text-text-primary">{instance.name}</h2>
           </div>
-          <div className="mt-1 font-mono text-[11px] text-text-muted">
+          <div className="mt-1 truncate font-mono text-[11px] text-text-muted" title={instance.address}>
             {instance.instance_short_id || 'local'}
           </div>
         </div>
@@ -197,12 +253,13 @@ function InstanceCard({ instance }: { instance: FleetDashboardInstance }) {
           target={instance.is_self ? undefined : '_blank'}
           rel={instance.is_self ? undefined : 'noreferrer'}
           aria-label={`Open ${instance.name} Command Center`}
-          className={`inline-flex w-full items-center justify-center rounded border px-3 py-2 text-sm font-medium ${
+          className={`inline-flex w-full items-center justify-center gap-2 rounded border px-3 py-2 text-sm font-medium ${
             commandCenterUrl
               ? 'border-accent-primary bg-accent-primary/10 text-accent-primary hover:bg-accent-primary/20'
               : 'pointer-events-none border-border-default text-text-muted'
           }`}
         >
+          <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
           Open Command Center
         </a>
       </div>
@@ -220,7 +277,10 @@ function ApprovalsTable({
   if (approvals.length === 0) {
     return (
       <section className="rounded-lg border border-border-default bg-surface-card p-4">
-        <h2 className="text-sm font-semibold text-text-primary">Unified Approval Queue</h2>
+        <div className="flex items-center gap-2">
+          <FileCheck2 className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+          <h2 className="text-sm font-semibold text-text-primary">Unified Approval Queue</h2>
+        </div>
         <p className="mt-3 text-sm text-text-muted">No pending approvals</p>
       </section>
     )
@@ -228,8 +288,60 @@ function ApprovalsTable({
 
   return (
     <section className="rounded-lg border border-border-default bg-surface-card p-4">
-      <h2 className="text-sm font-semibold text-text-primary">Unified Approval Queue</h2>
-      <div className="mt-3 overflow-x-auto">
+      <div className="flex items-center gap-2">
+        <FileCheck2 className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+        <h2 className="text-sm font-semibold text-text-primary">Unified Approval Queue</h2>
+      </div>
+      <div className="mt-3 space-y-3 lg:hidden">
+        {approvals.map((item) => (
+          <div key={`${item.instance_id}-${item.id}`} className="rounded-lg border border-border-default bg-surface-card-elevated p-3">
+            <div className="flex min-w-0 items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-text-primary">{item.action_name || item.capability}</div>
+                <div className="mt-1 truncate text-xs text-text-muted">{item.instance_name} / {item.capability}</div>
+              </div>
+              <span className="shrink-0 rounded border border-state-warning/30 bg-state-warning/10 px-2 py-1 text-xs text-state-warning">
+                {item.risk_tier || 'T3'}
+              </span>
+            </div>
+            {item.context && <p className="mt-2 line-clamp-2 text-xs leading-5 text-text-secondary">{item.context}</p>}
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs text-text-muted">Waiting {formatRelativeTime(item.waiting_since || item.created_at)}</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onDecision({
+                    decision: 'approve',
+                    instanceId: item.instance_id,
+                    approvalId: item.id,
+                    title: item.action_name || item.capability,
+                    subtitle: `${item.instance_name} - ${item.risk_tier || 'T3'}`,
+                  })}
+                  className="inline-flex items-center gap-1 rounded border border-state-healthy/60 px-2 py-1 text-xs font-medium text-state-healthy hover:bg-state-healthy/10"
+                >
+                  <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDecision({
+                    decision: 'deny',
+                    instanceId: item.instance_id,
+                    approvalId: item.id,
+                    title: item.action_name || item.capability,
+                    subtitle: `${item.instance_name} - ${item.risk_tier || 'T3'}`,
+                  })}
+                  className="inline-flex items-center gap-1 rounded border border-state-error/60 px-2 py-1 text-xs font-medium text-state-error hover:bg-state-error/10"
+                >
+                  <XCircle className="h-3 w-3" aria-hidden="true" />
+                  Deny
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 hidden overflow-x-auto lg:block">
         <table className="min-w-full text-left text-sm">
           <thead className="text-xs text-text-muted">
             <tr>
@@ -311,7 +423,10 @@ function TrustTable({
   if (proposals.length === 0) {
     return (
       <section className="rounded-lg border border-border-default bg-surface-card p-4">
-        <h2 className="text-sm font-semibold text-text-primary">Unified Trust Proposals</h2>
+        <div className="flex items-center gap-2">
+          <GitPullRequestArrow className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+          <h2 className="text-sm font-semibold text-text-primary">Unified Trust Proposals</h2>
+        </div>
         <p className="mt-3 text-sm text-text-muted">No pending trust proposals</p>
       </section>
     )
@@ -319,8 +434,59 @@ function TrustTable({
 
   return (
     <section className="rounded-lg border border-border-default bg-surface-card p-4">
-      <h2 className="text-sm font-semibold text-text-primary">Unified Trust Proposals</h2>
-      <div className="mt-3 overflow-x-auto">
+      <div className="flex items-center gap-2">
+        <GitPullRequestArrow className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+        <h2 className="text-sm font-semibold text-text-primary">Unified Trust Proposals</h2>
+      </div>
+      <div className="mt-3 space-y-3 lg:hidden">
+        {proposals.map((item) => (
+          <div key={`${item.instance_id}-${item.id}`} className="rounded-lg border border-border-default bg-surface-card-elevated p-3">
+            <div className="flex min-w-0 items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="truncate font-mono text-xs font-medium text-text-primary">{item.capability}</div>
+                <div className="mt-1 truncate text-xs text-text-muted">{item.instance_name} / {item.scope}</div>
+              </div>
+              <span className="shrink-0 rounded border border-state-healthy/30 bg-state-healthy/10 px-2 py-1 text-xs text-state-healthy">
+                T{item.current_tier} to T{item.proposed_tier}
+              </span>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs text-text-muted">{item.consecutive_successes} successes</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onDecision({
+                    decision: 'approve',
+                    instanceId: item.instance_id,
+                    approvalId: item.id,
+                    title: item.capability,
+                    subtitle: `${item.instance_name} - T${item.current_tier} to T${item.proposed_tier}`,
+                  })}
+                  className="inline-flex items-center gap-1 rounded border border-state-healthy/60 px-2 py-1 text-xs font-medium text-state-healthy hover:bg-state-healthy/10"
+                >
+                  <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDecision({
+                    decision: 'deny',
+                    instanceId: item.instance_id,
+                    approvalId: item.id,
+                    title: item.capability,
+                    subtitle: `${item.instance_name} - T${item.current_tier} to T${item.proposed_tier}`,
+                  })}
+                  className="inline-flex items-center gap-1 rounded border border-state-error/60 px-2 py-1 text-xs font-medium text-state-error hover:bg-state-error/10"
+                >
+                  <XCircle className="h-3 w-3" aria-hidden="true" />
+                  Deny
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 hidden overflow-x-auto lg:block">
         <table className="min-w-full text-left text-sm">
           <thead className="text-xs text-text-muted">
             <tr>
@@ -382,7 +548,10 @@ function TrustTable({
 function ActivityFeed({ events }: { events: FleetActivityEvent[] }) {
   return (
     <section className="rounded-lg border border-border-default bg-surface-card p-4">
-      <h2 className="text-sm font-semibold text-text-primary">Fleet Activity</h2>
+      <div className="flex items-center gap-2">
+        <Activity className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+        <h2 className="text-sm font-semibold text-text-primary">Fleet Activity</h2>
+      </div>
       {events.length === 0 ? (
         <p className="mt-3 text-sm text-text-muted">No recent fleet activity</p>
       ) : (
@@ -502,6 +671,7 @@ export function FleetDashboard() {
   })
   const data = streamConnected && streamData ? streamData : polledData ?? streamData
   const error = streamConnected ? streamError : pollingError ?? streamError
+  const fleetBudgetTone = data ? thresholdTone(data.fleet.budget_threshold) : 'healthy'
 
   useEffect(() => subscribeFederationDashboard(
     (snapshot) => {
@@ -588,31 +758,69 @@ export function FleetDashboard() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-text-primary">Fleet Dashboard</h1>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-text-muted">
-            <span>Updated {formatTimestamp(data.generated_at)}</span>
-            <span className={`rounded px-2 py-0.5 text-xs ${streamConnected ? 'bg-state-healthy/10 text-state-healthy' : 'bg-state-warning/10 text-state-warning'}`}>
-              {streamConnected ? 'Live' : 'Polling'}
-            </span>
+      <section className="rounded-lg border border-border-default bg-surface-card px-5 py-5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="max-w-3xl">
+            <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-widest text-accent-primary">
+              <Network className="h-3.5 w-3.5" aria-hidden="true" />
+              Federation Command
+            </div>
+            <h1 className="mt-2 text-2xl font-semibold leading-tight text-text-primary">Fleet Dashboard</h1>
+            <p className="mt-2 text-sm leading-6 text-text-muted">
+              Monitor federated Lancelot instances, heartbeat posture, distributed approvals, trust changes, and recent fleet activity.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-text-muted">
+              <span>Updated {formatTimestamp(data.generated_at)}</span>
+              <span className={`inline-flex items-center gap-1 rounded border px-2 py-1 ${streamConnected ? 'border-state-healthy/30 bg-state-healthy/10 text-state-healthy' : 'border-state-warning/30 bg-state-warning/10 text-state-warning'}`}>
+                <RadioTower className="h-3 w-3" aria-hidden="true" />
+                {streamConnected ? 'Live Stream' : 'Polling'}
+              </span>
+              <span className="rounded border border-border-default bg-surface-card-elevated px-2 py-1">
+                Soul {data.fleet.soul_consistency.toUpperCase()}
+              </span>
+            </div>
+          </div>
+          <div className={`rounded-lg border px-4 py-3 ${
+            data.fleet.critical_instances > 0
+              ? 'border-state-error/30 bg-state-error/10 text-state-error'
+              : data.fleet.instances_needing_attention > 0
+                ? 'border-state-warning/30 bg-state-warning/10 text-state-warning'
+                : 'border-state-healthy/30 bg-state-healthy/10 text-state-healthy'
+          }`}>
+            <div className="flex items-center gap-2">
+              {data.fleet.critical_instances > 0 ? (
+                <Siren className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+              )}
+              <span className="text-sm font-semibold text-text-primary">
+                {data.fleet.critical_instances > 0
+                  ? 'Critical Fleet Attention'
+                  : data.fleet.instances_needing_attention > 0
+                    ? 'Fleet Needs Review'
+                    : 'Fleet Stable'}
+              </span>
+            </div>
+            <div className="mt-2 text-xs leading-5 text-text-muted">
+              {data.fleet.total_instances} instances, {data.fleet.instances_needing_attention} needing attention, {data.fleet.pending_approvals} approvals.
+            </div>
           </div>
         </div>
         {error && (
-          <div className="rounded border border-state-warning/50 bg-state-warning/10 px-3 py-2 text-sm text-state-warning">
+          <div className="mt-4 rounded border border-state-warning/50 bg-state-warning/10 px-3 py-2 text-sm text-state-warning">
             {getErrorMessage(error, 'Latest refresh failed')}
           </div>
         )}
-      </div>
+      </section>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
-        <MetricCard label="Instances" value={data.fleet.total_instances} />
-        <MetricCard label="Need Attention" value={data.fleet.instances_needing_attention} />
-        <MetricCard label="Critical" value={data.fleet.critical_instances} />
-        <MetricCard label="Approvals" value={data.fleet.pending_approvals} />
-        <MetricCard label="Active Agents" value={data.fleet.active_agents} />
-        <MetricCard label="Fleet Cost" value={formatPct(data.fleet.fleet_cost_utilization_pct)} />
-      </div>
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        <FleetMetric label="Instances" value={data.fleet.total_instances} detail="Registered fleet members." icon={<Network className="h-4 w-4" />} tone="accent" />
+        <FleetMetric label="Attention" value={data.fleet.instances_needing_attention} detail="Instances needing operator review." icon={<AlertTriangle className="h-4 w-4" />} tone={data.fleet.instances_needing_attention > 0 ? 'warning' : 'healthy'} />
+        <FleetMetric label="Critical" value={data.fleet.critical_instances} detail="Critical instance posture." icon={<Siren className="h-4 w-4" />} tone={data.fleet.critical_instances > 0 ? 'error' : 'healthy'} />
+        <FleetMetric label="Approvals" value={data.fleet.pending_approvals} detail="Pending governed decisions." icon={<FileCheck2 className="h-4 w-4" />} tone={data.fleet.pending_approvals > 0 ? 'warning' : 'muted'} />
+        <FleetMetric label="Agents" value={data.fleet.active_agents} detail="Active agents across fleet." icon={<Users className="h-4 w-4" />} tone="muted" />
+        <FleetMetric label="Fleet Cost" value={formatPct(data.fleet.fleet_cost_utilization_pct)} detail={readableThreshold(data.fleet.budget_threshold)} icon={<WalletCards className="h-4 w-4" />} tone={fleetBudgetTone} />
+      </section>
 
       {data.errors.length > 0 && (
         <div className="rounded-lg border border-state-warning/40 bg-state-warning/10 p-4">
@@ -628,10 +836,13 @@ export function FleetDashboard() {
       )}
 
       <section>
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-text-primary">Instances</h2>
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2">
+            <Gauge className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+            <h2 className="text-sm font-semibold text-text-primary">Instances</h2>
+          </div>
           <div className="text-xs text-text-muted">
-            Soul {data.fleet.soul_consistency.toUpperCase()} - Budget {data.fleet.budget_threshold}
+            Budget {readableThreshold(data.fleet.budget_threshold)}
           </div>
         </div>
         <div className={instanceGridClass(data.instances.length)}>

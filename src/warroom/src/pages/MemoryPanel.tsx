@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Activity, Database, Gauge, Search, ShieldCheck } from 'lucide-react'
 import { usePolling, usePageTitle } from '@/hooks'
 import { fetchCoreBlocks, fetchQuarantine, fetchMemoryStats, fetchRecentMemory, searchMemory, approveQuarantinedItem } from '@/api'
-import { MetricCard, EmptyState } from '@/components'
+import { EmptyState } from '@/components'
 import type { CoreBlock, SearchResultItem, RecentMemoryItem, QuarantineItem } from '@/types/api'
 import { quarantineBadgeClass, quarantineReviewSummary } from '@/utils/memoryReview'
 
@@ -32,7 +33,36 @@ function renderBlockContent(block: CoreBlock): string {
 }
 
 function blockSizeLabel(block: CoreBlock): string {
-  return `${block.token_count} tokens • ${renderBlockContent(block).length} chars`
+  return `${block.token_count} tokens - ${renderBlockContent(block).length} chars`
+}
+
+type MemoryOverviewTone = 'accent' | 'healthy' | 'warning' | 'muted'
+
+const overviewToneClass: Record<MemoryOverviewTone, string> = {
+  accent: 'border-accent-primary/30 bg-accent-primary/10 text-accent-primary',
+  healthy: 'border-state-healthy/30 bg-state-healthy/10 text-state-healthy',
+  warning: 'border-state-warning/30 bg-state-warning/10 text-state-warning',
+  muted: 'border-border-default bg-surface-card-elevated text-text-muted',
+}
+
+function MemoryOverviewTile({
+  label,
+  value,
+  detail,
+  tone = 'muted',
+}: {
+  label: string
+  value: string | number
+  detail: string
+  tone?: MemoryOverviewTone
+}) {
+  return (
+    <div className={`rounded-lg border px-4 py-3 ${overviewToneClass[tone]}`}>
+      <div className="text-[10px] font-medium uppercase tracking-wider opacity-80">{label}</div>
+      <div className="mt-2 text-2xl font-semibold text-text-primary">{value}</div>
+      <div className="mt-1 text-xs leading-5 text-text-muted">{detail}</div>
+    </div>
+  )
 }
 
 export function MemoryPanel() {
@@ -47,6 +77,7 @@ export function MemoryPanel() {
   const [searchResults, setSearchResults] = useState<SearchResultItem[]>([])
   const [expandedBlocks, setExpandedBlocks] = useState<Record<string, boolean>>({})
   const [recentExpanded, setRecentExpanded] = useState(false)
+  const [quarantineExpanded, setQuarantineExpanded] = useState(false)
 
   const memoryDisabled = blocksError != null && quarantineError != null
 
@@ -55,6 +86,8 @@ export function MemoryPanel() {
   const quarantineItems = quarantine?.items ?? []
   const recentItems = recent?.items ?? []
   const tierCounts = stats?.index.items_by_tier ?? {}
+  const coreBlockCount = Object.keys(coreBlocks).length
+  const tieredTotal = (tierCounts.working ?? 0) + (tierCounts.episodic ?? 0) + (tierCounts.archival ?? 0)
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return
@@ -92,58 +125,102 @@ export function MemoryPanel() {
   }
 
   return (
-    <div>
-      <h2 className="text-lg font-semibold text-text-primary mb-2">Memory</h2>
-      <p className="text-sm text-text-muted mb-6">
-        Core block tokens reflect only the five persistent constitution blocks. Tier counts below reflect indexed working,
-        episodic, and archival memory items.
-      </p>
+    <div className="space-y-6">
+      <div className="rounded-lg border border-border-default bg-surface-card p-5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="max-w-3xl">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-accent-primary">
+              Memory Overview
+            </div>
+            <h2 className="mt-2 text-2xl font-semibold text-text-primary">Memory</h2>
+            <p className="mt-2 text-sm leading-6 text-text-muted">
+              Inspect durable core blocks, tiered memory activity, quarantine pressure, and search results without
+              entering the governed edit workflow.
+            </p>
+          </div>
 
-      <div className="flex flex-wrap items-center gap-3 mb-6">
-        <Link
-          to="/memory/manage"
-          className="inline-flex items-center px-4 py-2 text-sm rounded-md bg-accent-primary text-white hover:bg-accent-primary/80"
-        >
-          Open Governed Memory Manager
-        </Link>
-        <Link
-          to="/memory/context"
-          className="inline-flex items-center px-4 py-2 text-sm rounded-md border border-border-default text-text-primary hover:border-border-active"
-        >
-          Context Efficiency
-        </Link>
-        <span className="text-xs text-text-muted">
-          Use the manager for governed edits and context diagnostics for long-running session inspection.
-        </span>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              to="/memory/manage"
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm rounded-md bg-accent-primary text-white hover:bg-accent-primary/80"
+            >
+              <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+              Governed Manager
+            </Link>
+            <Link
+              to="/memory/context"
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm rounded-md border border-border-default text-text-primary hover:border-border-active"
+            >
+              <Gauge className="h-4 w-4" aria-hidden="true" />
+              Context Efficiency
+            </Link>
+          </div>
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <MemoryOverviewTile
+            label="Core Blocks"
+            value={coreBlockCount}
+            detail={`${totalTokens.toLocaleString()} core tokens`}
+            tone="accent"
+          />
+          <MemoryOverviewTile
+            label="Tiered Items"
+            value={tieredTotal.toLocaleString()}
+            detail="Indexed working, episodic, and archival records."
+          />
+          <MemoryOverviewTile
+            label="Working"
+            value={(tierCounts.working ?? 0).toLocaleString()}
+            detail="Near-term active memory."
+            tone="warning"
+          />
+          <MemoryOverviewTile
+            label="Episodic"
+            value={(tierCounts.episodic ?? 0).toLocaleString()}
+            detail="Event and session memory."
+          />
+          <MemoryOverviewTile
+            label="Archival"
+            value={(tierCounts.archival ?? 0).toLocaleString()}
+            detail="Long-retention knowledge."
+            tone="healthy"
+          />
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 xl:grid-cols-5 gap-4 mb-6">
-        <MetricCard label="Core Blocks" value={Object.keys(coreBlocks).length} />
-        <MetricCard label="Core Tokens" value={totalTokens.toLocaleString()} />
-        <MetricCard label="Working" value={(tierCounts.working ?? 0).toLocaleString()} />
-        <MetricCard label="Episodic" value={(tierCounts.episodic ?? 0).toLocaleString()} />
-        <MetricCard label="Archival" value={(tierCounts.archival ?? 0).toLocaleString()} />
-      </div>
-
-      <div className="mb-6 flex gap-2">
-        <input
-          type="text"
-          placeholder="Search memory..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-          className="flex-1 bg-surface-input border border-border-default rounded-md px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-border-active"
-        />
-        <button onClick={handleSearch} className="px-4 py-2 bg-accent-primary text-white text-sm rounded-md hover:bg-accent-primary/80">
-          Search
-        </button>
+      <div className="rounded-lg border border-border-default bg-surface-card p-4">
+        <div className="mb-3 flex items-center gap-2">
+          <Search className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+          <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">Memory Search</h3>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input
+            type="text"
+            placeholder="Search memory..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+            className="flex-1 bg-surface-input border border-border-default rounded-md px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-border-active"
+          />
+          <button onClick={handleSearch} className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-accent-primary text-white text-sm rounded-md hover:bg-accent-primary/80">
+            <Search className="h-4 w-4" aria-hidden="true" />
+            Search
+          </button>
+        </div>
       </div>
 
       {searchResults.length > 0 && (
-        <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
-          <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-            Search Results ({searchResults.length})
-          </h3>
+        <section className="bg-surface-card border border-border-default rounded-lg p-4">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">Search Results</h3>
+              <p className="mt-1 text-xs text-text-muted">Ranked memory matches for the current query.</p>
+            </div>
+            <span className="rounded border border-border-default bg-surface-input px-2 py-1 text-xs font-mono text-text-muted">
+              {searchResults.length}
+            </span>
+          </div>
           <div className="space-y-2">
             {searchResults.map((result) => (
               <div key={result.id} className="p-3 bg-surface-card-elevated rounded-md border border-border-default">
@@ -154,7 +231,7 @@ export function MemoryPanel() {
                 </div>
                 <p className="text-xs text-text-secondary mt-1 whitespace-pre-wrap break-words">{result.content}</p>
                 <div className="mt-2 text-[10px] font-mono text-text-muted">
-                  {result.namespace} {result.tags.length > 0 ? `• ${result.tags.join(', ')}` : ''}
+                  {result.namespace} {result.tags.length > 0 ? `- ${result.tags.join(', ')}` : ''}
                 </div>
               </div>
             ))}
@@ -162,11 +239,36 @@ export function MemoryPanel() {
         </section>
       )}
 
-      <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
-        <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-          Quarantine Queue ({quarantineItems.length})
-        </h3>
-        {quarantineItems.length === 0 ? (
+      <section className="bg-surface-card border border-border-default rounded-lg p-4">
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Activity className="h-4 w-4 text-state-warning" aria-hidden="true" />
+              <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">Quarantine Queue</h3>
+            </div>
+            <p className="mt-1 text-xs text-text-muted">
+              Inspection view for memory awaiting review. Use the manager for full governed review controls.
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="rounded border border-border-default bg-surface-input px-2 py-1 text-xs font-mono text-text-muted">
+              {quarantineItems.length}
+            </span>
+            <button
+              onClick={() => setQuarantineExpanded((current) => !current)}
+              className="px-2 py-1 text-[10px] font-medium rounded border border-border-default text-text-secondary hover:text-text-primary hover:border-border-active"
+            >
+              {quarantineExpanded ? 'Collapse' : 'Expand'}
+            </button>
+          </div>
+        </div>
+        {!quarantineExpanded ? (
+          <div className="rounded-md border border-border-default bg-surface-card-elevated px-3 py-2 text-sm text-text-muted">
+            {quarantineItems.length === 0
+              ? 'No quarantined memory items.'
+              : `${quarantineItems.length} quarantined memory item${quarantineItems.length === 1 ? '' : 's'} hidden from the overview.`}
+          </div>
+        ) : quarantineItems.length === 0 ? (
           <p className="text-sm text-text-muted">No quarantined items</p>
         ) : (
           <div className="space-y-3">
@@ -211,13 +313,21 @@ export function MemoryPanel() {
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <section className="bg-surface-card border border-border-default rounded-lg p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">
-              Core Blocks
-            </h3>
-            <span className="text-xs font-mono text-text-muted">{totalTokens.toLocaleString()} total tokens</span>
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Database className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+                <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">
+                  Core Blocks
+                </h3>
+              </div>
+              <p className="mt-1 text-xs text-text-muted">Persistent constitution memory blocks and token budgets.</p>
+            </div>
+            <span className="rounded border border-border-default bg-surface-input px-2 py-1 text-xs font-mono text-text-muted">
+              {totalTokens.toLocaleString()} tokens
+            </span>
           </div>
-          {Object.keys(coreBlocks).length === 0 ? (
+          {coreBlockCount === 0 ? (
             <p className="text-sm text-text-muted">No core blocks loaded</p>
           ) : (
             <div className="space-y-3">
@@ -227,7 +337,7 @@ export function MemoryPanel() {
                     <div>
                       <div className="text-sm font-mono text-text-primary">{type}</div>
                       <div className="text-[10px] font-mono text-text-muted mt-1">
-                        {blockSizeLabel(block)} • budget {block.token_budget}
+                        {blockSizeLabel(block)} - budget {block.token_budget}
                       </div>
                     </div>
                     <button
@@ -261,12 +371,20 @@ export function MemoryPanel() {
         </section>
 
         <section className="bg-surface-card border border-border-default rounded-lg p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">
-              Recent Tiered Memory
-            </h3>
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Activity className="h-4 w-4 text-state-healthy" aria-hidden="true" />
+                <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">
+                  Recent Tiered Memory
+                </h3>
+              </div>
+              <p className="mt-1 text-xs text-text-muted">Latest indexed working, episodic, and archival records.</p>
+            </div>
             <div className="flex items-center gap-3">
-              <span className="text-xs font-mono text-text-muted">{recentItems.length} shown</span>
+              <span className="rounded border border-border-default bg-surface-input px-2 py-1 text-xs font-mono text-text-muted">
+                {recentItems.length} shown
+              </span>
               <button
                 onClick={() => setRecentExpanded((current) => !current)}
                 className="px-2 py-1 text-[10px] font-medium rounded border border-border-default text-text-secondary hover:text-text-primary hover:border-border-active"

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { Notification } from './WarRoomShell'
 
 interface NotificationTrayProps {
@@ -11,11 +12,12 @@ export function NotificationTray({ sidebarCollapsed, notifications, onClear }: N
   const [expanded, setExpanded] = useState(false)
   const unread = notifications.filter(n => !n.read).length
 
-  return (
+  const tray = (
     <footer
-      className={`fixed bottom-0 right-0 z-40 bg-surface-card border-t border-border-default transition-all duration-200 ${
+      className={`fixed bottom-0 right-0 z-[60] bg-surface-card border-t border-border-default shadow-[0_-12px_28px_rgba(0,0,0,0.18)] transform-gpu transition-[left,height] duration-200 ${
         sidebarCollapsed ? 'left-0' : 'left-0 lg:left-60'
       } ${expanded ? 'h-60' : 'h-12'}`}
+      style={{ bottom: 0 }}
     >
       {/* Collapsed bar */}
       <button
@@ -95,4 +97,10 @@ export function NotificationTray({ sidebarCollapsed, notifications, onClear }: N
       )}
     </footer>
   )
+
+  if (typeof document === 'undefined') {
+    return tray
+  }
+
+  return createPortal(tray, document.body)
 }

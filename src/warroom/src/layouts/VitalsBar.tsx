@@ -1,8 +1,14 @@
-import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import {
+  AlertCircle,
+  HeartPulse,
+  Shield,
+  ShieldCheck,
+  Wifi,
+  type LucideIcon,
+} from 'lucide-react'
 import { usePolling } from '@/hooks'
 import { fetchHealth, fetchHealthReady, fetchSoulStatus } from '@/api'
-import { ProgressBar } from '@/components'
 import type { HealthCheckResponse, HealthReadyResponse, SoulStatusResponse } from '@/types/api'
 
 const POLL_INTERVAL = 5000
@@ -11,12 +17,6 @@ function stateColor(val: number, thresholds: [number, number] = [50, 90]) {
   if (val >= thresholds[1]) return 'text-state-healthy'
   if (val >= thresholds[0]) return 'text-state-degraded'
   return 'text-state-error'
-}
-
-function barColor(val: number, thresholds: [number, number] = [50, 90]) {
-  if (val >= thresholds[1]) return 'bg-state-healthy'
-  if (val >= thresholds[0]) return 'bg-state-degraded'
-  return 'bg-state-error'
 }
 
 function connectionState(health: HealthCheckResponse | null, ready: HealthReadyResponse | null) {
@@ -49,96 +49,55 @@ function defensePosture(health: HealthCheckResponse | null) {
 
 interface VitalProps {
   label: string
-  children: React.ReactNode
+  value: string
+  color: string
+  icon: LucideIcon
   tooltip?: string
+  className?: string
 }
 
-function Vital({ label, children, tooltip }: VitalProps) {
+function Vital({ label, value, color, icon: Icon, tooltip, className = '' }: VitalProps) {
   return (
-    <div className="flex flex-col min-w-[120px] group relative" title={tooltip}>
-      <span className="text-[10px] uppercase tracking-wider text-text-muted mb-0.5">{label}</span>
-      {children}
+    <div
+      className={`flex h-8 min-w-0 items-center gap-2 rounded-md border border-border-default bg-surface-bg/55 px-2.5 ${className}`}
+      title={tooltip}
+    >
+      <Icon className={`h-3.5 w-3.5 shrink-0 ${color}`} strokeWidth={1.9} aria-hidden="true" />
+      <span className="hidden shrink-0 whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.14em] text-text-muted 2xl:inline">
+        {label}
+      </span>
+      <span className={`min-w-0 truncate whitespace-nowrap font-mono text-xs font-semibold ${color}`}>{value}</span>
     </div>
   )
 }
 
-interface ArmorPopoverProps {
+interface HealthMonitorProps {
   armorPct: number
-  degradedReasons: string[]
 }
 
-function ArmorPopover({ armorPct, degradedReasons }: ArmorPopoverProps) {
+function HealthMonitor({ armorPct }: HealthMonitorProps) {
   const navigate = useNavigate()
-  const [open, setOpen] = useState(false)
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>>()
 
   const openHealthDashboard = () => {
-    setOpen(false)
     navigate('/health')
   }
 
-  const handleMouseEnter = () => {
-    clearTimeout(timeoutRef.current)
-    setOpen(true)
-  }
-
-  const handleMouseLeave = () => {
-    timeoutRef.current = setTimeout(() => setOpen(false), 150)
-  }
-
-  useEffect(() => {
-    return () => clearTimeout(timeoutRef.current)
-  }, [])
-
   return (
-    <div
-      className="flex flex-col min-w-[120px] group relative cursor-pointer"
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
+    <button
+      type="button"
+      className="flex h-8 min-w-[74px] cursor-pointer items-center gap-2 rounded-md border border-border-default bg-surface-bg/55 px-2.5 transition-colors hover:border-border-active hover:bg-surface-card-elevated"
       onClick={openHealthDashboard}
+      title="Open Health Dashboard"
+      aria-label={`Open Health Dashboard. Health ${armorPct} percent.`}
     >
-      <span className="text-[10px] uppercase tracking-wider text-text-muted mb-0.5">
-        Armor
+      <HeartPulse className={`h-3.5 w-3.5 shrink-0 ${stateColor(armorPct, [70, 90])}`} strokeWidth={1.9} aria-hidden="true" />
+      <span className="hidden shrink-0 whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.14em] text-text-muted 2xl:inline">
+        Health
       </span>
-      <span className={`text-xs font-semibold font-mono ${stateColor(armorPct, [70, 90])}`}>
+      <span className={`whitespace-nowrap font-mono text-xs font-semibold ${stateColor(armorPct, [70, 90])}`}>
         {armorPct}%
       </span>
-      <ProgressBar value={armorPct} color={barColor(armorPct, [70, 90])} className="mt-1" />
-
-      {open && (
-        <div
-          className="absolute top-full left-0 mt-2 w-64 bg-surface-card border border-border-default rounded-lg shadow-lg p-3 z-50"
-          onMouseEnter={handleMouseEnter}
-          onMouseLeave={handleMouseLeave}
-        >
-          <p className="text-[10px] uppercase tracking-wider text-text-muted mb-2">
-            System Health
-          </p>
-          {degradedReasons.length === 0 ? (
-            <p className="text-xs text-state-healthy">All systems operational</p>
-          ) : (
-            <ul className="space-y-1.5">
-              {degradedReasons.map((reason, i) => (
-                <li key={i} className="flex items-start gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-state-degraded mt-1.5 flex-shrink-0" />
-                  <span className="text-xs text-text-secondary">{reason}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          <button
-            type="button"
-            className="text-[10px] text-text-muted mt-2 pt-2 border-t border-border-default w-full text-left hover:text-text-primary transition-colors"
-            onClick={(event) => {
-              event.stopPropagation()
-              openHealthDashboard()
-            }}
-          >
-            Click to open Health Dashboard
-          </button>
-        </div>
-      )}
-    </div>
+    </button>
   )
 }
 
@@ -156,11 +115,9 @@ export function VitalsBar() {
     interval: POLL_INTERVAL,
   })
 
-  // Identity — based on soul status (100% if soul loaded, 0% if not)
   const identityPct = soul?.active_version ? 100 : 0
   const identityLabel = identityPct === 100 ? 'BONDED' : 'UNBONDED'
 
-  // Armor — based on health readiness
   const armorPct = ready
     ? ready.degraded_reasons.length === 0
       ? 100
@@ -170,79 +127,60 @@ export function VitalsBar() {
   const conn = connectionState(health, ready)
   const defense = defensePosture(health)
   const isCrusader = health?.crusader_mode ?? false
+  const errorRate = health?.error_rate ?? 0
 
   return (
     <div
-      className={`flex items-center gap-6 flex-1 min-w-0 ${
-        isCrusader ? 'ring-1 ring-accent-secondary/60 rounded px-2 animate-pulse' : ''
+      className={`flex min-w-0 flex-1 items-center gap-2 overflow-hidden ${
+        isCrusader ? 'rounded-md ring-1 ring-accent-secondary/60 animate-pulse' : ''
       }`}
     >
-      {/* Identity Bonded */}
       <Vital
         label="Identity"
+        value={`${identityLabel} ${identityPct}%`}
+        color={stateColor(identityPct)}
+        icon={ShieldCheck}
         tooltip="Soul contract integrity. 100% = all identity assertions verified."
-      >
-        <span className={`text-xs font-semibold font-mono ${stateColor(identityPct)}`}>
-          {identityLabel} {identityPct}%
-        </span>
-        <ProgressBar value={identityPct} color={barColor(identityPct)} className="mt-1" />
-      </Vital>
-
-      {/* Armor Integrity — hover for details, click for Health page */}
-      <ArmorPopover
-        armorPct={armorPct}
-        degradedReasons={ready?.degraded_reasons ?? []}
+        className="hidden w-[132px] md:flex xl:w-[138px]"
       />
 
-      {/* Connection */}
+      <HealthMonitor armorPct={armorPct} />
+
       <Vital
         label="Connection"
+        value={conn.label}
+        color={conn.color}
+        icon={Wifi}
         tooltip="Browser-to-gateway control connection. LLM provider status is shown in Cost Tracker."
-      >
-        <div className="flex items-center gap-1.5">
-          <span
-            className={`w-1.5 h-1.5 rounded-full ${conn.color.replace('text-', 'bg-')} ${
-              conn.pulse ? 'animate-pulse' : ''
-            }`}
-          />
-          <span className={`text-xs font-semibold font-mono ${conn.color}`}>{conn.label}</span>
-        </div>
-      </Vital>
+        className={`w-[98px] ${conn.pulse ? 'animate-pulse' : ''}`}
+      />
 
-      {/* Defense Posture */}
       <Vital
         label="Defense"
+        value={defense.label}
+        color={defense.color}
+        icon={Shield}
         tooltip="Current security posture. ELEVATED = anomalous activity. LOCKDOWN = safety trigger."
-      >
-        <div className="flex items-center gap-1.5">
-          <span className={`w-1.5 h-1.5 rounded-full ${defense.color.replace('text-', 'bg-')}`} />
-          <span className={`text-xs font-semibold font-mono ${defense.color}`}>
-            {defense.label}
-          </span>
-        </div>
-      </Vital>
+        className="hidden w-[96px] xl:flex"
+      />
 
-      {/* Error Rate */}
       <Vital
         label="Error Rate"
+        value={health ? `${health.error_rate}%` : '--'}
+        color={
+          errorRate > 5
+            ? 'text-state-error'
+            : errorRate > 1
+              ? 'text-state-degraded'
+              : 'text-state-healthy'
+        }
+        icon={AlertCircle}
         tooltip="Percentage of requests returning 5xx errors since last restart."
-      >
-        <span
-          className={`text-xs font-semibold font-mono ${
-            (health?.error_rate ?? 0) > 5
-              ? 'text-state-error'
-              : (health?.error_rate ?? 0) > 1
-                ? 'text-state-degraded'
-                : 'text-state-healthy'
-          }`}
-        >
-          {health ? `${health.error_rate}%` : '--'}
-        </span>
-      </Vital>
+        className="hidden w-[76px] 2xl:flex"
+      />
 
-      {/* Crusader badge */}
       {isCrusader && (
-        <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded bg-accent-secondary/20 text-accent-secondary">
+        <span className="rounded bg-accent-secondary/20 px-2 py-0.5 text-[10px] font-bold tracking-wider text-accent-secondary">
           CRUSADER
         </span>
       )}

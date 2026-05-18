@@ -11,22 +11,44 @@ import type { CrusaderStatusResponse } from '@/types/api'
 
 const CATEGORY_ORDER = ['Core Subsystem', 'Tool Fabric', 'Runtime', 'Governance', 'Capabilities', 'Intelligence', 'Reasoning', 'Other']
 
-// Master switches: subsystem circuit breakers shown in always-expanded block
-const MASTER_SWITCH_NAMES = new Set([
-  'FEATURE_MCP',
-  'FEATURE_A2A',
-  'FEATURE_OBSERVABILITY',
-  'FEATURE_INCIDENT_RESPONSE',
-  'FEATURE_FEDERATION',
-  'FEATURE_HIVE',
-  'FEATURE_PROCEDURAL_RECOMMENDATIONS',
-  'MCP_ALL',
-  'A2A_ALL',
-  'FEDERATION_KILL',
-])
+// Master switches: core operating substrate controls shown before capability toggles.
+const MASTER_SWITCH_ORDER = [
+  'FEATURE_SOUL',
+  'FEATURE_RISK_TIERED_GOVERNANCE',
+  'FEATURE_VAULT_SECRETS',
+  'FEATURE_MEMORY_VNEXT',
+  'FEATURE_SKILLS',
+  'FEATURE_TOOLS_FABRIC',
+  'FEATURE_NETWORK_ALLOWLIST',
+  'FEATURE_EXECUTION_TOKENS',
+  'FEATURE_AGENTIC_LOOP',
+  'FEATURE_TASK_GRAPH_EXECUTION',
+  'FEATURE_TRUST_LEDGER',
+  'FEATURE_SKILL_SECURITY_PIPELINE',
+  'FEATURE_ACTION_CARDS',
+  'FEATURE_APPROVAL_LEARNING',
+  'FEATURE_HEALTH_MONITOR',
+] as const
+
+const MASTER_SWITCH_NAMES = new Set<string>(MASTER_SWITCH_ORDER)
 
 // Human-readable labels for master switches
 const MASTER_LABELS: Record<string, string> = {
+  'FEATURE_SOUL': 'Soul Constitution',
+  'FEATURE_RISK_TIERED_GOVERNANCE': 'Risk Tiering & Approval Gates',
+  'FEATURE_VAULT_SECRETS': 'Vault Secrets',
+  'FEATURE_MEMORY_VNEXT': 'Governed Memory',
+  'FEATURE_SKILLS': 'Skill Runtime',
+  'FEATURE_TOOLS_FABRIC': 'Tool Fabric Core',
+  'FEATURE_NETWORK_ALLOWLIST': 'Network Allowlist',
+  'FEATURE_EXECUTION_TOKENS': 'Execution Tokens',
+  'FEATURE_AGENTIC_LOOP': 'PEV / Agentic Execution Loop',
+  'FEATURE_TASK_GRAPH_EXECUTION': 'Task Graph Execution',
+  'FEATURE_TRUST_LEDGER': 'Trust Ledger',
+  'FEATURE_SKILL_SECURITY_PIPELINE': 'Skill Security Pipeline',
+  'FEATURE_ACTION_CARDS': 'Action Cards & Approval UI',
+  'FEATURE_APPROVAL_LEARNING': 'Approval Pattern Learning',
+  'FEATURE_HEALTH_MONITOR': 'Health Monitor',
   'FEATURE_MCP': 'MCP (Model Context Protocol)',
   'FEATURE_A2A': 'A2A (Agent-to-Agent Protocol)',
   'FEATURE_OBSERVABILITY': 'Observability (OTel + Webhooks)',
@@ -49,6 +71,10 @@ const GOVERNANCE_FLAGS = new Set([
 
 type StatusFilter = 'all' | 'active' | 'inactive' | 'deps_unmet'
 
+function compactFlagName(name: string) {
+  return name.replace('FEATURE_', '').replace(/_/g, ' ')
+}
+
 // ── Toggle Component ──────────────────────────────────────────────────
 
 function Toggle({
@@ -57,12 +83,14 @@ function Toggle({
   large,
   onClick,
   title,
+  ariaLabel,
 }: {
   enabled: boolean
   disabled?: boolean
   large?: boolean
   onClick?: (e: React.MouseEvent) => void
   title?: string
+  ariaLabel?: string
 }) {
   const w = large ? 'w-14 h-7' : 'w-11 h-6'
   const knob = large ? 'w-6 h-6' : 'w-5 h-5'
@@ -72,6 +100,8 @@ function Toggle({
       onClick={onClick}
       disabled={disabled}
       title={title}
+      aria-pressed={enabled}
+      aria-label={ariaLabel ?? (enabled ? 'Disable switch' : 'Enable switch')}
       className={`relative ${w} rounded-full transition-colors duration-200 flex-shrink-0 ${
         enabled ? 'bg-state-healthy' : 'bg-surface-input border border-border-default'
       } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
@@ -96,50 +126,51 @@ function StatusHeader({
   depsUnmetCount: number
   criticalOff: string[]
 }) {
-  const inactiveCount = totalCount - activeCount
-  const allGood = inactiveCount === 0 && depsUnmetCount === 0 && criticalOff.length === 0
+  const standbyCount = totalCount - activeCount
+  const allGood = depsUnmetCount === 0 && criticalOff.length === 0
+  const headerTone = criticalOff.length > 0 ? 'error' : depsUnmetCount > 0 ? 'degraded' : 'healthy'
 
   return (
-    <div className={`flex items-center justify-between p-3 rounded-lg border ${
-      allGood
+    <div className={`flex flex-col gap-3 p-3 rounded-lg border lg:flex-row lg:items-center lg:justify-between ${
+      headerTone === 'healthy'
         ? 'bg-state-healthy/5 border-state-healthy/20'
-        : criticalOff.length > 0
+        : headerTone === 'error'
           ? 'bg-state-error/5 border-state-error/20'
           : 'bg-state-degraded/5 border-state-degraded/20'
     }`}>
-      <div className="flex items-center gap-4">
-        <div className="flex items-center gap-1.5">
-          <span className={`w-2 h-2 rounded-full ${allGood ? 'bg-state-healthy' : criticalOff.length > 0 ? 'bg-state-error animate-pulse' : 'bg-state-degraded'}`} />
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className={`w-2 h-2 rounded-full ${headerTone === 'healthy' ? 'bg-state-healthy' : headerTone === 'error' ? 'bg-state-error animate-pulse' : 'bg-state-degraded'}`} />
           <span className="text-sm font-medium text-text-primary">
             {totalCount} switches
           </span>
           <span className="text-sm text-text-muted">/</span>
-          <span className={`text-sm font-medium ${allGood ? 'text-state-healthy' : 'text-text-primary'}`}>
+          <span className={`text-sm font-medium ${headerTone === 'healthy' ? 'text-state-healthy' : 'text-text-primary'}`}>
             {activeCount} active
           </span>
         </div>
 
-        {inactiveCount > 0 && (
-          <span className="text-xs px-2 py-0.5 rounded bg-state-degraded/15 text-state-degraded font-medium">
-            {inactiveCount} inactive
+        {standbyCount > 0 && (
+          <span className="text-xs px-2 py-0.5 rounded bg-surface-input text-text-muted font-medium">
+            {standbyCount} standby
           </span>
         )}
 
         {depsUnmetCount > 0 && (
-          <span className="text-xs px-2 py-0.5 rounded bg-state-error/15 text-state-error font-medium">
+          <span className="text-xs px-2 py-0.5 rounded bg-state-degraded/15 text-state-degraded font-medium">
             {depsUnmetCount} deps unmet
           </span>
         )}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
         {criticalOff.map(name => (
           <span key={name} className="text-[10px] px-2 py-0.5 rounded bg-state-error/15 text-state-error font-mono font-medium">
-            {name.replace('FEATURE_', '')} OFF
+            {compactFlagName(name)} off
           </span>
         ))}
         {criticalOff.length === 0 && allGood && (
-          <span className="text-xs text-state-healthy font-medium">All systems nominal</span>
+          <span className="text-xs text-state-healthy font-medium">Governance protections nominal</span>
         )}
       </div>
     </div>
@@ -186,7 +217,7 @@ function SearchBar({
   ]
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
       <div className="relative flex-1">
         <input
           ref={inputRef}
@@ -207,7 +238,7 @@ function SearchBar({
         )}
       </div>
 
-      <div className="flex items-center gap-1">
+      <div className="flex flex-wrap items-center gap-1">
         {filters.map(f => (
           <button
             key={f.id}
@@ -226,68 +257,7 @@ function SearchBar({
   )
 }
 
-// ── Layer 3: Master Switch Block ──────────────────────────────────────
-
-function MasterSwitchRow({
-  name,
-  info,
-  flags,
-  isCrusaderOverride,
-  isToggling,
-  onToggle,
-}: {
-  name: string
-  info: FlagInfo
-  flags: Record<string, FlagInfo>
-  isCrusaderOverride: boolean
-  isToggling: boolean
-  onToggle: (e: React.MouseEvent, name: string, info: FlagInfo) => void
-}) {
-  // Count dependent switches in deps-unmet state
-  const dependentCount = useMemo(() => {
-    if (info.enabled) return 0
-    let count = 0
-    for (const [, fi] of Object.entries(flags)) {
-      if (fi.requires.includes(name) && !fi.requires.every(dep => flags[dep]?.enabled)) {
-        count++
-      }
-    }
-    return count
-  }, [name, info.enabled, flags])
-
-  const label = MASTER_LABELS[name] || name.replace('FEATURE_', '').replace(/_/g, ' ')
-
-  return (
-    <div className="flex items-center justify-between p-3 bg-surface-card-elevated rounded-lg">
-      <div className="flex flex-col gap-0.5 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-text-primary">{label}</span>
-          {isCrusaderOverride && (
-            <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent-secondary/15 text-accent-secondary">crusader</span>
-          )}
-          {info.restart_required && (
-            <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent-primary/15 text-accent-primary">restart</span>
-          )}
-        </div>
-        <span className="text-[10px] font-mono text-text-muted">{name}</span>
-        {!info.enabled && dependentCount > 0 && (
-          <span className="text-[10px] text-state-degraded">
-            {dependentCount} dependent switch{dependentCount !== 1 ? 'es' : ''} paused
-          </span>
-        )}
-      </div>
-      <Toggle
-        enabled={info.enabled}
-        disabled={isToggling || isCrusaderOverride}
-        large
-        title={isCrusaderOverride ? 'Locked by Crusader Mode' : undefined}
-        onClick={(e) => onToggle(e, name, info)}
-      />
-    </div>
-  )
-}
-
-// ── Layer 4: Category Accordion ───────────────────────────────────────
+// ── Layer 3: Category Accordion ───────────────────────────────────────
 
 function CategoryAccordion({
   category,
@@ -316,26 +286,42 @@ function CategoryAccordion({
 }) {
   const shouldShow = isSearchActive || isOpen
 
-  // Status dot: red if any deps unmet, amber if any inactive, green if all active
+  const activeCount = switches.filter(([, info]) => info.enabled).length
+  const standbyCount = switches.length - activeCount
   const hasDepsUnmet = switches.some(([, info]) => info.requires.some(dep => !flags[dep]?.enabled))
-  const hasInactive = switches.some(([, info]) => !info.enabled)
-  const dotColor = hasDepsUnmet ? 'bg-state-error' : hasInactive ? 'bg-state-degraded' : 'bg-state-healthy'
+  const hasConflict = switches.some(([, info]) => info.conflicts.some(c => flags[c]?.enabled))
+  const hasCriticalOff = switches.some(([name, info]) => GOVERNANCE_FLAGS.has(name) && !info.enabled)
+  const dotColor = hasDepsUnmet || hasConflict || hasCriticalOff ? 'bg-state-error' : 'bg-state-healthy'
 
   return (
     <div className="bg-surface-card border border-border-default rounded-lg overflow-hidden">
       {/* Header */}
       <button
         onClick={onToggleOpen}
-        className="w-full flex items-center justify-between p-3 hover:bg-surface-card-elevated/50 transition-colors"
+        className="w-full p-3 text-left hover:bg-surface-card-elevated/50 transition-colors"
       >
-        <div className="flex items-center gap-2.5">
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
-            className={`text-text-muted transition-transform ${shouldShow ? 'rotate-90' : ''}`}>
-            <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          <span className="text-sm font-medium text-text-primary">{category}</span>
-          <span className="text-xs text-text-muted">{switches.length} switch{switches.length !== 1 ? 'es' : ''}</span>
-          <span className={`w-2 h-2 rounded-full ${dotColor}`} />
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
+              className={`text-text-muted transition-transform ${shouldShow ? 'rotate-90' : ''}`}>
+              <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <span className="text-sm font-medium text-text-primary">{category}</span>
+            <span className="text-xs text-text-muted">{switches.length} switch{switches.length !== 1 ? 'es' : ''}</span>
+            <span className={`w-2 h-2 rounded-full ${dotColor}`} />
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-state-healthy/15 text-state-healthy">{activeCount} active</span>
+            {standbyCount > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-input text-text-muted">{standbyCount} standby</span>
+            )}
+            {hasDepsUnmet && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-state-degraded/15 text-state-degraded">deps</span>
+            )}
+            {hasConflict && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-state-error/15 text-state-error">conflict</span>
+            )}
+          </div>
         </div>
       </button>
 
@@ -385,6 +371,14 @@ function FlagRow({
   const unmet = info.requires.filter(dep => !flags[dep]?.enabled)
   const hasConflict = info.conflicts.some(c => flags[c]?.enabled)
   const isToggleDisabled = isToggling || isCrusaderOverride
+  const isMasterSwitch = MASTER_SWITCH_NAMES.has(name)
+  const label = isMasterSwitch ? (MASTER_LABELS[name] || compactFlagName(name)) : name
+  const dependentSwitches = useMemo(() => {
+    return Object.entries(flags)
+      .filter(([depName, depInfo]) => depName !== name && depInfo.requires.includes(name))
+      .map(([depName]) => depName)
+      .sort()
+  }, [flags, name])
 
   return (
     <div className={`bg-surface-card-elevated rounded-md border overflow-hidden mt-1 ${
@@ -392,12 +386,18 @@ function FlagRow({
     }`}>
       {/* Row */}
       <div
-        className="flex items-center justify-between p-3 cursor-pointer hover:bg-surface-input/50 transition-colors"
+        className="flex flex-col gap-3 p-3 cursor-pointer hover:bg-surface-input/50 transition-colors sm:flex-row sm:items-center sm:justify-between"
         onClick={onToggleExpand}
       >
-        <div className="flex items-center gap-2 min-w-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
           <span className={`text-[10px] transition-transform ${isExpanded ? 'rotate-90' : ''}`}>&#9654;</span>
-          <span className="text-xs font-mono text-text-primary truncate">{name}</span>
+          <span className={`min-w-0 break-all text-xs text-text-primary sm:truncate ${isMasterSwitch ? 'font-medium' : 'font-mono'}`}>{label}</span>
+          {isMasterSwitch && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent-primary/12 text-accent-primary whitespace-nowrap">master</span>
+          )}
+          <span className={`text-[9px] px-1.5 py-0.5 rounded whitespace-nowrap ${info.enabled ? 'bg-state-healthy/15 text-state-healthy' : 'bg-surface-input text-text-muted'}`}>
+            {info.enabled ? 'enabled' : 'standby'}
+          </span>
           {isCrusaderOverride && (
             <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent-secondary/15 text-accent-secondary whitespace-nowrap">crusader</span>
           )}
@@ -410,19 +410,34 @@ function FlagRow({
           {hasConflict && (
             <span className="text-[9px] px-1.5 py-0.5 rounded bg-state-error/15 text-state-error whitespace-nowrap">conflict</span>
           )}
+          {isMasterSwitch && !info.enabled && dependentSwitches.length > 0 && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-surface-input text-text-muted whitespace-nowrap">
+              {dependentSwitches.length} paused
+            </span>
+          )}
         </div>
-        <Toggle
-          enabled={info.enabled}
-          disabled={isToggleDisabled}
-          title={isCrusaderOverride ? 'Locked by Crusader Mode' : undefined}
-          onClick={(e) => { e.stopPropagation(); if (!isCrusaderOverride) onToggle(e, name, info) }}
-        />
+        <div className="self-end sm:self-auto">
+          <Toggle
+            enabled={info.enabled}
+            disabled={isToggleDisabled}
+            title={isCrusaderOverride ? 'Locked by Crusader Mode' : undefined}
+            ariaLabel={`${info.enabled ? 'Disable' : 'Enable'} ${label}`}
+            onClick={(e) => { e.stopPropagation(); if (!isCrusaderOverride) onToggle(e, name, info) }}
+          />
+        </div>
       </div>
 
       {/* Expanded details */}
       {isExpanded && (
         <div className="px-3 pb-3 pt-0 border-t border-border-default/50 space-y-2">
           <p className="text-xs text-text-secondary leading-relaxed mt-2">{info.description}</p>
+
+          {isMasterSwitch && (
+            <div className="flex items-start gap-2">
+              <span className="text-[10px] text-text-muted uppercase tracking-wider pt-0.5 whitespace-nowrap">Flag:</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-input text-text-muted break-all">{name}</span>
+            </div>
+          )}
 
           {info.warning && (
             <div className="p-2 rounded bg-state-degraded/8 border border-state-degraded/20">
@@ -464,6 +479,21 @@ function FlagRow({
                     </span>
                   )
                 })}
+              </div>
+            </div>
+          )}
+
+          {dependentSwitches.length > 0 && (
+            <div className="flex items-start gap-2">
+              <span className="text-[10px] text-text-muted uppercase tracking-wider pt-0.5 whitespace-nowrap">Controls:</span>
+              <div className="flex flex-wrap gap-1">
+                {dependentSwitches.map(dep => (
+                  <span key={dep} className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                    flags[dep]?.enabled ? 'bg-state-healthy/15 text-state-healthy' : 'bg-surface-input text-text-muted'
+                  }`}>
+                    {compactFlagName(dep)}
+                  </span>
+                ))}
               </div>
             </div>
           )}
@@ -612,9 +642,9 @@ function HostAgentPanel() {
         </div>
         {reachable && status && (
           <div className="space-y-1.5 mb-3">
-            <div className="flex items-center justify-between"><span className="text-[10px] text-text-muted">Platform</span><span className="text-[10px] font-mono text-text-primary">{status.platform} {status.platform_version}</span></div>
-            <div className="flex items-center justify-between"><span className="text-[10px] text-text-muted">Hostname</span><span className="text-[10px] font-mono text-text-primary">{status.hostname}</span></div>
-            <div className="flex items-center justify-between"><span className="text-[10px] text-text-muted">Agent Version</span><span className="text-[10px] font-mono text-text-primary">v{status.agent_version}</span></div>
+            <div className="flex items-center justify-between gap-3"><span className="text-[10px] text-text-muted">Platform</span><span className="min-w-0 break-all text-right text-[10px] font-mono text-text-primary">{status.platform} {status.platform_version}</span></div>
+            <div className="flex items-center justify-between gap-3"><span className="text-[10px] text-text-muted">Hostname</span><span className="min-w-0 break-all text-right text-[10px] font-mono text-text-primary">{status.hostname}</span></div>
+            <div className="flex items-center justify-between gap-3"><span className="text-[10px] text-text-muted">Agent Version</span><span className="min-w-0 break-all text-right text-[10px] font-mono text-text-primary">v{status.agent_version}</span></div>
           </div>
         )}
         {reachable ? (
@@ -632,8 +662,8 @@ function HostAgentPanel() {
       </div>
 
       <div className={`p-3 rounded-lg border ${writeEnabled ? 'bg-red-500/5 border-red-500/30' : 'bg-surface-card border-border-default'}`}>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
             <span className={`text-[11px] font-medium uppercase tracking-wider ${writeEnabled ? 'text-red-400' : 'text-text-secondary'}`}>Write Commands</span>
             {writeEnabled && <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 font-bold">DANGER</span>}
           </div>
@@ -763,17 +793,17 @@ function UABPanel() {
         </div>
         {reachable && status && (
           <div className="space-y-1.5 mb-3">
-            <div className="flex items-center justify-between"><span className="text-[10px] text-text-muted">Version</span><span className="text-[10px] font-mono text-text-primary">v{status.version}</span></div>
-            <div className="flex items-center justify-between"><span className="text-[10px] text-text-muted">Connected Apps</span><span className="text-[10px] font-mono text-text-primary">{status.connected_apps}</span></div>
-            <div className="flex items-center justify-between"><span className="text-[10px] text-text-muted">Frameworks</span><span className="text-[10px] font-mono text-text-primary">{status.supported_frameworks.length > 0 ? status.supported_frameworks.join(', ') : 'none'}</span></div>
+            <div className="flex items-center justify-between gap-3"><span className="text-[10px] text-text-muted">Version</span><span className="min-w-0 break-all text-right text-[10px] font-mono text-text-primary">v{status.version}</span></div>
+            <div className="flex items-center justify-between gap-3"><span className="text-[10px] text-text-muted">Connected Apps</span><span className="min-w-0 break-all text-right text-[10px] font-mono text-text-primary">{status.connected_apps}</span></div>
+            <div className="flex items-center justify-between gap-3"><span className="text-[10px] text-text-muted">Frameworks</span><span className="min-w-0 break-all text-right text-[10px] font-mono text-text-primary">{status.supported_frameworks.length > 0 ? status.supported_frameworks.join(', ') : 'none'}</span></div>
             {status.transport && (
-              <div className="flex items-center justify-between"><span className="text-[10px] text-text-muted">Transport</span><span className="text-[10px] font-mono text-text-primary">{status.transport}</span></div>
+              <div className="flex items-center justify-between gap-3"><span className="text-[10px] text-text-muted">Transport</span><span className="min-w-0 break-all text-right text-[10px] font-mono text-text-primary">{status.transport}</span></div>
             )}
             {!!status.standalone_features?.length && (
-              <div className="flex items-center justify-between"><span className="text-[10px] text-text-muted">Bridge Features</span><span className="text-[10px] font-mono text-text-primary">{status.standalone_features.join(', ')}</span></div>
+              <div className="flex items-center justify-between gap-3"><span className="text-[10px] text-text-muted">Bridge Features</span><span className="min-w-0 break-all text-right text-[10px] font-mono text-text-primary">{status.standalone_features.join(', ')}</span></div>
             )}
             {status.uptime_seconds > 0 && (
-              <div className="flex items-center justify-between"><span className="text-[10px] text-text-muted">Uptime</span><span className="text-[10px] font-mono text-text-primary">{Math.floor(status.uptime_seconds / 60)}m {status.uptime_seconds % 60}s</span></div>
+              <div className="flex items-center justify-between gap-3"><span className="text-[10px] text-text-muted">Uptime</span><span className="min-w-0 break-all text-right text-[10px] font-mono text-text-primary">{Math.floor(status.uptime_seconds / 60)}m {status.uptime_seconds % 60}s</span></div>
             )}
           </div>
         )}
@@ -793,14 +823,14 @@ function UABPanel() {
           </div>
           <div className="space-y-1.5">
             {apps.map((app) => (
-              <div key={app.pid} className="flex items-center justify-between py-1 px-2 bg-surface-input rounded">
-                <div className="flex items-center gap-2">
+              <div key={app.pid} className="flex flex-col gap-1.5 py-1.5 px-2 bg-surface-input rounded sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <span className="w-1.5 h-1.5 rounded-full bg-state-healthy" />
-                  <span className="text-[10px] font-medium text-text-primary">{app.name}</span>
+                  <span className="break-all text-[10px] font-medium text-text-primary sm:break-normal">{app.name}</span>
                   <span className="text-[9px] font-mono text-text-muted">PID {app.pid}</span>
-                  {!!app.windowTitle && <span className="text-[9px] text-text-muted truncate max-w-[12rem]">{app.windowTitle}</span>}
+                  {!!app.windowTitle && <span className="min-w-0 max-w-full break-all text-[9px] text-text-muted sm:max-w-[12rem] sm:truncate">{app.windowTitle}</span>}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                   <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent-primary/10 text-accent-primary font-mono">{app.framework}</span>
                   <span className="text-[9px] text-text-muted">{app.connectionMethod}</span>
                   {typeof app.elementCount === 'number' && app.elementCount > 0 && <span className="text-[9px] text-text-muted">{app.elementCount} el</span>}
@@ -868,14 +898,16 @@ export function KillSwitches() {
   }, [flags])
 
   const masterSwitches = useMemo(() => {
-    return allSwitches.filter(([name]) => MASTER_SWITCH_NAMES.has(name))
+    const byName = new Map(allSwitches)
+    return MASTER_SWITCH_ORDER.flatMap(name => {
+      const info = byName.get(name)
+      return info ? [[name, info] as [string, FlagInfo]] : []
+    })
   }, [allSwitches])
 
   const categorySwitches = useMemo(() => {
-    // Exclude master switches from category accordions
-    const nonMaster = allSwitches.filter(([name]) => !MASTER_SWITCH_NAMES.has(name))
     const grouped: Record<string, [string, FlagInfo][]> = {}
-    for (const [name, info] of nonMaster) {
+    for (const [name, info] of allSwitches.filter(([name]) => !MASTER_SWITCH_NAMES.has(name))) {
       const cat = info.category || 'Other'
       if (!grouped[cat]) grouped[cat] = []
       grouped[cat].push([name, info])
@@ -895,7 +927,7 @@ export function KillSwitches() {
     info.requires.some(dep => !flags[dep]?.enabled)
   ).length
   const criticalOff = allSwitches
-    .filter(([name, info]) => !info.enabled && (MASTER_SWITCH_NAMES.has(name) || GOVERNANCE_FLAGS.has(name)))
+    .filter(([name, info]) => !info.enabled && GOVERNANCE_FLAGS.has(name))
     .map(([name]) => name)
 
   // ── Search + filter logic ───────────────────────────────────
@@ -910,6 +942,8 @@ export function KillSwitches() {
     if (q === 'deps') return info.requires.some(dep => !flags[dep]?.enabled)
     return (
       name.toLowerCase().includes(q) ||
+      (MASTER_LABELS[name] || '').toLowerCase().includes(q) ||
+      (MASTER_SWITCH_NAMES.has(name) && q === 'master') ||
       (info.description || '').toLowerCase().includes(q) ||
       category.toLowerCase().includes(q)
     )
@@ -922,7 +956,6 @@ export function KillSwitches() {
     return true
   }, [statusFilter, flags])
 
-  // Filtered master switches
   const filteredMaster = useMemo(() => {
     if (!isSearchActive) return masterSwitches
     return masterSwitches.filter(([name, info]) => matchesSearch(name, info, 'Master') && matchesFilter(info))
@@ -940,7 +973,7 @@ export function KillSwitches() {
   }, [isSearchActive, categorySwitches, matchesSearch, matchesFilter])
 
   const filteredSortedCategories = isSearchActive
-    ? CATEGORY_ORDER.filter(c => filteredCategories[c]?.length)
+    ? sortedCategories.filter(c => filteredCategories[c]?.length)
     : sortedCategories
 
   const noResults = isSearchActive &&
@@ -1003,8 +1036,14 @@ export function KillSwitches() {
   // ── Render ──────────────────────────────────────────────────
 
   return (
-    <div className="p-6 space-y-4">
-      <h2 className="text-xl font-semibold text-text-primary">Kill Switches</h2>
+    <div className="space-y-4 p-4 md:p-6">
+      <div className="flex flex-col gap-1">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-accent-primary">Governance Controls</p>
+        <h2 className="text-xl font-semibold text-text-primary">Kill Switches</h2>
+        <p className="max-w-3xl text-sm text-text-muted">
+          Circuit breakers, dependency gates, and emergency stops for runtime capabilities.
+        </p>
+      </div>
 
       {/* Crusader Mode Banner */}
       {crusaderActive && (
@@ -1030,14 +1069,14 @@ export function KillSwitches() {
 
       {/* Restart / Agent Banners */}
       {restartBanner && (
-        <div className="p-3 bg-state-degraded/10 border border-state-degraded/30 rounded-lg flex items-center justify-between">
+        <div className="flex flex-col gap-2 rounded-lg border border-state-degraded/30 bg-state-degraded/10 p-3 sm:flex-row sm:items-center sm:justify-between">
           <span className="text-sm text-state-degraded">{restartBanner}</span>
-          <button onClick={() => setRestartBanner(null)} className="text-xs text-text-muted hover:text-text-primary ml-4">Dismiss</button>
+          <button onClick={() => setRestartBanner(null)} className="text-xs text-text-muted hover:text-text-primary sm:ml-4">Dismiss</button>
         </div>
       )}
       {agentStartHint && (
         <div className="p-3 bg-state-degraded/10 border border-state-degraded/30 rounded-lg">
-          <div className="flex items-center justify-between mb-2">
+          <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-state-degraded animate-pulse" />
               <span className="text-sm font-semibold text-state-degraded">Host Agent Not Running</span>
@@ -1066,25 +1105,31 @@ export function KillSwitches() {
         onClear={clearSearch}
       />
 
-      {/* ═══ Layer 3: Master Switches ═══ */}
+      {/* ═══ Layer 3: Category Accordions ═══ */}
       {filteredMaster.length > 0 && (
-        <div className="border-l-4 border-state-degraded/60 rounded-lg bg-surface-card p-4 space-y-2">
-          <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">Master Switches</h3>
-          {filteredMaster.map(([name, info]) => (
-            <MasterSwitchRow
-              key={name}
-              name={name}
-              info={info}
-              flags={flags}
-              isCrusaderOverride={overriddenFlags.has(name)}
-              isToggling={toggling === name}
-              onToggle={handleToggle}
-            />
-          ))}
+        <div className="rounded-lg border border-border-default bg-surface-card p-4 space-y-2">
+          <div className="mb-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-text-muted">Master Circuit Breakers</h3>
+            <span className="text-[10px] text-text-muted">Core safety and operating substrate. Expand a row to inspect dependencies and controlled switches.</span>
+          </div>
+          <div className="space-y-1">
+            {filteredMaster.map(([name, info]) => (
+              <FlagRow
+                key={name}
+                name={name}
+                info={info}
+                flags={flags}
+                isExpanded={expanded.has(name)}
+                onToggleExpand={() => toggleExpand(name)}
+                isCrusaderOverride={overriddenFlags.has(name)}
+                isToggling={toggling === name}
+                onToggle={handleToggle}
+              />
+            ))}
+          </div>
         </div>
       )}
 
-      {/* ═══ Layer 4: Category Accordions ═══ */}
       {filteredSortedCategories.map(category => (
         <CategoryAccordion
           key={category}

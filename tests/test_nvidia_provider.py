@@ -187,6 +187,8 @@ class TestNvidiaFactory:
         from src.core.providers.factory import API_KEY_VARS
         assert "nvidia" in API_KEY_VARS
         assert API_KEY_VARS["nvidia"] == "NVIDIA_API_KEY"
+        assert API_KEY_VARS["deepseek"] == "DEEPSEEK_API_KEY"
+        assert API_KEY_VARS["local-openai"] == "LOCAL_OPENAI_API_KEY"
 
     @needs_openai
     def test_factory_creates_nvidia_client(self):
@@ -199,7 +201,7 @@ class TestNvidiaFactory:
     def test_factory_unknown_still_raises(self):
         from src.core.providers.factory import create_provider
         with pytest.raises(ValueError, match="Unknown provider"):
-            create_provider("deepseek", "key")
+            create_provider("missing-provider", "key")
 
 
 # ===================================================================

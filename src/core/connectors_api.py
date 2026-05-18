@@ -62,6 +62,8 @@ _CONNECTOR_CLASSES = {
     "whatsapp": ("src.connectors.connectors.whatsapp", "WhatsAppConnector", {"phone_number_id": ""}),
     "sms": ("src.connectors.connectors.sms", "SMSConnector", {"account_sid": ""}),
     "calendar": ("src.connectors.connectors.calendar", "CalendarConnector", {}),
+    "onedrive": ("src.connectors.connectors.onedrive", "OneDriveConnector", {}),
+    "sharepoint": ("src.connectors.connectors.sharepoint", "SharePointConnector", {}),
     "telegram": ("src.connectors.connectors.telegram", "TelegramConnector", {}),
     "x": ("src.connectors.connectors.x", "XConnector", {}),
     "generic_rest": ("src.connectors.connectors.generic_rest", "GenericRESTConnector", {}),
@@ -70,6 +72,7 @@ _CONNECTOR_CLASSES = {
 
 _BACKEND_OPTIONS: Dict[str, List[str]] = {
     "email": ["gmail", "outlook", "smtp"],
+    "calendar": ["google", "outlook", "caldav"],
 }
 
 
@@ -156,9 +159,25 @@ def _save_config(config: dict) -> None:
     """Write connectors.yaml with lock."""
     with _config_lock:
         path = Path(_config_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        except PermissionError as exc:
+            logger.error("Connector configuration is not writable at %s: %s", path, exc)
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Connector configuration is not writable. "
+                    "Check config/connectors.yaml ownership and restart Lancelot."
+                ),
+            ) from exc
+        except OSError as exc:
+            logger.error("Failed to write connector configuration at %s: %s", path, exc)
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to persist connector configuration.",
+            ) from exc
 
 
 # ── Response Models ──────────────────────────────────────────────
@@ -384,7 +403,7 @@ def disable_connector(connector_id: str, request: Request):
 
 
 @router.post("/{connector_id}/backend", response_model=BackendSetResponse)
-def set_backend(connector_id: str, body: BackendSetRequest):
+def set_backend(connector_id: str, body: BackendSetRequest, request: Request):
     """Set the backend for a multi-backend connector."""
     if connector_id not in _BACKEND_OPTIONS:
         raise HTTPException(
@@ -400,6 +419,7 @@ def set_backend(connector_id: str, body: BackendSetRequest):
     full_config = _load_config()
     connectors_config = full_config.setdefault("connectors", {})
     ccfg = connectors_config.setdefault(connector_id, {})
+    previous_backend = ccfg.get("backend")
     ccfg["backend"] = body.backend
     _save_config(full_config)
 
@@ -414,5 +434,19 @@ def set_backend(connector_id: str, body: BackendSetRequest):
                 logger.info("Connector %s re-registered with backend: %s", connector_id, body.backend)
         except Exception as e:
             logger.warning("Failed to re-register connector %s: %s", connector_id, e)
+
+    from src.core.governance_receipts import emit_governance_receipt
+    from src.shared.receipts import ActionType
+    emit_governance_receipt(
+        request,
+        ActionType.CONNECTOR_BACKEND_CHANGED,
+        action_name="set_connector_backend",
+        inputs={
+            "connector_id": connector_id,
+            "previous_backend": previous_backend,
+            "backend": body.backend,
+            "enabled": bool(ccfg.get("enabled", False)),
+        },
+    )
 
     return BackendSetResponse(connector_id=connector_id, backend=body.backend)

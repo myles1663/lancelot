@@ -110,6 +110,35 @@ export interface ProviderKeysResponse {
   keys: ProviderKeyInfo[]
 }
 
+export interface LocalOpenAIConfig {
+  base_url: string
+  api_key_configured: boolean
+  key_preview: string
+  fast_model: string
+  deep_model: string
+  cache_model: string
+  context_window: number
+  supports_tools: boolean
+}
+
+export interface SaveLocalOpenAIConfigRequest {
+  base_url: string
+  api_key?: string
+  fast_model: string
+  deep_model: string
+  cache_model?: string
+  context_window: number
+  supports_tools: boolean
+}
+
+export interface SaveLocalOpenAIConfigResponse {
+  status: string
+  message?: string
+  config: LocalOpenAIConfig
+  persisted_to_env: boolean
+  hot_swapped: boolean
+}
+
 export interface RotateKeyResponse {
   status: string
   provider?: string
@@ -125,6 +154,12 @@ export const fetchProviderKeys = () =>
 
 export const rotateProviderKey = (provider: string, apiKey: string) =>
   apiPost<RotateKeyResponse>('/api/v1/providers/keys/rotate', { provider, api_key: apiKey })
+
+export const fetchLocalOpenAIConfig = () =>
+  apiGet<LocalOpenAIConfig>('/api/v1/providers/local-openai/config')
+
+export const saveLocalOpenAIConfig = (config: SaveLocalOpenAIConfigRequest) =>
+  apiPost<SaveLocalOpenAIConfigResponse>('/api/v1/providers/local-openai/config', config)
 
 // --- OAuth Management ---
 

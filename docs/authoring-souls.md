@@ -310,14 +310,22 @@ On successful activation:
 
 ### Rolling Back
 
-To revert to a previous Soul version:
+To revert to a previous Soul version, open the War Room Soul Inspector and use
+the **Activate** action beside the retained version in **Available Versions**.
+War Room shows the active version's source when it can infer provenance from
+the amendment history, including templates such as
+`template:finance-compliance-monitor`.
+
+The rollback action requires `soul.admin`, asks for confirmation, runs the
+linter on the target version, updates the `soul/ACTIVE` pointer, refreshes the
+live runtime Soul, and emits a `soul_version_pinned` receipt.
+
+For local maintenance scripts, the underlying store operation is:
 
 ```python
 from soul.store import set_active_version
 set_active_version("v1", soul_dir)  # Revert to v1
 ```
-
-Or via the War Room Soul panel. The linter runs on the target version to ensure it's still valid.
 
 ---
 

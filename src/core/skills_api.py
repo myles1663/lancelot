@@ -98,6 +98,17 @@ def _manifest_dict(entry) -> dict:
     return _builtin_manifest(getattr(entry, "name", ""))
 
 
+def _manifest_source(entry, manifest: dict) -> str:
+    if getattr(entry, "manifest", None) is not None:
+        return "registry"
+    manifest_path = getattr(entry, "manifest_path", "")
+    if manifest_path and Path(manifest_path).exists():
+        return "registry"
+    if manifest:
+        return "builtin"
+    return "missing"
+
+
 def _manifest_yaml(entry, manifest: dict) -> str:
     manifest_path = getattr(entry, "manifest_path", "")
     if manifest_path:
@@ -172,6 +183,8 @@ def _installed_skill_detail(entry) -> dict:
     return {
         **_installed_skill_summary(entry),
         "manifest_path": manifest_path,
+        "manifest": manifest or None,
+        "manifest_source": _manifest_source(entry, manifest),
         "manifest_yaml": _manifest_yaml(entry, manifest),
         "execute_code": execute_code,
         "test_code": test_code,

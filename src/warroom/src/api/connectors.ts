@@ -32,6 +32,8 @@ export interface ConnectorInfo {
   does_not_access: string[]
   credentials: CredentialInfo[]
   operation_count: number
+  available?: boolean
+  availability_reason?: string | null
 }
 
 export interface ConnectorsListResponse {

@@ -99,6 +99,22 @@ def validate_api_key_live(
                 return {"valid": False, "error": "Invalid API key - rejected by NVIDIA"}
             return {"valid": False, "error": f"Unexpected response (HTTP {response.status_code})"}
 
+        if provider == "deepseek":
+            url = url_validator(
+                "https://api.deepseek.com/models",
+                component="Onboarding DeepSeek API key validation",
+            )
+            response = requests.get(
+                url,
+                headers={"Authorization": f"Bearer {key}"},
+                timeout=10,
+            )
+            if response.ok:
+                return {"valid": True}
+            if response.status_code == 401:
+                return {"valid": False, "error": "Invalid API key - rejected by DeepSeek"}
+            return {"valid": False, "error": f"Unexpected response (HTTP {response.status_code})"}
+
         return {"valid": False, "error": f"Unknown provider: {provider}"}
 
     except network_error_type as exc:

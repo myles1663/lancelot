@@ -88,6 +88,12 @@ class ActionType(str, Enum):
     MCP_T3_REJECTED = "mcp_t3_rejected"
     CONNECTOR_ENABLED = "connector_enabled"
     CONNECTOR_DISABLED = "connector_disabled"
+    CONNECTOR_BACKEND_CHANGED = "connector_backend_changed"
+    PROVIDER_SWITCHED = "provider_switched"
+    PROVIDER_LANE_OVERRIDDEN = "provider_lane_overridden"
+    PROVIDER_LANES_RESET = "provider_lanes_reset"
+    PROVIDER_KEY_ROTATED = "provider_key_rotated"
+    PROVIDER_LOCAL_CONFIG_UPDATED = "provider_local_config_updated"
     ALLOWLIST_MODIFIED = "allowlist_modified"
     SCHEDULER_TASK_CREATED = "scheduler_task_created"
     SCHEDULER_TASK_DELETED = "scheduler_task_deleted"
@@ -905,8 +911,14 @@ class ReceiptService(ReceiptQueryMixin):
         self,
         query: str,
         limit: int = 50,
+        offset: int = 0,
         action_types: Optional[List[str]] = None,
-        time_range_hours: Optional[int] = None
+        time_range_hours: Optional[int] = None,
+        status: Optional[str] = None,
+        quest_id: Optional[str] = None,
+        risk_tier: Optional[int] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
     ) -> List[Receipt]:
         """
         Search receipts by text query.
@@ -916,21 +928,85 @@ class ReceiptService(ReceiptQueryMixin):
         Args:
             query: Text to search for
             limit: Maximum results
+            offset: Number of matching results to skip
             action_types: Optional list of action types to filter
             time_range_hours: Optional time range in hours
+            status: Optional receipt status filter
+            quest_id: Optional quest filter
+            risk_tier: Optional cognition tier filter
+            since: Optional inclusive start timestamp
+            until: Optional inclusive end timestamp
             
         Returns:
             List of matching receipts
         """
+        sql, params = self._search_query_sql(
+            query=query,
+            action_types=action_types,
+            time_range_hours=time_range_hours,
+            status=status,
+            quest_id=quest_id,
+            risk_tier=risk_tier,
+            since=since,
+            until=until,
+            select="*",
+        )
+        sql += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        conn = self._get_connection()
+        cursor = conn.execute(sql, params)
+        return [self._row_to_receipt(row) for row in cursor.fetchall()]
+
+    def count_search(
+        self,
+        query: str,
+        action_types: Optional[List[str]] = None,
+        time_range_hours: Optional[int] = None,
+        status: Optional[str] = None,
+        quest_id: Optional[str] = None,
+        risk_tier: Optional[int] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> int:
+        """Count receipts matching the same filters used by search()."""
+        sql, params = self._search_query_sql(
+            query=query,
+            action_types=action_types,
+            time_range_hours=time_range_hours,
+            status=status,
+            quest_id=quest_id,
+            risk_tier=risk_tier,
+            since=since,
+            until=until,
+            select="COUNT(*) as total",
+        )
+        row = self._get_connection().execute(sql, params).fetchone()
+        return int(row["total"] if row else 0)
+
+    def _search_query_sql(
+        self,
+        *,
+        query: str,
+        select: str,
+        action_types: Optional[List[str]] = None,
+        time_range_hours: Optional[int] = None,
+        status: Optional[str] = None,
+        quest_id: Optional[str] = None,
+        risk_tier: Optional[int] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> tuple[str, List[Any]]:
+        """Build a parameterized text-search query for finalized receipts."""
         sql = """
-            SELECT * FROM receipts 
+            SELECT {select} FROM receipts
             WHERE (
                 action_name LIKE ? OR
                 inputs LIKE ? OR
                 outputs LIKE ? OR
                 error_message LIKE ?
             )
-        """
+        """.format(select=select)
         pattern = f"%{query}%"
         params: List[Any] = [pattern, pattern, pattern, pattern]
         
@@ -938,6 +1014,20 @@ class ReceiptService(ReceiptQueryMixin):
             placeholders = ",".join(["?" for _ in action_types])
             sql += f" AND action_type IN ({placeholders})"
             params.extend(action_types)
+
+        for clause, value in (
+            ("status = ?", status),
+            ("quest_id = ?", quest_id),
+            ("timestamp >= ?", since),
+            ("timestamp <= ?", until),
+        ):
+            if value:
+                sql += f" AND {clause}"
+                params.append(value)
+
+        if risk_tier is not None:
+            sql += " AND tier = ?"
+            params.append(risk_tier)
         
         if time_range_hours:
             cutoff = datetime.now(timezone.utc)
@@ -945,13 +1035,8 @@ class ReceiptService(ReceiptQueryMixin):
             cutoff = cutoff - timedelta(hours=time_range_hours)
             sql += " AND timestamp >= ?"
             params.append(cutoff.isoformat())
-        
-        sql += " ORDER BY timestamp DESC LIMIT ?"
-        params.append(limit)
-        
-        conn = self._get_connection()
-        cursor = conn.execute(sql, params)
-        return [self._row_to_receipt(row) for row in cursor.fetchall()]
+
+        return sql, params
 
     def get_quest_receipts(self, quest_id: str) -> List[Receipt]:
         """

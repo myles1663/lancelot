@@ -1,6 +1,7 @@
 """Subsystem startup and shutdown helpers for the runtime gateway."""
 from __future__ import annotations
 import asyncio
+import importlib
 import json
 import logging
 import os
@@ -1410,7 +1411,7 @@ def _bootstrap_model_router() -> bool:
     try:
         from model_router import ModelRouter
         from provider_profile import ProfileRegistry
-        from src.core.control_plane import set_model_router, set_usage_tracker
+        control_plane_api = importlib.import_module("src.core.control_plane")
 
         router = ModelRouter(
             registry=ProfileRegistry(),
@@ -1420,14 +1421,19 @@ def _bootstrap_model_router() -> bool:
         )
 
         existing_tracker = getattr(main_orchestrator, "usage_tracker", None)
-        persistence = getattr(existing_tracker, "_persistence", None)
+        get_usage_persistence = getattr(
+            control_plane_api,
+            "get_usage_persistence",
+            lambda: None,
+        )
+        persistence = get_usage_persistence() or getattr(existing_tracker, "_persistence", None)
         if persistence is not None:
             router.usage.set_persistence(persistence)
 
         main_orchestrator.model_router = router
         main_orchestrator.usage_tracker = router.usage
-        set_model_router(router)
-        set_usage_tracker(router.usage)
+        control_plane_api.set_model_router(router)
+        control_plane_api.set_usage_tracker(router.usage)
         logger.info(
             "Model router wired live (local_model=%s, provider=%s).",
             "ready" if getattr(main_orchestrator, "local_model", None) else "none",

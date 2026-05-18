@@ -25,11 +25,13 @@ The repo currently ships the following first-party connector implementations und
 
 | Connector ID | Runtime Target | Notes |
 |--------------|----------------|-------|
-| `calendar` | Google Calendar API | OAuth/Bearer flow behind the Google connector feature gate |
+| `calendar` | Google Calendar / Microsoft Graph / CalDAV | Multi-backend calendar connector selected by config; Google is feature-gated, Microsoft and CalDAV remain available separately |
 | `discord` | Discord REST API | Bot-token auth for guild, channel, message, and reaction operations |
 | `email` | Gmail / Outlook / SMTP / IMAP | Multi-backend email connector selected by config rather than a single hardcoded provider |
 | `generic_rest` | Operator-defined REST target | Config-driven manifest for custom governed HTTP endpoints |
+| `onedrive` | Microsoft Graph API | OneDrive file and folder request specs using a shared Microsoft Graph vault token |
 | `shared_workspace` | Localhost shared workspace | Local-only connector for governed shared-workspace operations |
+| `sharepoint` | Microsoft Graph API | SharePoint site, document library, and list-item request specs using a shared Microsoft Graph vault token |
 | `slack` | Slack Web API | Bot-token auth for channels, threads, reactions, uploads, and posting |
 | `sms` | Twilio SMS/MMS | Twilio REST API with composed Basic auth |
 | `teams` | Microsoft Graph API | Teams chat/channel operations via Graph bearer tokens |

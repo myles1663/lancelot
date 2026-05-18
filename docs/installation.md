@@ -65,8 +65,15 @@ You need an API key from at least one provider:
 | **Anthropic** | [console.anthropic.com](https://console.anthropic.com/) | No | `sk-ant-...` |
 | **xAI (Grok)** | [console.x.ai](https://console.x.ai/) | No | `xai-...` |
 | **NVIDIA Nemotron** | [build.nvidia.com](https://build.nvidia.com/) | Yes | `nvapi-...` |
+| **DeepSeek** | [platform.deepseek.com](https://platform.deepseek.com/) | Varies | `DEEPSEEK_API_KEY` |
+| **Local/OpenAI-compatible** | Self-hosted endpoint | N/A | Base URL, optional bearer token |
 
 You can configure one or more providers. Lancelot routes between them based on task complexity and provider availability. API keys can be rotated from the War Room UI without restarting the container.
+
+The local/OpenAI-compatible provider is for open-weight model servers such as
+Ollama, vLLM, llama.cpp, or LM Studio when they expose a Chat Completions API.
+Configure it from War Room Cost Tracker by setting the endpoint base URL and
+the model IDs assigned to Lancelot's fast, deep, and cache lanes.
 
 For `openai-codex`, the production path is not an OpenAI Platform API key. Sign in with the Codex CLI on the host first so `~/.codex/auth.json` exists and can be mounted into the container. Lancelot imports that Codex OAuth token and sends model turns to the ChatGPT Codex Responses backend; the Codex CLI itself is only a recovery transport. During onboarding, selecting Codex checks for the mounted auth file and proceeds immediately when it is present. Browser OAuth remains available for token recovery.
 
@@ -782,12 +789,15 @@ Open `http://localhost:8000` in a browser. You should see the operator dashboard
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | **LLM Provider** | | | |
-| `LANCELOT_PROVIDER` | Yes | — | Active provider: `gemini`, `openai`, `anthropic`, `xai`, or `nvidia` |
-| `GEMINI_API_KEY` | One of five | — | Google Gemini API key |
-| `OPENAI_API_KEY` | One of five | — | OpenAI API key |
-| `ANTHROPIC_API_KEY` | One of five | — | Anthropic API key |
-| `XAI_API_KEY` | One of five | — | xAI (Grok) API key |
-| `NVIDIA_API_KEY` | One of five | — | NVIDIA NIM API key |
+| `LANCELOT_PROVIDER` | Yes | — | Active provider: `gemini`, `openai`, `anthropic`, `xai`, `nvidia`, `deepseek`, or `local-openai` |
+| `GEMINI_API_KEY` | One of seven | — | Google Gemini API key |
+| `OPENAI_API_KEY` | One of seven | — | OpenAI API key |
+| `ANTHROPIC_API_KEY` | One of seven | — | Anthropic API key |
+| `XAI_API_KEY` | One of seven | — | xAI (Grok) API key |
+| `NVIDIA_API_KEY` | One of seven | — | NVIDIA NIM API key |
+| `DEEPSEEK_API_KEY` | One of seven | — | DeepSeek API key |
+| `LOCAL_OPENAI_BASE_URL` | For `local-openai` | — | OpenAI-compatible local model server base URL |
+| `LOCAL_OPENAI_API_KEY` | Optional | — | Optional bearer token for the local model endpoint |
 | **Security** | | | |
 | `LANCELOT_OWNER_TOKEN` | Yes | — | Token for Soul amendments, memory writes |
 | `LANCELOT_API_TOKEN` | Yes | — | Token for API authentication |
