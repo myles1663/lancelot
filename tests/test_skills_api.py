@@ -5,7 +5,8 @@ from fastapi.testclient import TestClient
 
 from src.core import api_auth, auth_api, skills_api
 from src.core.operator_identity import OperatorIdentity
-from src.core.skills.registry import SkillError
+from src.core.skills.schema import SkillManifest
+from src.shared.receipts import ActionType
 
 
 def _insert_session(token: str) -> None:
@@ -132,11 +133,20 @@ def test_list_proposals_and_skills_success_paths():
         version="1.0.0",
         enabled=True,
         ownership=SimpleNamespace(value="system"),
+        signature_state=SimpleNamespace(value="verified"),
+        installed_at="2026-04-18T00:00:00Z",
+        manifest=SkillManifest(
+            name="demo_skill",
+            version="1.0.0",
+            description="Demo skill",
+            permissions=["read_input"],
+            risk="low",
+        ),
     )
 
     skills_api.init_skills_api(
         factory=SimpleNamespace(list_proposals=lambda: [proposal]),
-        registry=SimpleNamespace(list_skills=lambda: [skill]),
+        registry=SimpleNamespace(list_skills=lambda: [skill], get_skill=lambda name: skill if name == "demo_skill" else None),
         executor=object(),
     )
 
@@ -154,87 +164,130 @@ def test_list_proposals_and_skills_success_paths():
                 "version": "1.0.0",
                 "enabled": True,
                 "ownership": "system",
+                "signature_state": "verified",
+                "installed_at": "2026-04-18T00:00:00Z",
+                "description": "Demo skill",
+                "risk": "low",
+                "permissions": ["read_input"],
             }
         ],
         "total": 1,
     }
 
 
-def test_installed_skill_detail_and_toggle_paths():
+def test_installed_skill_detail_exposes_contract_and_source_proposal():
+    proposal = SimpleNamespace(
+        id="proposal-1",
+        name="demo_skill",
+        status=SimpleNamespace(value="installed"),
+        source="first-party",
+        author="Arthur",
+        pipeline_passed=True,
+        pipeline_failed_at_stage=None,
+        pipeline_stage_results={"owner_review": {"status": "approved"}},
+        artifact_hashes={"skill.yaml": "abc123"},
+        approved_capabilities=["tool.read_input"],
+        created_at="2026-04-18T00:00:00Z",
+        approved_by="Arthur",
+        approved_at="2026-04-18T00:01:00Z",
+        installed_at="2026-04-18T00:02:00Z",
+    )
     skill = SimpleNamespace(
         name="demo_skill",
         version="1.0.0",
         enabled=True,
         ownership=SimpleNamespace(value="user"),
-        signature_state=SimpleNamespace(value="verified"),
-        installed_at="2026-04-18T00:00:00Z",
-        manifest_path="/skills/demo/skill.yaml",
-        manifest=SimpleNamespace(model_dump=lambda mode="json": {"name": "demo_skill", "version": "1.0.0"}),
+        signature_state=SimpleNamespace(value="unsigned"),
+        installed_at="2026-04-18T00:02:00Z",
+        manifest_path="",
+        manifest=SkillManifest(
+            name="demo_skill",
+            version="1.0.0",
+            description="Demo skill",
+            permissions=["read_input", "write_output"],
+            risk="medium",
+            inputs=[{"name": "input_data", "type": "string", "required": True}],
+            outputs=[{"name": "result", "type": "string"}],
+        ),
     )
 
-    class Registry:
-        def __init__(self):
-            self.skill = skill
+    skills_api.init_skills_api(
+        factory=SimpleNamespace(list_proposals=lambda: [proposal]),
+        registry=SimpleNamespace(list_skills=lambda: [skill], get_skill=lambda name: skill if name == "demo_skill" else None),
+        executor=object(),
+    )
 
-        def list_skills(self):
-            return [self.skill]
-
-        def get_skill(self, name):
-            return self.skill if name == "demo_skill" else None
-
-        def enable_skill(self, name):
-            if name != "demo_skill":
-                raise SkillError("missing")
-            self.skill.enabled = True
-
-        def disable_skill(self, name):
-            if name != "demo_skill":
-                raise SkillError("missing")
-            self.skill.enabled = False
-
-    skills_api.init_skills_api(factory=SimpleNamespace(list_proposals=lambda: []), registry=Registry(), executor=object())
     client = _client()
+    response = client.get("/api/skills/demo_skill")
 
-    detail = client.get("/api/skills/demo_skill")
-    disabled = client.post("/api/skills/demo_skill/disable")
-    enabled = client.post("/api/skills/demo_skill/enable")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "demo_skill"
+    assert body["permissions"] == ["read_input", "write_output"]
+    assert body["risk"] == "medium"
+    assert body["manifest"]["name"] == "demo_skill"
+    assert body["manifest_source"] == "registry"
+    assert body["source_proposal"]["id"] == "proposal-1"
+    assert body["source_proposal"]["pipeline_stage_results"]["owner_review"]["status"] == "approved"
+    assert "name: demo_skill" in body["manifest_yaml"]
 
-    assert detail.status_code == 200
-    assert detail.json()["manifest"] == {"name": "demo_skill", "version": "1.0.0"}
-    assert detail.json()["manifest_source"] == "registry"
-    assert detail.json()["signature_state"] == "verified"
-    assert disabled.json()["skill"]["enabled"] is False
-    assert enabled.json()["skill"]["enabled"] is True
 
-
-def test_installed_skill_detail_uses_builtin_manifest_when_registry_manifest_missing():
+def test_enable_disable_installed_skill_emit_governance_receipts(monkeypatch):
+    recorded = []
     skill = SimpleNamespace(
-        name="health_check",
+        name="demo_skill",
         version="1.0.0",
-        enabled=True,
-        ownership=SimpleNamespace(value="system"),
-        signature_state=SimpleNamespace(value="verified"),
+        enabled=False,
+        ownership=SimpleNamespace(value="user"),
+        signature_state=SimpleNamespace(value="unsigned"),
         installed_at="2026-04-18T00:00:00Z",
         manifest_path="",
-        manifest=None,
+        manifest=SkillManifest(
+            name="demo_skill",
+            version="1.0.0",
+            description="Demo skill",
+            permissions=["read_input"],
+            risk="low",
+        ),
     )
 
     class Registry:
+        def list_skills(self):
+            return [skill]
+
         def get_skill(self, name):
-            return skill if name == "health_check" else None
+            return skill if name == "demo_skill" else None
 
-    skills_api.init_skills_api(factory=object(), registry=Registry(), executor=object())
+        def enable_skill(self, name):
+            assert name == "demo_skill"
+            skill.enabled = True
+
+        def disable_skill(self, name):
+            assert name == "demo_skill"
+            skill.enabled = False
+
+    def fake_emit(request, action_type, **kwargs):
+        recorded.append((action_type, kwargs))
+
+    monkeypatch.setattr(skills_api, "emit_governance_receipt", fake_emit)
+    skills_api.init_skills_api(
+        factory=SimpleNamespace(list_proposals=lambda: []),
+        registry=Registry(),
+        executor=object(),
+    )
+
     client = _client()
+    enabled = client.post("/api/skills/demo_skill/enable")
+    disabled = client.post("/api/skills/demo_skill/disable")
 
-    detail = client.get("/api/skills/health_check")
-
-    assert detail.status_code == 200
-    body = detail.json()
-    assert body["manifest_source"] == "builtin"
-    assert body["manifest"]["name"] == "health_check"
-    assert body["description"] == "Run a system health sweep and return the current health snapshot"
-    assert body["permissions"] == []
-    assert body["inputs"] == []
+    assert enabled.status_code == 200
+    assert enabled.json()["enabled"] is True
+    assert disabled.status_code == 200
+    assert disabled.json()["enabled"] is False
+    assert recorded[0][0] == ActionType.TOOL_ENABLED
+    assert recorded[0][1]["action_name"] == "enable_skill"
+    assert recorded[0][1]["metadata"] == {"subsystem": "skills"}
+    assert recorded[1][0] == ActionType.TOOL_DISABLED
 
 
 def test_approve_reject_and_install_error_paths(monkeypatch):
@@ -275,6 +328,7 @@ def test_uninitialized_and_not_found_paths():
     assert client.post("/api/skills/proposals/missing/reject").status_code == 503
     assert client.post("/api/skills/proposals/missing/install").status_code == 503
     assert client.get("/api/skills").status_code == 503
+    assert client.get("/api/skills/missing").status_code == 503
 
     skills_api.init_skills_api(
         factory=SimpleNamespace(
@@ -282,10 +336,13 @@ def test_uninitialized_and_not_found_paths():
             approve_proposal=lambda proposal_id, approved_by: (_ for _ in ()).throw(RuntimeError("bad approve")),
             reject_proposal=lambda proposal_id, reason=None: (_ for _ in ()).throw(RuntimeError("bad reject")),
         ),
-        registry=SimpleNamespace(list_skills=lambda: []),
+        registry=SimpleNamespace(list_skills=lambda: [], get_skill=lambda name: None),
         executor=object(),
     )
 
     assert client.get("/api/skills/proposals/missing").status_code == 404
+    assert client.get("/api/skills/missing").status_code == 404
+    assert client.post("/api/skills/missing/enable").status_code == 404
+    assert client.post("/api/skills/missing/disable").status_code == 404
     assert client.post("/api/skills/proposals/missing/approve").status_code == 400
     assert client.post("/api/skills/proposals/missing/reject").status_code == 400

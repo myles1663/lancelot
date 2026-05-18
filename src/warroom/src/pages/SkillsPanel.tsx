@@ -203,11 +203,11 @@ export function SkillsPanel() {
     setLoading(true)
     setActionMessage(null)
     try {
-      const res = shouldEnable ? await enableInstalledSkill(name) : await disableInstalledSkill(name)
-      setActionMessage(`${res.skill.name} ${res.status}.`)
+      const detail = shouldEnable ? await enableInstalledSkill(name) : await disableInstalledSkill(name)
+      setActionMessage(`${detail.name} ${detail.enabled ? 'enabled' : 'disabled'}.`)
       refreshSkills()
       if (selectedSkill?.name === name) {
-        setSelectedSkill(await fetchInstalledSkill(name))
+        setSelectedSkill(detail)
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Action failed'
@@ -791,6 +791,87 @@ export function SkillsPanel() {
                   {renderJson(selectedSkill.manifest, '(no manifest stored for this registry entry)')}
                 </pre>
               </section>
+
+              <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
+                <section className="rounded-lg border border-border-default bg-surface-card-elevated p-4">
+                  <h4 className="mb-3 text-xs font-medium uppercase tracking-wider text-text-secondary">
+                    Pipeline Position
+                  </h4>
+                  {selectedSkill.source_proposal ? (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 gap-2 text-xs text-text-muted sm:grid-cols-2">
+                        <span>Proposal: {selectedSkill.source_proposal.id}</span>
+                        <span>Status: {selectedSkill.source_proposal.status}</span>
+                        <span>Source: {selectedSkill.source_proposal.source || 'unknown'}</span>
+                        <span>Author: {selectedSkill.source_proposal.author || 'unknown'}</span>
+                        {selectedSkill.source_proposal.approved_by && <span>Approved by: {selectedSkill.source_proposal.approved_by}</span>}
+                        {selectedSkill.source_proposal.installed_at && <span>Installed: {formatTimestamp(selectedSkill.source_proposal.installed_at)}</span>}
+                      </div>
+                      <div>
+                        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Approved Capabilities</p>
+                        {renderPills(selectedSkill.source_proposal.approved_capabilities, 'No approved capabilities recorded')}
+                      </div>
+                      <div>
+                        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Pipeline Stages</p>
+                        <pre className="max-h-56 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs font-mono text-text-primary">
+                          {renderJson(selectedSkill.source_proposal.pipeline_stage_results, '(no pipeline stage history recorded)')}
+                        </pre>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-text-muted">
+                      No governed proposal is linked to this installed skill. System skills and older registry entries may not have proposal history.
+                    </p>
+                  )}
+                </section>
+
+                <section className="rounded-lg border border-border-default bg-surface-card-elevated p-4">
+                  <h4 className="mb-3 text-xs font-medium uppercase tracking-wider text-text-secondary">
+                    Runtime Metadata
+                  </h4>
+                  <div className="space-y-2 text-xs text-text-muted">
+                    <p>Required brain: {selectedSkill.required_brain || 'not declared'}</p>
+                    <p>Scheduler eligible: {selectedSkill.scheduler_eligible ? 'yes' : 'no'}</p>
+                    <p>Sentry requirements: {selectedSkill.sentry_requirements.length}</p>
+                  </div>
+                  <div className="mt-4">
+                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Receipt Contract</p>
+                    <pre className="max-h-56 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs font-mono text-text-primary">
+                      {renderJson(selectedSkill.receipts, '(no receipt config declared)')}
+                    </pre>
+                  </div>
+                </section>
+              </div>
+
+              <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
+                <section>
+                  <h4 className="mb-2 text-xs font-medium uppercase tracking-wider text-text-secondary">
+                    Implementation
+                  </h4>
+                  <pre className="max-h-80 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs font-mono text-text-primary">
+                    {selectedSkill.execute_code || '(no implementation artifact available)'}
+                  </pre>
+                </section>
+                <section>
+                  <h4 className="mb-2 text-xs font-medium uppercase tracking-wider text-text-secondary">
+                    Tests
+                  </h4>
+                  <pre className="max-h-80 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs font-mono text-text-primary">
+                    {selectedSkill.test_code || '(no test artifact available)'}
+                  </pre>
+                </section>
+              </div>
+
+              {selectedSkill.source_proposal && (
+                <section className="mt-6 rounded-lg border border-border-default bg-surface-card-elevated p-4">
+                  <h4 className="mb-3 text-xs font-medium uppercase tracking-wider text-text-secondary">
+                    Proposal Artifact Hashes
+                  </h4>
+                  <pre className="max-h-56 overflow-auto rounded-md border border-border-default bg-surface-input p-3 text-xs font-mono text-text-primary">
+                    {renderJson(selectedSkill.source_proposal.artifact_hashes, '(no artifact hashes recorded)')}
+                  </pre>
+                </section>
+              )}
             </div>
 
             <div className="flex items-center justify-end gap-2 border-t border-border-default p-4">

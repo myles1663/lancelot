@@ -1007,29 +1007,48 @@ export interface InstalledSkill {
   version: string
   enabled: boolean
   ownership: string
+  signature_state: string
+  installed_at: string | null
+  description: string
+  risk: string
+  permissions: string[]
+}
+
+export interface InstalledSkillSourceProposal {
+  id: string
+  status: string
+  source: string
+  author: string
+  pipeline_passed: boolean
+  pipeline_failed_at_stage: string | null
+  pipeline_stage_results: Record<string, unknown>
+  artifact_hashes: Record<string, string>
+  approved_capabilities: string[]
+  created_at: string | null
+  approved_by: string | null
+  approved_at: string | null
+  installed_at: string | null
 }
 
 export interface InstalledSkillDetail extends InstalledSkill {
-  signature_state: string
-  installed_at: string
   manifest_path: string
+  manifest: Record<string, unknown> | null
   manifest_source: string
-  description: string | null
-  permissions: string[]
+  manifest_yaml: string
+  execute_code: string
+  test_code: string
   inputs: Array<Record<string, unknown>>
   outputs: Array<Record<string, unknown>>
-  risk: string | null
-  manifest: Record<string, unknown> | null
+  required_brain: string
+  scheduler_eligible: boolean
+  sentry_requirements: Array<Record<string, unknown>>
+  receipts: Record<string, unknown>
+  source_proposal: InstalledSkillSourceProposal | null
 }
 
 export interface SkillsListResponse {
   skills: InstalledSkill[]
   total: number
-}
-
-export interface InstalledSkillToggleResponse {
-  status: string
-  skill: InstalledSkill
 }
 
 // ------------------------------------------------------------------
