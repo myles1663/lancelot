@@ -3,7 +3,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -71,6 +71,8 @@ import logging
 from typing import Any
 from oauth_callback_pages import render_callback_exception_page, render_callback_page
 from src.core.runtime_pause import init_runtime_pause
+from src.core.api_auth import require_authenticated_request
+from src.core.auth_api import require_operator_capability
 from chat_runs import ChatRun, ChatRunStore
 from work_ledger import WorkItem, WorkLedgerStore
 import feature_flags as _ff
@@ -88,6 +90,7 @@ logger = logging.getLogger("lancelot.gateway")
 
 # Request size limit allows file uploads without accepting unbounded bodies.
 MAX_REQUEST_SIZE = 20_971_520
+WARROOM_CLIENT_ERROR_MAX_BYTES = 8_192
 
 _startup_time = None
 _gateway_started = False
@@ -1378,25 +1381,41 @@ def readiness_check():
     )
 
 
-@app.post("/api/warroom/client-error")
+def _sanitize_warroom_client_error_value(value: Any, limit: int = 2000) -> str:
+    """Return a bounded single-line value suitable for structured logs."""
+    text = str(value or "")
+    text = "".join(ch if ch.isprintable() and ch not in "\r\n\t" else " " for ch in text)
+    return " ".join(text.split())[:limit]
+
+
+@app.post(
+    "/api/warroom/client-error",
+    dependencies=[
+        Depends(require_authenticated_request),
+        Depends(require_operator_capability("warroom.login")),
+    ],
+)
 async def warroom_client_error(request: Request):
     """Record War Room browser-side failures for operator debugging."""
-    try:
-        payload = await request.json()
-    except Exception:
-        payload = {}
+    raw_body = await request.body()
+    if len(raw_body) > WARROOM_CLIENT_ERROR_MAX_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content={"error": "Client error report too large", "status": 413},
+        )
 
-    def _short(value: Any, limit: int = 2000) -> str:
-        text = str(value or "")
-        return text[:limit]
+    try:
+        payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        payload = {}
 
     logger.error(
         "warroom_client_error kind=%s href=%s ua=%s message=%s stack=%s",
-        _short(payload.get("kind"), 80),
-        _short(payload.get("href"), 300),
-        _short(payload.get("user_agent"), 500),
-        _short(payload.get("message"), 1000),
-        _short(payload.get("stack"), 3000),
+        _sanitize_warroom_client_error_value(payload.get("kind"), 80),
+        _sanitize_warroom_client_error_value(payload.get("href"), 300),
+        _sanitize_warroom_client_error_value(payload.get("user_agent"), 500),
+        _sanitize_warroom_client_error_value(payload.get("message"), 1000),
+        _sanitize_warroom_client_error_value(payload.get("stack"), 3000),
     )
     return {"status": "recorded"}
 

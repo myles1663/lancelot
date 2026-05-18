@@ -227,6 +227,13 @@ def test_available_providers_and_keys_include_oauth_and_masking(monkeypatch):
 
 def test_refresh_and_switch_provider_handle_errors_and_initialize_discovery(monkeypatch):
     client = _client()
+    receipt_calls = []
+    monkeypatch.setattr(
+        "src.core.governance_receipts.emit_governance_receipt",
+        lambda request, action_type, action_name, inputs=None, outputs=None, **kwargs: receipt_calls.append(
+            (action_type.value, action_name, inputs, outputs)
+        ),
+    )
 
     refresh = client.post("/api/v1/providers/refresh")
     assert refresh.status_code == 200
@@ -281,10 +288,23 @@ def test_refresh_and_switch_provider_handle_errors_and_initialize_discovery(monk
     assert created[0][2] == {"fast": "gpt-fast"}
     assert created[1] == "refresh"
     assert providers_api.load_persisted_config()["active_provider"] == "openai"
+    assert receipt_calls[-1] == (
+        "provider_switched",
+        "switch_provider",
+        {"provider": "openai"},
+        {"provider": "openai", "status": "ok"},
+    )
 
 
 def test_local_openai_config_persists_and_enables_provider_switch(monkeypatch):
     client = _client()
+    receipt_calls = []
+    monkeypatch.setattr(
+        "src.core.governance_receipts.emit_governance_receipt",
+        lambda request, action_type, action_name, inputs=None, outputs=None, **kwargs: receipt_calls.append(
+            (action_type.value, action_name, inputs, outputs)
+        ),
+    )
     monkeypatch.setattr(
         provider_factory,
         "API_KEY_VARS",
@@ -313,6 +333,11 @@ def test_local_openai_config_persists_and_enables_provider_switch(monkeypatch):
     assert saved.json()["status"] == "ok"
     assert saved.json()["config"]["base_url"] == "http://localhost:11434/v1"
     assert ("LOCAL_OPENAI_BASE_URL", "http://localhost:11434/v1") in persisted_env
+    assert receipt_calls[-1][0:2] == (
+        "provider_local_config_updated",
+        "save_local_openai_config",
+    )
+    assert receipt_calls[-1][2]["api_key_configured"] is False
 
     providers_api.init_provider_api(None, _FakeOrchestrator())
     created = []
@@ -353,7 +378,35 @@ def test_local_openai_config_persists_and_enables_provider_switch(monkeypatch):
     assert providers_api.load_persisted_config()["active_provider"] == "local-openai"
 
 
-def test_override_and_reset_lanes_persist_and_sync_orchestrator():
+def test_local_openai_config_reports_provider_config_persistence_failures(monkeypatch):
+    client = _client()
+    monkeypatch.setattr(
+        providers_api,
+        "_save_config",
+        lambda data: (_ for _ in ()).throw(
+            providers_api.ProviderConfigPersistenceError("durable store unavailable")
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/providers/local-openai/config",
+        json={
+            "base_url": "http://localhost:11434/v1",
+            "api_key": "",
+            "fast_model": "llama3.1:8b",
+            "deep_model": "qwen3:32b",
+            "cache_model": "llama3.1:8b",
+            "context_window": 65536,
+            "supports_tools": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "error"
+    assert "durable store unavailable" in response.json()["message"]
+
+
+def test_override_and_reset_lanes_persist_and_sync_orchestrator(monkeypatch):
     discovery = _FakeDiscovery(
         provider_name="openai",
         discovered_models=[_FakeModel("model-fast"), _FakeModel("model-deep"), _FakeModel("model-cache")],
@@ -362,6 +415,13 @@ def test_override_and_reset_lanes_persist_and_sync_orchestrator():
     orchestrator = _FakeOrchestrator()
     providers_api.init_provider_api(discovery, orchestrator)
     client = _client()
+    receipt_calls = []
+    monkeypatch.setattr(
+        "src.core.governance_receipts.emit_governance_receipt",
+        lambda request, action_type, action_name, inputs=None, outputs=None, **kwargs: receipt_calls.append(
+            (action_type.value, action_name, inputs, outputs)
+        ),
+    )
 
     invalid_lane = client.post("/api/v1/providers/lanes/override", json={"lane": "wide", "model_id": "model-fast"})
     assert invalid_lane.status_code == 200
@@ -377,6 +437,11 @@ def test_override_and_reset_lanes_persist_and_sync_orchestrator():
     assert discovery.overrides == [("fast", "model-cache")]
     assert orchestrator.lane_calls == [("fast", "model-cache")]
     assert providers_api.load_persisted_config()["lane_overrides"] == {"fast": "model-cache"}
+    assert receipt_calls[-1][0:3] == (
+        "provider_lane_overridden",
+        "override_provider_lane",
+        {"lane": "fast", "model_id": "model-cache"},
+    )
 
     reset = client.post("/api/v1/providers/lanes/reset")
     assert reset.status_code == 200
@@ -384,6 +449,11 @@ def test_override_and_reset_lanes_persist_and_sync_orchestrator():
     assert discovery.reset_calls == 1
     assert orchestrator.lane_calls[-2:] == [("fast", "model-cache"), ("deep", "model-deep")]
     assert "lane_overrides" not in providers_api.load_persisted_config()
+    assert receipt_calls[-1][0:3] == (
+        "provider_lanes_reset",
+        "reset_provider_lanes",
+        {"cleared_overrides": True},
+    )
 
 
 def test_rotate_provider_key_validates_hotswaps_and_persists(monkeypatch):
@@ -393,6 +463,13 @@ def test_rotate_provider_key_validates_hotswaps_and_persists(monkeypatch):
     providers_api.report_auth_error("openai", "old auth failure")
     providers_api._save_config({"lane_overrides": {"fast": "gpt-fast"}})
     client = _client()
+    receipt_calls = []
+    monkeypatch.setattr(
+        "src.core.governance_receipts.emit_governance_receipt",
+        lambda request, action_type, action_name, inputs=None, outputs=None, **kwargs: receipt_calls.append(
+            (action_type.value, action_name, inputs, outputs)
+        ),
+    )
 
     too_short = client.post("/api/v1/providers/keys/rotate", json={"provider": "openai", "api_key": "short"})
     assert too_short.status_code == 200
@@ -430,6 +507,12 @@ def test_rotate_provider_key_validates_hotswaps_and_persists(monkeypatch):
     assert discovery.replaced == [(SimpleNamespace(provider_name="openai"), {"fast": "gpt-fast"})]
     assert persisted == [("OPENAI_API_KEY", "sk-rotated-123456")]
     assert providers_api._auth_errors == {}
+    assert receipt_calls[-1] == (
+        "provider_key_rotated",
+        "rotate_provider_key",
+        {"provider": "openai", "key_preview": body["key_preview"]},
+        {"models_discovered": 2, "hot_swapped": True, "persisted_to_env": True},
+    )
 
 
 def test_oauth_routes_surface_manager_status_and_errors(monkeypatch):
@@ -670,8 +753,44 @@ def test_provider_api_oauth_and_profile_fallback_helpers(monkeypatch, tmp_path):
         "mkstemp",
         lambda **kwargs: (_ for _ in ()).throw(OSError("disk full")),
     )
-    providers_api._save_config({"active_provider": "openai"})
+    with pytest.raises(providers_api.ProviderConfigPersistenceError):
+        providers_api._save_config({"active_provider": "openai"})
     assert not providers_api._CONFIG_FILE.exists()
+
+
+def test_load_persisted_config_hydrates_local_openai_runtime_env(monkeypatch, tmp_path):
+    config_path = tmp_path / "provider_config.json"
+    config_path.write_text(
+        json.dumps({
+            "local_openai": {
+                "base_url": "http://local-model:8000/v1",
+                "fast_model": "fast-local",
+                "deep_model": "deep-local",
+                "cache_model": "cache-local",
+                "context_window": 12345,
+                "supports_tools": False,
+            }
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(providers_api, "_CONFIG_FILE", config_path)
+    monkeypatch.setattr(providers_api, "_LEGACY_CONFIG_FILE", tmp_path / "legacy.json")
+    for env_var in (
+        "LOCAL_OPENAI_BASE_URL",
+        "LOCAL_OPENAI_FAST_MODEL",
+        "LOCAL_OPENAI_DEEP_MODEL",
+        "LOCAL_OPENAI_CACHE_MODEL",
+        "LOCAL_OPENAI_CONTEXT_WINDOW",
+        "LOCAL_OPENAI_SUPPORTS_TOOLS",
+    ):
+        monkeypatch.delenv(env_var, raising=False)
+
+    loaded = providers_api.load_persisted_config()
+
+    assert loaded["local_openai"]["base_url"] == "http://local-model:8000/v1"
+    assert providers_api.os.environ["LOCAL_OPENAI_BASE_URL"] == "http://local-model:8000/v1"
+    assert providers_api.os.environ["LOCAL_OPENAI_FAST_MODEL"] == "fast-local"
+    assert providers_api.os.environ["LOCAL_OPENAI_SUPPORTS_TOOLS"] == "false"
 
 
 def test_provider_api_switch_rotate_and_lane_error_branches(monkeypatch):

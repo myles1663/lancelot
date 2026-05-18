@@ -6,8 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 
 import gateway
+from src.core import api_auth, auth_api
+from src.core.operator_identity import OperatorIdentity
 
 
 class FakeResponse:
@@ -18,6 +21,55 @@ class FakeResponse:
 
 def _response_body(response):
     return json.loads(response.body.decode("utf-8"))
+
+
+def test_warroom_client_error_requires_auth_caps_and_sanitizes_payload(monkeypatch):
+    auth_api._sessions.clear()
+    api_auth.init_api_auth(lambda request: False)
+    client = TestClient(gateway.app)
+
+    unauthenticated = client.post("/api/warroom/client-error", json={"message": "boom"})
+
+    assert unauthenticated.status_code == 401
+
+    api_auth.init_api_auth(lambda request: True)
+    auth_api._sessions["client-error-session"] = {
+        "expires_at": 9999999999,
+        "username": "Arthur",
+        "operator_identity": OperatorIdentity(
+            operator_id="op-arthur",
+            display_name="Arthur",
+            session_id="session-1",
+            session_started_at="2026-04-19T00:00:00Z",
+            auth_method="local",
+            ip_address="127.0.0.1",
+        ),
+        "capabilities": ["warroom.login"],
+        "groups": [],
+    }
+    client.cookies.set(auth_api.get_warroom_session_cookie_name(), "client-error-session")
+
+    assert gateway._sanitize_warroom_client_error_value("bad\nvalue\twith\rcontrols") == "bad value with controls"
+
+    recorded = client.post(
+        "/api/warroom/client-error",
+        json={
+            "kind": "window.error",
+            "href": "http://localhost/war-room",
+            "user_agent": "test",
+            "message": "bad\nvalue",
+            "stack": "trace",
+        },
+    )
+    oversized = client.post(
+        "/api/warroom/client-error",
+        content=b"{" + (b"a" * (gateway.WARROOM_CLIENT_ERROR_MAX_BYTES + 1)) + b"}",
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert recorded.status_code == 200
+    assert recorded.json() == {"status": "recorded"}
+    assert oversized.status_code == 413
 
 
 def test_audit_user_resolution_and_security_headers(monkeypatch):

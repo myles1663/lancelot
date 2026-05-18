@@ -403,7 +403,7 @@ def disable_connector(connector_id: str, request: Request):
 
 
 @router.post("/{connector_id}/backend", response_model=BackendSetResponse)
-def set_backend(connector_id: str, body: BackendSetRequest):
+def set_backend(connector_id: str, body: BackendSetRequest, request: Request):
     """Set the backend for a multi-backend connector."""
     if connector_id not in _BACKEND_OPTIONS:
         raise HTTPException(
@@ -419,6 +419,7 @@ def set_backend(connector_id: str, body: BackendSetRequest):
     full_config = _load_config()
     connectors_config = full_config.setdefault("connectors", {})
     ccfg = connectors_config.setdefault(connector_id, {})
+    previous_backend = ccfg.get("backend")
     ccfg["backend"] = body.backend
     _save_config(full_config)
 
@@ -433,5 +434,19 @@ def set_backend(connector_id: str, body: BackendSetRequest):
                 logger.info("Connector %s re-registered with backend: %s", connector_id, body.backend)
         except Exception as e:
             logger.warning("Failed to re-register connector %s: %s", connector_id, e)
+
+    from src.core.governance_receipts import emit_governance_receipt
+    from src.shared.receipts import ActionType
+    emit_governance_receipt(
+        request,
+        ActionType.CONNECTOR_BACKEND_CHANGED,
+        action_name="set_connector_backend",
+        inputs={
+            "connector_id": connector_id,
+            "previous_backend": previous_backend,
+            "backend": body.backend,
+            "enabled": bool(ccfg.get("enabled", False)),
+        },
+    )
 
     return BackendSetResponse(connector_id=connector_id, backend=body.backend)

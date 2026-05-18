@@ -35,6 +35,16 @@ external users and reviewers.
   reasons, and Microsoft Graph workspace connectors.
 - Refined War Room operations pages for more readable operator workflow,
   responsive layouts, readiness status, and clearer drill-down controls.
+- Provider and connector configuration changes now emit governance receipts
+  for backend switches, provider switches, lane overrides, lane resets, key
+  rotation, and local OpenAI-compatible provider configuration.
+
+### Security
+
+- Locked down War Room browser error reporting behind War Room auth, bounded
+  client payload size, and sanitized logged client-supplied fields.
+- Provider configuration persistence now fails closed when durable
+  `provider_config.json` writes fail instead of reporting a successful save.
 
 ### Verification
 

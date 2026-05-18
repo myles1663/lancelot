@@ -174,11 +174,18 @@ def test_connector_routes_reject_unknown_connector_ids(tmp_path, monkeypatch):
 def test_set_backend_validates_options_and_reregisters(tmp_path, monkeypatch):
     registry = _Registry()
     registry.items["fake"] = object()
+    receipt_calls = []
     client, config_path = _client(
         tmp_path,
         monkeypatch,
         config={"connectors": {"fake": {"enabled": True, "backend": "a"}}},
         registry=registry,
+    )
+    monkeypatch.setattr(
+        "src.core.governance_receipts.emit_governance_receipt",
+        lambda request, action_type, action_name, inputs=None, **kwargs: receipt_calls.append(
+            (action_type.value, action_name, inputs)
+        ),
     )
 
     invalid_connector = client.post("/api/connectors/other/backend", json={"backend": "a"})
@@ -190,6 +197,18 @@ def test_set_backend_validates_options_and_reregisters(tmp_path, monkeypatch):
     assert valid.json() == {"connector_id": "fake", "backend": "b"}
     assert "fake" in registry.unregistered
     assert yaml.safe_load(config_path.read_text(encoding="utf-8"))["connectors"]["fake"]["backend"] == "b"
+    assert receipt_calls == [
+        (
+            "connector_backend_changed",
+            "set_connector_backend",
+            {
+                "connector_id": "fake",
+                "previous_backend": "a",
+                "backend": "b",
+                "enabled": True,
+            },
+        )
+    ]
 
 
 def test_set_backend_reports_unwritable_config(tmp_path, monkeypatch):

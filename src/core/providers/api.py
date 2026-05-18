@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict
 from src.core.api_auth import require_authenticated_request
 from src.core.auth_api import require_operator_capability
@@ -79,6 +79,31 @@ _LEGACY_CONFIG_FILE = Path("lancelot_data") / "provider_config.json"
 _MODELS_YAML = "config/models.yaml"
 
 
+class ProviderConfigPersistenceError(RuntimeError):
+    """Raised when durable provider configuration cannot be written."""
+
+
+def _apply_local_openai_env_from_config(data: dict) -> None:
+    """Hydrate runtime env from durable local-provider config on startup."""
+    local_config = data.get("local_openai")
+    if not isinstance(local_config, dict):
+        return
+
+    env_updates = {
+        "LOCAL_OPENAI_BASE_URL": str(local_config.get("base_url", "")).strip(),
+        "LOCAL_OPENAI_FAST_MODEL": str(local_config.get("fast_model", "")).strip(),
+        "LOCAL_OPENAI_DEEP_MODEL": str(local_config.get("deep_model", "")).strip(),
+        "LOCAL_OPENAI_CACHE_MODEL": str(local_config.get("cache_model", "")).strip(),
+        "LOCAL_OPENAI_CONTEXT_WINDOW": str(local_config.get("context_window", "")).strip(),
+        "LOCAL_OPENAI_SUPPORTS_TOOLS": (
+            "true" if bool(local_config.get("supports_tools", True)) else "false"
+        ),
+    }
+    for env_var, value in env_updates.items():
+        if value:
+            os.environ[env_var] = value
+
+
 # ---------------------------------------------------------------------------
 # Request models
 # ---------------------------------------------------------------------------
@@ -130,6 +155,7 @@ def load_persisted_config() -> dict:
             with open(_CONFIG_FILE, "r") as f:
                 data = json.load(f)
             logger.info("Loaded persisted provider config: %s", data)
+            _apply_local_openai_env_from_config(data)
             return data
 
         if _LEGACY_CONFIG_FILE.exists():
@@ -137,8 +163,16 @@ def load_persisted_config() -> dict:
                 data = json.load(f)
             logger.info("Loaded legacy provider config from %s: %s", _LEGACY_CONFIG_FILE, data)
             if _CONFIG_FILE != _LEGACY_CONFIG_FILE:
-                _save_config(data)
-                logger.info("Migrated provider config to durable path: %s", _CONFIG_FILE)
+                try:
+                    _save_config(data)
+                    logger.info("Migrated provider config to durable path: %s", _CONFIG_FILE)
+                except ProviderConfigPersistenceError as exc:
+                    logger.warning(
+                        "Loaded legacy provider config but migration to %s failed: %s",
+                        _CONFIG_FILE,
+                        exc,
+                    )
+            _apply_local_openai_env_from_config(data)
             return data
     except Exception as e:
         logger.warning("Failed to load provider_config.json: %s", e)
@@ -171,6 +205,7 @@ def _save_config(data: dict) -> None:
             raise
     except Exception as e:
         logger.warning("Failed to save provider_config.json: %s", e)
+        raise ProviderConfigPersistenceError("Failed to persist provider configuration") from e
 
 
 def _read_current_config() -> dict:
@@ -423,6 +458,25 @@ def _replace_discovery_provider(discovery, new_provider, *, lane_overrides: dict
         discovery.replace_provider(new_provider, lane_overrides=lane_overrides)
 
 
+def _emit_provider_governance_receipt(
+    request: Request,
+    action_type,
+    *,
+    action_name: str,
+    inputs: dict,
+    outputs: Optional[dict] = None,
+) -> None:
+    from src.core.governance_receipts import emit_governance_receipt
+
+    emit_governance_receipt(
+        request,
+        action_type,
+        action_name=action_name,
+        inputs=inputs,
+        outputs=outputs or {},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Existing endpoints (v8.3.0)
 # ---------------------------------------------------------------------------
@@ -564,7 +618,24 @@ def get_available_providers():
 
 
 @router.post("/switch", dependencies=[Depends(require_operator_capability("provider.admin"))])
-def switch_provider(req: SwitchProviderRequest):
+def switch_provider(req: SwitchProviderRequest, request: Request):
+    """Hot-swap the active LLM provider (no restart required)."""
+    result = _switch_provider(req)
+    if result.get("status") == "ok":
+        from src.shared.receipts import ActionType
+
+        stack = result.get("stack") or {}
+        _emit_provider_governance_receipt(
+            request,
+            ActionType.PROVIDER_SWITCHED,
+            action_name="switch_provider",
+            inputs={"provider": req.provider.lower().strip()},
+            outputs={"provider": stack.get("provider"), "status": result.get("status")},
+        )
+    return result
+
+
+def _switch_provider(req: SwitchProviderRequest):
     """Hot-swap the active LLM provider (no restart required)."""
     from providers.factory import API_KEY_VARS, create_provider
 
@@ -659,7 +730,7 @@ def switch_provider(req: SwitchProviderRequest):
 
 
 @router.post("/lanes/override", dependencies=[Depends(require_operator_capability("provider.admin"))])
-def override_lane(req: LaneOverrideRequest):
+def override_lane(req: LaneOverrideRequest, request: Request):
     """Override a single lane's model assignment at runtime."""
     lane = req.lane.lower().strip()
     model_id = req.model_id.strip()
@@ -701,6 +772,15 @@ def override_lane(req: LaneOverrideRequest):
         # Return updated stack
         stack = _discovery.get_stack() if _discovery else {}
         stack["status"] = "connected"
+        from src.shared.receipts import ActionType
+
+        _emit_provider_governance_receipt(
+            request,
+            ActionType.PROVIDER_LANE_OVERRIDDEN,
+            action_name="override_provider_lane",
+            inputs={"lane": lane, "model_id": model_id},
+            outputs={"provider": stack.get("provider"), "status": "ok"},
+        )
         return {
             "status": "ok",
             "message": f"Lane '{lane}' overridden to {model_id}",
@@ -713,7 +793,7 @@ def override_lane(req: LaneOverrideRequest):
 
 
 @router.post("/lanes/reset", dependencies=[Depends(require_operator_capability("provider.admin"))])
-def reset_lanes():
+def reset_lanes(request: Request):
     """Clear all lane overrides and re-run auto-assignment."""
     try:
         if _discovery:
@@ -735,6 +815,15 @@ def reset_lanes():
         # Return updated stack
         stack = _discovery.get_stack() if _discovery else {}
         stack["status"] = "connected"
+        from src.shared.receipts import ActionType
+
+        _emit_provider_governance_receipt(
+            request,
+            ActionType.PROVIDER_LANES_RESET,
+            action_name="reset_provider_lanes",
+            inputs={"cleared_overrides": True},
+            outputs={"provider": stack.get("provider"), "lanes": stack.get("lanes", {})},
+        )
         return {
             "status": "ok",
             "message": "Lane overrides cleared — auto-assignment active",
@@ -850,7 +939,7 @@ def get_provider_keys():
 
 
 @router.post("/keys/rotate", dependencies=[Depends(require_operator_capability("provider.admin"))])
-def rotate_provider_key(req: RotateKeyRequest):
+def rotate_provider_key(req: RotateKeyRequest, request: Request):
     """Validate and rotate an API key for a provider.
 
     1. Validates provider name
@@ -920,7 +1009,7 @@ def rotate_provider_key(req: RotateKeyRequest):
     # Step 4: Persist to .env file
     persisted = _update_env_file(env_var, new_key)
 
-    return {
+    response = {
         "status": "ok",
         "provider": provider_name,
         "key_preview": _mask_key(new_key),
@@ -931,6 +1020,20 @@ def rotate_provider_key(req: RotateKeyRequest):
             " and provider hot-swapped" if hot_swapped else ""
         ),
     }
+    from src.shared.receipts import ActionType
+
+    _emit_provider_governance_receipt(
+        request,
+        ActionType.PROVIDER_KEY_ROTATED,
+        action_name="rotate_provider_key",
+        inputs={"provider": provider_name, "key_preview": response["key_preview"]},
+        outputs={
+            "models_discovered": len(models),
+            "hot_swapped": hot_swapped,
+            "persisted_to_env": persisted,
+        },
+    )
+    return response
 
 
 @router.get("/local-openai/config", dependencies=[Depends(require_operator_capability("provider.admin"))])
@@ -940,14 +1043,14 @@ def get_local_openai_config():
 
 
 @router.post("/local-openai/config", dependencies=[Depends(require_operator_capability("provider.admin"))])
-def save_local_openai_config(req: LocalOpenAIConfigRequest):
+def save_local_openai_config(req: LocalOpenAIConfigRequest, request: Request):
     """Persist local/OpenAI-compatible endpoint config without exposing secrets."""
     try:
         key_persisted = _persist_local_openai_config(req)
         hot_swapped = False
         current_provider = _discovery.provider_name if _discovery else None
         if current_provider == "local-openai":
-            switched = switch_provider(SwitchProviderRequest(provider="local-openai"))
+            switched = _switch_provider(SwitchProviderRequest(provider="local-openai"))
             hot_swapped = switched.get("status") == "ok"
             if not hot_swapped:
                 return {
@@ -957,13 +1060,34 @@ def save_local_openai_config(req: LocalOpenAIConfigRequest):
                     "persisted_to_env": key_persisted,
                     "hot_swapped": False,
                 }
-        return {
+        response = {
             "status": "ok",
             "message": "Local OpenAI-compatible provider config saved",
             "config": _local_openai_config(),
             "persisted_to_env": key_persisted,
             "hot_swapped": hot_swapped,
         }
+        from src.shared.receipts import ActionType
+
+        _emit_provider_governance_receipt(
+            request,
+            ActionType.PROVIDER_LOCAL_CONFIG_UPDATED,
+            action_name="save_local_openai_config",
+            inputs={
+                "base_url": response["config"].get("base_url", ""),
+                "fast_model": response["config"].get("fast_model", ""),
+                "deep_model": response["config"].get("deep_model", ""),
+                "cache_model": response["config"].get("cache_model", ""),
+                "context_window": response["config"].get("context_window"),
+                "supports_tools": response["config"].get("supports_tools"),
+                "api_key_configured": response["config"].get("api_key_configured", False),
+            },
+            outputs={
+                "persisted_to_env": key_persisted,
+                "hot_swapped": hot_swapped,
+            },
+        )
+        return response
     except Exception as exc:
         logger.warning("Local OpenAI-compatible provider config save failed: %s", exc)
         return {
