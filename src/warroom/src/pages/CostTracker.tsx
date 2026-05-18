@@ -1,14 +1,29 @@
 import { useState, useEffect, useCallback } from 'react'
+import type { ReactNode } from 'react'
+import {
+  Activity,
+  CheckCircle2,
+  Clock3,
+  KeyRound,
+  RefreshCw,
+  RotateCcw,
+  ServerCog,
+  ShieldCheck,
+  WalletCards,
+  Zap,
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { usePolling, usePageTitle } from '@/hooks'
 import {
   fetchUsageSummary, fetchUsageLanes, fetchUsageModels, fetchUsageMonthly,
   fetchProviderStack, refreshModelDiscovery,
   fetchAvailableProviders, switchProvider, overrideLane, resetLanes,
   fetchProviderKeys, rotateProviderKey,
+  fetchLocalOpenAIConfig, saveLocalOpenAIConfig,
   initiateOAuth, fetchOAuthStatus, revokeOAuth,
   initiateCodexOAuth, fetchCodexOAuthStatus, revokeCodexOAuth,
 } from '@/api'
-import type { DiscoveredModel, AvailableProvider, ProviderKeyInfo, OAuthStatusResponse } from '@/api'
+import type { DiscoveredModel, AvailableProvider, ProviderKeyInfo, OAuthStatusResponse, LocalOpenAIConfig } from '@/api'
 import { MetricCard } from '@/components'
 import { formatTimeOnly } from '@/utils/dateFormat'
 import { getErrorMessage } from '@/utils/errors'
@@ -27,12 +42,124 @@ const LANE_LABELS: Record<string, string> = {
   fast: 'Fast',
   deep: 'Deep',
   cache: 'Cache',
+  flagship_fast: 'Flagship Fast',
+  flagship_deep: 'Flagship Deep',
+  local_redaction: 'Local Redaction',
+  local_utility: 'Local Utility',
+  local_agentic: 'Local Agentic',
+  unclassified: 'Unclassified',
+  legacy_unclassified: 'Legacy Unclassified',
+}
+
+const PRIMARY_USAGE_LANE_ALIASES: Record<string, string[]> = {
+  fast: ['fast', 'flagship_fast'],
+  deep: ['deep', 'flagship_deep'],
+  cache: ['cache'],
+}
+
+const PRIMARY_USAGE_LANE_KEYS = new Set(
+  Object.values(PRIMARY_USAGE_LANE_ALIASES).flat()
+)
+
+type UsageMetrics = {
+  calls: number
+  tokens: number
+  cost: number
 }
 
 function laneSourceLabel(source?: string): string {
   if (source === 'override') return 'Pinned'
   if (source === 'fallback') return 'Default'
   return 'Auto'
+}
+
+function connectionLabel(status?: string): string {
+  if (status === 'connected') return 'Connected'
+  if (status === 'auth_error') return 'Invalid API Key'
+  if (status === 'no_key') return 'No API Key'
+  return 'Unavailable'
+}
+
+function connectionTone(status?: string): string {
+  if (status === 'connected') return 'border-state-healthy/30 bg-state-healthy/10 text-state-healthy'
+  if (status === 'auth_error' || status === 'no_key') return 'border-state-error/30 bg-state-error/10 text-state-error'
+  return 'border-border-default bg-surface-card-elevated text-text-muted'
+}
+
+function laneDisplayName(lane: string): string {
+  return LANE_LABELS[lane] || lane.replace(/_/g, ' ')
+}
+
+function readNumeric(data: Record<string, unknown>, fields: string[]): number {
+  for (const field of fields) {
+    const value = data[field]
+    if (value != null && value !== '') return Number(value)
+  }
+  return 0
+}
+
+function readUsageRow(data: Record<string, unknown> | undefined): UsageMetrics {
+  const d = data ?? {}
+  return {
+    calls: readNumeric(d, ['calls', 'requests']),
+    tokens: readNumeric(d, ['tokens', 'tokens_est', 'total_tokens_est', 'total_tokens']),
+    cost: readNumeric(d, ['estimated_cost', 'cost', 'total_cost_est', 'total_cost']),
+  }
+}
+
+function sumUsageRows(rows: Array<Record<string, unknown> | undefined>): UsageMetrics {
+  return rows.reduce<UsageMetrics>(
+    (total, row) => {
+      const current = readUsageRow(row)
+      return {
+        calls: total.calls + current.calls,
+        tokens: total.tokens + current.tokens,
+        cost: total.cost + current.cost,
+      }
+    },
+    { calls: 0, tokens: 0, cost: 0 }
+  )
+}
+
+function SectionTitle({
+  icon: Icon,
+  label,
+  action,
+}: {
+  icon: LucideIcon
+  label: string
+  action?: ReactNode
+}) {
+  return (
+    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <h3 className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-text-secondary">
+        <Icon className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+        {label}
+      </h3>
+      {action}
+    </div>
+  )
+}
+
+function StatusBadge({
+  children,
+  tone = 'muted',
+}: {
+  children: ReactNode
+  tone?: 'healthy' | 'error' | 'accent' | 'warning' | 'muted'
+}) {
+  const tones = {
+    healthy: 'border-state-healthy/30 bg-state-healthy/10 text-state-healthy',
+    error: 'border-state-error/30 bg-state-error/10 text-state-error',
+    accent: 'border-accent-primary/30 bg-accent-primary/10 text-accent-primary',
+    warning: 'border-state-degraded/30 bg-state-degraded/10 text-state-degraded',
+    muted: 'border-border-default bg-surface-input text-text-muted',
+  }
+  return (
+    <span className={`inline-flex items-center rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider ${tones[tone]}`}>
+      {children}
+    </span>
+  )
 }
 
 export function CostTracker() {
@@ -55,6 +182,18 @@ export function CostTracker() {
   const [newKeyValue, setNewKeyValue] = useState('')
   const [keyLoading, setKeyLoading] = useState(false)
   const [keyError, setKeyError] = useState<string | null>(null)
+  const [localConfig, setLocalConfig] = useState<LocalOpenAIConfig | null>(null)
+  const [localForm, setLocalForm] = useState({
+    base_url: '',
+    api_key: '',
+    fast_model: 'local-fast',
+    deep_model: 'local-deep',
+    cache_model: 'local-cache',
+    context_window: 32768,
+    supports_tools: true,
+  })
+  const [localSaving, setLocalSaving] = useState(false)
+  const [localError, setLocalError] = useState<string | null>(null)
 
   // OAuth state (Anthropic)
   const [oauthStatus, setOauthStatus] = useState<OAuthStatusResponse | null>(null)
@@ -87,10 +226,29 @@ export function CostTracker() {
     }
   }, [showStatus])
 
+  const loadLocalConfig = useCallback(async () => {
+    try {
+      const config = await fetchLocalOpenAIConfig()
+      setLocalConfig(config)
+      setLocalForm({
+        base_url: config.base_url || '',
+        api_key: '',
+        fast_model: config.fast_model || 'local-fast',
+        deep_model: config.deep_model || 'local-deep',
+        cache_model: config.cache_model || 'local-cache',
+        context_window: config.context_window || 32768,
+        supports_tools: config.supports_tools,
+      })
+    } catch (error) {
+      showStatus(getErrorMessage(error, 'Failed to load local model provider config'))
+    }
+  }, [showStatus])
+
   // Fetch available providers on mount
   useEffect(() => {
     void loadProviders()
     void loadProviderKeys()
+    void loadLocalConfig()
     // Fetch OAuth status
     fetchOAuthStatus()
       .then(res => setOauthStatus(res))
@@ -99,7 +257,7 @@ export function CostTracker() {
     fetchCodexOAuthStatus()
       .then(res => setCodexOauthStatus(res))
       .catch((error) => showStatus(getErrorMessage(error, 'Failed to load Codex OAuth status')))
-  }, [loadProviderKeys, loadProviders, showStatus])
+  }, [loadLocalConfig, loadProviderKeys, loadProviders, showStatus])
 
   // Re-fetch providers after stack changes (to update active indicator)
   const refreshProviders = useCallback(() => {
@@ -192,6 +350,36 @@ export function CostTracker() {
       setKeyError(getErrorMessage(error, 'Key rotation failed — check the key and try again'))
     } finally {
       setKeyLoading(false)
+    }
+  }
+
+  const handleLocalConfigSave = async () => {
+    setLocalSaving(true)
+    setLocalError(null)
+    try {
+      const res = await saveLocalOpenAIConfig({
+        base_url: localForm.base_url.trim(),
+        api_key: localForm.api_key.trim() || undefined,
+        fast_model: localForm.fast_model.trim(),
+        deep_model: localForm.deep_model.trim(),
+        cache_model: localForm.cache_model.trim() || localForm.fast_model.trim(),
+        context_window: Number(localForm.context_window) || 32768,
+        supports_tools: localForm.supports_tools,
+      })
+      if (res.status === 'ok') {
+        setLocalConfig(res.config)
+        setLocalForm(prev => ({ ...prev, api_key: '' }))
+        showStatus(res.message || 'Local provider config saved')
+        await loadProviderKeys('Failed to refresh provider keys')
+        await refreshProviders()
+        await refetchStack()
+      } else {
+        setLocalError(res.message || 'Local provider config save failed')
+      }
+    } catch (error) {
+      setLocalError(getErrorMessage(error, 'Local provider config save failed'))
+    } finally {
+      setLocalSaving(false)
     }
   }
 
@@ -298,7 +486,7 @@ export function CostTracker() {
   }
 
   const usage = summary?.usage ?? {} as Record<string, unknown>
-  const laneData = lanes?.lanes ?? {}
+  const laneData = (lanes?.lanes ?? {}) as Record<string, Record<string, unknown>>
   const modelData = models?.models ?? {}
   const monthlyData = monthly?.monthly ?? {} as Record<string, unknown>
 
@@ -311,6 +499,7 @@ export function CostTracker() {
   // Monthly data fields
   const md = monthlyData as Record<string, unknown>
   const byModel = (md.by_model ?? {}) as Record<string, Record<string, unknown>>
+  const monthlyByLane = (md.by_lane ?? {}) as Record<string, Record<string, unknown>>
   const byDay = (md.by_day ?? {}) as Record<string, Record<string, unknown>>
 
   // Use monthly by_model / summary by_model as fallback for per-model breakdown
@@ -321,101 +510,152 @@ export function CostTracker() {
 
   // Use summary by_lane as fallback for per-lane breakdown
   const summaryByLane = (usage as Record<string, unknown>).by_lane as Record<string, Record<string, unknown>> | undefined
-  const effectiveLaneData = Object.keys(laneData).length > 0 ? laneData : (summaryByLane ?? {})
+  const liveLaneData = Object.keys(laneData).length > 0 ? laneData : (summaryByLane ?? {})
+  const usingMonthlyLaneFallback = Object.keys(liveLaneData).length === 0 && Object.keys(monthlyByLane).length > 0
+  const effectiveLaneData: Record<string, Record<string, unknown>> = usingMonthlyLaneFallback ? monthlyByLane : liveLaneData
 
   // Model stack data
   const stackLanes = stack?.lanes ?? {}
   const discoveredModels = stack?.discovered_models ?? []
-  const isConnected = stack?.status === 'connected'
-  const hasNoKey = stack?.status === 'no_key'
-  const hasAuthError = stack?.status === 'auth_error'
 
   // Format last refresh time
   const lastRefresh = stack?.last_refresh
     ? formatTimeOnly(stack.last_refresh)
     : null
+  const configuredKeyCount = providerKeys.filter(k => k.has_key || k.oauth_configured).length
+  const activeProviderName = stack?.provider_display_name || stack?.provider || 'No provider'
+  const activeLaneCount = Object.keys(stackLanes).length
+  const discoveredCount = discoveredModels.length
+  const primaryLaneRows = LANE_ORDER.map(lane => {
+    const aliases = PRIMARY_USAGE_LANE_ALIASES[lane] ?? [lane]
+    return {
+      lane,
+      label: LANE_LABELS[lane],
+      model: stackLanes[lane]?.display_name || stackLanes[lane]?.model || '',
+      usage: sumUsageRows(aliases.map(alias => effectiveLaneData[alias])),
+    }
+  })
+  const nonPrimaryLaneEntries = Object.entries(effectiveLaneData).filter(
+    ([lane]) => !PRIMARY_USAGE_LANE_KEYS.has(lane)
+  )
+  const hasAnyLaneUsage = primaryLaneRows.some(row => row.usage.calls > 0 || row.usage.tokens > 0 || row.usage.cost > 0)
+    || nonPrimaryLaneEntries.length > 0
 
   return (
-    <div>
-      <h2 className="text-lg font-semibold text-text-primary mb-6">Cost Tracker</h2>
+    <div className="mx-auto max-w-7xl space-y-6 p-4 sm:p-6">
+      <section className="rounded-lg border border-border-default bg-surface-card p-4">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-accent-primary">
+              <WalletCards className="h-4 w-4" aria-hidden="true" />
+              Spend Control
+            </div>
+            <h1 className="mt-2 text-2xl font-semibold text-text-primary">Cost Tracker</h1>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">
+              Monitor model spend, keep provider access healthy, and pin lane models when the automatic stack needs operator direction.
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3 xl:min-w-[34rem]">
+            <div className="rounded border border-border-default bg-surface-card-elevated p-3">
+              <div className="text-[10px] uppercase tracking-wider text-text-muted">Active Provider</div>
+              <div className="mt-1 truncate text-sm font-semibold text-text-primary" title={activeProviderName}>
+                {activeProviderName}
+              </div>
+            </div>
+            <div className={`rounded border p-3 ${connectionTone(stack?.status)}`}>
+              <div className="text-[10px] uppercase tracking-wider text-text-muted">Provider State</div>
+              <div className="mt-1 text-sm font-semibold">{connectionLabel(stack?.status)}</div>
+            </div>
+            <div className="rounded border border-border-default bg-surface-card-elevated p-3">
+              <div className="text-[10px] uppercase tracking-wider text-text-muted">Keys / OAuth</div>
+              <div className="mt-1 text-sm font-semibold text-text-primary">{configuredKeyCount} configured</div>
+            </div>
+          </div>
+        </div>
+      </section>
 
       {/* Status message toast */}
       {statusMsg && (
-        <div className="mb-4 px-4 py-2 rounded bg-accent-primary/15 text-accent-primary text-sm font-mono">
+        <div className="rounded border border-accent-primary/30 bg-accent-primary/15 px-4 py-2 text-sm text-accent-primary">
           {statusMsg}
         </div>
       )}
 
-      {/* ======= Model Stack Section ======= */}
-      <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">
-            Model Stack
-          </h3>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleResetLanes}
-              className="text-xs px-3 py-1 rounded border border-border-default text-text-secondary
-                         hover:bg-surface-card-elevated hover:text-text-primary transition-colors"
-            >
-              Reset to Auto
-            </button>
-            <button
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="text-xs px-3 py-1 rounded border border-border-default text-text-secondary
-                         hover:bg-surface-card-elevated hover:text-text-primary transition-colors
-                         disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {refreshing ? 'Refreshing...' : 'Refresh'}
-            </button>
-          </div>
-        </div>
+      {/* Summary Metrics */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <MetricCard label="Total Calls" value={totalRequests != null ? String(totalRequests) : '--'} />
+        <MetricCard label="Total Tokens" value={totalTokens ? Number(totalTokens).toLocaleString() : '--'} />
+        <MetricCard label="Est. Cost" value={estCost ? `$${Number(estCost).toFixed(4)}` : '--'} />
+        <MetricCard label="Avg Latency" value={avgLatency ? `${Math.round(Number(avgLatency))}ms` : '--'} />
+      </div>
 
-        {/* Provider selector row */}
-        <div className="flex items-center gap-3 mb-4 flex-wrap">
-          <span className="text-sm text-text-secondary">Provider:</span>
-          <select
-            value={stack?.provider || ''}
-            onChange={(e) => handleSwitchProvider(e.target.value)}
-            disabled={switching || providers.length === 0}
-            className="text-sm font-medium bg-surface-input border border-border-default
-                       rounded px-3 py-1.5 text-text-primary
-                       focus:outline-none focus:ring-1 focus:ring-accent-primary
-                       disabled:opacity-50 disabled:cursor-not-allowed
-                       [&>option]:bg-surface-input [&>option]:text-text-primary"
-          >
-            {providers.length === 0 && stack?.provider && (
-              <option value={stack.provider}>
-                {stack.provider_display_name || stack.provider}
-              </option>
-            )}
-            {providers.map(p => (
-              <option key={p.name} value={p.name} disabled={!p.has_key}>
-                {p.display_name}{!p.has_key ? ' (no key)' : ''}
-              </option>
-            ))}
-          </select>
-          {switching && (
-            <span className="text-xs text-text-muted">Switching...</span>
-          )}
-          <span className={`inline-flex items-center gap-1.5 text-xs ${
-            isConnected ? 'text-green-400'
-            : (hasNoKey || hasAuthError) ? 'text-state-error'
-            : 'text-text-muted'
-          }`}>
-            <span className={`w-2 h-2 rounded-full ${
-              isConnected ? 'bg-green-400'
-              : (hasNoKey || hasAuthError) ? 'bg-state-error'
-              : 'bg-text-muted'
-            }`} />
-            {isConnected ? 'Connected' : hasAuthError ? 'Invalid API Key' : hasNoKey ? 'No API Key' : 'Unavailable'}
-          </span>
-          {lastRefresh && (
-            <span className="text-xs text-text-muted ml-auto">
-              Last discovery: {lastRefresh}
-            </span>
-          )}
+      {/* ======= Model Stack Section ======= */}
+      <section className="rounded-lg border border-border-default bg-surface-card p-4">
+        <SectionTitle
+          icon={ServerCog}
+          label="Model Stack"
+          action={
+            <div className="flex flex-wrap items-center gap-2">
+              {lastRefresh && (
+                <span className="inline-flex items-center gap-1.5 text-xs text-text-muted">
+                  <Clock3 className="h-3.5 w-3.5" aria-hidden="true" />
+                  {lastRefresh}
+                </span>
+              )}
+              <button
+                onClick={handleResetLanes}
+                className="inline-flex items-center gap-2 rounded border border-border-default px-3 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-card-elevated hover:text-text-primary"
+              >
+                <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                Auto
+              </button>
+              <button
+                onClick={handleRefresh}
+                disabled={refreshing}
+                className="inline-flex items-center gap-2 rounded border border-border-default px-3 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-card-elevated hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
+                {refreshing ? 'Refreshing' : 'Refresh'}
+              </button>
+            </div>
+          }
+        />
+        <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(15rem,0.8fr)_minmax(15rem,0.8fr)]">
+          <div className="rounded border border-border-default bg-surface-card-elevated p-3">
+            <div className="mb-2 text-[10px] uppercase tracking-wider text-text-muted">Provider</div>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <select
+                value={stack?.provider || ''}
+                onChange={(e) => handleSwitchProvider(e.target.value)}
+                disabled={switching || providers.length === 0}
+                className="min-h-9 flex-1 rounded border border-border-default bg-surface-input px-3 py-2 text-sm font-medium text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-primary disabled:cursor-not-allowed disabled:opacity-50 [&>option]:bg-surface-input [&>option]:text-text-primary"
+              >
+                {providers.length === 0 && stack?.provider && (
+                  <option value={stack.provider}>
+                    {stack.provider_display_name || stack.provider}
+                  </option>
+                )}
+                {providers.map(p => (
+                  <option key={p.name} value={p.name} disabled={!p.has_key}>
+                    {p.display_name}{!p.has_key ? ' (no key)' : ''}
+                  </option>
+                ))}
+              </select>
+              <span className={`inline-flex min-h-9 items-center justify-center rounded border px-3 text-xs font-medium ${connectionTone(stack?.status)}`}>
+                {switching ? 'Switching' : connectionLabel(stack?.status)}
+              </span>
+            </div>
+          </div>
+          <div className="rounded border border-border-default bg-surface-card-elevated p-3">
+            <div className="text-[10px] uppercase tracking-wider text-text-muted">Lanes</div>
+            <div className="mt-1 text-xl font-semibold text-text-primary">{activeLaneCount}</div>
+            <div className="mt-1 text-xs text-text-muted">Fast, deep, and cache assignments.</div>
+          </div>
+          <div className="rounded border border-border-default bg-surface-card-elevated p-3">
+            <div className="text-[10px] uppercase tracking-wider text-text-muted">Models</div>
+            <div className="mt-1 text-xl font-semibold text-text-primary">{discoveredCount}</div>
+            <div className="mt-1 text-xs text-text-muted">Discovered for this provider.</div>
+          </div>
         </div>
 
         {/* Lane assignments table with model selectors */}
@@ -486,7 +726,7 @@ export function CostTracker() {
                       </td>
                       <td className="py-2 text-center">
                         {l.supports_tools
-                          ? <span className="text-green-400">Yes</span>
+                          ? <span className="inline-flex items-center justify-center gap-1 text-state-healthy"><CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" /> Yes</span>
                           : <span className="text-text-muted">No</span>
                         }
                       </td>
@@ -504,11 +744,10 @@ export function CostTracker() {
         )}
       </section>
 
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(20rem,0.75fr)]">
       {/* ======= Provider Keys Section ======= */}
-      <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
-        <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-          Provider API Keys
-        </h3>
+      <section className="rounded-lg border border-border-default bg-surface-card p-4">
+        <SectionTitle icon={KeyRound} label="Provider API Keys" />
         <p className="text-xs text-text-muted mb-3">
           Rotate or add API keys for each provider. Keys are validated before saving and persisted to .env.
         </p>
@@ -516,27 +755,21 @@ export function CostTracker() {
           {providerKeys.length === 0 && (
             <p className="text-sm text-text-muted py-4 text-center">Loading provider keys...</p>
           )}
-          {providerKeys.filter(k => !k.oauth_only).map(k => (
-            <div key={k.provider} className="flex items-center gap-3 p-3 bg-surface-card-elevated rounded-md">
+          {providerKeys.filter(k => !k.oauth_only && k.provider !== 'local-openai').map(k => (
+            <div key={k.provider} className="flex flex-col gap-3 rounded border border-border-default bg-surface-card-elevated p-3 lg:flex-row lg:items-center">
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium text-text-primary">{k.display_name}</span>
                   {k.active && (
-                    <span className="text-[10px] px-1.5 py-0.5 bg-accent-primary/15 text-accent-primary rounded font-mono">
-                      ACTIVE
-                    </span>
+                    <StatusBadge tone="accent">Active</StatusBadge>
                   )}
                   {k.has_key ? (
-                    <span className="text-[10px] px-1.5 py-0.5 bg-state-healthy/15 text-state-healthy rounded font-mono">
-                      CONFIGURED
-                    </span>
+                    <StatusBadge tone="healthy">Configured</StatusBadge>
                   ) : (
-                    <span className="text-[10px] px-1.5 py-0.5 bg-state-error/15 text-state-error rounded font-mono">
-                      NOT SET
-                    </span>
+                    <StatusBadge tone="error">Not Set</StatusBadge>
                   )}
                 </div>
-                <div className="flex items-center gap-2 mt-1">
+                <div className="mt-1 flex flex-wrap items-center gap-2">
                   <span className="text-xs text-text-muted font-mono">{k.env_var}</span>
                   {k.key_preview && (
                     <span className="text-xs text-text-muted font-mono">{k.key_preview}</span>
@@ -544,14 +777,13 @@ export function CostTracker() {
                 </div>
               </div>
               {editingKey === k.provider ? (
-                <div className="flex items-center gap-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   <input
                     type="password"
                     value={newKeyValue}
                     onChange={e => { setNewKeyValue(e.target.value); setKeyError(null) }}
                     placeholder="Paste new API key..."
-                    className="text-xs font-mono bg-surface-base border border-border-default rounded
-                               px-3 py-1.5 text-text-primary w-64
+                    className="w-full rounded border border-border-default bg-surface-base px-3 py-1.5 text-xs font-mono text-text-primary sm:w-64
                                focus:outline-none focus:ring-1 focus:ring-accent-primary
                                placeholder:text-text-muted"
                     autoFocus
@@ -590,15 +822,14 @@ export function CostTracker() {
         </div>
       </section>
 
+      <div className="space-y-6">
       {/* ======= Anthropic OAuth Section ======= */}
-      <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
-        <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-          Anthropic OAuth
-        </h3>
+      <section className="rounded-lg border border-border-default bg-surface-card p-4">
+        <SectionTitle icon={ShieldCheck} label="Anthropic OAuth" />
         <p className="text-xs text-text-muted mb-3">
           Connect via your claude.ai subscription (Pro/Max). OAuth tokens auto-refresh every 8 hours.
         </p>
-        <div className="flex items-center gap-3 p-3 bg-surface-card-elevated rounded-md">
+        <div className="flex flex-col gap-3 rounded border border-border-default bg-surface-card-elevated p-3 sm:flex-row sm:items-center">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-text-primary">Anthropic OAuth</span>
@@ -661,15 +892,13 @@ export function CostTracker() {
       </section>
 
       {/* ======= OpenAI Codex OAuth Section ======= */}
-      <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
-        <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-          OpenAI Codex Access
-        </h3>
+      <section className="rounded-lg border border-border-default bg-surface-card p-4">
+        <SectionTitle icon={Zap} label="OpenAI Codex Access" />
         <p className="text-xs text-text-muted mb-3">
           Preferred: sign in on the host with the Codex CLI so `~/.codex/auth.json` is mounted into the container.
           Browser OAuth is available only as a fallback when mounted Codex auth is not present.
         </p>
-        <div className="flex items-center gap-3 p-3 bg-surface-card-elevated rounded-md">
+        <div className="flex flex-col gap-3 rounded border border-border-default bg-surface-card-elevated p-3 sm:flex-row sm:items-center">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-text-primary">OpenAI Codex</span>
@@ -737,32 +966,155 @@ export function CostTracker() {
         </div>
       </section>
 
-      {/* Summary Metrics */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <MetricCard label="Total Calls" value={totalRequests != null ? String(totalRequests) : '--'} />
-        <MetricCard label="Total Tokens" value={totalTokens ? Number(totalTokens).toLocaleString() : '--'} />
-        <MetricCard label="Est. Cost" value={estCost ? `$${Number(estCost).toFixed(4)}` : '--'} />
-        <MetricCard label="Avg Latency" value={avgLatency ? `${Math.round(Number(avgLatency))}ms` : '--'} />
+      {/* ======= Local OpenAI-Compatible Provider Section ======= */}
+      <section className="rounded-lg border border-border-default bg-surface-card p-4">
+        <SectionTitle icon={ServerCog} label="Local Model Provider" />
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium text-text-primary">Bring-your-own OpenAI-compatible endpoint</span>
+            {localConfig?.base_url ? (
+              <StatusBadge tone="healthy">Configured</StatusBadge>
+            ) : (
+              <StatusBadge tone="warning">Needs Endpoint</StatusBadge>
+            )}
+            {localConfig?.api_key_configured && (
+              <StatusBadge tone="muted">{localConfig.key_preview}</StatusBadge>
+            )}
+          </div>
+          <div className="grid gap-3">
+            <label className="block">
+              <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-text-muted">Base URL</span>
+              <input
+                value={localForm.base_url}
+                onChange={e => setLocalForm(prev => ({ ...prev, base_url: e.target.value }))}
+                placeholder="http://host.docker.internal:11434/v1"
+                className="w-full rounded border border-border-default bg-surface-input px-3 py-2 text-xs font-mono text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent-primary"
+              />
+            </label>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="block">
+                <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-text-muted">Fast Model</span>
+                <input
+                  value={localForm.fast_model}
+                  onChange={e => setLocalForm(prev => ({ ...prev, fast_model: e.target.value }))}
+                  className="w-full rounded border border-border-default bg-surface-input px-3 py-2 text-xs font-mono text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-text-muted">Deep Model</span>
+                <input
+                  value={localForm.deep_model}
+                  onChange={e => setLocalForm(prev => ({ ...prev, deep_model: e.target.value }))}
+                  className="w-full rounded border border-border-default bg-surface-input px-3 py-2 text-xs font-mono text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-text-muted">Cache Model</span>
+                <input
+                  value={localForm.cache_model}
+                  onChange={e => setLocalForm(prev => ({ ...prev, cache_model: e.target.value }))}
+                  className="w-full rounded border border-border-default bg-surface-input px-3 py-2 text-xs font-mono text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                />
+              </label>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+              <label className="block">
+                <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-text-muted">Context Window</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={localForm.context_window}
+                  onChange={e => setLocalForm(prev => ({ ...prev, context_window: Number(e.target.value) }))}
+                  className="w-full rounded border border-border-default bg-surface-input px-3 py-2 text-xs font-mono text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                />
+              </label>
+              <label className="flex min-h-9 items-center gap-2 rounded border border-border-default bg-surface-card-elevated px-3 py-2 text-xs text-text-secondary">
+                <input
+                  type="checkbox"
+                  checked={localForm.supports_tools}
+                  onChange={e => setLocalForm(prev => ({ ...prev, supports_tools: e.target.checked }))}
+                  className="h-4 w-4 accent-accent-primary"
+                />
+                Tools
+              </label>
+            </div>
+            <label className="block">
+              <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-text-muted">Optional API Key</span>
+              <input
+                type="password"
+                value={localForm.api_key}
+                onChange={e => setLocalForm(prev => ({ ...prev, api_key: e.target.value }))}
+                placeholder={localConfig?.api_key_configured ? 'Leave blank to keep current key' : 'Optional for local servers'}
+                className="w-full rounded border border-border-default bg-surface-input px-3 py-2 text-xs font-mono text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent-primary"
+              />
+            </label>
+          </div>
+          {localError && (
+            <p className="text-xs text-state-error">{localError}</p>
+          )}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="min-w-0 truncate text-xs text-text-muted">
+              Provider ID: <span className="font-mono">local-openai</span>
+            </span>
+            <button
+              onClick={handleLocalConfigSave}
+              disabled={localSaving || !localForm.base_url.trim() || !localForm.fast_model.trim() || !localForm.deep_model.trim()}
+              className="inline-flex items-center justify-center rounded bg-accent-primary/15 px-3 py-1.5 text-xs font-medium text-accent-primary transition-colors hover:bg-accent-primary/25 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {localSaving ? 'Saving' : 'Save Local Provider'}
+            </button>
+          </div>
+        </div>
+      </section>
+      </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Per-Lane Breakdown */}
-        <section className="bg-surface-card border border-border-default rounded-lg p-4">
-          <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-            Usage by Lane
-          </h3>
-          {Object.keys(effectiveLaneData).length === 0 ? (
-            <p className="text-sm text-text-muted">No lane data available</p>
+        <section className="rounded-lg border border-border-default bg-surface-card p-4">
+          <SectionTitle
+            icon={Activity}
+            label="Usage by Lane"
+            action={usingMonthlyLaneFallback ? <StatusBadge tone="muted">Monthly history</StatusBadge> : undefined}
+          />
+          {!hasAnyLaneUsage && activeLaneCount === 0 ? (
+            <p className="text-sm text-text-muted">Lane usage will appear after the next routed model call.</p>
           ) : (
             <div className="space-y-3">
-              {Object.entries(effectiveLaneData).map(([lane, data]) => {
-                const d = data as Record<string, unknown>
+              {primaryLaneRows.map(({ lane, label, model, usage }) => {
                 return (
-                  <div key={lane} className="flex items-center justify-between p-2 bg-surface-card-elevated rounded">
-                    <span className="text-sm text-text-primary font-mono">{lane}</span>
-                    <div className="text-right text-xs text-text-secondary font-mono">
-                      <span>{String(d.calls ?? d.requests ?? 0)} calls</span>
-                      <span className="ml-3">{Number(d.tokens ?? d.tokens_est ?? 0).toLocaleString()} tokens</span>
+                  <div key={lane} className="flex flex-col gap-2 rounded border border-border-default bg-surface-card-elevated p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <span className="block truncate text-sm font-medium text-text-primary" title={lane}>{label}</span>
+                      <span className="block truncate text-[11px] font-mono text-text-muted">
+                        {model || 'No model assigned'}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-3 text-xs text-text-secondary font-mono sm:justify-end">
+                      <span>{usage.calls.toLocaleString()} calls</span>
+                      <span>{usage.tokens.toLocaleString()} tokens</span>
+                      {usage.cost > 0 && <span>${usage.cost.toFixed(4)}</span>}
+                    </div>
+                  </div>
+                )
+              })}
+              {nonPrimaryLaneEntries.map(([lane, data]) => {
+                const usageRow = readUsageRow(data as Record<string, unknown>)
+                const isLegacy = lane === 'legacy_unclassified'
+                return (
+                  <div key={lane} className="flex flex-col gap-2 rounded border border-border-default bg-surface-base p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <span className="block truncate text-sm font-medium text-text-secondary" title={lane}>
+                        {isLegacy ? 'Pre-lane history' : laneDisplayName(lane)}
+                      </span>
+                      <span className="block truncate text-[11px] font-mono text-text-muted">
+                        {isLegacy ? 'Recorded before lane attribution was enabled' : lane}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-3 text-xs text-text-secondary font-mono sm:justify-end">
+                      <span>{usageRow.calls.toLocaleString()} calls</span>
+                      <span>{usageRow.tokens.toLocaleString()} tokens</span>
+                      {usageRow.cost > 0 && <span>${usageRow.cost.toFixed(4)}</span>}
                     </div>
                   </div>
                 )
@@ -772,10 +1124,8 @@ export function CostTracker() {
         </section>
 
         {/* Per-Model Breakdown */}
-        <section className="bg-surface-card border border-border-default rounded-lg p-4">
-          <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-            Usage by Model
-          </h3>
+        <section className="rounded-lg border border-border-default bg-surface-card p-4">
+          <SectionTitle icon={ServerCog} label="Usage by Model" />
           {Object.keys(effectiveModelData).length === 0 ? (
             <p className="text-sm text-text-muted">No model data available</p>
           ) : (
@@ -783,13 +1133,13 @@ export function CostTracker() {
               {Object.entries(effectiveModelData).map(([model, data]) => {
                 const d = data as Record<string, unknown>
                 return (
-                  <div key={model} className="flex items-center justify-between p-2 bg-surface-card-elevated rounded">
-                    <span className="text-sm text-text-primary font-mono truncate max-w-[200px]">{model}</span>
-                    <div className="text-right text-xs text-text-secondary font-mono">
+                  <div key={model} className="flex flex-col gap-2 rounded border border-border-default bg-surface-card-elevated p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <span className="min-w-0 truncate text-sm text-text-primary font-mono" title={model}>{model}</span>
+                    <div className="flex flex-wrap gap-3 text-xs text-text-secondary font-mono sm:justify-end">
                       <span>{String(d.calls ?? d.requests ?? 0)} calls</span>
-                      <span className="ml-3">{Number(d.tokens ?? d.tokens_est ?? 0).toLocaleString()} tokens</span>
+                      <span>{Number(d.tokens ?? d.tokens_est ?? 0).toLocaleString()} tokens</span>
                       {(d.estimated_cost ?? d.cost) != null && (
-                        <span className="ml-3">${Number(d.estimated_cost ?? d.cost).toFixed(4)}</span>
+                        <span>${Number(d.estimated_cost ?? d.cost).toFixed(4)}</span>
                       )}
                     </div>
                   </div>
@@ -800,10 +1150,8 @@ export function CostTracker() {
         </section>
 
         {/* Monthly Summary — Rendered as proper tables */}
-        <section className="bg-surface-card border border-border-default rounded-lg p-4 lg:col-span-2">
-          <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-            Monthly Summary
-          </h3>
+        <section className="rounded-lg border border-border-default bg-surface-card p-4 lg:col-span-2">
+          <SectionTitle icon={WalletCards} label="Monthly Summary" />
           <div className="flex gap-3 mb-4 flex-wrap items-center">
             {monthly?.available_months?.map((m: string) => (
               <span key={m} className="text-xs font-mono px-2 py-1 bg-accent-primary/15 text-accent-primary rounded">

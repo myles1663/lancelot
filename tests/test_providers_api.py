@@ -283,6 +283,76 @@ def test_refresh_and_switch_provider_handle_errors_and_initialize_discovery(monk
     assert providers_api.load_persisted_config()["active_provider"] == "openai"
 
 
+def test_local_openai_config_persists_and_enables_provider_switch(monkeypatch):
+    client = _client()
+    monkeypatch.setattr(
+        provider_factory,
+        "API_KEY_VARS",
+        {"local-openai": "LOCAL_OPENAI_API_KEY"},
+    )
+    persisted_env = []
+    monkeypatch.setattr(
+        providers_api,
+        "_update_env_file",
+        lambda env_var, value: persisted_env.append((env_var, value)) or True,
+    )
+
+    saved = client.post(
+        "/api/v1/providers/local-openai/config",
+        json={
+            "base_url": "http://localhost:11434/v1",
+            "api_key": "",
+            "fast_model": "llama3.1:8b",
+            "deep_model": "qwen3:32b",
+            "cache_model": "llama3.1:8b",
+            "context_window": 65536,
+            "supports_tools": True,
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["status"] == "ok"
+    assert saved.json()["config"]["base_url"] == "http://localhost:11434/v1"
+    assert ("LOCAL_OPENAI_BASE_URL", "http://localhost:11434/v1") in persisted_env
+
+    providers_api.init_provider_api(None, _FakeOrchestrator())
+    created = []
+
+    class _ModelDiscovery:
+        def __init__(self, provider, lane_overrides=None, fallback_lanes=None):
+            created.append((provider, lane_overrides, fallback_lanes))
+            self.provider_name = "local-openai"
+            self.lane_assignments = fallback_lanes or {}
+            self.discovered_models = []
+
+        def refresh(self):
+            created.append("refresh")
+
+        def get_stack(self):
+            return {"provider": "local-openai", "lanes": dict(self.lane_assignments)}
+
+    monkeypatch.setattr(model_discovery, "ModelDiscovery", _ModelDiscovery)
+    monkeypatch.setattr(
+        provider_factory,
+        "create_provider",
+        lambda provider_name, api_key, auth_token="": SimpleNamespace(
+            provider_name=provider_name,
+            api_key=api_key,
+            auth_token=auth_token,
+        ),
+    )
+
+    switched = client.post("/api/v1/providers/switch", json={"provider": "local-openai"})
+
+    assert switched.status_code == 200
+    assert switched.json()["status"] == "ok"
+    assert created[0][2] == {
+        "fast": "llama3.1:8b",
+        "deep": "qwen3:32b",
+        "cache": "llama3.1:8b",
+    }
+    assert providers_api.load_persisted_config()["active_provider"] == "local-openai"
+
+
 def test_override_and_reset_lanes_persist_and_sync_orchestrator():
     discovery = _FakeDiscovery(
         provider_name="openai",

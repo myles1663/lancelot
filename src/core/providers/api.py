@@ -100,6 +100,17 @@ class RotateKeyRequest(BaseModel):
     api_key: str
 
 
+class LocalOpenAIConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    base_url: str
+    api_key: str = ""
+    fast_model: str
+    deep_model: str
+    cache_model: str = ""
+    context_window: int = 32768
+    supports_tools: bool = True
+
+
 # ---------------------------------------------------------------------------
 # Initialization + persistence
 # ---------------------------------------------------------------------------
@@ -269,6 +280,85 @@ def _codex_cli_auth_available() -> bool:
         return False
 
 
+def _local_openai_base_url() -> str:
+    return os.getenv("LOCAL_OPENAI_BASE_URL", "").strip()
+
+
+def _local_openai_is_configured() -> bool:
+    return bool(_local_openai_base_url())
+
+
+def _local_openai_config() -> dict:
+    config = _read_current_config().get("local_openai", {})
+    env_context = os.getenv("LOCAL_OPENAI_CONTEXT_WINDOW", "").strip()
+    try:
+        context_window = int(env_context or config.get("context_window") or 32768)
+    except (TypeError, ValueError):
+        context_window = 32768
+    supports_tools_env = os.getenv("LOCAL_OPENAI_SUPPORTS_TOOLS", "").strip().lower()
+    if supports_tools_env:
+        supports_tools = supports_tools_env not in {"0", "false", "no", "off"}
+    else:
+        supports_tools = bool(config.get("supports_tools", True))
+
+    api_key = os.getenv("LOCAL_OPENAI_API_KEY", "").strip()
+    return {
+        "base_url": _local_openai_base_url() or config.get("base_url", ""),
+        "api_key_configured": bool(api_key),
+        "key_preview": _mask_key(api_key) if api_key else "",
+        "fast_model": os.getenv("LOCAL_OPENAI_FAST_MODEL", "").strip()
+        or config.get("fast_model", "local-fast"),
+        "deep_model": os.getenv("LOCAL_OPENAI_DEEP_MODEL", "").strip()
+        or config.get("deep_model", "local-deep"),
+        "cache_model": os.getenv("LOCAL_OPENAI_CACHE_MODEL", "").strip()
+        or config.get("cache_model", "local-cache"),
+        "context_window": context_window,
+        "supports_tools": supports_tools,
+    }
+
+
+def _persist_local_openai_config(req: LocalOpenAIConfigRequest) -> bool:
+    base_url = req.base_url.strip().rstrip("/")
+    fast_model = req.fast_model.strip()
+    deep_model = req.deep_model.strip()
+    cache_model = (req.cache_model or req.fast_model).strip()
+    if not base_url:
+        raise ValueError("Base URL is required")
+    if not fast_model or not deep_model or not cache_model:
+        raise ValueError("Fast, deep, and cache model IDs are required")
+    if req.context_window < 1:
+        raise ValueError("Context window must be a positive integer")
+
+    config = _read_current_config()
+    config["local_openai"] = {
+        "base_url": base_url,
+        "fast_model": fast_model,
+        "deep_model": deep_model,
+        "cache_model": cache_model,
+        "context_window": req.context_window,
+        "supports_tools": req.supports_tools,
+    }
+    _save_config(config)
+
+    env_updates = {
+        "LOCAL_OPENAI_BASE_URL": base_url,
+        "LOCAL_OPENAI_FAST_MODEL": fast_model,
+        "LOCAL_OPENAI_DEEP_MODEL": deep_model,
+        "LOCAL_OPENAI_CACHE_MODEL": cache_model,
+        "LOCAL_OPENAI_CONTEXT_WINDOW": str(req.context_window),
+        "LOCAL_OPENAI_SUPPORTS_TOOLS": "true" if req.supports_tools else "false",
+    }
+    for env_var, value in env_updates.items():
+        os.environ[env_var] = value
+        _update_env_file(env_var, value)
+
+    persisted_key = True
+    if req.api_key.strip():
+        os.environ["LOCAL_OPENAI_API_KEY"] = req.api_key.strip()
+        persisted_key = _update_env_file("LOCAL_OPENAI_API_KEY", req.api_key.strip())
+    return persisted_key
+
+
 def _read_provider_profile_lanes(provider_name: str, label: str) -> dict:
     try:
         from provider_profile import ProfileRegistry
@@ -294,6 +384,13 @@ def _read_provider_profile_lanes(provider_name: str, label: str) -> dict:
 
 
 def _provider_profile_lane_defaults(provider_name: str) -> dict:
+    if provider_name == "local-openai":
+        config = _local_openai_config()
+        return {
+            "fast": config["fast_model"],
+            "deep": config["deep_model"],
+            "cache": config["cache_model"],
+        }
     return _read_provider_profile_lanes(provider_name, "defaults")
 
 
@@ -352,6 +449,8 @@ def get_provider_stack():
     provider_name = stack.get("provider", "")
     env_var = API_KEY_VARS.get(provider_name, "")
     has_key = bool(os.getenv(env_var, "").strip()) if env_var else False
+    if provider_name == "local-openai":
+        has_key = _local_openai_is_configured()
     # Anthropic OAuth counts as having credentials.
     if not has_key and provider_name == "anthropic":
         status = _anthropic_oauth_status()
@@ -442,6 +541,8 @@ def get_available_providers():
     providers = []
     for name, env_var in API_KEY_VARS.items():
         has_key = bool(os.getenv(env_var, "").strip()) if env_var else False
+        if name == "local-openai":
+            has_key = _local_openai_is_configured()
         # Anthropic OAuth counts as having credentials.
         if not has_key and name == "anthropic":
             status = _anthropic_oauth_status()
@@ -481,16 +582,22 @@ def switch_provider(req: SwitchProviderRequest):
     api_key = os.getenv(env_var, "").strip() if env_var else ""
     if not api_key:
         _has_oauth = False
+        _has_local_endpoint = provider_name == "local-openai" and _local_openai_is_configured()
         # Check for OAuth token as alternative for Anthropic.
         if provider_name == "anthropic":
             _has_oauth = bool(_anthropic_oauth_token())
         # Codex OAuth: ChatGPT Pro subscription
         elif provider_name == "openai-codex":
             _has_oauth = bool(_codex_oauth_token()) or _codex_cli_auth_available()
-        if not _has_oauth:
+        if not _has_oauth and not _has_local_endpoint:
+            message = (
+                f"No API key, OAuth token, or local endpoint configured for {provider_name}"
+                if provider_name == "local-openai"
+                else f"No API key or OAuth token configured for {provider_name}"
+            )
             return {
                 "status": "error",
-                "message": f"No API key or OAuth token configured for {provider_name}",
+                "message": message,
             }
 
     try:
@@ -707,6 +814,20 @@ def get_provider_keys():
             continue
 
         raw = os.getenv(env_var, "").strip() if env_var else ""
+        if name == "local-openai":
+            local_config = _local_openai_config()
+            entry = {
+                "provider": name,
+                "display_name": display_names.get(name, "Local OpenAI-Compatible"),
+                "env_var": "LOCAL_OPENAI_BASE_URL",
+                "has_key": bool(local_config["base_url"]),
+                "key_preview": local_config["base_url"],
+                "active": name == current_provider,
+                "oauth_configured": False,
+                "oauth_status": None,
+            }
+            keys.append(entry)
+            continue
         entry = {
             "provider": name,
             "display_name": display_names.get(name, name.title()),
@@ -810,6 +931,48 @@ def rotate_provider_key(req: RotateKeyRequest):
             " and provider hot-swapped" if hot_swapped else ""
         ),
     }
+
+
+@router.get("/local-openai/config", dependencies=[Depends(require_operator_capability("provider.admin"))])
+def get_local_openai_config():
+    """Return operator-managed OpenAI-compatible local provider config."""
+    return _local_openai_config()
+
+
+@router.post("/local-openai/config", dependencies=[Depends(require_operator_capability("provider.admin"))])
+def save_local_openai_config(req: LocalOpenAIConfigRequest):
+    """Persist local/OpenAI-compatible endpoint config without exposing secrets."""
+    try:
+        key_persisted = _persist_local_openai_config(req)
+        hot_swapped = False
+        current_provider = _discovery.provider_name if _discovery else None
+        if current_provider == "local-openai":
+            switched = switch_provider(SwitchProviderRequest(provider="local-openai"))
+            hot_swapped = switched.get("status") == "ok"
+            if not hot_swapped:
+                return {
+                    "status": "error",
+                    "message": switched.get("message", "Local provider hot-swap failed"),
+                    "config": _local_openai_config(),
+                    "persisted_to_env": key_persisted,
+                    "hot_swapped": False,
+                }
+        return {
+            "status": "ok",
+            "message": "Local OpenAI-compatible provider config saved",
+            "config": _local_openai_config(),
+            "persisted_to_env": key_persisted,
+            "hot_swapped": hot_swapped,
+        }
+    except Exception as exc:
+        logger.warning("Local OpenAI-compatible provider config save failed: %s", exc)
+        return {
+            "status": "error",
+            "message": str(exc),
+            "config": _local_openai_config(),
+            "persisted_to_env": False,
+            "hot_swapped": False,
+        }
 
 
 # ---------------------------------------------------------------------------

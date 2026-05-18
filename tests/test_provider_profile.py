@@ -126,6 +126,8 @@ class TestRealConfigFiles:
         assert "gemini" in providers
         assert "openai" in providers
         assert "anthropic" in providers
+        assert "deepseek" in providers
+        assert "local-openai" in providers
 
     def test_real_router_has_four_lanes(self):
         data = load_router_config(str(_ROUTER_PATH))
@@ -138,6 +140,23 @@ class TestRealConfigFiles:
         )
         assert reg.models_version == "1.0"
         assert reg.router_version == "1.0"
+
+    def test_local_openai_profile_uses_env_overrides(self, monkeypatch):
+        monkeypatch.setenv("LOCAL_OPENAI_FAST_MODEL", "llama3.1:8b")
+        monkeypatch.setenv("LOCAL_OPENAI_DEEP_MODEL", "qwen3:32b")
+        monkeypatch.setenv("LOCAL_OPENAI_CACHE_MODEL", "llama3.1:8b")
+        monkeypatch.setenv("LOCAL_OPENAI_CONTEXT_WINDOW", "65536")
+
+        reg = ProfileRegistry(
+            models_path=str(_MODELS_PATH),
+            router_path=str(_ROUTER_PATH),
+        )
+
+        profile = reg.get_profile("local-openai")
+        assert profile.fast.model == "llama3.1:8b"
+        assert profile.deep.model == "qwen3:32b"
+        assert profile.cache.model == "llama3.1:8b"
+        assert profile.fast.max_tokens == 65536
 
 
 # ===================================================================

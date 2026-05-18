@@ -31,6 +31,7 @@ export function fetchReceipts(params?: {
   action_type?: string
   status?: string
   quest_id?: string
+  risk_tier?: string | number
   since?: string
   until?: string
   q?: string

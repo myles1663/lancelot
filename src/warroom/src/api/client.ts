@@ -72,7 +72,11 @@ async function handleResponse<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>
 }
 
-export async function apiGet<T>(path: string, params?: Record<string, string>): Promise<T> {
+export async function apiGet<T>(
+  path: string,
+  params?: Record<string, string>,
+  timeoutMs = READ_REQUEST_TIMEOUT_MS,
+): Promise<T> {
   const url = new URL(`${API_BASE}${path}`, window.location.origin)
   if (params) {
     Object.entries(params).forEach(([k, v]) => {
@@ -82,7 +86,7 @@ export async function apiGet<T>(path: string, params?: Record<string, string>): 
   const res = await fetchWithTimeout(
     url.toString(),
     { credentials: 'include' },
-    READ_REQUEST_TIMEOUT_MS,
+    timeoutMs,
   )
   return handleResponse<T>(res)
 }

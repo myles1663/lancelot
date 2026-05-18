@@ -61,7 +61,14 @@ def switch_provider(runtime: Any, provider_name: str) -> str:
         auth_token = runtime.get_openai_codex_oauth_token()
 
     has_codex_cli_auth = provider_name == "openai-codex" and runtime.has_openai_codex_cli_auth()
-    if not api_key and not auth_token and not has_codex_cli_auth:
+    has_local_endpoint = provider_name == "local-openai" and bool(
+        os.getenv("LOCAL_OPENAI_BASE_URL", "").strip()
+    )
+    if not api_key and not auth_token and not has_codex_cli_auth and not has_local_endpoint:
+        if provider_name == "local-openai":
+            raise ValueError(
+                f"No API key, OAuth token, or local endpoint configured for {provider_name}"
+            )
         raise ValueError(f"No API key or OAuth token configured for {provider_name}")
 
     provider_mode = os.getenv("LANCELOT_PROVIDER_MODE", "sdk")

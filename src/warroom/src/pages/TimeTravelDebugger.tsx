@@ -19,20 +19,20 @@ import { emitWarRoomNotification } from '@/utils/notifications'
 
 function StatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
-    success: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-    failure: 'bg-red-500/20 text-red-400 border-red-500/30',
-    pending: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
-    cancelled: 'bg-zinc-500/20 text-zinc-400 border-zinc-500/30',
+    success: 'bg-state-healthy/15 text-state-healthy border-state-healthy/30',
+    failure: 'bg-state-error/15 text-state-error border-state-error/30',
+    pending: 'bg-state-degraded/15 text-state-degraded border-state-degraded/30',
+    cancelled: 'bg-surface-input text-text-muted border-border-default',
   }
   return (
-    <span className={`px-2 py-0.5 rounded text-xs font-mono border ${colors[status] || colors.pending}`}>
+    <span className={`rounded border px-2 py-0.5 text-xs font-mono ${colors[status] || colors.pending}`}>
       {status}
     </span>
   )
 }
 
 function TierBadge({ tier }: { tier: number }) {
-  const colors = ['text-zinc-400', 'text-blue-400', 'text-amber-400', 'text-red-400']
+  const colors = ['text-text-muted', 'text-accent-primary', 'text-state-degraded', 'text-state-error']
   return <span className={`font-mono text-xs ${colors[tier] || colors[0]}`}>T{tier}</span>
 }
 
@@ -92,7 +92,7 @@ function DagNavigator({
   const height = rowHeight + padding * 2
 
   return (
-    <div className="overflow-x-auto border border-zinc-700 rounded-lg bg-zinc-900/50">
+    <div className="overflow-x-auto rounded-lg border border-border-default bg-surface-card-elevated/60">
       <svg width={Math.max(width, 300)} height={height} className="min-w-full">
         {/* Edges */}
         {receipts.map((node, i) => {
@@ -156,49 +156,49 @@ function DagNavigator({
 function StateInspector({ snapshot }: { snapshot: StateSnapshot | null }) {
   if (!snapshot) {
     return (
-      <div className="text-zinc-500 text-sm p-4 border border-zinc-700 rounded-lg">
+      <div className="rounded-lg border border-border-default bg-surface-card p-4 text-sm text-text-muted">
         Select a receipt node to inspect its governance state.
       </div>
     )
   }
 
   return (
-    <div className="border border-zinc-700 rounded-lg p-4 space-y-4">
-      <h3 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider">State Inspector</h3>
+    <div className="space-y-4 rounded-lg border border-border-default bg-surface-card p-4">
+      <h3 className="text-sm font-semibold uppercase tracking-wider text-text-secondary">State Inspector</h3>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+      <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
         <div>
-          <span className="text-zinc-500 block">Soul Version</span>
-          <span className="text-zinc-200 font-mono">{snapshot.soul_version || '—'}</span>
+          <span className="block text-text-muted">Soul Version</span>
+          <span className="font-mono text-text-primary">{snapshot.soul_version || '-'}</span>
         </div>
         <div>
-          <span className="text-zinc-500 block">Trust Tier</span>
-          <span className="text-zinc-200 font-mono">T{snapshot.trust_tier ?? '?'}</span>
+          <span className="block text-text-muted">Trust Tier</span>
+          <span className="font-mono text-text-primary">T{snapshot.trust_tier ?? '?'}</span>
         </div>
         <div>
-          <span className="text-zinc-500 block">Receipt Chain</span>
-          <span className="text-zinc-200 font-mono">{snapshot.receipt_chain_length} receipts</span>
+          <span className="block text-text-muted">Receipt Chain</span>
+          <span className="font-mono text-text-primary">{snapshot.receipt_chain_length} receipts</span>
         </div>
         <div>
-          <span className="text-zinc-500 block">Timestamp</span>
-          <span className="text-zinc-200 font-mono text-xs">{snapshot.timestamp}</span>
+          <span className="block text-text-muted">Timestamp</span>
+          <span className="break-all font-mono text-xs text-text-primary">{snapshot.timestamp}</span>
         </div>
       </div>
 
       {/* Kill Switches */}
       {Object.keys(snapshot.kill_switches).length > 0 && (
         <div>
-          <h4 className="text-xs font-semibold text-zinc-400 uppercase mb-1">Kill Switches Active</h4>
+          <h4 className="mb-1 text-xs font-semibold uppercase text-text-secondary">Kill Switches Active</h4>
           <div className="flex flex-wrap gap-1">
             {Object.entries(snapshot.kill_switches)
               .filter(([, active]) => active)
               .map(([name]) => (
-                <span key={name} className="px-2 py-0.5 bg-red-500/20 text-red-400 text-xs rounded font-mono border border-red-500/30">
+                <span key={name} className="rounded border border-state-error/30 bg-state-error/15 px-2 py-0.5 text-xs font-mono text-state-error">
                   {name}
                 </span>
               ))}
             {Object.values(snapshot.kill_switches).every((v) => !v) && (
-              <span className="text-zinc-500 text-xs">None active</span>
+              <span className="text-xs text-text-muted">None active</span>
             )}
           </div>
         </div>
@@ -207,23 +207,23 @@ function StateInspector({ snapshot }: { snapshot: StateSnapshot | null }) {
       {/* Cost Data */}
       {snapshot.cost_data && Object.keys(snapshot.cost_data).length > 0 && (
         <div>
-          <h4 className="text-xs font-semibold text-zinc-400 uppercase mb-1">Cost Data</h4>
-          <div className="grid grid-cols-3 gap-2 text-xs">
+          <h4 className="mb-1 text-xs font-semibold uppercase text-text-secondary">Cost Data</h4>
+          <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
             <div>
-              <span className="text-zinc-500">Tokens</span>
-              <span className="block text-zinc-200 font-mono">
+              <span className="text-text-muted">Tokens</span>
+              <span className="block font-mono text-text-primary">
                 {(snapshot.cost_data.total_tokens as number)?.toLocaleString() ?? '—'}
               </span>
             </div>
             <div>
-              <span className="text-zinc-500">Receipts</span>
-              <span className="block text-zinc-200 font-mono">
+              <span className="text-text-muted">Receipts</span>
+              <span className="block font-mono text-text-primary">
                 {(snapshot.cost_data.total_receipts as number)?.toLocaleString() ?? '—'}
               </span>
             </div>
             <div>
-              <span className="text-zinc-500">Duration</span>
-              <span className="block text-zinc-200 font-mono">
+              <span className="text-text-muted">Duration</span>
+              <span className="block font-mono text-text-primary">
                 {(snapshot.cost_data.total_duration_ms as number)?.toLocaleString() ?? '—'}ms
               </span>
             </div>
@@ -233,20 +233,20 @@ function StateInspector({ snapshot }: { snapshot: StateSnapshot | null }) {
 
       {/* Metadata */}
       <div>
-        <h4 className="text-xs font-semibold text-zinc-400 uppercase mb-1">Governance Context</h4>
+        <h4 className="mb-1 text-xs font-semibold uppercase text-text-secondary">Governance Context</h4>
         <div className="flex flex-wrap gap-2 text-xs">
           {snapshot.metadata?.soul_constraints_active !== undefined && (
-            <span className={`px-2 py-0.5 rounded font-mono border ${snapshot.metadata.soul_constraints_active ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-zinc-600/20 text-zinc-400 border-zinc-600/30'}`}>
+            <span className={`rounded border px-2 py-0.5 font-mono ${snapshot.metadata.soul_constraints_active ? 'bg-state-healthy/15 text-state-healthy border-state-healthy/30' : 'bg-surface-input text-text-muted border-border-default'}`}>
               Soul: {snapshot.metadata.soul_constraints_active ? 'ON' : 'OFF'}
             </span>
           )}
           {snapshot.metadata?.apl_rules_active !== undefined && (
-            <span className={`px-2 py-0.5 rounded font-mono border ${snapshot.metadata.apl_rules_active ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-zinc-600/20 text-zinc-400 border-zinc-600/30'}`}>
+            <span className={`rounded border px-2 py-0.5 font-mono ${snapshot.metadata.apl_rules_active ? 'bg-state-healthy/15 text-state-healthy border-state-healthy/30' : 'bg-surface-input text-text-muted border-border-default'}`}>
               APL: {snapshot.metadata.apl_rules_active ? 'ON' : 'OFF'}
             </span>
           )}
           {snapshot.metadata?.trust_ledger_active !== undefined && (
-            <span className={`px-2 py-0.5 rounded font-mono border ${snapshot.metadata.trust_ledger_active ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-zinc-600/20 text-zinc-400 border-zinc-600/30'}`}>
+            <span className={`rounded border px-2 py-0.5 font-mono ${snapshot.metadata.trust_ledger_active ? 'bg-state-healthy/15 text-state-healthy border-state-healthy/30' : 'bg-surface-input text-text-muted border-border-default'}`}>
               Trust: {snapshot.metadata.trust_ledger_active ? 'ON' : 'OFF'}
             </span>
           )}
@@ -262,38 +262,38 @@ function ReceiptDetail({ receipt }: { receipt: ReceiptNode | null }) {
   if (!receipt) return null
 
   return (
-    <div className="border border-zinc-700 rounded-lg p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider">Receipt Detail</h3>
-        <div className="flex items-center gap-2">
+    <div className="space-y-3 rounded-lg border border-border-default bg-surface-card p-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-text-secondary">Receipt Detail</h3>
+        <div className="flex flex-wrap items-center gap-2">
           <TierBadge tier={receipt.tier} />
           <StatusBadge status={receipt.status} />
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 text-sm">
+      <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
         <div>
-          <span className="text-zinc-500 block">ID</span>
-          <span className="text-zinc-200 font-mono text-xs break-all">{receipt.id}</span>
+          <span className="block text-text-muted">ID</span>
+          <span className="break-all font-mono text-xs text-text-primary">{receipt.id}</span>
         </div>
         <div>
-          <span className="text-zinc-500 block">Action</span>
-          <span className="text-zinc-200 font-mono">{receipt.action_type}</span>
+          <span className="block text-text-muted">Action</span>
+          <span className="break-all font-mono text-text-primary">{receipt.action_type}</span>
         </div>
         <div>
-          <span className="text-zinc-500 block">Name</span>
-          <span className="text-zinc-200">{receipt.action_name}</span>
+          <span className="block text-text-muted">Name</span>
+          <span className="break-words text-text-primary">{receipt.action_name}</span>
         </div>
         <div>
-          <span className="text-zinc-500 block">Duration</span>
-          <span className="text-zinc-200 font-mono">{receipt.duration_ms ?? '—'}ms</span>
+          <span className="block text-text-muted">Duration</span>
+          <span className="font-mono text-text-primary">{receipt.duration_ms ?? '-'}ms</span>
         </div>
       </div>
 
       {Object.keys(receipt.inputs).length > 0 && (
         <details className="text-xs">
-          <summary className="text-zinc-400 cursor-pointer hover:text-zinc-300">Inputs</summary>
-          <pre className="mt-1 p-2 bg-zinc-800 rounded text-zinc-300 overflow-x-auto max-h-40">
+          <summary className="cursor-pointer text-text-secondary hover:text-text-primary">Inputs</summary>
+          <pre className="mt-1 max-h-40 overflow-x-auto rounded bg-surface-input p-2 text-text-secondary">
             {JSON.stringify(receipt.inputs, null, 2)}
           </pre>
         </details>
@@ -301,8 +301,8 @@ function ReceiptDetail({ receipt }: { receipt: ReceiptNode | null }) {
 
       {Object.keys(receipt.outputs).length > 0 && (
         <details className="text-xs">
-          <summary className="text-zinc-400 cursor-pointer hover:text-zinc-300">Outputs</summary>
-          <pre className="mt-1 p-2 bg-zinc-800 rounded text-zinc-300 overflow-x-auto max-h-40">
+          <summary className="cursor-pointer text-text-secondary hover:text-text-primary">Outputs</summary>
+          <pre className="mt-1 max-h-40 overflow-x-auto rounded bg-surface-input p-2 text-text-secondary">
             {JSON.stringify(receipt.outputs, null, 2)}
           </pre>
         </details>
@@ -348,13 +348,13 @@ function ForkModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-zinc-800 border border-zinc-600 rounded-xl p-6 max-w-lg w-full mx-4 space-y-4" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-lg font-semibold text-zinc-200">Time-Travel Operation</h2>
-        <p className="text-sm text-zinc-400">Quest: <span className="font-mono text-zinc-300">{questId.slice(0, 12)}...</span></p>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div className="w-full max-w-lg space-y-4 rounded-xl border border-border-default bg-surface-card p-6" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold text-text-primary">Time-Travel Operation</h2>
+        <p className="text-sm text-text-muted">Quest: <span className="break-all font-mono text-text-secondary">{questId.slice(0, 24)}...</span></p>
 
         {status && !status.fork_allowed && (
-          <div className="bg-amber-500/10 border border-amber-500/30 rounded p-3 text-sm text-amber-400">
+          <div className="rounded border border-state-degraded/30 bg-state-degraded/10 p-3 text-sm text-state-degraded">
             Fork/Replay is disabled in the current Soul. Enable fork_permissions.allow_fork to proceed.
           </div>
         )}
@@ -362,20 +362,20 @@ function ForkModal({
         <div className="flex gap-2">
           <button
             onClick={() => setMode('replay')}
-            className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${mode === 'replay' ? 'bg-indigo-600 text-white' : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'}`}
+            className={`rounded px-3 py-1.5 text-sm font-medium transition-colors ${mode === 'replay' ? 'bg-accent-primary text-white' : 'bg-surface-input text-text-secondary hover:text-text-primary'}`}
           >
             Replay
           </button>
           <button
             onClick={() => setMode('fork')}
-            className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${mode === 'fork' ? 'bg-indigo-600 text-white' : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'}`}
+            className={`rounded px-3 py-1.5 text-sm font-medium transition-colors ${mode === 'fork' ? 'bg-accent-primary text-white' : 'bg-surface-input text-text-secondary hover:text-text-primary'}`}
           >
             Fork
           </button>
         </div>
 
         {mode === 'replay' && (
-          <p className="text-sm text-zinc-400">
+          <p className="text-sm text-text-muted">
             Re-execute this quest unchanged under the current Soul. A new quest ID will be assigned.
             Requires T{status?.require_approval_tier ?? 3} approval.
           </p>
@@ -383,29 +383,29 @@ function ForkModal({
 
         {mode === 'fork' && (
           <div className="space-y-2">
-            <p className="text-sm text-zinc-400">
+            <p className="text-sm text-text-muted">
               Fork this quest with modified inputs. Requires T{status?.require_approval_tier ?? 3} approval.
             </p>
-            <label className="text-xs text-zinc-500 block">Modifications (JSON)</label>
+            <label className="block text-xs text-text-muted">Modifications (JSON)</label>
             <textarea
               value={modsText}
               onChange={(e) => setModsText(e.target.value)}
-              className="w-full h-24 bg-zinc-900 border border-zinc-600 rounded p-2 text-sm font-mono text-zinc-300 focus:outline-none focus:border-indigo-500"
+              className="h-24 w-full rounded border border-border-default bg-surface-input p-2 text-sm font-mono text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
               placeholder='{"inputs.query": "new prompt"}'
             />
           </div>
         )}
 
         {error && (
-          <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded p-2">{error}</div>
+          <div className="rounded border border-state-error/30 bg-state-error/10 p-2 text-sm text-state-error">{error}</div>
         )}
 
         <div className="flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-zinc-400 hover:text-zinc-200 transition-colors">Cancel</button>
+          <button onClick={onClose} className="px-4 py-2 text-sm text-text-muted transition-colors hover:text-text-primary">Cancel</button>
           <button
             onClick={handleSubmit}
             disabled={submitting || (status !== null && !status.fork_allowed)}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white text-sm rounded font-medium transition-colors"
+            className="rounded bg-accent-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-primary/80 disabled:bg-surface-input disabled:text-text-muted"
           >
             {submitting ? 'Processing...' : mode === 'replay' ? 'Replay Quest' : 'Fork Quest'}
           </button>
@@ -509,23 +509,37 @@ export function TimeTravelDebugger() {
     }
   }, [searchedQuestId])
 
+  const runtimeDegraded = !!status?.runtime_degraded
+  const readinessChecks = [
+    { label: 'Engine', ready: status?.engine_ready ?? status?.enabled },
+    { label: 'Executor', ready: status?.quest_executor_ready },
+    { label: 'Snapshots', ready: status?.snapshot_reader_ready },
+    { label: 'Receipts', ready: status?.receipt_service_ready },
+  ]
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 p-4 md:p-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-zinc-100">Time-Travel Debugger</h1>
-          <p className="text-sm text-zinc-400 mt-1">Inspect, replay, and fork past quest executions under governed control.</p>
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-accent-primary">System Forensics</p>
+          <h1 className="text-2xl font-bold text-text-primary">Time-Travel Debugger</h1>
+          <p className="mt-1 max-w-3xl text-sm text-text-muted">Inspect, replay, and fork past quest executions under governed control.</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
           {status && (
             <>
-              <span className={`px-2 py-1 rounded text-xs font-mono border ${status.enabled ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-zinc-600/20 text-zinc-400 border-zinc-600/30'}`}>
-                {status.enabled ? 'ENABLED' : 'DISABLED'}
+              <span className={`rounded border px-2 py-1 text-xs font-mono ${status.enabled && !runtimeDegraded ? 'bg-state-healthy/15 text-state-healthy border-state-healthy/30' : status.enabled ? 'bg-state-degraded/15 text-state-degraded border-state-degraded/30' : 'bg-surface-input text-text-muted border-border-default'}`}>
+                {status.enabled ? (runtimeDegraded ? 'DEGRADED' : 'ENABLED') : 'DISABLED'}
               </span>
               {status.fork_allowed && (
-                <span className="px-2 py-1 rounded text-xs font-mono border bg-indigo-500/20 text-indigo-400 border-indigo-500/30">
+                <span className="rounded border border-accent-primary/30 bg-accent-primary/15 px-2 py-1 text-xs font-mono text-accent-primary">
                   FORK: T{status.require_approval_tier}
+                </span>
+              )}
+              {status.soul_version && (
+                <span className="rounded border border-border-default bg-surface-input px-2 py-1 text-xs font-mono text-text-muted">
+                  Soul {status.soul_version}
                 </span>
               )}
             </>
@@ -533,20 +547,34 @@ export function TimeTravelDebugger() {
         </div>
       </div>
 
+      {status && (
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          {readinessChecks.map((item) => (
+            <div key={item.label} className="flex items-center justify-between gap-2 rounded-lg border border-border-default bg-surface-card px-3 py-2">
+              <span className="text-xs text-text-muted">{item.label}</span>
+              <span className={`text-[10px] font-mono ${item.ready ? 'text-state-healthy' : 'text-state-degraded'}`}>
+                {item.ready ? 'ready' : 'standby'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Quest Search */}
-      <div className="flex gap-2">
+      <div className="rounded-lg border border-border-default bg-surface-card p-3">
+        <div className="flex flex-col gap-2 lg:flex-row">
         <input
           type="text"
           value={questId}
           onChange={(e) => setQuestId(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
           placeholder="Enter Quest ID..."
-          className="flex-1 bg-zinc-800 border border-zinc-600 rounded-lg px-4 py-2 text-sm font-mono text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
+          className="min-w-0 flex-1 rounded-lg border border-border-default bg-surface-input px-4 py-2 text-sm font-mono text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent-primary"
         />
         <button
           onClick={handleSearch}
           disabled={loadingQuest || !questId.trim()}
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white text-sm rounded-lg font-medium transition-colors"
+          className="rounded-lg bg-accent-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-primary/80 disabled:bg-surface-input disabled:text-text-muted"
         >
           {loadingQuest ? 'Loading...' : 'Load Quest'}
         </button>
@@ -554,35 +582,45 @@ export function TimeTravelDebugger() {
           <button
             onClick={() => setShowForkModal(true)}
             disabled={!status?.enabled}
-            className="px-4 py-2 bg-amber-600 hover:bg-amber-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white text-sm rounded-lg font-medium transition-colors"
+            className="rounded-lg bg-state-degraded px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-state-degraded/80 disabled:bg-surface-input disabled:text-text-muted"
           >
             Fork / Replay
           </button>
         )}
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-muted">
+          <span>Quest IDs are sourced from receipts.</span>
+          <a href="/war-room/receipts" className="text-accent-primary hover:text-accent-primary/80">Open Receipt Explorer</a>
+        </div>
       </div>
 
       {/* Messages */}
+      {status?.degraded_reasons && status.degraded_reasons.length > 0 && (
+        <div className="rounded-lg border border-state-degraded/30 bg-state-degraded/10 p-3 text-sm text-state-degraded">
+          {status.degraded_reasons.join(' / ')}
+        </div>
+      )}
       {error && (
-        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm text-red-400 flex justify-between items-center">
-          <span>{error}</span>
-          <button onClick={() => setError(null)} className="text-red-400 hover:text-red-300">x</button>
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-state-error/30 bg-state-error/10 p-3 text-sm text-state-error">
+          <span className="min-w-0 break-words">{error}</span>
+          <button onClick={() => setError(null)} className="text-state-error hover:text-state-error/80">x</button>
         </div>
       )}
       {resultMsg && (
-        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-3 text-sm text-emerald-400 flex justify-between items-center">
-          <span>{resultMsg}</span>
-          <button onClick={() => setResultMsg(null)} className="text-emerald-400 hover:text-emerald-300">x</button>
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-state-healthy/30 bg-state-healthy/10 p-3 text-sm text-state-healthy">
+          <span className="min-w-0 break-words">{resultMsg}</span>
+          <button onClick={() => setResultMsg(null)} className="text-state-healthy hover:text-state-healthy/80">x</button>
         </div>
       )}
 
       {/* DAG Navigator */}
       {questData && (
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-sm font-semibold text-zinc-400 uppercase tracking-wider">
+        <div className="rounded-lg border border-border-default bg-surface-card p-4">
+          <div className="mb-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-text-secondary">
               Receipt DAG — {questData.receipt_count} receipts
             </h2>
-            <span className="text-xs text-zinc-500 font-mono">{searchedQuestId?.slice(0, 12)}...</span>
+            <span className="break-all text-xs font-mono text-text-muted">{searchedQuestId?.slice(0, 24)}...</span>
           </div>
           <DagNavigator
             receipts={questData.receipts}
@@ -594,11 +632,11 @@ export function TimeTravelDebugger() {
 
       {/* Detail Panels */}
       {questData && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <ReceiptDetail receipt={selectedReceipt} />
           <div>
             {loadingSnapshot ? (
-              <div className="border border-zinc-700 rounded-lg p-4 text-zinc-500 text-sm animate-pulse">
+              <div className="animate-pulse rounded-lg border border-border-default bg-surface-card p-4 text-sm text-text-muted">
                 Loading state snapshot...
               </div>
             ) : (
@@ -610,10 +648,16 @@ export function TimeTravelDebugger() {
 
       {/* Empty State */}
       {!questData && !loadingQuest && !error && (
-        <div className="text-center py-16 text-zinc-500">
-          <div className="text-4xl mb-3 opacity-30">&#8634;</div>
-          <p className="text-lg">Enter a Quest ID to explore its receipt DAG</p>
-          <p className="text-sm mt-1">You can find Quest IDs in the Receipt Explorer</p>
+        <div className="rounded-lg border border-border-default bg-surface-card p-6 text-text-muted">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-sm font-medium text-text-primary">No quest loaded</p>
+              <p className="mt-1 text-sm">Load a quest to inspect receipts, governance state, replay controls, and fork controls.</p>
+            </div>
+            <a href="/war-room/receipts" className="inline-flex items-center justify-center rounded-lg border border-accent-primary/30 bg-accent-primary/10 px-3 py-2 text-sm font-medium text-accent-primary hover:bg-accent-primary/15">
+              Receipt Explorer
+            </a>
+          </div>
         </div>
       )}
 

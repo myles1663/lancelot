@@ -1,4 +1,19 @@
 import { useState, useEffect } from 'react'
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronRight,
+  Database,
+  KeyRound,
+  Link2,
+  LockKeyhole,
+  PlugZap,
+  RefreshCw,
+  ShieldCheck,
+  SlidersHorizontal,
+  Trash2,
+  Unplug,
+} from 'lucide-react'
 import { usePolling, usePageTitle } from '@/hooks'
 import {
   fetchConnectors,
@@ -37,6 +52,59 @@ function credentialLabel(creds: CredentialInfo[]): string {
   if (allPresent) return 'Configured'
   if (anyPresent) return 'Partial'
   return 'Not Configured'
+}
+
+function connectorPosture(connector: ConnectorInfo): 'healthy' | 'degraded' | 'inactive' {
+  if (!connector.enabled) return 'inactive'
+  if (connector.available === false) return 'degraded'
+  return credentialState(connector.credentials)
+}
+
+function providerLabel(provider: string): string {
+  const labels: Record<string, string> = {
+    gmail: 'Google Gmail',
+    google: 'Google Calendar',
+    outlook: 'Microsoft Graph',
+    smtp: 'SMTP / IMAP',
+    caldav: 'CalDAV',
+  }
+  return labels[provider] ?? provider
+}
+
+function connectorFamily(connector: ConnectorInfo): string {
+  if (connector.id === 'email') return 'Email'
+  if (connector.id === 'calendar') return 'Calendar'
+  if (['teams', 'onedrive', 'sharepoint'].includes(connector.id)) return 'Microsoft Graph'
+  if (['slack', 'discord', 'telegram', 'whatsapp', 'sms', 'x'].includes(connector.id)) return 'Messaging'
+  if (connector.id === 'shared_workspace') return 'Workspace'
+  return 'Custom'
+}
+
+function SummaryTile({
+  label,
+  value,
+  detail,
+  tone = 'muted',
+}: {
+  label: string
+  value: string | number
+  detail: string
+  tone?: 'healthy' | 'accent' | 'warning' | 'muted'
+}) {
+  const tones = {
+    healthy: 'border-state-healthy/30 bg-state-healthy/10 text-state-healthy',
+    accent: 'border-accent-primary/30 bg-accent-primary/10 text-accent-primary',
+    warning: 'border-state-degraded/30 bg-state-degraded/10 text-state-degraded',
+    muted: 'border-border-default bg-surface-card text-text-muted',
+  }
+
+  return (
+    <div className={`min-w-0 rounded-lg border p-4 ${tones[tone]}`}>
+      <div className="text-[10px] font-semibold uppercase tracking-wider opacity-80">{label}</div>
+      <div className="mt-3 truncate text-2xl font-semibold leading-tight text-text-primary">{value}</div>
+      <div className="mt-1 text-xs leading-5 text-text-muted">{detail}</div>
+    </div>
+  )
 }
 
 // ── Main Page ────────────────────────────────────────────────────
@@ -133,6 +201,12 @@ export function Connectors() {
   }
 
   const connectors = data?.connectors ?? []
+  const enabledConnectors = connectors.filter(c => c.enabled).length
+  const unavailableConnectors = connectors.filter(c => c.available === false).length
+  const missingCredentialConnectors = connectors.filter(c => (
+    c.available === false || (c.credentials.length > 0 && credentialState(c.credentials) !== 'healthy')
+  )).length
+  const googleConnected = Boolean(googleOAuthStatus?.valid)
 
   const toggleExpand = (id: string) => {
     setExpanded(prev => {
@@ -241,32 +315,49 @@ export function Connectors() {
   }
 
   return (
-    <div>
-      <h2 className="text-lg font-semibold text-text-primary mb-6">Connectors</h2>
-
-      {/* Summary Bar */}
-      <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
-        <div className="grid grid-cols-3 gap-4">
+    <div className="mx-auto max-w-7xl space-y-6 p-4 sm:p-6">
+      <section className="rounded-lg border border-border-default bg-surface-card p-4">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
-            <span className="text-[10px] uppercase tracking-wider text-text-muted">Total</span>
-            <p className="text-xl font-mono text-text-primary mt-1">{data?.total ?? 0}</p>
+            <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-accent-primary">
+              <PlugZap className="h-4 w-4" aria-hidden="true" />
+              Integration Control
+            </div>
+            <h1 className="mt-2 text-2xl font-semibold text-text-primary">Connectors</h1>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">
+              Enable governed integrations, review data access boundaries, configure masked credentials, and validate connector readiness.
+            </p>
           </div>
-          <div>
-            <span className="text-[10px] uppercase tracking-wider text-text-muted">Enabled</span>
-            <p className="text-xl font-mono text-state-healthy mt-1">{data?.enabled_count ?? 0}</p>
-          </div>
-          <div>
-            <span className="text-[10px] uppercase tracking-wider text-text-muted">Configured</span>
-            <p className="text-xl font-mono text-accent-primary mt-1">{data?.configured_count ?? 0}</p>
+          <div className="grid gap-2 sm:grid-cols-3 xl:min-w-[34rem]">
+            <div className="rounded border border-border-default bg-surface-card-elevated p-3">
+              <div className="text-[10px] uppercase tracking-wider text-text-muted">Enabled</div>
+              <div className="mt-1 text-lg font-semibold text-text-primary">{enabledConnectors}</div>
+            </div>
+            <div className={`rounded border p-3 ${missingCredentialConnectors > 0 ? 'border-state-degraded/30 bg-state-degraded/10' : 'border-state-healthy/30 bg-state-healthy/10'}`}>
+              <div className="text-[10px] uppercase tracking-wider text-text-muted">Needs Attention</div>
+              <div className="mt-1 text-lg font-semibold text-text-primary">{missingCredentialConnectors}</div>
+            </div>
+            <div className={`rounded border p-3 ${googleConnected ? 'border-state-healthy/30 bg-state-healthy/10' : 'border-border-default bg-surface-card-elevated'}`}>
+              <div className="text-[10px] uppercase tracking-wider text-text-muted">Google OAuth</div>
+              <div className="mt-1 text-sm font-medium text-text-primary">{googleConnected ? 'Connected' : 'Not connected'}</div>
+            </div>
           </div>
         </div>
       </section>
 
+      {/* Summary Bar */}
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <SummaryTile label="Total" value={data?.total ?? 0} detail="Registered connector definitions." tone="accent" />
+        <SummaryTile label="Enabled" value={data?.enabled_count ?? 0} detail="Available to governed workflows." tone={enabledConnectors > 0 ? 'healthy' : 'muted'} />
+        <SummaryTile label="Configured" value={data?.configured_count ?? 0} detail="Credential requirements satisfied." tone="accent" />
+        <SummaryTile label="Attention" value={missingCredentialConnectors} detail={`${unavailableConnectors} unavailable, plus missing credential sets.`} tone={missingCredentialConnectors > 0 ? 'warning' : 'healthy'} />
+      </section>
+
       {/* Connector Cards */}
       {!data ? (
-        <p className="text-sm text-text-muted">Loading connectors...</p>
+        <section className="rounded-lg border border-border-default bg-surface-card p-6 text-sm text-text-muted">Loading connectors...</section>
       ) : connectors.length === 0 ? (
-        <section className="bg-surface-card border border-border-default rounded-lg p-6 text-center">
+        <section className="rounded-lg border border-border-default bg-surface-card p-6 text-center">
           <p className="text-sm text-text-muted">No connectors available. Ensure FEATURE_CONNECTORS is enabled.</p>
         </section>
       ) : (
@@ -275,25 +366,29 @@ export function Connectors() {
             const isExpanded = expanded.has(connector.id)
             const isConfiguring = configuring.has(connector.id)
             const cState = credentialState(connector.credentials)
+            const posture = connectorPosture(connector)
 
             return (
-              <div key={connector.id} className="bg-surface-card-elevated rounded-md border border-border-default overflow-hidden">
+              <div key={connector.id} className="overflow-hidden rounded-lg border border-border-default bg-surface-card">
                 {/* Header row */}
                 <div
-                  className="flex items-center justify-between p-3 cursor-pointer hover:bg-surface-input/50 transition-colors"
+                  className="flex cursor-pointer flex-col gap-3 p-4 transition-colors hover:bg-surface-card-elevated sm:flex-row sm:items-center sm:justify-between"
                   onClick={() => toggleExpand(connector.id)}
                 >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <span className={`text-[10px] transition-transform ${isExpanded ? 'rotate-90' : ''}`}>&#9654;</span>
+                  <div className="flex min-w-0 flex-1 items-start gap-3">
+                    <ChevronRight className={`mt-0.5 h-4 w-4 shrink-0 text-text-muted transition-transform ${isExpanded ? 'rotate-90' : ''}`} aria-hidden="true" />
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-medium text-text-primary">{connector.name}</span>
                         <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-surface-input text-text-muted">
                           {connector.operation_count} ops
                         </span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded border border-border-default bg-surface-card-elevated text-text-muted">
+                          {connectorFamily(connector)}
+                        </span>
                         {connector.backend && (
                           <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-accent-primary/15 text-accent-primary">
-                            {connector.backend}
+                            {providerLabel(connector.backend)}
                           </span>
                         )}
                       </div>
@@ -301,7 +396,8 @@ export function Connectors() {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3 flex-shrink-0">
+                  <div className="flex flex-wrap items-center gap-3 sm:flex-shrink-0 sm:justify-end">
+                    <StatusDot state={posture} label={connector.enabled ? 'Enabled' : 'Disabled'} />
                     <StatusDot state={cState} label={credentialLabel(connector.credentials)} />
 
                     {/* Enable/Disable Toggle */}
@@ -321,45 +417,64 @@ export function Connectors() {
 
                 {/* Expanded details */}
                 {isExpanded && (
-                  <div className="px-3 pb-3 pt-0 border-t border-border-default/50 space-y-3">
+                  <div className="space-y-4 border-t border-border-default px-4 pb-4 pt-4">
                     {/* Backend selector */}
                     {connector.available_backends && connector.available_backends.length > 1 && (
-                      <div className="flex items-center gap-2 mt-2">
-                        <span className="text-[10px] uppercase tracking-wider text-text-muted">Backend:</span>
+                      <div className="flex flex-col gap-2 rounded border border-border-default bg-surface-card-elevated p-3 sm:flex-row sm:items-center">
+                        <span className="inline-flex items-center gap-2 text-[10px] uppercase tracking-wider text-text-muted">
+                          <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+                          Provider
+                        </span>
                         <select
                           value={connector.backend || ''}
                           onChange={(e) => { e.stopPropagation(); handleBackendChange(connector.id, e.target.value) }}
-                          className="text-xs bg-surface-input border border-border-default rounded px-2 py-1 text-text-primary focus:outline-none focus:border-accent-primary"
+                          className="text-xs bg-surface-input border border-border-default rounded px-2 py-1.5 text-text-primary focus:outline-none focus:border-accent-primary"
                         >
                           {connector.available_backends.map(b => (
-                            <option key={b} value={b}>{b}</option>
+                            <option key={b} value={b}>{providerLabel(b)}</option>
                           ))}
                         </select>
                       </div>
                     )}
 
+                    {connector.available === false && connector.availability_reason && (
+                      <div className="flex items-start gap-2 rounded border border-state-degraded/30 bg-state-degraded/10 p-3 text-[11px] leading-5 text-state-degraded">
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                        <span>{connector.availability_reason}</span>
+                      </div>
+                    )}
+
                     {/* Data access summary */}
-                    <div className="grid grid-cols-3 gap-3 mt-2">
-                      <div>
-                        <span className="text-[10px] text-text-muted uppercase tracking-wider">Reads</span>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                      <div className="rounded border border-border-default bg-surface-card-elevated p-3">
+                        <span className="inline-flex items-center gap-2 text-[10px] uppercase tracking-wider text-text-muted">
+                          <Database className="h-3.5 w-3.5" aria-hidden="true" />
+                          Reads
+                        </span>
                         <ul className="mt-1 space-y-0.5">
-                          {connector.data_reads.map((r, i) => (
+                          {connector.data_reads.length === 0 ? <li className="text-[11px] text-text-muted">None declared</li> : connector.data_reads.map((r, i) => (
                             <li key={i} className="text-[11px] text-text-secondary">{r}</li>
                           ))}
                         </ul>
                       </div>
-                      <div>
-                        <span className="text-[10px] text-text-muted uppercase tracking-wider">Writes</span>
+                      <div className="rounded border border-border-default bg-surface-card-elevated p-3">
+                        <span className="inline-flex items-center gap-2 text-[10px] uppercase tracking-wider text-text-muted">
+                          <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          Writes
+                        </span>
                         <ul className="mt-1 space-y-0.5">
-                          {connector.data_writes.map((w, i) => (
+                          {connector.data_writes.length === 0 ? <li className="text-[11px] text-text-muted">None declared</li> : connector.data_writes.map((w, i) => (
                             <li key={i} className="text-[11px] text-text-secondary">{w}</li>
                           ))}
                         </ul>
                       </div>
-                      <div>
-                        <span className="text-[10px] text-state-healthy uppercase tracking-wider">Does Not Access</span>
+                      <div className="rounded border border-state-healthy/20 bg-state-healthy/5 p-3">
+                        <span className="inline-flex items-center gap-2 text-[10px] uppercase tracking-wider text-state-healthy">
+                          <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                          Does Not Access
+                        </span>
                         <ul className="mt-1 space-y-0.5">
-                          {connector.does_not_access.map((d, i) => (
+                          {connector.does_not_access.length === 0 ? <li className="text-[11px] text-state-healthy/70">None declared</li> : connector.does_not_access.map((d, i) => (
                             <li key={i} className="text-[11px] text-state-healthy/70">{d}</li>
                           ))}
                         </ul>
@@ -378,23 +493,29 @@ export function Connectors() {
                     {/* Configure credentials button */}
                     <button
                       onClick={(e) => { e.stopPropagation(); toggleConfigure(connector.id) }}
-                      className="px-3 py-1.5 text-[11px] font-medium rounded bg-surface-input border border-border-default text-text-secondary hover:text-text-primary hover:bg-surface-card transition-colors"
+                      className="inline-flex items-center gap-2 rounded border border-border-default bg-surface-input px-3 py-1.5 text-[11px] font-medium text-text-secondary transition-colors hover:bg-surface-card hover:text-text-primary"
                     >
+                      <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
                       {isConfiguring ? 'Hide Credentials' : 'Configure Credentials'}
                     </button>
 
                     {/* Credential form */}
                     {isConfiguring && (
-                      <div className="p-3 bg-surface-card rounded-lg border border-border-default">
-                        <span className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">
-                          Credentials ({connector.credentials.filter(c => c.present).length}/{connector.credentials.length} configured)
-                        </span>
+                      <div className="rounded-lg border border-border-default bg-surface-card-elevated p-3">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <span className="inline-flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-text-secondary">
+                            <LockKeyhole className="h-3.5 w-3.5" aria-hidden="true" />
+                            Credentials ({connector.credentials.filter(c => c.present).length}/{connector.credentials.length} configured)
+                          </span>
+                          <span className="text-[10px] text-text-muted">Secrets are stored in the connector vault.</span>
+                        </div>
 
                         {/* Google OAuth section — shown for connectors using Google OAuth tokens */}
                         {usesGoogleOAuth(connector) && googleOAuthStatus?.feature_enabled && (
-                          <div className="mt-3 p-3 bg-surface-input/50 rounded-lg border border-border-default">
+                          <div className="mt-3 rounded-lg border border-border-default bg-surface-input/50 p-3">
                             <div className="flex items-center justify-between mb-2">
-                              <span className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">
+                              <span className="inline-flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-text-secondary">
+                                <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
                                 Google OAuth
                               </span>
                               {googleOAuthStatus?.valid && (
@@ -426,8 +547,9 @@ export function Connectors() {
                                 </p>
                                 <button
                                   onClick={() => setRevokeConfirm(true)}
-                                  className="px-3 py-1.5 text-[11px] font-medium rounded bg-state-error/10 text-state-error hover:bg-state-error/20 transition-colors"
+                                  className="inline-flex items-center gap-2 rounded bg-state-error/10 px-3 py-1.5 text-[11px] font-medium text-state-error transition-colors hover:bg-state-error/20"
                                 >
+                                  <Unplug className="h-3.5 w-3.5" aria-hidden="true" />
                                   Disconnect Google
                                 </button>
                               </div>
@@ -454,12 +576,13 @@ export function Connectors() {
                                   <button
                                     onClick={handleGoogleOAuthStart}
                                     disabled={googleOAuthLoading || !googleClientId.trim() || !googleClientSecret.trim()}
-                                    className={`px-3 py-1.5 text-[11px] font-medium rounded transition-colors ${
+                                    className={`inline-flex items-center gap-2 rounded px-3 py-1.5 text-[11px] font-medium transition-colors ${
                                       googleClientId.trim() && googleClientSecret.trim()
                                         ? 'bg-accent-primary text-white hover:bg-accent-primary/80'
                                         : 'bg-surface-input text-text-muted cursor-not-allowed'
                                     } disabled:opacity-50`}
                                   >
+                                    <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
                                     {googleOAuthLoading ? 'Opening...' : 'Authorize with Google'}
                                   </button>
                                 </div>
@@ -483,8 +606,8 @@ export function Connectors() {
                             return null
                           }
                           return (
-                          <div key={cred.vault_key} className="mt-3">
-                            <div className="flex items-center gap-2 mb-1">
+                          <div key={cred.vault_key} className="mt-3 rounded border border-border-default bg-surface-card p-3">
+                            <div className="mb-2 flex flex-wrap items-center gap-2">
                               <span className="text-[11px] font-medium text-text-primary">{cred.name}</span>
                               <span className={`text-[9px] px-1.5 py-0.5 rounded ${
                                 cred.present ? 'bg-state-healthy/15 text-state-healthy' : 'bg-state-error/15 text-state-error'
@@ -494,7 +617,7 @@ export function Connectors() {
                               <span className="text-[9px] px-1.5 py-0.5 rounded bg-surface-input text-text-muted">{cred.type}</span>
                               {cred.required && <span className="text-[9px] text-state-degraded">required</span>}
                             </div>
-                            <div className="flex gap-2">
+                            <div className="flex flex-col gap-2 sm:flex-row">
                               <input
                                 type={cred.type === 'config' ? 'text' : 'password'}
                                 placeholder={cred.present ? (cred.type === 'config' ? 'Current value stored' : '••••••••') : `Enter ${cred.type === 'config' ? 'value' : cred.type}...`}
@@ -505,19 +628,21 @@ export function Connectors() {
                               <button
                                 onClick={() => handleSaveCred(connector.id, cred)}
                                 disabled={saving === `${connector.id}.${cred.vault_key}` || !credInputs[connector.id]?.[cred.vault_key]}
-                                className={`px-3 py-1 text-[11px] font-medium rounded transition-colors ${
+                                className={`inline-flex items-center justify-center gap-2 rounded px-3 py-1.5 text-[11px] font-medium transition-colors ${
                                   credInputs[connector.id]?.[cred.vault_key]
                                     ? 'bg-accent-primary text-white hover:bg-accent-primary/80'
                                     : 'bg-surface-input text-text-muted cursor-not-allowed'
                                 }`}
                               >
+                                <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
                                 {saving === `${connector.id}.${cred.vault_key}` ? 'Saving...' : 'Save'}
                               </button>
                               {cred.present && (
                                 <button
                                   onClick={() => setDeleteConfirm({ connectorId: connector.id, vaultKey: cred.vault_key, name: cred.name })}
-                                  className="px-3 py-1 text-[11px] font-medium rounded bg-state-error/10 text-state-error hover:bg-state-error/20 transition-colors"
+                                  className="inline-flex items-center justify-center gap-2 rounded bg-state-error/10 px-3 py-1.5 text-[11px] font-medium text-state-error transition-colors hover:bg-state-error/20"
                                 >
+                                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                                   Delete
                                 </button>
                               )}
@@ -536,12 +661,13 @@ export function Connectors() {
                         })}
 
                         {/* Test Connection */}
-                        <div className="flex items-center gap-2 mt-4 pt-3 border-t border-border-default/50">
+                        <div className="mt-4 flex flex-col gap-2 border-t border-border-default/50 pt-3 sm:flex-row sm:items-center">
                           <button
                             onClick={() => handleValidate(connector.id)}
                             disabled={validating === connector.id}
-                            className="px-3 py-1.5 text-[11px] font-medium rounded bg-accent-primary text-white hover:bg-accent-primary/80 transition-colors disabled:opacity-50"
+                            className="inline-flex items-center justify-center gap-2 rounded bg-accent-primary px-3 py-1.5 text-[11px] font-medium text-white transition-colors hover:bg-accent-primary/80 disabled:opacity-50"
                           >
+                            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
                             {validating === connector.id ? 'Testing...' : 'Test Connection'}
                           </button>
                           {validationResult[connector.id] != null && (

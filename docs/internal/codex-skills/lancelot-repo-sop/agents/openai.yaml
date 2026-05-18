@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lancelot Repo SOP"
+  short_description: "Enterprise-grade workflow for Lancelot repo changes"
+  default_prompt: "Use $lancelot-repo-sop when making code, test, docs, release, governance, production-hardening, connector, skill, UAB, or War Room changes in the Lancelot repository."

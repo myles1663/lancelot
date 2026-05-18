@@ -53,13 +53,30 @@ container recovery when the vault key and persisted data volumes are still prese
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GEMINI_API_KEY` | One of five | Google Gemini API key (starts with `AIza...`) |
-| `OPENAI_API_KEY` | One of five | OpenAI API key (starts with `sk-...`) |
-| `ANTHROPIC_API_KEY` | One of five | Anthropic API key (starts with `sk-ant-...`) |
-| `XAI_API_KEY` | One of five | xAI (Grok) API key (starts with `xai-...`) |
-| `NVIDIA_API_KEY` | One of five | NVIDIA NIM API key (starts with `nvapi-...`) |
+| `GEMINI_API_KEY` | One of seven | Google Gemini API key (starts with `AIza...`) |
+| `OPENAI_API_KEY` | One of seven | OpenAI API key (starts with `sk-...`) |
+| `ANTHROPIC_API_KEY` | One of seven | Anthropic API key (starts with `sk-ant-...`) |
+| `XAI_API_KEY` | One of seven | xAI (Grok) API key (starts with `xai-...`) |
+| `NVIDIA_API_KEY` | One of seven | NVIDIA NIM API key (starts with `nvapi-...`) |
+| `DEEPSEEK_API_KEY` | One of seven | DeepSeek API key for `LANCELOT_PROVIDER=deepseek` |
+| `LOCAL_OPENAI_API_KEY` | Optional | Optional bearer token for a local/OpenAI-compatible model endpoint. Many local endpoints do not require a key. |
 
-At least one API key is required. You can configure one or more providers. Keys can be rotated from the War Room UI without restarting.
+At least one hosted provider API key, OAuth-backed provider, or local
+OpenAI-compatible endpoint is required. You can configure one or more
+providers. Keys can be rotated from the War Room UI without restarting.
+
+For a bring-your-own local/open-weight provider, configure `LOCAL_OPENAI_BASE_URL`
+instead of a hosted API key. This endpoint must expose an OpenAI-compatible
+`/chat/completions` API.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `LOCAL_OPENAI_BASE_URL` | For `local-openai` | - | Base URL for a local/OpenAI-compatible model server, such as `http://host.docker.internal:11434/v1`. |
+| `LOCAL_OPENAI_FAST_MODEL` | For `local-openai` | `local-fast` | Model ID used for the fast lane. |
+| `LOCAL_OPENAI_DEEP_MODEL` | For `local-openai` | `local-deep` | Model ID used for the deep lane. |
+| `LOCAL_OPENAI_CACHE_MODEL` | No | `local-cache` | Model ID used for cache lane requests. |
+| `LOCAL_OPENAI_CONTEXT_WINDOW` | No | `32768` | Operator-declared context window when the endpoint does not report model metadata. |
+| `LOCAL_OPENAI_SUPPORTS_TOOLS` | No | `true` | Whether the configured local endpoint supports OpenAI-style tool calls. |
 
 ### Provider Auth Mode
 

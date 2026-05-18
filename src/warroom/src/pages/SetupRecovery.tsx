@@ -1,4 +1,22 @@
 ﻿import { useState, useRef, useEffect, useCallback } from 'react'
+import {
+  AlertTriangle,
+  Archive,
+  CircleAlert,
+  Database,
+  Download,
+  FileText,
+  Flag,
+  HardDrive,
+  KeyRound,
+  LifeBuoy,
+  RotateCcw,
+  ServerCog,
+  Settings,
+  ShieldAlert,
+  Terminal,
+  Trash2,
+} from 'lucide-react'
 import { usePolling, usePageTitle } from '@/hooks'
 import {
   fetchOnboardingStatus,
@@ -43,10 +61,10 @@ import type {
 // Tab definitions
 
 const TABS = [
-  { id: 'system', label: 'System' },
-  { id: 'data', label: 'Data' },
-  { id: 'logs', label: 'Logs & Config' },
-  { id: 'danger', label: 'Danger Zone' },
+  { id: 'system', label: 'System', icon: ServerCog, detail: 'Runtime, onboarding, and model policy.' },
+  { id: 'data', label: 'Data', icon: Database, detail: 'Vault credentials, tokens, receipts, and usage.' },
+  { id: 'logs', label: 'Logs & Config', icon: FileText, detail: 'Audit logs, config reload, and backup export.' },
+  { id: 'danger', label: 'Danger Zone', icon: ShieldAlert, detail: 'Destructive recovery operations.' },
 ] as const
 
 type TabId = (typeof TABS)[number]['id']
@@ -63,12 +81,40 @@ function normalizeLocalModelRoles(
 
 // Section wrapper
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  children,
+  description,
+  icon,
+  tone = 'default',
+}: {
+  title: string
+  children: React.ReactNode
+  description?: string
+  icon?: React.ReactNode
+  tone?: 'default' | 'warning' | 'danger'
+}) {
+  const toneClass = {
+    default: 'border-border-default',
+    warning: 'border-state-degraded/30',
+    danger: 'border-state-error/30',
+  }[tone]
+
   return (
-    <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
-      <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-        {title}
-      </h3>
+    <section className={`mb-6 rounded-lg border ${toneClass} bg-surface-card p-4`}>
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            {icon && <span className="shrink-0 text-accent-primary">{icon}</span>}
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-text-secondary">
+              {title}
+            </h3>
+          </div>
+          {description && (
+            <p className="mt-1 max-w-3xl text-xs leading-5 text-text-muted">{description}</p>
+          )}
+        </div>
+      </div>
       {children}
     </section>
   )
@@ -100,13 +146,15 @@ function ActionButton({
   onClick,
   loading,
   variant = 'default',
+  icon,
 }: {
   label: string
   onClick: () => void
   loading?: boolean
   variant?: 'default' | 'destructive' | 'warning'
+  icon?: React.ReactNode
 }) {
-  const base = 'px-3 py-2 text-sm rounded-md transition-colors disabled:opacity-50'
+  const base = 'inline-flex items-center justify-center gap-2 px-3 py-2 text-sm rounded-md transition-colors disabled:opacity-50'
   const styles = {
     default:
       'bg-surface-input border border-border-default text-text-secondary hover:text-text-primary hover:bg-surface-card-elevated',
@@ -117,6 +165,7 @@ function ActionButton({
   }
   return (
     <button onClick={onClick} disabled={loading} className={`${base} ${styles[variant]}`}>
+      {icon}
       {loading ? 'Working...' : label}
     </button>
   )
@@ -127,26 +176,59 @@ function ActionButton({
 export function SetupRecovery() {
   usePageTitle('Setup & Recovery')
   const [tab, setTab] = useState<TabId>('system')
+  const activeTab = TABS.find((t) => t.id === tab) ?? TABS[0]
 
   return (
-    <div>
-      <h2 className="text-lg font-semibold text-text-primary mb-4">Setup & Recovery</h2>
+    <div className="mx-auto max-w-7xl space-y-6 p-4 sm:p-6">
+      <section className="rounded-lg border border-border-default bg-surface-card p-4">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-accent-primary">
+              <LifeBuoy className="h-4 w-4" aria-hidden="true" />
+              System Recovery
+            </div>
+            <h1 className="mt-2 text-2xl font-semibold text-text-primary">Setup & Recovery</h1>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">
+              Manage runtime recovery, onboarding, vault health, logs, backup export, and destructive reset workflows.
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 xl:min-w-[28rem]">
+            <div className="rounded border border-border-default bg-surface-card-elevated p-3">
+              <div className="text-[10px] uppercase tracking-wider text-text-muted">Current View</div>
+              <div className="mt-1 flex items-center gap-2 text-sm font-medium text-text-primary">
+                <activeTab.icon className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+                {activeTab.label}
+              </div>
+            </div>
+            <div className={`rounded border p-3 ${tab === 'danger' ? 'border-state-error/30 bg-state-error/10' : 'border-accent-primary/30 bg-accent-primary/10'}`}>
+              <div className="text-[10px] uppercase tracking-wider text-text-muted">Operator Scope</div>
+              <div className={`mt-1 text-sm font-medium ${tab === 'danger' ? 'text-state-error' : 'text-text-primary'}`}>
+                {tab === 'danger' ? 'Destructive' : 'Recoverable'}
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
 
       {/* Tab Navigation */}
-      <div className="flex gap-1 mb-6 bg-surface-input rounded-lg p-1">
+      <div className="grid gap-2 rounded-lg border border-border-default bg-surface-card p-2 sm:grid-cols-2 xl:grid-cols-4">
         {TABS.map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
-            className={`flex-1 px-3 py-2 text-sm font-medium rounded-md transition-colors ${
+            className={`min-w-0 rounded-md border px-3 py-3 text-left transition-colors ${
               tab === t.id
                 ? t.id === 'danger'
-                  ? 'bg-state-error/10 text-state-error border border-state-error/20'
-                  : 'bg-surface-card text-text-primary shadow-sm'
-                : 'text-text-muted hover:text-text-secondary'
+                  ? 'border-state-error/40 bg-state-error/10 text-state-error'
+                  : 'border-accent-primary/40 bg-accent-primary/10 text-text-primary'
+                : 'border-transparent bg-surface-card-elevated text-text-muted hover:border-border-active hover:text-text-secondary'
             }`}
           >
-            {t.label}
+            <span className="flex items-center gap-2 text-sm font-semibold">
+              <t.icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+              {t.label}
+            </span>
+            <span className="mt-1 block text-xs leading-5 text-text-muted">{t.detail}</span>
           </button>
         ))}
       </div>
@@ -233,7 +315,11 @@ function SystemTab() {
   return (
     <>
       {/* System Info */}
-      <Section title="System Info">
+      <Section
+        title="System Info"
+        icon={<HardDrive className="h-4 w-4" aria-hidden="true" />}
+        description="Runtime identity and storage posture for this instance."
+      >
         {!sysInfo ? (
           <p className="text-sm text-text-muted">Loading...</p>
         ) : (
@@ -250,16 +336,23 @@ function SystemTab() {
       </Section>
 
       {/* Container Controls */}
-      <Section title="Container Controls">
+      <Section
+        title="Container Controls"
+        icon={<RotateCcw className="h-4 w-4" aria-hidden="true" />}
+        tone="warning"
+        description="Restart and shutdown are operational controls; shutdown requires manual Docker recovery."
+      >
         <div className="flex flex-wrap gap-3">
           <ActionButton
             label="Restart Container"
             variant="warning"
+            icon={<RotateCcw className="h-4 w-4" aria-hidden="true" />}
             onClick={() => setConfirmAction('restart')}
           />
           <ActionButton
             label="Shutdown Container"
             variant="destructive"
+            icon={<CircleAlert className="h-4 w-4" aria-hidden="true" />}
             onClick={() => setConfirmAction('shutdown')}
           />
         </div>
@@ -269,7 +362,11 @@ function SystemTab() {
       </Section>
 
       {/* Onboarding Status */}
-      <Section title="Onboarding Status">
+      <Section
+        title="Onboarding Status"
+        icon={<Flag className="h-4 w-4" aria-hidden="true" />}
+        description="Setup flow state, credential posture, and local runtime readiness."
+      >
         {!onboarding ? (
           <p className="text-sm text-text-muted">Loading...</p>
         ) : (
@@ -384,7 +481,11 @@ function SystemTab() {
         )}
       </Section>
 
-      <Section title="Local Model Usage Policy">
+      <Section
+        title="Local Model Usage Policy"
+        icon={<Settings className="h-4 w-4" aria-hidden="true" />}
+        description="Controls local utility execution and frontier-bound scrubbing behavior."
+      >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-[10px] uppercase tracking-wider text-text-muted mb-1">
@@ -521,6 +622,7 @@ function SystemTab() {
             label="Save Policy"
             onClick={handleSaveModelPolicy}
             loading={policySaving}
+            icon={<Settings className="h-4 w-4" aria-hidden="true" />}
           />
         </div>
         {policyResult && (
@@ -529,21 +631,26 @@ function SystemTab() {
       </Section>
 
       {/* Recovery Commands */}
-      <Section title="Recovery Commands">
+      <Section
+        title="Recovery Commands"
+        icon={<Terminal className="h-4 w-4" aria-hidden="true" />}
+        description="Guided onboarding recovery commands that do not reset data."
+      >
         <div className="flex flex-wrap gap-2">
           <ActionButton
             label="Check Status"
+            icon={<Terminal className="h-4 w-4" aria-hidden="true" />}
             onClick={() => runCommand(() => sendOnboardingCommand('STATUS'))}
           />
           <ActionButton label="Go Back" onClick={() => runCommand(onboardingBack)} />
-          <ActionButton label="Restart Step" onClick={() => runCommand(onboardingRestartStep)} />
+          <ActionButton label="Restart Step" icon={<RotateCcw className="h-4 w-4" aria-hidden="true" />} onClick={() => runCommand(onboardingRestartStep)} />
           <ActionButton label="Resend Code" onClick={() => runCommand(onboardingResendCode)} />
         </div>
       </Section>
 
       {/* Command Result */}
       {cmdResult && (
-        <Section title="Command Result">
+        <Section title="Command Result" icon={<Terminal className="h-4 w-4" aria-hidden="true" />}>
           <pre className="text-sm font-mono text-text-primary bg-surface-input rounded p-3 whitespace-pre-wrap">
             {cmdResult}
           </pre>
@@ -625,7 +732,11 @@ function DataTab() {
 
   return (
     <>
-      <Section title="Connector Vault Health">
+      <Section
+        title="Connector Vault Health"
+        icon={<KeyRound className="h-4 w-4" aria-hidden="true" />}
+        description="Vault availability, key source, file posture, and mismatch detection."
+      >
         {!vaultStatus ? (
           <p className="text-sm text-text-muted">Loading...</p>
         ) : (
@@ -686,7 +797,11 @@ function DataTab() {
       </Section>
 
       {/* Vault Credentials */}
-      <Section title="Vault Credentials">
+      <Section
+        title="Vault Credentials"
+        icon={<KeyRound className="h-4 w-4" aria-hidden="true" />}
+        description="Masked connector credentials only. Full secrets are never displayed."
+      >
         {!vaultData || !vaultStatus ? (
           <p className="text-sm text-text-muted">Loading...</p>
         ) : !vaultStatus.available ? (
@@ -701,11 +816,11 @@ function DataTab() {
             {vaultData.keys.map((entry: VaultMaskedEntry) => (
               <div
                 key={entry.key}
-                className="flex items-center justify-between p-3 bg-surface-card-elevated rounded-md"
+                className="flex flex-col gap-3 rounded-md bg-surface-card-elevated p-3 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div className="flex-1 min-w-0">
                   <span className="text-sm font-mono text-text-primary">{entry.key}</span>
-                  <div className="flex gap-3 mt-0.5">
+                  <div className="mt-0.5 flex flex-wrap gap-3">
                     <span className="text-[10px] text-text-muted">Type: {entry.type}</span>
                     <span className="text-[10px] font-mono text-text-muted">{entry.masked_value}</span>
                     {entry.created_at && (
@@ -717,8 +832,9 @@ function DataTab() {
                 </div>
                 <button
                   onClick={() => setDeleteConfirm(entry.key)}
-                  className="px-2 py-1 text-xs text-state-error hover:bg-state-error/10 rounded transition-colors"
+                  className="inline-flex items-center gap-1 self-start rounded px-2 py-1 text-xs text-state-error transition-colors hover:bg-state-error/10 sm:self-auto"
                 >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                   Delete
                 </button>
               </div>
@@ -731,7 +847,11 @@ function DataTab() {
       </Section>
 
       {/* Execution Tokens */}
-      <Section title="Execution Tokens">
+      <Section
+        title="Execution Tokens"
+        icon={<CircleAlert className="h-4 w-4" aria-hidden="true" />}
+        description="Active execution tokens can be revoked from here."
+      >
         {!tokensData ? (
           <p className="text-sm text-text-muted">Loading...</p>
         ) : tokensData.tokens.length === 0 ? (
@@ -741,7 +861,7 @@ function DataTab() {
             {tokensData.tokens.map((token: ExecutionToken) => (
               <div
                 key={token.id}
-                className="flex items-center justify-between p-3 bg-surface-card-elevated rounded-md"
+                className="flex flex-col gap-3 rounded-md bg-surface-card-elevated p-3 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div className="flex-1 min-w-0">
                   <span className="text-sm font-mono text-text-primary truncate">{token.id}</span>
@@ -755,8 +875,9 @@ function DataTab() {
                 {token.status === 'active' && (
                   <button
                     onClick={() => setRevokeConfirm(token.id)}
-                    className="px-2 py-1 text-xs text-state-degraded hover:bg-state-degraded/10 rounded transition-colors"
+                    className="inline-flex items-center gap-1 self-start rounded px-2 py-1 text-xs text-state-degraded transition-colors hover:bg-state-degraded/10 sm:self-auto"
                   >
+                    <CircleAlert className="h-3.5 w-3.5" aria-hidden="true" />
                     Revoke
                   </button>
                 )}
@@ -767,7 +888,11 @@ function DataTab() {
       </Section>
 
       {/* Receipt Management */}
-      <Section title="Receipt Management">
+      <Section
+        title="Receipt Management"
+        icon={<Archive className="h-4 w-4" aria-hidden="true" />}
+        description="Receipt persistence is append-only; this panel reports the current receipt footprint."
+      >
         <div className="flex items-center justify-between">
           <div>
             <p className="text-sm text-text-primary">
@@ -784,10 +909,15 @@ function DataTab() {
       </Section>
 
       {/* Usage Counters */}
-      <Section title="Usage Counters">
-        <div className="flex items-center justify-between">
+      <Section
+        title="Usage Counters"
+        icon={<RotateCcw className="h-4 w-4" aria-hidden="true" />}
+        tone="warning"
+        description="Reset runtime usage counters without deleting receipts."
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm text-text-secondary">Reset in-memory usage counters for a fresh tracking period.</p>
-          <ActionButton label="Reset Usage" variant="warning" onClick={handleResetUsage} />
+          <ActionButton label="Reset Usage" variant="warning" icon={<RotateCcw className="h-4 w-4" aria-hidden="true" />} onClick={handleResetUsage} />
         </div>
       </Section>
 
@@ -869,8 +999,12 @@ function LogsConfigTab() {
   return (
     <>
       {/* Audit Log Viewer */}
-      <Section title="Log Viewer">
-        <div className="flex items-center gap-3 mb-3">
+      <Section
+        title="Log Viewer"
+        icon={<Terminal className="h-4 w-4" aria-hidden="true" />}
+        description="Tail audit or vault logs without leaving the War Room."
+      >
+        <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center">
           <select
             value={logFile}
             onChange={(e) => setLogFile(e.target.value)}
@@ -879,8 +1013,8 @@ function LogsConfigTab() {
             <option value="audit">Audit Log</option>
             <option value="vault">Vault Access Log</option>
           </select>
-          <ActionButton label="Refresh" onClick={loadLogs} loading={logLoading} />
-          <span className="text-xs text-text-muted ml-auto">{totalLines} total lines</span>
+          <ActionButton label="Refresh" icon={<RotateCcw className="h-4 w-4" aria-hidden="true" />} onClick={loadLogs} loading={logLoading} />
+          <span className="text-xs text-text-muted sm:ml-auto">{totalLines} total lines</span>
         </div>
         <div
           ref={logViewerRef}
@@ -899,12 +1033,16 @@ function LogsConfigTab() {
       </Section>
 
       {/* Configuration Reload */}
-      <Section title="Configuration Reload">
-        <div className="flex items-center justify-between">
+      <Section
+        title="Configuration Reload"
+        icon={<Settings className="h-4 w-4" aria-hidden="true" />}
+        description="Re-read YAML backed runtime configuration."
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm text-text-secondary">
             Re-read YAML configs (feature flags, scheduler, connectors).
           </p>
-          <ActionButton label="Reload Config" onClick={handleReloadConfig} />
+          <ActionButton label="Reload Config" icon={<Settings className="h-4 w-4" aria-hidden="true" />} onClick={handleReloadConfig} />
         </div>
         {configResult && (
           <div className="mt-3 space-y-1">
@@ -928,14 +1066,18 @@ function LogsConfigTab() {
       </Section>
 
       {/* Export / Backup */}
-      <Section title="Export / Backup">
-        <div className="flex items-center justify-between">
+      <Section
+        title="Export / Backup"
+        icon={<Download className="h-4 w-4" aria-hidden="true" />}
+        description="Download a local backup package for recovery or inspection."
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-sm text-text-secondary">
               Download a ZIP containing configs, soul YAML, memory, flags, and scheduler data.
             </p>
           </div>
-          <ActionButton label="Download Backup" onClick={handleExport} loading={exportLoading} />
+          <ActionButton label="Download Backup" icon={<Download className="h-4 w-4" aria-hidden="true" />} onClick={handleExport} loading={exportLoading} />
         </div>
       </Section>
     </>
@@ -1041,18 +1183,23 @@ function DangerTab() {
   return (
     <>
       {/* Warning Banner */}
-      <div className="bg-state-error/10 border-2 border-state-error/30 rounded-lg p-4 mb-6">
-        <h3 className="text-sm font-semibold text-state-error mb-1">
-          Danger Zone
-        </h3>
-        <p className="text-xs text-text-secondary">
-          These actions are destructive and cannot be undone. Proceed with caution.
-        </p>
+      <div className="mb-6 rounded-lg border-2 border-state-error/30 bg-state-error/10 p-4">
+        <div className="flex items-start gap-3">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-state-error" aria-hidden="true" />
+          <div>
+            <h3 className="text-sm font-semibold text-state-error">
+              Danger Zone
+            </h3>
+            <p className="mt-1 text-xs leading-5 text-text-secondary">
+              These actions are destructive and cannot be undone. Typed confirmations and dialogs remain required.
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Reset Connector Vault */}
-      <section className="bg-surface-card border-2 border-state-error/20 rounded-lg p-4 mb-4">
-        <div className="flex items-start justify-between gap-4">
+      <section className="mb-4 rounded-lg border-2 border-state-error/20 bg-surface-card p-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h4 className="text-sm font-medium text-text-primary">Reset Connector Vault</h4>
             <p className="text-xs text-text-secondary mt-1">
@@ -1075,14 +1222,15 @@ function DangerTab() {
           <ActionButton
             label="Reset Connector Vault"
             variant="destructive"
+            icon={<KeyRound className="h-4 w-4" aria-hidden="true" />}
             onClick={() => setConnectorVaultResetConfirm(true)}
           />
         </div>
       </section>
 
       {/* Factory Reset */}
-      <section className="bg-surface-card border-2 border-state-error/20 rounded-lg p-4 mb-4">
-        <div className="flex items-start justify-between">
+      <section className="mb-4 rounded-lg border-2 border-state-error/20 bg-surface-card p-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h4 className="text-sm font-medium text-text-primary">Factory Reset</h4>
             <p className="text-xs text-text-secondary mt-1">
@@ -1092,14 +1240,15 @@ function DangerTab() {
           <ActionButton
             label="Factory Reset"
             variant="destructive"
+            icon={<ShieldAlert className="h-4 w-4" aria-hidden="true" />}
             onClick={() => setFactoryResetConfirm(true)}
           />
         </div>
       </section>
 
       {/* Purge Memory */}
-      <section className="bg-surface-card border-2 border-state-error/20 rounded-lg p-4 mb-4">
-        <div className="flex items-start justify-between">
+      <section className="mb-4 rounded-lg border-2 border-state-error/20 bg-surface-card p-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h4 className="text-sm font-medium text-text-primary">Purge Memory</h4>
             <p className="text-xs text-text-secondary mt-1">
@@ -1109,14 +1258,15 @@ function DangerTab() {
           <ActionButton
             label="Purge Memory"
             variant="destructive"
+            icon={<Trash2 className="h-4 w-4" aria-hidden="true" />}
             onClick={() => setPurgeConfirm(true)}
           />
         </div>
       </section>
 
       {/* Reset Feature Flags */}
-      <section className="bg-surface-card border-2 border-state-error/20 rounded-lg p-4 mb-4">
-        <div className="flex items-start justify-between">
+      <section className="mb-4 rounded-lg border-2 border-state-error/20 bg-surface-card p-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h4 className="text-sm font-medium text-text-primary">Reset Feature Flags</h4>
             <p className="text-xs text-text-secondary mt-1">
@@ -1126,14 +1276,15 @@ function DangerTab() {
           <ActionButton
             label="Reset Flags"
             variant="destructive"
+            icon={<Flag className="h-4 w-4" aria-hidden="true" />}
             onClick={() => setResetFlagsConfirm(true)}
           />
         </div>
       </section>
 
       {/* Reset Onboarding */}
-      <section className="bg-surface-card border-2 border-state-error/20 rounded-lg p-4 mb-4">
-        <div className="flex items-start justify-between">
+      <section className="mb-4 rounded-lg border-2 border-state-error/20 bg-surface-card p-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h4 className="text-sm font-medium text-text-primary">Reset Onboarding</h4>
             <p className="text-xs text-text-secondary mt-1">
@@ -1143,6 +1294,7 @@ function DangerTab() {
           <ActionButton
             label="Reset Onboarding"
             variant="destructive"
+            icon={<RotateCcw className="h-4 w-4" aria-hidden="true" />}
             onClick={() => setResetOnboardingConfirm(true)}
           />
         </div>
@@ -1150,7 +1302,7 @@ function DangerTab() {
 
       {/* Action Result */}
       {actionResult && (
-        <Section title="Result">
+        <Section title="Result" icon={<Terminal className="h-4 w-4" aria-hidden="true" />}>
           <pre className="text-sm font-mono text-text-primary bg-surface-input rounded p-3 whitespace-pre-wrap">
             {actionResult}
           </pre>

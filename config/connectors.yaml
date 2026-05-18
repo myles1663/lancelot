@@ -36,6 +36,12 @@ rate_limits:
     x:
       max_requests_per_minute: 15
       burst_limit: 3
+    onedrive:
+      max_requests_per_minute: 60
+      burst_limit: 10
+    sharepoint:
+      max_requests_per_minute: 60
+      burst_limit: 10
 connectors:
   email:
     enabled: false
@@ -52,6 +58,14 @@ connectors:
     backend: google
     settings:
       max_events_per_query: 50
+  onedrive:
+    enabled: false
+    settings:
+      max_items_per_query: 50
+  sharepoint:
+    enabled: false
+    settings:
+      max_items_per_query: 50
   generic_rest:
     enabled: false
     settings:

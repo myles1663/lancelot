@@ -6,6 +6,7 @@ Search, filter, and retrieve execution receipts.
 """
 
 import logging
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -50,6 +51,8 @@ async def list_receipts(
     action_type: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     quest_id: Optional[str] = Query(None),
+    risk_tier: Optional[int] = Query(None, ge=0, le=3),
+    tier: Optional[str] = Query(None, description="Alias for risk_tier; accepts 0-3 or T0-T3"),
     since: Optional[str] = Query(None),
     until: Optional[str] = Query(None),
     q: Optional[str] = Query(None, description="Text search across action names and content"),
@@ -59,11 +62,31 @@ async def list_receipts(
         if _receipt_service is None:
             return {"receipts": [], "total": 0, "message": "Receipt service not initialised"}
 
-        if q:
+        effective_risk_tier = _resolve_risk_tier(risk_tier, tier)
+        search_query, inferred_risk_tier = _normalize_text_query(q)
+        if effective_risk_tier is None:
+            effective_risk_tier = inferred_risk_tier
+
+        if search_query:
             results = _receipt_service.search(
-                query=q,
+                query=search_query,
                 limit=limit,
+                offset=offset,
                 action_types=[action_type] if action_type else None,
+                status=status,
+                quest_id=quest_id,
+                risk_tier=effective_risk_tier,
+                since=since,
+                until=until,
+            )
+            total = _receipt_service.count_search(
+                query=search_query,
+                action_types=[action_type] if action_type else None,
+                status=status,
+                quest_id=quest_id,
+                risk_tier=effective_risk_tier,
+                since=since,
+                until=until,
             )
         else:
             results = _receipt_service.list(
@@ -72,17 +95,68 @@ async def list_receipts(
                 action_type=action_type,
                 status=status,
                 quest_id=quest_id,
+                risk_tier=effective_risk_tier,
+                since=since,
+                until=until,
+            )
+            total = _receipt_service.count(
+                action_type=action_type,
+                status=status,
+                quest_id=quest_id,
+                risk_tier=effective_risk_tier,
                 since=since,
                 until=until,
             )
 
         return {
             "receipts": [_receipt_to_dict(r) for r in results],
-            "total": len(results),
+            "total": total,
         }
     except Exception as exc:
         logger.error("list_receipts error: %s", exc)
         return _safe_error(500, "Failed to list receipts")
+
+
+def _parse_tier_value(value: str) -> Optional[int]:
+    cleaned = value.strip().lower()
+    if not cleaned:
+        return None
+
+    exact = re.fullmatch(r"t([0-3])", cleaned)
+    if exact:
+        return int(exact.group(1))
+
+    named = re.fullmatch(r"(?:risk[\s_-]*)?tier\s*[:\s-]*([0-3])", cleaned)
+    if named:
+        return int(named.group(1))
+
+    if cleaned in {"0", "1", "2", "3"}:
+        return int(cleaned)
+
+    return None
+
+
+def _resolve_risk_tier(risk_tier: Optional[int], tier: Optional[str]) -> Optional[int]:
+    if risk_tier is not None:
+        return risk_tier
+    if tier is None:
+        return None
+    return _parse_tier_value(tier)
+
+
+def _normalize_text_query(q: Optional[str]) -> tuple[Optional[str], Optional[int]]:
+    if q is None:
+        return None, None
+
+    stripped = q.strip()
+    if not stripped:
+        return None, None
+
+    inferred_tier = _parse_tier_value(stripped)
+    if inferred_tier is not None and not stripped.isdigit():
+        return None, inferred_tier
+
+    return stripped, None
 
 
 @router.get("/stats")

@@ -242,6 +242,11 @@ def set_usage_persistence(persistence) -> None:
     _usage_persistence = persistence
 
 
+def get_usage_persistence():
+    """Return the active UsagePersistence, if one is registered."""
+    return _usage_persistence
+
+
 def set_runtime_control_hooks(*, emergency_stop_handler=None) -> None:
     """Register runtime-level control handlers such as emergency stop."""
     global _runtime_emergency_stop_handler

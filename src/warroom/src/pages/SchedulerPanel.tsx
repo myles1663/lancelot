@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Activity, AlertTriangle, CalendarClock, Clock, ListChecks, PlayCircle } from 'lucide-react'
 import { usePolling, usePageTitle } from '@/hooks'
 import { fetchHealthReady } from '@/api'
 import { fetchSchedulerJobs, enableSchedulerJob, disableSchedulerJob, triggerSchedulerJob, updateSchedulerJobTimezone } from '@/api/scheduler'
@@ -22,7 +23,7 @@ const TIMEZONE_OPTIONS = [
   'Asia/Kolkata',
   'Australia/Sydney',
 ]
-import { StatusDot, ConfirmDialog, MetricCard, EmptyState } from '@/components'
+import { StatusDot, ConfirmDialog, EmptyState } from '@/components'
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -57,6 +58,35 @@ function formatJobError(error: string | null): string {
   return error.length > 220 ? `${error.slice(0, 217)}...` : error
 }
 
+type SchedulerTileTone = 'accent' | 'healthy' | 'warning' | 'muted'
+
+const schedulerTileToneClass: Record<SchedulerTileTone, string> = {
+  accent: 'border-accent-primary/30 bg-accent-primary/10 text-accent-primary',
+  healthy: 'border-state-healthy/30 bg-state-healthy/10 text-state-healthy',
+  warning: 'border-state-warning/30 bg-state-warning/10 text-state-warning',
+  muted: 'border-border-default bg-surface-card-elevated text-text-muted',
+}
+
+function SchedulerTile({
+  label,
+  value,
+  detail,
+  tone = 'muted',
+}: {
+  label: string
+  value: string | number
+  detail: string
+  tone?: SchedulerTileTone
+}) {
+  return (
+    <div className={`rounded-lg border px-4 py-3 ${schedulerTileToneClass[tone]}`}>
+      <div className="text-[10px] font-medium uppercase tracking-wider opacity-80">{label}</div>
+      <div className="mt-2 text-2xl font-semibold text-text-primary">{value}</div>
+      <div className="mt-1 text-xs leading-5 text-text-muted">{detail}</div>
+    </div>
+  )
+}
+
 // ── Component ───────────────────────────────────────────────────
 
 export function SchedulerPanel() {
@@ -81,6 +111,10 @@ export function SchedulerPanel() {
   const jobs = jobsData?.jobs ?? []
   const total = jobsData?.total ?? 0
   const enabledCount = jobsData?.enabled_count ?? 0
+  const disabledCount = Math.max(0, total - enabledCount)
+  const approvalJobs = jobs.filter(job => job.requires_approvals.length > 0)
+  const failedJobs = jobs.filter(job => job.last_run_status === 'failed')
+  const cronJobs = jobs.filter(job => job.trigger_type === 'cron')
 
   const toggleExpand = (id: string) => {
     setExpanded(prev => {
@@ -135,36 +169,66 @@ export function SchedulerPanel() {
   const pendingJob = jobs.find(j => j.id === pendingTrigger)
 
   return (
-    <div>
-      <h2 className="text-lg font-semibold text-text-primary mb-6">Scheduler</h2>
-
-      {/* Summary Metrics */}
-      <div className="grid grid-cols-3 gap-4 mb-6">
-        <MetricCard label="Total Jobs" value={total} />
-        <MetricCard label="Enabled" value={enabledCount} />
-        <MetricCard
-          label="Scheduler"
-          value={schedulerRunning ? 'Running' : 'Stopped'}
-        />
-      </div>
-
-      {/* Scheduler Status */}
-      <section className="bg-surface-card border border-border-default rounded-lg p-4 mb-6">
-        <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-          Scheduler Status
-        </h3>
-        <div className="flex items-center gap-6">
-          <StatusDot
-            state={schedulerRunning ? 'healthy' : 'inactive'}
-            label={schedulerRunning ? 'Running' : 'Stopped'}
-          />
-          {lastTick && (
-            <span className="text-xs font-mono text-text-muted">
-              Last tick: {formatTimestamp(lastTick)}
+    <div className="space-y-6">
+      <div className="rounded-lg border border-border-default bg-surface-card p-5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="max-w-3xl">
+            <div className="flex items-center gap-2">
+              <CalendarClock className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-accent-primary">
+                Scheduled Operations
+              </div>
+            </div>
+            <h2 className="mt-2 text-2xl font-semibold text-text-primary">Scheduler</h2>
+            <p className="mt-2 text-sm leading-6 text-text-muted">
+              Monitor recurring jobs, manual triggers, approval-gated schedules, and recent execution outcomes.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-xs font-mono text-text-muted sm:flex sm:flex-wrap">
+            <span className={`rounded border px-2 py-1 ${schedulerRunning ? 'border-state-healthy/40 bg-state-healthy/10 text-state-healthy' : 'border-border-default bg-surface-input'}`}>
+              {schedulerRunning ? 'running' : 'stopped'}
             </span>
-          )}
+            <span className="rounded border border-border-default bg-surface-input px-2 py-1">
+              jobs {total}
+            </span>
+            <span className={`rounded border px-2 py-1 ${failedJobs.length > 0 ? 'border-state-error/40 bg-state-error/10 text-state-error' : 'border-border-default bg-surface-input'}`}>
+              failed {failedJobs.length}
+            </span>
+          </div>
         </div>
-      </section>
+
+        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <SchedulerTile
+            label="Scheduler"
+            value={schedulerRunning ? 'Running' : 'Stopped'}
+            detail={lastTick ? `Last tick ${formatTimestamp(lastTick)}` : 'No scheduler tick recorded.'}
+            tone={schedulerRunning ? 'healthy' : 'warning'}
+          />
+          <SchedulerTile
+            label="Total Jobs"
+            value={total}
+            detail={`${enabledCount} enabled, ${disabledCount} disabled.`}
+            tone="accent"
+          />
+          <SchedulerTile
+            label="Cron Jobs"
+            value={cronJobs.length}
+            detail="Wall-clock scheduled jobs."
+          />
+          <SchedulerTile
+            label="Approval Gated"
+            value={approvalJobs.length}
+            detail="Jobs requiring approval scopes."
+            tone={approvalJobs.length > 0 ? 'warning' : 'muted'}
+          />
+          <SchedulerTile
+            label="Failed Last Run"
+            value={failedJobs.length}
+            detail="Jobs whose most recent run failed."
+            tone={failedJobs.length > 0 ? 'warning' : 'healthy'}
+          />
+        </div>
+      </div>
 
       {/* Trigger Result Banner */}
       {triggerResult && (
@@ -192,9 +256,22 @@ export function SchedulerPanel() {
 
       {/* Scheduled Jobs */}
       <section className="bg-surface-card border border-border-default rounded-lg p-4">
-        <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-          Scheduled Jobs
-        </h3>
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <ListChecks className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+              <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">
+                Scheduled Jobs
+              </h3>
+            </div>
+            <p className="mt-1 text-xs text-text-muted">
+              Expand a job to inspect schedule details, readiness requirements, approval scopes, and run history.
+            </p>
+          </div>
+          <span className="rounded border border-border-default bg-surface-input px-2 py-1 text-xs font-mono text-text-muted">
+            {jobs.length}
+          </span>
+        </div>
 
         {jobs.length === 0 ? (
           <EmptyState
@@ -216,7 +293,7 @@ export function SchedulerPanel() {
                 >
                   {/* Job row */}
                   <div
-                    className="flex items-center justify-between p-3 cursor-pointer hover:bg-surface-input/50 transition-colors"
+                    className="flex flex-col gap-3 p-3 cursor-pointer hover:bg-surface-input/50 transition-colors xl:flex-row xl:items-center xl:justify-between"
                     onClick={() => toggleExpand(job.id)}
                   >
                     <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -242,9 +319,19 @@ export function SchedulerPanel() {
                           approval
                         </span>
                       )}
+                      {job.last_run_status === 'failed' && (
+                        <span className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-state-error/15 text-state-error whitespace-nowrap">
+                          <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+                          failed
+                        </span>
+                      )}
                     </div>
 
-                    <div className="flex items-center gap-2 flex-shrink-0 ml-3">
+                    <div className="flex items-center gap-2 flex-shrink-0 xl:ml-3">
+                      <StatusDot
+                        state={job.enabled ? 'healthy' : 'inactive'}
+                        label={job.enabled ? 'Enabled' : 'Disabled'}
+                      />
                       {/* Run Now button */}
                       <button
                         onClick={(e) => {
@@ -376,6 +463,36 @@ export function SchedulerPanel() {
           </div>
         )}
       </section>
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div className="rounded-lg border border-border-default bg-surface-card p-4">
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-state-healthy" aria-hidden="true" />
+            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">Schedule Posture</h3>
+          </div>
+          <p className="mt-2 text-xs leading-5 text-text-muted">
+            Enabled jobs run on their configured trigger while disabled jobs remain visible for operator inspection.
+          </p>
+        </div>
+        <div className="rounded-lg border border-border-default bg-surface-card p-4">
+          <div className="flex items-center gap-2">
+            <PlayCircle className="h-4 w-4 text-accent-primary" aria-hidden="true" />
+            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">Manual Trigger</h3>
+          </div>
+          <p className="mt-2 text-xs leading-5 text-text-muted">
+            Run Now uses the same job path immediately, after explicit confirmation, without changing the schedule.
+          </p>
+        </div>
+        <div className="rounded-lg border border-border-default bg-surface-card p-4">
+          <div className="flex items-center gap-2">
+            <Activity className="h-4 w-4 text-state-warning" aria-hidden="true" />
+            <h3 className="text-sm font-medium text-text-secondary uppercase tracking-wider">Failure Signal</h3>
+          </div>
+          <p className="mt-2 text-xs leading-5 text-text-muted">
+            Failed last runs stay visible in the job row and expanded details so operators can triage quickly.
+          </p>
+        </div>
+      </div>
 
       {/* Trigger confirmation dialog */}
       <ConfirmDialog

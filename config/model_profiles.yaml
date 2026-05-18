@@ -177,3 +177,41 @@ profiles:
     supports_tools: true
     cost_input_per_1k: 0.003
     cost_output_per_1k: 0.015
+
+  # DeepSeek
+  deepseek-v4-flash:
+    capability_tier: fast
+    context_window: 1000000
+    supports_tools: true
+    cost_input_per_1k: 0.00014
+    cost_output_per_1k: 0.00028
+
+  deepseek-v4-pro:
+    capability_tier: deep
+    context_window: 1000000
+    supports_tools: true
+    cost_input_per_1k: 0.000435
+    cost_output_per_1k: 0.00087
+
+  # Operator-managed local/OpenAI-compatible endpoints. Runtime-discovered
+  # model IDs inherit these only when the operator uses the default labels.
+  local-fast:
+    capability_tier: fast
+    context_window: 32768
+    supports_tools: true
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+
+  local-deep:
+    capability_tier: deep
+    context_window: 32768
+    supports_tools: true
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0
+
+  local-cache:
+    capability_tier: fast
+    context_window: 32768
+    supports_tools: true
+    cost_input_per_1k: 0.0
+    cost_output_per_1k: 0.0

@@ -186,6 +186,86 @@ class TestRecording:
         assert lane["total_tokens_est"] == 23
         assert lane["total_cost_est"] == 0.0
 
+    def test_persistence_receives_lane_context(self, tracker):
+        records = []
+
+        class FakePersistence:
+            def record(self, model, tokens, cost, **kwargs):
+                records.append((model, tokens, cost, kwargs))
+
+        tracker.set_persistence(FakePersistence())
+        tracker.record(FakeDecision("flagship_fast", "gpt-4o-mini", False, 42.0))
+        tracker.record_simple("bonsai-8b", 23)
+
+        assert records[0][3]["lane"] == "flagship_fast"
+        assert records[0][3]["success"] is False
+        assert records[0][3]["elapsed_ms"] == 42.0
+        assert records[1][3]["lane"] == "local_agentic"
+        assert records[1][3]["success"] is True
+
+    def test_set_persistence_hydrates_current_month_usage(self):
+        class FakePersistence:
+            def get_current_month(self):
+                return {
+                    "month": "2026-05",
+                    "total_requests": 3,
+                    "by_lane": {
+                        "flagship_fast": {
+                            "requests": 2,
+                            "successes": 2,
+                            "failures": 0,
+                            "total_tokens_est": 500,
+                            "total_cost_est": 0.005,
+                            "total_elapsed_ms": 80.0,
+                        },
+                        "local_agentic": {
+                            "requests": 1,
+                            "successes": 1,
+                            "failures": 0,
+                            "total_tokens_est": 100,
+                            "total_cost_est": 0.0,
+                            "total_elapsed_ms": 10.0,
+                        },
+                    },
+                    "by_model": {
+                        "gpt-test": {"requests": 2, "tokens": 500, "cost": 0.005},
+                        "bonsai-8b": {"requests": 1, "tokens": 100, "cost": 0.0},
+                    },
+                }
+
+            def record(self, model, tokens, cost, **kwargs):
+                raise AssertionError("hydrate should not write")
+
+        tracker = UsageTracker()
+        tracker.set_persistence(FakePersistence())
+
+        summary = tracker.summary()
+        assert summary["period_start"] == "2026-05-01T00:00:00+00:00"
+        assert summary["total_requests"] == 3
+        assert summary["total_tokens_est"] == 600
+        assert summary["by_lane"]["flagship_fast"]["requests"] == 2
+        assert summary["by_model"]["bonsai-8b"]["tokens"] == 100
+
+    def test_set_persistence_does_not_hydrate_nonempty_tracker(self, tracker):
+        tracker.record_simple("bonsai-8b", 23)
+
+        class FakePersistence:
+            def get_current_month(self):
+                return {
+                    "month": "2026-05",
+                    "total_requests": 10,
+                    "by_lane": {"flagship_fast": {"requests": 10}},
+                    "by_model": {},
+                }
+
+            def record(self, model, tokens, cost, **kwargs):
+                pass
+
+        tracker.set_persistence(FakePersistence())
+
+        assert tracker.summary()["total_requests"] == 1
+        assert "flagship_fast" not in tracker.lane_breakdown()
+
 
 # ===================================================================
 # UsageTracker — cost estimation

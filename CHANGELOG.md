@@ -15,6 +15,26 @@ external users and reviewers.
   source proposal, pipeline evidence, implementation, tests, and artifact
   hash visibility.
 - Added governed War Room enable/disable controls for installed skills.
+- Added War Room Soul version rollback controls so operators can activate an
+  existing retained Soul version, with confirmation, linter validation,
+  runtime refresh, and template provenance shown for active versions.
+- Added Microsoft Graph OneDrive and SharePoint connector definitions with
+  governed request specs, explicit data boundaries, and shared Graph-token
+  credential requirements.
+- Added DeepSeek and operator-managed OpenAI-compatible local model providers,
+  including War Room Cost Tracker configuration for local endpoint URL and lane
+  model IDs.
+
+### Changed
+
+- The Skills tab now uses the full inspector layout by default on tablets; the
+  compact layout is available only with the explicit `?compact=1` URL option.
+- The Calendar connector now supports provider selection for Google Calendar,
+  Microsoft Graph, and CalDAV while preserving Google feature-gate behavior.
+- The War Room Connectors tab now surfaces provider labels, availability
+  reasons, and Microsoft Graph workspace connectors.
+- Refined War Room operations pages for more readable operator workflow,
+  responsive layouts, readiness status, and clearer drill-down controls.
 
 ### Verification
 
@@ -28,6 +48,9 @@ external users and reviewers.
 - Local deployment smoke: health endpoint served, War Room Skills page served,
   protected Skills API remained auth-gated, and the built War Room bundle
   included skill Inspect, source-proposal, enable, and disable controls.
+- Focused provider, connector, receipt, and usage-persistence regression tests:
+  204 passed, 21 skipped.
+- Installer Node tests: 9 passed.
 
 ## [0.4.4] - 2026-05-13
 

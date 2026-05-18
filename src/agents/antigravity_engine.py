@@ -295,6 +295,8 @@ class AntigravityEngine:
             "openai": self._build_openai_llm,
             "anthropic": self._build_anthropic_llm,
             "xai": self._build_xai_llm,
+            "deepseek": self._build_deepseek_llm,
+            "local-openai": self._build_local_openai_llm,
         }
 
         # Try the configured provider first
@@ -315,7 +317,8 @@ class AntigravityEngine:
         raise RuntimeError(
             "No LLM available for Browser Use agent. "
             "Set LANCELOT_PROVIDER and provide an API key "
-            "(GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or XAI_API_KEY)."
+            "(GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, XAI_API_KEY, "
+            "DEEPSEEK_API_KEY, or LOCAL_OPENAI_BASE_URL)."
         )
 
     def _build_gemini_llm(self, model_name: str = None):
@@ -377,6 +380,38 @@ class AntigravityEngine:
             )
         except ImportError:
             logger.warning("langchain-openai not installed (needed for xAI)")
+            return None
+
+    def _build_deepseek_llm(self, model_name: str = None):
+        """Build a DeepSeek LangChain LLM via OpenAI-compatible API."""
+        api_key = os.getenv("DEEPSEEK_API_KEY", "")
+        if not api_key:
+            return None
+        try:
+            from langchain_openai import ChatOpenAI
+            return ChatOpenAI(
+                model=model_name or "deepseek-v4-flash",
+                api_key=api_key,
+                base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+            )
+        except ImportError:
+            logger.warning("langchain-openai not installed (needed for DeepSeek)")
+            return None
+
+    def _build_local_openai_llm(self, model_name: str = None):
+        """Build a local OpenAI-compatible LangChain LLM."""
+        base_url = os.getenv("LOCAL_OPENAI_BASE_URL", "")
+        if not base_url:
+            return None
+        try:
+            from langchain_openai import ChatOpenAI
+            return ChatOpenAI(
+                model=model_name or os.getenv("LOCAL_OPENAI_FAST_MODEL", "local-fast"),
+                api_key=os.getenv("LOCAL_OPENAI_API_KEY", "local-provider"),
+                base_url=base_url,
+            )
+        except ImportError:
+            logger.warning("langchain-openai not installed (needed for local OpenAI-compatible models)")
             return None
 
     # ------------------------------------------------------------------

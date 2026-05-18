@@ -346,6 +346,7 @@ def _sync_gateway_runtime_bindings() -> None:
         render_callback_exception_page=render_callback_exception_page,
         error_response=error_response,
         verify_token=verify_token,
+        _require_request_capability=_require_request_capability,
         _bootstrap_model_discovery=_bootstrap_model_discovery,
     )
     if "_optional_json_body" in globals():

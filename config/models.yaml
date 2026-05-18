@@ -121,3 +121,38 @@ providers:
       model: "nvidia/nemotron-nano-9b-v2"
       max_tokens: 2048
       temperature: 0.1
+
+  deepseek:
+    display_name: "DeepSeek"
+    mode: "api"
+    fast:
+      model: "deepseek-v4-flash"
+      max_tokens: 32768
+      temperature: 0.3
+    deep:
+      model: "deepseek-v4-pro"
+      max_tokens: 65536
+      temperature: 0.7
+      thinking:
+        enabled: true
+        budget_tokens: 12000
+    cache:
+      model: "deepseek-v4-flash"
+      max_tokens: 8192
+      temperature: 0.1
+
+  local-openai:
+    display_name: "Local OpenAI-Compatible"
+    mode: "api"
+    fast:
+      model: "local-fast"
+      max_tokens: 32768
+      temperature: 0.3
+    deep:
+      model: "local-deep"
+      max_tokens: 32768
+      temperature: 0.7
+    cache:
+      model: "local-cache"
+      max_tokens: 8192
+      temperature: 0.1

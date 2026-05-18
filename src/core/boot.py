@@ -21,6 +21,8 @@ _PROVIDER_CREDENTIAL_VARS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "xai": "XAI_API_KEY",
     "nvidia": "NVIDIA_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "local-openai": "LOCAL_OPENAI_BASE_URL",
 }
 
 def bind_gateway_globals(**kwargs):

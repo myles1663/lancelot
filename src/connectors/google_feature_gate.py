@@ -9,7 +9,7 @@ def is_google_connector_enabled(connector_id: str, backend: str | None = None) -
     """Return whether the requested Google-backed connector should be available."""
     from src.core import feature_flags
 
-    if connector_id == "calendar":
+    if connector_id == "calendar" and (backend or "google") == "google":
         return bool(feature_flags.FEATURE_GOOGLE_OAUTH)
     if connector_id == "email" and (backend or "gmail") == "gmail":
         return bool(feature_flags.FEATURE_GOOGLE_OAUTH)
@@ -18,7 +18,7 @@ def is_google_connector_enabled(connector_id: str, backend: str | None = None) -
 
 def google_connector_disabled_reason(connector_id: str, backend: str | None = None) -> str:
     """Human-readable reason for why the connector is unavailable."""
-    if connector_id == "calendar":
+    if connector_id == "calendar" and (backend or "google") == "google":
         return "Google OAuth is disabled; Calendar connector is unavailable."
     if connector_id == "email" and (backend or "gmail") == "gmail":
         return "Google OAuth is disabled; Gmail backend is unavailable."

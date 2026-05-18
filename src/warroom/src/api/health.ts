@@ -6,7 +6,7 @@ import type {
 
 /** GET /health — Gateway health with component status */
 export function fetchHealth() {
-  return apiGet<HealthCheckResponse>('/health')
+  return apiGet<HealthCheckResponse>('/health', undefined, 15000)
 }
 
 /** GET /health/ready — Full health snapshot with degraded reasons */

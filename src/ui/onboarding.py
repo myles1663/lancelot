@@ -82,6 +82,10 @@ class OnboardingOrchestrator:
                     updates["flagship_provider"] = "anthropic"
                 elif os.getenv("XAI_API_KEY"):
                     updates["flagship_provider"] = "xai"
+                elif os.getenv("NVIDIA_API_KEY"):
+                    updates["flagship_provider"] = "nvidia"
+                elif os.getenv("DEEPSEEK_API_KEY"):
+                    updates["flagship_provider"] = "deepseek"
                 updates["credential_status"] = "verified"
                 updates["local_model_status"] = "verified"
 
@@ -373,6 +377,8 @@ class OnboardingOrchestrator:
             "    Get a key at: https://build.nvidia.com/\n\n"
             "[6] OpenAI Codex (Pro) — ChatGPT Plus/Pro subscription via Codex CLI auth\n"
             "    Preferred: sign in on the host so ~/.codex/auth.json is mounted; browser OAuth is fallback only\n\n"
+            "[7] DeepSeek — V4 models via OpenAI-compatible API\n"
+            "    Get a key at: https://platform.deepseek.com/\n\n"
             "Enter the number of your choice:"
         )
 
@@ -387,6 +393,7 @@ class OnboardingOrchestrator:
             "4": "xai", "xai": "xai", "grok": "xai",
             "5": "nvidia", "nvidia": "nvidia", "nemotron": "nvidia",
             "6": "openai-codex", "codex": "openai-codex", "openai-codex": "openai-codex",
+            "7": "deepseek", "deepseek": "deepseek",
         }
 
         provider_id = provider_map.get(choice.lower())

@@ -62,6 +62,8 @@ _CONNECTOR_CLASSES = {
     "whatsapp": ("src.connectors.connectors.whatsapp", "WhatsAppConnector", {"phone_number_id": ""}),
     "sms": ("src.connectors.connectors.sms", "SMSConnector", {"account_sid": ""}),
     "calendar": ("src.connectors.connectors.calendar", "CalendarConnector", {}),
+    "onedrive": ("src.connectors.connectors.onedrive", "OneDriveConnector", {}),
+    "sharepoint": ("src.connectors.connectors.sharepoint", "SharePointConnector", {}),
     "telegram": ("src.connectors.connectors.telegram", "TelegramConnector", {}),
     "x": ("src.connectors.connectors.x", "XConnector", {}),
     "generic_rest": ("src.connectors.connectors.generic_rest", "GenericRESTConnector", {}),
@@ -70,6 +72,7 @@ _CONNECTOR_CLASSES = {
 
 _BACKEND_OPTIONS: Dict[str, List[str]] = {
     "email": ["gmail", "outlook", "smtp"],
+    "calendar": ["google", "outlook", "caldav"],
 }
 
 
@@ -156,9 +159,25 @@ def _save_config(config: dict) -> None:
     """Write connectors.yaml with lock."""
     with _config_lock:
         path = Path(_config_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        except PermissionError as exc:
+            logger.error("Connector configuration is not writable at %s: %s", path, exc)
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Connector configuration is not writable. "
+                    "Check config/connectors.yaml ownership and restart Lancelot."
+                ),
+            ) from exc
+        except OSError as exc:
+            logger.error("Failed to write connector configuration at %s: %s", path, exc)
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to persist connector configuration.",
+            ) from exc
 
 
 # ── Response Models ──────────────────────────────────────────────

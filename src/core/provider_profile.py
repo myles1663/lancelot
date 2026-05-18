@@ -275,6 +275,7 @@ class ProfileRegistry:
 
         # Provider profiles
         for name, raw in self._models_data["providers"].items():
+            raw = _apply_provider_env_overrides(name, raw)
             fast = LaneConfig(
                 model=raw["fast"]["model"],
                 max_tokens=raw["fast"]["max_tokens"],
@@ -408,3 +409,43 @@ class ProfileRegistry:
     def is_local_task(self, task_type: str) -> bool:
         """Check if a task type should be routed to the local model."""
         return task_type in self._local_tasks
+
+
+def _apply_provider_env_overrides(name: str, raw: dict) -> dict:
+    """Apply runtime env overrides for operator-managed provider profiles."""
+    if name != "local-openai":
+        return raw
+
+    patched = {
+        **raw,
+        "fast": dict(raw.get("fast", {})),
+        "deep": dict(raw.get("deep", {})),
+        "cache": dict(raw.get("cache", {})),
+    }
+    fast_model = os.getenv("LOCAL_OPENAI_FAST_MODEL", "").strip()
+    deep_model = os.getenv("LOCAL_OPENAI_DEEP_MODEL", "").strip()
+    cache_model = os.getenv("LOCAL_OPENAI_CACHE_MODEL", "").strip()
+    context_window = _positive_int_env("LOCAL_OPENAI_CONTEXT_WINDOW")
+
+    if fast_model:
+        patched["fast"]["model"] = fast_model
+    if deep_model:
+        patched["deep"]["model"] = deep_model
+    if cache_model:
+        patched["cache"]["model"] = cache_model
+    if context_window:
+        for lane in ("fast", "deep", "cache"):
+            if lane in patched:
+                patched[lane]["max_tokens"] = context_window
+    return patched
+
+
+def _positive_int_env(name: str) -> Optional[int]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None

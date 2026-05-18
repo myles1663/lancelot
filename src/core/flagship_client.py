@@ -33,6 +33,7 @@ _OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 _XAI_URL = "https://api.x.ai/v1/chat/completions"
 _NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+_DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
 # Environment variable names for API keys
 _API_KEY_VARS = {
@@ -41,6 +42,8 @@ _API_KEY_VARS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "xai": "XAI_API_KEY",
     "nvidia": "NVIDIA_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "local-openai": "LOCAL_OPENAI_API_KEY",
 }
 
 
@@ -96,7 +99,10 @@ class FlagshipClient:
         Raises:
             FlagshipError on API failure or missing configuration.
         """
-        if not self._api_key and not self._oauth_token:
+        has_local_endpoint = self._provider == "local-openai" and bool(
+            os.getenv("LOCAL_OPENAI_BASE_URL", "").strip()
+        )
+        if not self._api_key and not self._oauth_token and not has_local_endpoint:
             raise FlagshipError(
                 f"API key not configured for {self._provider} "
                 f"(set {_API_KEY_VARS.get(self._provider, 'UNKNOWN')})"
@@ -124,6 +130,27 @@ class FlagshipClient:
             return self._call_xai(prompt, lane_config.model, effective_max, effective_temp, timeout)
         elif self._provider == "nvidia":
             return self._call_nvidia(prompt, lane_config.model, effective_max, effective_temp, timeout)
+        elif self._provider == "deepseek":
+            return self._call_openai_compatible(
+                _DEEPSEEK_URL,
+                prompt,
+                lane_config.model,
+                effective_max,
+                effective_temp,
+                timeout,
+                provider_label="DeepSeek",
+            )
+        elif self._provider == "local-openai":
+            base_url = os.getenv("LOCAL_OPENAI_BASE_URL", "").rstrip("/")
+            return self._call_openai_compatible(
+                f"{base_url}/chat/completions",
+                prompt,
+                lane_config.model,
+                effective_max,
+                effective_temp,
+                timeout,
+                provider_label="local OpenAI-compatible",
+            )
         else:
             raise FlagshipError(f"Unsupported provider: {self._provider}")
 
@@ -248,6 +275,32 @@ class FlagshipClient:
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError) as exc:
             raise FlagshipError(f"Unexpected NVIDIA response: {exc}") from exc
+
+    def _call_openai_compatible(
+        self,
+        url: str,
+        prompt: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+        timeout: float,
+        *,
+        provider_label: str,
+    ) -> str:
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        headers = {}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        data = self._http_post(url, payload, timeout, extra_headers=headers)
+        try:
+            return data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError) as exc:
+            raise FlagshipError(f"Unexpected {provider_label} response: {exc}") from exc
 
     # ------------------------------------------------------------------
     # HTTP helper
