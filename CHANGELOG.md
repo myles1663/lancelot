@@ -7,6 +7,8 @@ external users and reviewers.
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-05-19
+
 ### Added
 
 - Added a standalone React War Room visual walkthrough with current
@@ -15,15 +17,6 @@ external users and reviewers.
 - Added fresh War Room walkthrough captures for Soul templates, Memory
   Manager samples, incidents, federation graph and audit, compliance export,
   Context Efficiency diagnostics, and Time-Travel Debugger.
-
-## [0.4.5] - 2026-05-14
-
-### Added
-
-- Added War Room installed-skill inspection with manifest, permissions, risk,
-  source proposal, pipeline evidence, implementation, tests, and artifact
-  hash visibility.
-- Added governed War Room enable/disable controls for installed skills.
 - Added War Room Soul version rollback controls so operators can activate an
   existing retained Soul version, with confirmation, linter validation,
   runtime refresh, and template provenance shown for active versions.
@@ -57,6 +50,26 @@ external users and reviewers.
 
 ### Verification
 
+- Full Python suite: 7,393 passed, 24 skipped, 31 deselected.
+- Full Python line coverage: 90.0927%.
+- Focused provider, connector, receipt, usage-persistence, and skills suite:
+  54 passed.
+- War Room type-check and production build: passed.
+- Universal Application Bridge build and tests: passed in public CI.
+- Docker Compose config validation: passed.
+- Public artifact guard: passed.
+
+## [0.4.5] - 2026-05-14
+
+### Added
+
+- Added War Room installed-skill inspection with manifest, permissions, risk,
+  source proposal, pipeline evidence, implementation, tests, and artifact
+  hash visibility.
+- Added governed War Room enable/disable controls for installed skills.
+
+### Verification
+
 - Full Python suite: 7,361 passed, 24 skipped, 31 deselected.
 - Full Python line coverage: 90.2644%.
 - Focused skills suite: 44 passed.
@@ -67,9 +80,6 @@ external users and reviewers.
 - Local deployment smoke: health endpoint served, War Room Skills page served,
   protected Skills API remained auth-gated, and the built War Room bundle
   included skill Inspect, source-proposal, enable, and disable controls.
-- Focused provider, connector, receipt, and usage-persistence regression tests:
-  204 passed, 21 skipped.
-- Installer Node tests: 9 passed.
 
 ## [0.4.4] - 2026-05-13
 
