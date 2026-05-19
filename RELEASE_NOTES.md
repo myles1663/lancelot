@@ -1,23 +1,24 @@
 # Release Notes
 
-## Current Public Release: 0.4.5
+## Current Public Release: 0.4.6
 
-Lancelot 0.4.5 adds operator inspection and management for installed skills in
-the War Room. Operators can inspect an installed skill's manifest, permissions,
-risk posture, source proposal linkage, pipeline evidence, receipts contract,
-implementation, tests, and artifact hashes before relying on it. Installed
-skills can also be enabled or disabled through governed War Room controls that
-emit durable `TOOL_ENABLED` and `TOOL_DISABLED` receipts. The core path remains
-self-hosted: requests enter through the gateway, policy and Soul constraints
-are checked before execution, approved work runs through governed tools or UAB
-routes, and outcomes are written as immutable receipts.
+Lancelot 0.4.6 expands the War Room into a more complete operator console. It
+adds broad UX polish across governance, operations, federation, receipts, cost,
+connectors, kill switches, and time-travel views; preserves governed installed
+skill inspection with source proposal and artifact evidence; adds Soul version
+rollback and template provenance; introduces Microsoft Graph workspace
+connectors; and adds DeepSeek plus operator-managed OpenAI-compatible local
+model provider configuration. Provider and connector changes now emit durable
+governance receipts, and provider configuration persistence fails closed when
+durable writes fail. The release also includes a standalone visual War Room
+walkthrough built from fresh screenshots.
 
 ### What To Inspect First
 
 - `README.md` for the quickstart and architecture summary.
 - `docs/security-overview.md` for the current dependency audit and security
   posture snapshot.
-- `CHANGELOG.md` for the 0.4.5 skill inspector verification summary.
+- `CHANGELOG.md` for the 0.4.6 War Room readiness verification summary.
 - `docs/soul-templates.md` for the built-in template library and structured
   governance fields.
 - The War Room Skills panel for installed-skill inspection, source proposal
