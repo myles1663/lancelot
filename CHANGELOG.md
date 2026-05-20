@@ -17,6 +17,12 @@ external users and reviewers.
 - Added fresh War Room walkthrough captures for Soul templates, Memory
   Manager samples, incidents, federation graph and audit, compliance export,
   Context Efficiency diagnostics, and Time-Travel Debugger.
+- Added the proposed UCP Governed Commerce Connector specification, defining
+  UCP as a high-authority commerce execution rail that uses the existing
+  governance approval queue for spend-committing actions.
+- Added the disabled-by-default UCP connector foundation with structured
+  commerce intent validation, default T3 spend-commitment tiers, approval
+  evidence checks, and connector registry/config wiring.
 - Added War Room Soul version rollback controls so operators can activate an
   existing retained Soul version, with confirmation, linter validation,
   runtime refresh, and template provenance shown for active versions.
