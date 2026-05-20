@@ -56,8 +56,10 @@ external users and reviewers.
 
 ### Verification
 
-- Full Python suite: 7,393 passed, 24 skipped, 31 deselected.
-- Full Python line coverage: 90.0927%.
+- Full Python suite: 7,406 passed, 24 skipped, 31 deselected.
+- Full Python line coverage: 90.0990%.
+- Focused UCP, connector registry, connector management, and legacy gateway
+  UCP suite: 69 passed, 36 deselected.
 - Focused provider, connector, receipt, usage-persistence, and skills suite:
   54 passed.
 - War Room type-check and production build: passed.
