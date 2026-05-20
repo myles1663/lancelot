@@ -42,6 +42,9 @@ rate_limits:
     sharepoint:
       max_requests_per_minute: 60
       burst_limit: 10
+    ucp:
+      max_requests_per_minute: 20
+      burst_limit: 3
 connectors:
   email:
     enabled: false
@@ -101,3 +104,7 @@ connectors:
   shared_workspace:
     enabled: true
     settings: {}
+  ucp:
+    enabled: false
+    settings:
+      base_url: https://api.ucp.example

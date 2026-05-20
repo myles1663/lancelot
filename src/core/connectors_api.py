@@ -68,6 +68,7 @@ _CONNECTOR_CLASSES = {
     "x": ("src.connectors.connectors.x", "XConnector", {}),
     "generic_rest": ("src.connectors.connectors.generic_rest", "GenericRESTConnector", {}),
     "shared_workspace": ("src.connectors.connectors.shared_workspace", "SharedWorkspaceConnector", {}),
+    "ucp": ("src.connectors.connectors.ucp", "UCPConnector", {}),
 }
 
 _BACKEND_OPTIONS: Dict[str, List[str]] = {
@@ -110,6 +111,8 @@ def _instantiate_connector(connector_id: str, config: dict):
             if settings.get("messaging_service_sid"):
                 kwargs["messaging_service_sid"] = settings["messaging_service_sid"]
             kwargs["account_sid"] = kwargs.get("account_sid", "")
+        if connector_id == "ucp" and settings.get("base_url"):
+            kwargs["base_url"] = settings["base_url"]
         return cls(**kwargs)
     except Exception as e:
         logger.warning("Failed to instantiate connector %s: %s", connector_id, e)

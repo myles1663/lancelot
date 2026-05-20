@@ -36,6 +36,7 @@ The repo currently ships the following first-party connector implementations und
 | `sms` | Twilio SMS/MMS | Twilio REST API with composed Basic auth |
 | `teams` | Microsoft Graph API | Teams chat/channel operations via Graph bearer tokens |
 | `telegram` | Telegram Bot API | URL-token auth for bot messaging and file operations |
+| `ucp` | UCP commerce API | Disabled-by-default high-authority commerce connector for quotes, purchases, subscriptions, bookings, procurement, refunds, and vendor actions |
 | `whatsapp` | WhatsApp Business Cloud API | Meta Graph-based business messaging connector |
 | `x` | X API v2 | OAuth 1.0a-signed tweet/account operations |
 
@@ -123,3 +124,13 @@ Per-connector rate limiters prevent abuse. Check is performed before credential 
 ## Relationship to MCP
 
 Connectors and MCP servers coexist. Connectors are lighter-weight (direct HTTP specs), while MCP servers use the full JSON-RPC 2.0 protocol with the 8-gate governance pipeline. MCP is more expensive token-wise but provides richer tool discovery and schema validation.
+
+---
+
+## High-Authority Connectors
+
+### UCP Governed Commerce
+
+UCP is Lancelot's disabled-by-default governed commerce connector foundation: agents may create commerce intents for quotes, purchases, subscriptions, bookings, procurement, cancellation, and refunds, but spend-committing execution must route through the existing governance approval queue. UCP owns commerce execution; governance owns approval.
+
+See [UCP Governed Commerce](ucp-governed-commerce.md).
