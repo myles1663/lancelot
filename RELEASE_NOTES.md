@@ -1,13 +1,19 @@
 # Release Notes
 
-## Current Public Release: 0.4.6
+## Current Public Release: 0.4.7
 
-Lancelot 0.4.6 expands the War Room into a more complete operator console. It
-adds broad UX polish across governance, operations, federation, receipts, cost,
-connectors, kill switches, and time-travel views; preserves governed installed
-skill inspection with source proposal and artifact evidence; adds Soul version
-rollback and template provenance; introduces Microsoft Graph workspace
-connectors; and adds DeepSeek plus operator-managed OpenAI-compatible local
+Lancelot 0.4.7 adds a disabled-by-default governed UCP commerce connector
+foundation on top of the 0.4.6 War Room readiness release. UCP is documented as
+a high-authority commerce execution rail: quote and discovery operations can be
+modeled as governed commerce intents, while spend-committing actions default to
+T3 and require approval evidence through Lancelot's existing governance queue.
+
+Lancelot 0.4.6 expanded the War Room into a more complete operator console. It
+added broad UX polish across governance, operations, federation, receipts, cost,
+connectors, kill switches, and time-travel views; preserved governed installed
+skill inspection with source proposal and artifact evidence; added Soul version
+rollback and template provenance; introduced Microsoft Graph workspace
+connectors; and added DeepSeek plus operator-managed OpenAI-compatible local
 model provider configuration. Provider and connector changes now emit durable
 governance receipts, and provider configuration persistence fails closed when
 durable writes fail. The release also includes a standalone visual War Room
@@ -18,7 +24,10 @@ walkthrough built from fresh screenshots.
 - `README.md` for the quickstart and architecture summary.
 - `docs/security-overview.md` for the current dependency audit and security
   posture snapshot.
-- `CHANGELOG.md` for the 0.4.6 War Room readiness verification summary.
+- `CHANGELOG.md` for the 0.4.7 UCP and 0.4.6 War Room readiness verification
+  summaries.
+- `docs/ucp-governed-commerce.md` for the governed commerce connector
+  authority boundary, approval contract, and rollout plan.
 - `docs/soul-templates.md` for the built-in template library and structured
   governance fields.
 - The War Room Skills panel for installed-skill inspection, source proposal
