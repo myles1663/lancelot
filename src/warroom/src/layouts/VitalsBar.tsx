@@ -85,7 +85,7 @@ function HealthMonitor({ armorPct }: HealthMonitorProps) {
   return (
     <button
       type="button"
-      className="flex h-8 min-w-[74px] cursor-pointer items-center gap-2 rounded-md border border-border-default bg-surface-bg/55 px-2.5 transition-colors hover:border-border-active hover:bg-surface-card-elevated"
+      className="flex h-8 min-w-[74px] cursor-pointer items-center gap-2 rounded-md border border-border-default bg-surface-bg/55 px-2.5 transition-colors hover:border-border-active hover:bg-surface-card-elevated 2xl:min-w-[116px]"
       onClick={openHealthDashboard}
       title="Open Health Dashboard"
       aria-label={`Open Health Dashboard. Health ${armorPct} percent.`}
@@ -141,7 +141,7 @@ export function VitalsBar() {
         color={stateColor(identityPct)}
         icon={ShieldCheck}
         tooltip="Soul contract integrity. 100% = all identity assertions verified."
-        className="hidden w-[132px] md:flex xl:w-[138px]"
+        className="hidden w-[150px] md:flex 2xl:w-[206px]"
       />
 
       <HealthMonitor armorPct={armorPct} />
@@ -152,7 +152,7 @@ export function VitalsBar() {
         color={conn.color}
         icon={Wifi}
         tooltip="Browser-to-gateway control connection. LLM provider status is shown in Cost Tracker."
-        className={`w-[98px] ${conn.pulse ? 'animate-pulse' : ''}`}
+        className={`w-[120px] 2xl:w-[210px] ${conn.pulse ? 'animate-pulse' : ''}`}
       />
 
       <Vital
@@ -161,7 +161,7 @@ export function VitalsBar() {
         color={defense.color}
         icon={Shield}
         tooltip="Current security posture. ELEVATED = anomalous activity. LOCKDOWN = safety trigger."
-        className="hidden w-[96px] xl:flex"
+        className="hidden w-[154px] 2xl:flex"
       />
 
       <Vital
@@ -176,7 +176,7 @@ export function VitalsBar() {
         }
         icon={AlertCircle}
         tooltip="Percentage of requests returning 5xx errors since last restart."
-        className="hidden w-[76px] 2xl:flex"
+        className="hidden w-[150px] 2xl:flex"
       />
 
       {isCrusader && (

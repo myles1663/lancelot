@@ -108,7 +108,7 @@ export function Header({ sidebarCollapsed, onToggleSidebar, notificationCount }:
         </div>
 
         {/* Live Vitals Bar */}
-        <div className="flex min-w-0 flex-1 justify-end xl:max-w-[420px] 2xl:max-w-[640px]">
+        <div className="flex min-w-0 flex-1 justify-end xl:max-w-[420px] 2xl:max-w-[900px]">
           <VitalsBar />
         </div>
 
