@@ -1,17 +1,17 @@
 {
   "branch": "main",
-  "commit": "69fd92f",
+  "commit": "440683a",
   "display": {
     "headline_label": "Runnable tests tracked",
-    "headline_tests": 7483,
-    "test_files": 398
+    "headline_tests": 7626,
+    "test_files": 412
   },
-  "generated_at": "2026-06-02T14:10:43Z",
+  "generated_at": "2026-06-22T20:30:03Z",
   "metrics": {
     "installer": {
       "cancelled": 0,
       "command": "npm test",
-      "duration_ms": 3712,
+      "duration_ms": 3744,
       "failed": 0,
       "passed": 9,
       "skipped": 0,
@@ -25,28 +25,28 @@
       "cancelled": 0,
       "command": "npm test",
       "daemon_dispatcher_passed": true,
-      "dist_entries": 209,
-      "duration_ms": 31017,
+      "dist_entries": 214,
+      "duration_ms": 60768,
       "failed": 0,
-      "passed": 44,
+      "passed": 56,
       "skipped": 0,
       "status": "passed",
-      "test_files": 13,
-      "tests": 44,
+      "test_files": 14,
+      "tests": 56,
       "todo": 0
     },
     "python": {
-      "collected": 7461,
+      "collected": 7592,
       "command": "python -m pytest --collect-only -q",
       "deselected": 31,
-      "selected": 7430,
+      "selected": 7561,
       "status": "collected",
-      "test_files": 383
+      "test_files": 396
     },
     "totals": {
-      "test_files": 398,
-      "tracked_tests": 7483,
-      "verified_node_passes": 53
+      "test_files": 412,
+      "tracked_tests": 7626,
+      "verified_node_passes": 65
     }
   },
   "project": "lancelot",
