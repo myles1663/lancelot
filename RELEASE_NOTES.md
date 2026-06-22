@@ -1,9 +1,9 @@
 # Release Notes
 
-## Upcoming Public Release Candidate
+## Current Public Release: 0.4.8
 
-This release candidate is scoped to the governed runtime spine, UAB hardening,
-and proof-of-governed-execution evidence. It does not include other in-flight
+Lancelot 0.4.8 is scoped to the governed runtime spine, UAB hardening, and
+proof-of-governed-execution evidence. It does not include other in-flight
 private development projects.
 
 The spine hardening work separates boot, gateway, orchestration, memory, and
@@ -19,18 +19,19 @@ evidence, and packet validation so reviewers can inspect governed denial,
 approval, receipt, and evidence-manifest behavior without relying on prose-only
 claims.
 
-### Release Candidate Verification
+### Verification
 
-- Public artifact guard.
-- Full Python coverage gate at or above 90%.
-- Focused UAB, receipt, spine-boundary, and governed-execution proof tests.
-- UAB package install and test run.
-- Installer package install and test run.
-- War Room type-check and production build.
-- Docker Compose config validation.
-- Proof packet generation and zip integrity validation.
+- Full Python suite: 7,537 passed, 24 skipped, 31 deselected.
+- Full Python line coverage: 90%.
+- Public artifact guard: passed.
+- Governed-execution proof runner: 13 cases passed.
+- Proof packet zip integrity validation: passed.
+- Universal Application Bridge clean install, audit, build, and tests: passed.
+- War Room clean install, audit, type-check, and production build: passed.
+- Installer clean install, audit, and tests: passed.
+- Docker Compose config validation: passed.
 
-## Current Public Release: 0.4.7
+## Previous Public Release: 0.4.7
 
 Lancelot 0.4.7 adds a disabled-by-default governed UCP commerce connector
 foundation on top of the 0.4.6 War Room readiness release. UCP is documented as
@@ -54,8 +55,14 @@ walkthrough built from fresh screenshots.
 - `README.md` for the quickstart and architecture summary.
 - `docs/security-overview.md` for the current dependency audit and security
   posture snapshot.
-- `CHANGELOG.md` for the 0.4.7 UCP and 0.4.6 War Room readiness verification
-  summaries.
+- `CHANGELOG.md` for the 0.4.8 governance spine, UAB, proof, and dependency
+  audit verification summary.
+- `docs/proof/README.md` for the proof-of-governed-execution package.
+- `docs/engineering/runtime-spine-boundaries.md` and
+  `docs/engineering/uab-governance-boundary.md` for the hardened runtime and
+  UAB boundaries.
+- `docs/security/governed-execution-threat-model.md` and
+  `docs/security/uab-threat-model.md` for the release threat models.
 - `docs/ucp-governed-commerce.md` for the governed commerce connector
   authority boundary, approval contract, and rollout plan.
 - `docs/soul-templates.md` for the built-in template library and structured
