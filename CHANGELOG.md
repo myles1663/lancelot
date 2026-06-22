@@ -7,6 +7,8 @@ external users and reviewers.
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-06-22
+
 ### Added
 
 - Added public-facing governance spine and UAB boundary documentation covering
@@ -25,10 +27,15 @@ external users and reviewers.
 
 ### Verification
 
-- Full Python coverage gate, UAB package tests, installer tests, War Room
-  type-check/build, Docker Compose config, public artifact guard, focused
-  UAB/governance-spine tests, and proof packet validation must pass before
-  publishing this release.
+- Full Python suite: 7,537 passed, 24 skipped, 31 deselected.
+- Full Python line coverage: 90%.
+- Public artifact guard: passed.
+- Governed-execution proof runner: 13 cases passed.
+- Proof packet zip integrity validation: passed.
+- Universal Application Bridge clean install, audit, build, and tests: passed.
+- War Room clean install, audit, type-check, and production build: passed.
+- Installer clean install, audit, and tests: passed.
+- Docker Compose config validation: passed.
 
 ## [0.4.7] - 2026-05-20
 
