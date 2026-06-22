@@ -7,6 +7,29 @@ external users and reviewers.
 
 ## [Unreleased]
 
+### Added
+
+- Added public-facing governance spine and UAB boundary documentation covering
+  runtime ownership, UAB grant authority, receipt storage separation, threat
+  model expectations, and import-boundary test coverage.
+- Added the proof-of-governed-execution package, including the deterministic
+  proof runner, control-to-evidence matrix, scenario documentation, receipt
+  validation checks, and focused proof tests.
+
+### Changed
+
+- Split core runtime, gateway, orchestrator, memory, receipt, and boot modules
+  into smaller governed spine units while preserving existing runtime behavior.
+- Hardened UAB permission handling with canonical authority grants, explicit
+  permission risk terminology, fallback coverage, and bridge receipt metadata.
+
+### Verification
+
+- Full Python coverage gate, UAB package tests, installer tests, War Room
+  type-check/build, Docker Compose config, public artifact guard, focused
+  UAB/governance-spine tests, and proof packet validation must pass before
+  publishing this release.
+
 ## [0.4.7] - 2026-05-20
 
 ### Added

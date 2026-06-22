@@ -48,8 +48,7 @@ class TestOrchestratorChatProvenance:
     def test_chat_preserves_supplied_identity_and_quest(self):
         orch = _build_minimal_orchestrator()
 
-        with patch.object(orch_mod, "classify_intent", return_value=orch_mod.IntentType.KNOWLEDGE_REQUEST), \
-             patch.object(orch_mod, "create_receipt", return_value=MagicMock()) as create_receipt:
+        with patch.object(orch_mod, "classify_intent", return_value=orch_mod.IntentType.KNOWLEDGE_REQUEST):
             response = orch.chat(
                 "hello",
                 channel="warroom",
@@ -66,11 +65,12 @@ class TestOrchestratorChatProvenance:
         assert orch._current_quest_id == "quest-789"
         assert orch.context_env._current_quest_id == "quest-789"
 
-        create_receipt.assert_called_once()
-        assert create_receipt.call_args.kwargs["quest_id"] == "quest-789"
-        assert create_receipt.call_args.kwargs["metadata"]["session_id"] == "session-123"
-        assert create_receipt.call_args.kwargs["metadata"]["operator_id"] == "operator-456"
-        assert create_receipt.call_args.kwargs["metadata"]["operator_name"] == "Myles"
+        orch.receipt_service.create.assert_called_once()
+        receipt = orch.receipt_service.create.call_args.args[0]
+        assert receipt.quest_id == "quest-789"
+        assert receipt.metadata["session_id"] == "session-123"
+        assert receipt.metadata["operator_id"] == "operator-456"
+        assert receipt.metadata["operator_name"] == "Myles"
 
     def test_prompt_injection_block_is_receipted_and_never_reaches_provider(self):
         orch = _build_minimal_orchestrator()

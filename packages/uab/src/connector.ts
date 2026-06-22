@@ -87,6 +87,8 @@ export interface ConnectorOptions {
   loadProfiles?: boolean;
   /** Max actions per minute per PID (rate limiting). Default: auto-detected from environment */
   rateLimit?: number;
+  /** HMAC key used to validate supplied central-authority UAB grants. */
+  authoritySecret?: string | Buffer;
   /** Force a specific runtime mode instead of auto-detecting. */
   mode?: 'desktop' | 'server' | 'container';
 }
@@ -116,7 +118,10 @@ export class UABConnector {
   private connectionMgr: ConnectionManager | null = null;
   private extensionServer: ExtensionWSServer | null = null;
 
-  private opts: Required<Omit<ConnectorOptions, 'mode'>> & { mode: string };
+  private opts: Required<Omit<ConnectorOptions, 'mode' | 'authoritySecret'>> & {
+    authoritySecret?: string | Buffer;
+    mode: string;
+  };
   private started = false;
 
   constructor(options?: ConnectorOptions) {
@@ -129,6 +134,7 @@ export class UABConnector {
       extensionBridge: options?.extensionBridge ?? envDefaults.extensionBridge,
       loadProfiles: options?.loadProfiles ?? true,
       rateLimit: options?.rateLimit ?? envDefaults.rateLimit,
+      authoritySecret: options?.authoritySecret,
       mode: options?.mode ?? detectEnvironment().mode,
     };
 
@@ -137,7 +143,10 @@ export class UABConnector {
     this.pluginManager = new PluginManager();
     this.router = new ControlRouter(this.pluginManager);
     this.cache = new ElementCache();
-    this.permissions = new PermissionManager({ rateLimit: this.opts.rateLimit });
+    this.permissions = new PermissionManager({
+      rateLimit: this.opts.rateLimit,
+      authoritySecret: this.opts.authoritySecret,
+    });
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────
@@ -414,15 +423,10 @@ export class UABConnector {
   async act(pid: number, elementId: string, action: ActionType, params?: ActionParams): Promise<ActionResult> {
     this.ensureConnected(pid);
 
-    const route = this.router.getRoute(pid)!;
     const connection = this.router.getConnection(pid)!;
 
-    // Permission check
-    const check = this.permissions.check(pid, action, route.app);
-    this.permissions.record(pid, action, elementId, route.app, check.allowed, check.reason);
-    if (!check.allowed) {
-      return { success: false, error: check.reason };
-    }
+    const denied = this.enforcePermission(pid, elementId, action, params, elementId);
+    if (denied) return denied;
 
     const result = await withRetry(
       () => connection.act(elementId, action, params),
@@ -453,8 +457,11 @@ export class UABConnector {
   // ─── Keyboard & Window ──────────────────────────────────────────
 
   /** Send a single keypress. */
-  async keypress(pid: number, key: string): Promise<ActionResult> {
+  async keypress(pid: number, key: string, params?: ActionParams): Promise<ActionResult> {
     this.ensureConnected(pid);
+    const actionParams = { ...params, key };
+    const denied = this.enforcePermission(pid, '', 'keypress', actionParams);
+    if (denied) return denied;
     const plan = this.planForPid(pid, 'keypress');
     if (plan.primaryMethod !== 'keyboard-native') {
       throw new Error(`Unexpected concerto plan for keypress: ${plan.primaryMethod}`);
@@ -466,13 +473,16 @@ export class UABConnector {
   }
 
   /** Send a hotkey combination (e.g., "ctrl+s" or ['ctrl', 's']). */
-  async hotkey(pid: number, keys: string | string[]): Promise<ActionResult> {
+  async hotkey(pid: number, keys: string | string[], params?: ActionParams): Promise<ActionResult> {
     this.ensureConnected(pid);
+    const keyArray = typeof keys === 'string' ? keys.split('+').map(k => k.trim()) : keys;
+    const actionParams = { ...params, keys: keyArray };
+    const denied = this.enforcePermission(pid, '', 'hotkey', actionParams);
+    if (denied) return denied;
     const plan = this.planForPid(pid, 'hotkey');
     if (plan.primaryMethod !== 'keyboard-native') {
       throw new Error(`Unexpected concerto plan for hotkey: ${plan.primaryMethod}`);
     }
-    const keyArray = typeof keys === 'string' ? keys.split('+').map(k => k.trim()) : keys;
     const { sendHotkey } = await import('./plugins/vision/input.js');
     const result = sendHotkey(pid, keyArray);
     this.cache.invalidateIfNeeded(pid, 'hotkey');
@@ -480,8 +490,17 @@ export class UABConnector {
   }
 
   /** P6 raw input injection - drag along a waypoint path. */
-  async drag(pid: number, path: Array<{ x: number; y: number }>, stepDelay = 10, button: 'left' | 'middle' | 'right' = 'left'): Promise<ActionResult> {
+  async drag(
+    pid: number,
+    path: Array<{ x: number; y: number }>,
+    stepDelay = 10,
+    button: 'left' | 'middle' | 'right' = 'left',
+    params?: ActionParams,
+  ): Promise<ActionResult> {
     this.ensureConnected(pid);
+    const actionParams = { ...params, dragPath: path, stepDelay, button };
+    const denied = this.enforcePermission(pid, '', 'drag', actionParams);
+    if (denied) return denied;
     const plan = this.planForPid(pid, 'drag');
     if (plan.primaryMethod !== 'os-input-injection') {
       throw new Error(`Unexpected concerto plan for drag: ${plan.primaryMethod}`);
@@ -491,8 +510,11 @@ export class UABConnector {
   }
 
   /** P6 raw input injection - scroll at absolute coordinates. */
-  async scroll(pid: number, x: number, y: number, amount: number): Promise<ActionResult> {
+  async scroll(pid: number, x: number, y: number, amount: number, params?: ActionParams): Promise<ActionResult> {
     this.ensureConnected(pid);
+    const actionParams = { ...params, x, y, amount };
+    const denied = this.enforcePermission(pid, '', 'scroll', actionParams);
+    if (denied) return denied;
     const plan = this.planForPid(pid, 'scroll');
     if (plan.primaryMethod !== 'os-input-injection') {
       throw new Error(`Unexpected concerto plan for scroll: ${plan.primaryMethod}`);
@@ -502,7 +524,7 @@ export class UABConnector {
   }
 
   /** Window management (minimize, maximize, restore, close, move, resize). */
-  async window(pid: number, action: string, params?: { x?: number; y?: number; width?: number; height?: number }): Promise<ActionResult> {
+  async window(pid: number, action: string, params?: ActionParams): Promise<ActionResult> {
     this.ensureConnected(pid);
 
     const actionMap: Record<string, ActionType> = {
@@ -516,18 +538,22 @@ export class UABConnector {
   }
 
   /** Capture a screenshot of the app window. Returns path + base64 data. */
-  async screenshot(pid: number, outputPath?: string): Promise<ActionResult> {
+  async screenshot(pid: number, outputPath?: string, params?: ActionParams): Promise<ActionResult> {
     this.ensureConnected(pid);
     const connection = this.router.getConnection(pid)!;
     void this.planForPid(pid, 'screenshot');
     const path = outputPath || `data/screenshots/uab-${pid}-${Date.now()}.png`;
+    const actionParams = { ...params, outputPath: path };
+
+    const denied = this.enforcePermission(pid, '', 'screenshot', actionParams);
+    if (denied) return denied;
 
     // Ensure directory exists
     const { mkdirSync, readFileSync, existsSync } = await import('fs');
     const { dirname } = await import('path');
     mkdirSync(dirname(path), { recursive: true });
 
-    const result = await connection.act('', 'screenshot', { outputPath: path });
+    const result = await connection.act('', 'screenshot', actionParams);
 
     // Always include base64 in the response so remote clients (Co-work) can read it
     if (result.success && !(result as any).base64 && !(result as any).data) {
@@ -1093,12 +1119,25 @@ else { $events | ConvertTo-Json -Compress -Depth 3 }
    * });
    */
   async atomicChain(chain: AtomicChainDef): Promise<AtomicChainResult> {
-    this.ensureStarted();
+    this.ensureConnected(chain.pid);
     const { runPSRawInteractive } = await import('./ps-exec.js');
 
     // Build PowerShell script for all steps in one session
     const stepScripts: string[] = [];
-    for (const step of chain.steps) {
+    for (let stepIndex = 0; stepIndex < chain.steps.length; stepIndex++) {
+      const step = chain.steps[stepIndex];
+      if (step.action !== 'wait') {
+        const denied = this.enforcePermission(chain.pid, '', step.action, step.params);
+        if (denied) {
+          return {
+            success: false,
+            stepsCompleted: stepIndex,
+            totalSteps: chain.steps.length,
+            durationMs: 0,
+            error: denied.error,
+          };
+        }
+      }
       switch (step.action) {
         case 'wait':
           stepScripts.push(`Start-Sleep -Milliseconds ${step.ms || 200}`);
@@ -1449,6 +1488,22 @@ try {
   }
 
   // ─── Helpers ────────────────────────────────────────────────────
+
+  private enforcePermission(
+    pid: number,
+    elementId: string,
+    action: ActionType,
+    params?: ActionParams,
+    selectorScope?: string,
+  ): ActionResult | null {
+    const route = this.router.getRoute(pid)!;
+    const check = this.permissions.check(pid, action, route.app, params, selectorScope);
+    this.permissions.record(pid, action, elementId, route.app, check.allowed, check.reason);
+    if (!check.allowed) {
+      return { success: false, error: check.reason };
+    }
+    return null;
+  }
 
   /** Count elements recursively. */
   countElements(elements: UIElement[]): number {

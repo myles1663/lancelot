@@ -4,6 +4,39 @@ import assert from 'node:assert/strict';
 import { UABConnector } from '../dist/connector.js';
 import { PluginManager } from '../dist/plugins/base.js';
 import { ControlRouter } from '../dist/router.js';
+import { signUABAuthorityGrant } from '../dist/governance/grants.js';
+
+const SECRET = 'connector-fallback-test-secret-not-production';
+
+function makeGrant(action, overrides = {}) {
+  const grant = {
+    grant_id: `grant-${action}`,
+    issued_at: '2026-06-17T00:00:00.000Z',
+    expires_at: '2999-01-01T00:00:00.000Z',
+    nonce: '123e4567-e89b-42d3-a456-426614174111',
+    risk_tier: action === 'screenshot' ? 'T0/T1' : 'T1/T2',
+    uab_risk: action === 'screenshot' ? 'safe' : 'moderate',
+    capability: 'desktop.control',
+    app_name: 'Chrome',
+    app_pid: 9901,
+    action,
+    selector_scope: '',
+    sensitive_read: action === 'screenshot',
+    mutating: action !== 'screenshot',
+    destructive: false,
+    external_submission: false,
+    credential_sensitive: false,
+    policy_version: 'test',
+    soul_version: 'test',
+    workflow_id: 'workflow-test',
+    run_id: 'run-test',
+    parent_receipt_id: null,
+    approval_id: 'approval-test',
+    ...overrides,
+  };
+  grant.signature = signUABAuthorityGrant(grant, SECRET);
+  return grant;
+}
 
 class PrimaryBrowserPlugin {
   framework = 'browser';
@@ -61,6 +94,7 @@ async function createInjectedConnector(primaryConnection, fallbackConnection) {
     persistent: false,
     extensionBridge: false,
     loadProfiles: false,
+    authoritySecret: SECRET,
   });
 
   await connector.start();
@@ -176,7 +210,11 @@ test('connector replays mutating actions on the fallback route through the publi
   const { connector, router } = await createInjectedConnector(primaryConnection, fallbackConnection);
 
   try {
-    const result = await connector.act(9901, 'field-1', 'click', { x: 1, y: 2 });
+    const result = await connector.act(9901, 'field-1', 'click', {
+      x: 1,
+      y: 2,
+      uabAuthorityGrant: makeGrant('click', { selector_scope: 'field-1' }),
+    });
     assert.equal(result.success, true);
     assert.equal(result.backend, 'win-uia');
     assert.equal(primaryConnection.actCalls, 1);
@@ -253,7 +291,11 @@ test('connector screenshot uses the fallback-capable route wrapper', async () =>
   const { connector, router } = await createInjectedConnector(primaryConnection, fallbackConnection);
 
   try {
-    const result = await connector.screenshot(9901, 'data/screenshots/fallback-test.png');
+    const result = await connector.screenshot(
+      9901,
+      'data/screenshots/fallback-test.png',
+      { uabAuthorityGrant: makeGrant('screenshot') },
+    );
     assert.equal(result.success, true);
     assert.equal(result.backend, 'win-uia');
     assert.equal(result.data, 'ZmFrZS1wbmc=');

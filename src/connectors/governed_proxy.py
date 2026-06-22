@@ -51,6 +51,7 @@ class GovernedConnectorProxy:
         receipt_service: Any = None,
         trust_ledger: Any = None,
         soul: Any = None,
+        approval_verifier: Any = None,
     ) -> None:
         self._proxy = proxy
         self._registry = registry
@@ -61,6 +62,7 @@ class GovernedConnectorProxy:
         self._receipt_service = receipt_service
         self._trust_ledger = trust_ledger
         self._soul = soul
+        self._approval_verifier = approval_verifier
         self._daily_send_lock = threading.Lock()
 
     def update_soul(self, soul: Any) -> None:
@@ -200,10 +202,30 @@ class GovernedConnectorProxy:
                     parent_receipt_id=parent_receipt_id,
                 )
 
+        connector_params = self._prepare_connector_params(
+            connector_id=connector_id,
+            operation_id=operation_id,
+            params=params,
+            risk_tier=risk_profile.tier,
+            operator_id=operator_id,
+            session_id=session_id,
+        )
+        if isinstance(connector_params, ConnectorResponse):
+            return self._finalize_response(
+                connector_params,
+                cap_id,
+                risk_profile.tier,
+                params,
+                operator_id=operator_id,
+                session_id=session_id,
+                quest_id=quest_id,
+                parent_receipt_id=parent_receipt_id,
+            )
+
         # 4. Execute
         connector = entry.connector
         try:
-            result = connector.execute(operation_id, params)
+            result = connector.execute(operation_id, connector_params)
         except Exception as e:
             response = ConnectorResponse(
                 operation_id=operation_id,
@@ -306,7 +328,7 @@ class GovernedConnectorProxy:
                     inputs={
                         "connector_id": response.connector_id,
                         "operation_id": response.operation_id,
-                        "params": params,
+                        "params": self._receipt_safe_params(params),
                         "capability": capability,
                     },
                     tier=CognitionTier.DETERMINISTIC,
@@ -332,6 +354,87 @@ class GovernedConnectorProxy:
                 logger.warning("Connector receipt persistence failed: %s", exc)
 
         return response
+
+    def _prepare_connector_params(
+        self,
+        *,
+        connector_id: str,
+        operation_id: str,
+        params: Dict[str, Any],
+        risk_tier: RiskTier,
+        operator_id: Optional[str],
+        session_id: Optional[str],
+    ) -> Dict[str, Any] | ConnectorResponse:
+        """Strip untrusted approval claims and inject verified evidence where available."""
+        connector_params = dict(params)
+        connector_params.pop("_governance_approval", None)
+        if connector_id != "ucp":
+            return connector_params
+
+        from src.connectors.commerce import UCPApprovalEvidence, operation_requires_approval
+
+        connector_params.pop("approved", None)
+        if not operation_requires_approval(operation_id):
+            return connector_params
+
+        approval_id = str(params.get("approval_id") or "").strip()
+        if self._approval_verifier is None:
+            return ConnectorResponse(
+                operation_id=operation_id,
+                connector_id=connector_id,
+                status_code=0,
+                success=False,
+                error="UCP spend-committing operations require verified governance approval evidence",
+            )
+
+        try:
+            evidence = self._approval_verifier(
+                connector_id=connector_id,
+                operation_id=operation_id,
+                params=self._receipt_safe_params(params),
+                risk_tier=risk_tier,
+                approval_id=approval_id,
+                operator_id=operator_id,
+                session_id=session_id,
+            )
+        except Exception as exc:
+            logger.warning("UCP approval verification failed: %s", exc)
+            return ConnectorResponse(
+                operation_id=operation_id,
+                connector_id=connector_id,
+                status_code=0,
+                success=False,
+                error="UCP spend-committing operations require verified governance approval evidence",
+            )
+        if not isinstance(evidence, UCPApprovalEvidence) or not evidence.approved:
+            return ConnectorResponse(
+                operation_id=operation_id,
+                connector_id=connector_id,
+                status_code=0,
+                success=False,
+                error="UCP spend-committing operations require verified governance approval evidence",
+            )
+
+        connector_params["_governance_approval"] = evidence
+        connector_params["approval_id"] = evidence.approval_id
+        return connector_params
+
+    def _receipt_safe_params(self, value: Any) -> Any:
+        """Return connector params with raw payment metadata redacted before receipts."""
+        from src.connectors.commerce import looks_like_raw_payment_key
+
+        if isinstance(value, dict):
+            safe: Dict[str, Any] = {}
+            for key, child in value.items():
+                key_text = str(key)
+                if looks_like_raw_payment_key(key_text):
+                    safe[key] = "[REDACTED]"
+                else:
+                    safe[key] = self._receipt_safe_params(child)
+            return safe
+        if isinstance(value, list):
+            return [self._receipt_safe_params(item) for item in value]
+        return value
 
     def _active_soul(self) -> Any:
         return self._soul or getattr(self._classifier, "_soul", None)

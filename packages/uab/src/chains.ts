@@ -65,12 +65,14 @@ export interface DelayStep {
 export interface KeypressStep {
   type: 'keypress';
   key: string;
+  params?: ActionParams;
   label?: string;
 }
 
 export interface HotkeyStep {
   type: 'hotkey';
   keys: string[];
+  params?: ActionParams;
   label?: string;
 }
 
@@ -82,6 +84,7 @@ export interface TypeTextStep {
   text: string;
   /** Clear field first */
   clearFirst?: boolean;
+  params?: ActionParams;
   label?: string;
 }
 
@@ -151,6 +154,9 @@ export class ChainExecutor {
 
       try {
         const result = await this.executeStep(chain.pid, step);
+        if (result && result.success === false) {
+          throw new Error(result.error || `Action returned failure for step ${i}`);
+        }
         stepResults.push({
           stepIndex: i,
           step,
@@ -230,9 +236,9 @@ export class ChainExecutor {
         await new Promise(r => setTimeout(r, step.ms));
         return null;
       case 'keypress':
-        return this.uab.keypress(pid, step.key);
+        return this.uab.keypress(pid, step.key, step.params);
       case 'hotkey':
-        return this.uab.hotkey(pid, step.keys);
+        return this.uab.hotkey(pid, step.keys, step.params);
       case 'typeText':
         return this.executeTypeText(pid, step);
       default:
@@ -282,7 +288,10 @@ export class ChainExecutor {
 
     const branch = present ? step.ifPresent : (step.ifAbsent || []);
     for (const subStep of branch) {
-      await this.executeStep(pid, subStep);
+      const result = await this.executeStep(pid, subStep);
+      if (result && result.success === false) {
+        throw new Error(result.error || `Conditional action returned failure for ${subStep.type}`);
+      }
     }
   }
 
@@ -297,11 +306,14 @@ export class ChainExecutor {
     const target = elements[0];
 
     if (step.clearFirst) {
-      await this.uab.act(pid, target.id, 'clear');
+      const clearResult = await this.uab.act(pid, target.id, 'clear');
+      if (!clearResult.success) {
+        return clearResult;
+      }
       await new Promise(r => setTimeout(r, 100));
     }
 
-    return this.uab.act(pid, target.id, 'type', { text: step.text });
+    return this.uab.act(pid, target.id, 'type', { ...step.params, text: step.text });
   }
 }
 

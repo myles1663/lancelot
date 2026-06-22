@@ -78,6 +78,10 @@ export interface ElementSelector {
 // ─── Actions ────────────────────────────────────────────────────
 
 export interface ActionParams {
+  /** Signed central-authority grant for governed UAB action requests. */
+  uabAuthorityGrant?: import('./governance/grants.js').UABAuthorityGrant;
+  /** Runtime selector scope used to bind authority grants to the acted element. */
+  selectorScope?: string;
   text?: string;
   value?: string;
   direction?: 'up' | 'down' | 'left' | 'right';
@@ -218,6 +222,8 @@ export type StateChangeCallback = (event: StateChangeEvent) => void;
 
 export interface AtomicStep {
   action: 'hotkey' | 'keypress' | 'click' | 'type' | 'wait';
+  /** Optional governed action params, including a scoped UAB authority grant. */
+  params?: ActionParams;
   /** Key name for keypress */
   key?: string;
   /** Key combo for hotkey: ["alt", "m"] */

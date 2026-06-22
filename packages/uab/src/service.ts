@@ -239,7 +239,7 @@ export class UABService {
     if (!connection) throw new Error(`Not connected to PID ${pid}`);
 
     // Permission check
-    const check = this.permissions.check(pid, action, route.app);
+    const check = this.permissions.check(pid, action, route.app, params, elementId);
     this.permissions.record(pid, action, elementId, route.app, check.allowed, check.reason);
     if (!check.allowed) {
       return { success: false, error: check.reason };
@@ -278,72 +278,52 @@ export class UABService {
   // ─── Keyboard Input ─────────────────────────────────────────────
 
   /** Send a single keypress to a connected app */
-  async keypress(pid: number, key: string): Promise<ActionResult> {
-    const connection = this.router.getConnection(pid);
-    if (!connection) throw new Error(`Not connected to PID ${pid}`);
-    const result = await connection.act('', 'keypress', { key });
-    this.cache.invalidateIfNeeded(pid, 'keypress');
-    return result;
+  async keypress(pid: number, key: string, params?: ActionParams): Promise<ActionResult> {
+    return this.act(pid, '', 'keypress', { ...params, key });
   }
 
   /** Send a hotkey combination to a connected app (e.g., ['ctrl', 's']) */
-  async hotkey(pid: number, keys: string[]): Promise<ActionResult> {
-    const connection = this.router.getConnection(pid);
-    if (!connection) throw new Error(`Not connected to PID ${pid}`);
-    const result = await connection.act('', 'hotkey', { keys });
-    this.cache.invalidateIfNeeded(pid, 'hotkey');
-    return result;
+  async hotkey(pid: number, keys: string[], params?: ActionParams): Promise<ActionResult> {
+    return this.act(pid, '', 'hotkey', { ...params, keys });
   }
 
   // ─── Window Management ──────────────────────────────────────────
 
   /** Minimize a window */
-  async minimize(pid: number): Promise<ActionResult> {
-    const connection = this.router.getConnection(pid);
-    if (!connection) throw new Error(`Not connected to PID ${pid}`);
-    return connection.act('', 'minimize');
+  async minimize(pid: number, params?: ActionParams): Promise<ActionResult> {
+    return this.act(pid, '', 'minimize', params);
   }
 
   /** Maximize a window */
-  async maximize(pid: number): Promise<ActionResult> {
-    const connection = this.router.getConnection(pid);
-    if (!connection) throw new Error(`Not connected to PID ${pid}`);
-    return connection.act('', 'maximize');
+  async maximize(pid: number, params?: ActionParams): Promise<ActionResult> {
+    return this.act(pid, '', 'maximize', params);
   }
 
   /** Restore a window from min/max */
-  async restore(pid: number): Promise<ActionResult> {
-    const connection = this.router.getConnection(pid);
-    if (!connection) throw new Error(`Not connected to PID ${pid}`);
-    return connection.act('', 'restore');
+  async restore(pid: number, params?: ActionParams): Promise<ActionResult> {
+    return this.act(pid, '', 'restore', params);
   }
 
   /** Close a window gracefully */
-  async closeWindow(pid: number): Promise<ActionResult> {
-    return this.act(pid, '', 'close'); // Goes through permission check
+  async closeWindow(pid: number, params?: ActionParams): Promise<ActionResult> {
+    return this.act(pid, '', 'close', params);
   }
 
   /** Move a window to (x, y) */
-  async moveWindow(pid: number, x: number, y: number): Promise<ActionResult> {
-    const connection = this.router.getConnection(pid);
-    if (!connection) throw new Error(`Not connected to PID ${pid}`);
-    return connection.act('', 'move', { x, y });
+  async moveWindow(pid: number, x: number, y: number, params?: ActionParams): Promise<ActionResult> {
+    return this.act(pid, '', 'move', { ...params, x, y });
   }
 
   /** Resize a window to (width, height) */
-  async resizeWindow(pid: number, width: number, height: number): Promise<ActionResult> {
-    const connection = this.router.getConnection(pid);
-    if (!connection) throw new Error(`Not connected to PID ${pid}`);
-    return connection.act('', 'resize', { width, height });
+  async resizeWindow(pid: number, width: number, height: number, params?: ActionParams): Promise<ActionResult> {
+    return this.act(pid, '', 'resize', { ...params, width, height });
   }
 
   // ─── Screenshot ────────────────────────────────────────────────
 
   /** Capture a screenshot of a connected app's window */
-  async screenshot(pid: number, outputPath?: string): Promise<ActionResult> {
-    const connection = this.router.getConnection(pid);
-    if (!connection) throw new Error(`Not connected to PID ${pid}`);
-    return connection.act('', 'screenshot', { outputPath });
+  async screenshot(pid: number, outputPath?: string, params?: ActionParams): Promise<ActionResult> {
+    return this.act(pid, '', 'screenshot', { ...params, outputPath });
   }
 
   // ─── Action Chains ─────────────────────────────────────────────

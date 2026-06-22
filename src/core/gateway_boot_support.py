@@ -87,17 +87,38 @@ def _shutdown_soul(objects):
     logger.info("Soul shut down.")
 
 
+_DEFAULT_BUILTIN_SKILLS = (
+    "echo",
+    "repo_writer",
+    "command_runner",
+    "service_runner",
+    "network_client",
+    "telegram_send",
+    "warroom_send",
+    "schedule_job",
+    "health_check",
+    "document_creator",
+    "skill_manager",
+    "github_search",
+    "daily_news_brief",
+    "memory_cleanup",
+    "memory_query",
+)
+
+
+def _builtin_skill_names(executor_module) -> tuple[str, ...]:
+    return tuple(getattr(executor_module, "_BUILTIN_SKILLS", _DEFAULT_BUILTIN_SKILLS))
+
+
 def _init_skills():
     """Initialize Skills subsystem."""
     from skills.registry import SkillRegistry
+    from skills import executor as skills_executor_module
     from skills.executor import SkillExecutor
     from skills.factory import SkillFactory
 
     skill_registry = SkillRegistry(data_dir="/home/lancelot/data")
-    for builtin_name in ("echo", "command_runner", "repo_writer", "service_runner",
-                         "network_client", "telegram_send", "warroom_send", "schedule_job",
-                         "health_check", "document_creator", "skill_manager",
-                         "memory_query"):
+    for builtin_name in _builtin_skill_names(skills_executor_module):
         skill_registry.ensure_system_skill(builtin_name)
 
     executor = SkillExecutor(registry=skill_registry)
@@ -461,27 +482,16 @@ def _shutdown_host_bridge(objects):
 
 def _init_uab():
     """Hot-start the UAB provider inside Tool Fabric."""
-    from src.tools.fabric import get_tool_fabric
-    from src.tools.providers.uab_bridge import UABProvider
+    from src.core.uab_runtime_adapter import init_uab_provider
 
-    fabric = get_tool_fabric()
-    provider = UABProvider()
-    fabric.register_provider(provider)
-    fabric.update_router_preferences()
-    logger.warning(
-        "UAB BRIDGE hot-started; desktop app control via daemon at %s",
-        provider.config.daemon_url,
-    )
-    return {"provider": provider}
+    return init_uab_provider(logger)
 
 
 def _shutdown_uab(objects):
     """Hot-stop the UAB provider."""
-    from src.tools.fabric import get_tool_fabric
-    fabric = get_tool_fabric()
-    fabric.unregister_provider("uab_bridge")
-    fabric.update_router_preferences()
-    logger.info("UAB Bridge provider unregistered.")
+    from src.core.uab_runtime_adapter import shutdown_uab_provider
+
+    shutdown_uab_provider(logger)
 
 def _init_hive():
     """Initialize the HIVE Agent Mesh subsystem."""

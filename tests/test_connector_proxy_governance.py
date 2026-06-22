@@ -13,6 +13,8 @@ from unittest.mock import MagicMock, patch
 from cryptography.fernet import Fernet
 
 from src.connectors.base import ConnectorBase, ConnectorManifest, ConnectorStatus, CredentialSpec
+from src.connectors.commerce import UCPApprovalEvidence
+from src.connectors.connectors.ucp import UCPConnector
 from src.connectors.governed_proxy import GovernedConnectorProxy
 from src.connectors.models import ConnectorOperation, ConnectorResult, HTTPMethod
 from src.connectors.proxy import ConnectorProxy
@@ -80,6 +82,47 @@ class _GovTestConnector(ConnectorBase):
 class _FailingConnector(_GovTestConnector):
     def execute(self, operation_id, params):
         raise RuntimeError("connector execution blocked")
+
+
+def _ucp_purchase_intent() -> dict[str, Any]:
+    return {
+        "intent_id": "intent-ucp-1",
+        "domain": "commerce",
+        "connector_id": "ucp",
+        "operation": "purchase",
+        "requested_by": {
+            "actor_type": "agent",
+            "agent_id": "agent-1",
+            "task_id": "task-1",
+        },
+        "vendor": {
+            "name": "Example Vendor",
+            "external_id": "vendor-1",
+            "domain": "api.vendor.example",
+        },
+        "item": {
+            "name": "Service Plan",
+            "sku": "plan-pro",
+            "quantity": 1,
+        },
+        "financial": {
+            "amount": "49.00",
+            "currency": "USD",
+            "recurring": False,
+            "budget_code": "ops.software",
+        },
+        "commitment": {
+            "action_type": "purchase",
+            "term_summary": "One-time purchase.",
+            "terms_url": "https://vendor.example/terms",
+            "reversible": False,
+        },
+        "risk": {
+            "declared_default_tier": "T3",
+            "reason": "One-time purchase commits spend",
+        },
+        "metadata": {"quote_id": "quote-1"},
+    }
 
 
 # ── Fixtures ──────────────────────────────────────────────────────
@@ -485,3 +528,122 @@ class TestGovernedConnectorProxy:
 
         assert resp.success is True
         mock_execute.assert_called_once()
+
+    @patch("src.connectors.proxy.ConnectorProxy.execute")
+    def test_ucp_spend_rejects_forged_approval_params(
+        self, mock_execute, registry, vault, classifier
+    ):
+        connector = UCPConnector(base_url="https://commerce.example")
+        registry.register(connector)
+        connector.set_status(ConnectorStatus.ACTIVE)
+        proxy = ConnectorProxy(registry, vault)
+        receipt_store = []
+        governed = GovernedConnectorProxy(
+            proxy=proxy,
+            registry=registry,
+            risk_classifier=classifier,
+            receipt_store=receipt_store,
+        )
+        governed.register_connector_tiers("ucp")
+
+        resp = governed.execute_governed(
+            "ucp",
+            "purchase",
+            {
+                "intent": _ucp_purchase_intent(),
+                "approved": True,
+                "approval_id": "caller-supplied",
+            },
+        )
+
+        assert resp.success is False
+        assert "verified governance approval evidence" in resp.error
+        assert receipt_store[-1]["success"] is False
+        mock_execute.assert_not_called()
+
+    @patch("src.connectors.proxy.ConnectorProxy.execute")
+    def test_ucp_spend_allows_verified_governance_evidence(
+        self, mock_execute, registry, vault, classifier
+    ):
+        connector = UCPConnector(base_url="https://commerce.example")
+        registry.register(connector)
+        connector.set_status(ConnectorStatus.ACTIVE)
+        proxy = ConnectorProxy(registry, vault)
+        governed = GovernedConnectorProxy(
+            proxy=proxy,
+            registry=registry,
+            risk_classifier=classifier,
+            approval_verifier=lambda **kwargs: UCPApprovalEvidence(
+                approval_id=kwargs["approval_id"],
+                approved=True,
+                source="governance",
+                approved_by=kwargs["operator_id"],
+            ),
+        )
+        governed.register_connector_tiers("ucp")
+        mock_execute.return_value = MagicMock(
+            operation_id="purchase",
+            connector_id="ucp",
+            status_code=200,
+            success=True,
+            receipt_id="",
+        )
+
+        resp = governed.execute_governed(
+            "ucp",
+            "purchase",
+            {"intent": _ucp_purchase_intent(), "approved": True, "approval_id": "approval-1"},
+            operator_id="op-1",
+        )
+
+        assert resp.success is True
+        request_spec = mock_execute.call_args.args[0]
+        assert request_spec.metadata["approval_id"] == "approval-1"
+        assert request_spec.metadata["approval_source"] == "governance"
+
+    @patch("src.connectors.proxy.ConnectorProxy.execute")
+    def test_ucp_spend_fails_closed_when_approval_verifier_errors(
+        self, mock_execute, registry, vault, classifier
+    ):
+        connector = UCPConnector(base_url="https://commerce.example")
+        registry.register(connector)
+        connector.set_status(ConnectorStatus.ACTIVE)
+        proxy = ConnectorProxy(registry, vault)
+        governed = GovernedConnectorProxy(
+            proxy=proxy,
+            registry=registry,
+            risk_classifier=classifier,
+            approval_verifier=lambda **_: (_ for _ in ()).throw(RuntimeError("verifier down")),
+        )
+        governed.register_connector_tiers("ucp")
+
+        resp = governed.execute_governed(
+            "ucp",
+            "purchase",
+            {"intent": _ucp_purchase_intent(), "approval_id": "approval-1"},
+        )
+
+        assert resp.success is False
+        assert "verified governance approval evidence" in resp.error
+        mock_execute.assert_not_called()
+
+    def test_receipt_safe_params_redacts_nested_payment_metadata(self, registry, vault, classifier):
+        governed = GovernedConnectorProxy(
+            proxy=ConnectorProxy(registry, vault),
+            registry=registry,
+            risk_classifier=classifier,
+        )
+
+        safe = governed._receipt_safe_params(
+            {
+                "intent": {
+                    "metadata": {
+                        "payment": {
+                            "Card-Number": "4111111111111111",
+                        },
+                    },
+                },
+            },
+        )
+
+        assert safe["intent"]["metadata"]["payment"]["Card-Number"] == "[REDACTED]"

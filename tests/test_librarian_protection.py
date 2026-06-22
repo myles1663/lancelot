@@ -12,6 +12,8 @@ def test_librarian_protects_governance_runtime_state_files():
     protected = librarian_cls.PROTECTED_FILES
 
     assert "mcp_pending_requests.json" in protected
+    assert "auth_state.json" in protected
+    assert "auth_state.key" in protected
     assert "actioncards.db" in protected
     assert "actioncards.db-shm" in protected
     assert "actioncards.db-wal" in protected

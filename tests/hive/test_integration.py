@@ -140,6 +140,7 @@ def _make_uab_lifecycle(config, registry, receipt_mgr, governance, parent_soul=N
     executor = HiveUABExecutor(
         uab_provider=provider,
         governance_bridge=governance,
+        uab_grant_secret="test-uab-authority-secret",
     )
     lifecycle = AgentLifecycleManager(
         config=config,
@@ -383,10 +384,13 @@ class TestGovernedUABIntegration:
             lifecycle.shutdown()
 
         assert result.success is True
-        assert provider.act_calls == [
-            (202, "edit1", "click", {}),
-            (202, "edit1", "type", {"text": "hello world"}),
+        assert [(pid, element_id, action) for pid, element_id, action, _ in provider.act_calls] == [
+            (202, "edit1", "click"),
+            (202, "edit1", "type"),
         ]
+        assert provider.act_calls[0][3]["uabAuthorityGrant"]["capability"] == "uab_click"
+        assert provider.act_calls[1][3]["text"] == "hello world"
+        assert provider.act_calls[1][3]["uabAuthorityGrant"]["capability"] == "uab_type"
         assert [call["capability"] for call in governance.validations] == [
             "uab_automation",
             "uab_click",

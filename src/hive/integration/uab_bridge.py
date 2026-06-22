@@ -8,9 +8,13 @@ This wraps the existing provider, not a parallel RPC client.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.core.execution_authority import create_uab_authority_grant
 from src.hive.errors import ScopedSoulViolationError, UABControlError
 from src.hive.integration.governance_bridge import GovernanceBridge
 from src.hive.scoped_soul import (
@@ -20,6 +24,99 @@ from src.hive.scoped_soul import (
 )
 
 logger = logging.getLogger(__name__)
+
+_UAB_GRANT_SECRET_ENV = "UAB_AUTHORITY_GRANT_SECRET"
+_UAB_POLICY_VERSION = "hive-uab-governance-v1"
+_ACTION_RISK_MANIFEST_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "packages"
+    / "uab"
+    / "data"
+    / "action-risk.json"
+)
+
+
+def _load_action_risk_manifest() -> Dict[str, List[str]]:
+    with _ACTION_RISK_MANIFEST_PATH.open("r", encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    return {
+        "read_only": list(manifest.get("read_only", [])),
+        "mutating": list(manifest.get("mutating", [])),
+        "destructive": list(manifest.get("destructive", [])),
+        "sensitive_app_patterns": list(manifest.get("sensitive_app_patterns", [])),
+    }
+
+
+_ACTION_RISK_MANIFEST = _load_action_risk_manifest()
+_READ_ONLY_ACTIONS = frozenset(_ACTION_RISK_MANIFEST["read_only"])
+_MUTATING_ACTIONS = frozenset(_ACTION_RISK_MANIFEST["mutating"])
+_DESTRUCTIVE_ACTIONS = frozenset(_ACTION_RISK_MANIFEST["destructive"])
+_SENSITIVE_APP_PATTERNS = frozenset(_ACTION_RISK_MANIFEST["sensitive_app_patterns"])
+
+
+def _soul_version(scoped_soul=None) -> str:
+    return str(getattr(scoped_soul, "version", "") or "unspecified")
+
+
+def _selector_scope_from_params(params: Optional[Dict[str, Any]]) -> str:
+    if not params:
+        return ""
+    return str(params.get("selectorScope") or params.get("selector_scope") or "")
+
+
+def _risk_label_for_action(action: str, app_name: str) -> str:
+    if action in _DESTRUCTIVE_ACTIONS:
+        return "destructive"
+
+    app_lower = app_name.lower()
+    for pattern in _SENSITIVE_APP_PATTERNS:
+        if pattern in app_lower:
+            return "destructive" if action in _MUTATING_ACTIONS else "moderate"
+
+    if action in _MUTATING_ACTIONS:
+        return "moderate"
+    if action in _READ_ONLY_ACTIONS:
+        return "safe"
+    return "destructive"
+
+
+def _risk_flags_for_action(action: str, app_name: str) -> Dict[str, bool]:
+    uab_risk = _risk_label_for_action(action, app_name)
+    return {
+        "mutating": uab_risk != "safe",
+        "destructive": uab_risk == "destructive",
+        "external_submission": action == "sendEmail",
+        "credential_sensitive": action
+        in {
+            "getCookies",
+            "setCookie",
+            "deleteCookie",
+            "clearCookies",
+            "getLocalStorage",
+            "setLocalStorage",
+            "deleteLocalStorage",
+            "clearLocalStorage",
+            "getSessionStorage",
+            "setSessionStorage",
+            "deleteSessionStorage",
+            "clearSessionStorage",
+            "executeScript",
+        },
+        "sensitive_read": action
+        in {
+            "screenshot",
+            "readDocument",
+            "readCell",
+            "readRange",
+            "readFormula",
+            "readSlides",
+            "readSlideText",
+            "readEmails",
+            "getCookies",
+            "getLocalStorage",
+            "getSessionStorage",
+        },
+    }
 
 
 class UABBridge:
@@ -33,9 +130,11 @@ class UABBridge:
         self,
         uab_provider=None,
         governance_bridge: Optional[GovernanceBridge] = None,
+        uab_grant_secret: Optional[str] = None,
     ):
         self._uab_provider = uab_provider
         self._governance = governance_bridge
+        self._uab_grant_secret = uab_grant_secret or os.environ.get(_UAB_GRANT_SECRET_ENV)
 
     @property
     def available(self) -> bool:
@@ -122,25 +221,23 @@ class UABBridge:
         )
 
         # Governance check for mutating actions
-        if self._governance:
-            gov_result = self._governance.validate_action(
-                capability=capability,
-                scope=app_name,
-                target=action,
-                agent_id=agent_id,
-            )
-            if not gov_result.approved:
-                raise UABControlError(
-                    f"Governance denied UAB action '{action}' on '{app_name}': "
-                    f"{gov_result.reason}"
-                )
+        grant = self._issue_authority_grant(
+            capability=capability,
+            app_name=app_name,
+            action=action,
+            params=params,
+            agent_id=agent_id,
+            scoped_soul=scoped_soul,
+        )
 
         if not self._uab_provider:
             raise UABControlError("UAB provider not available")
 
         try:
+            governed_params = dict(params or {})
+            governed_params["uabAuthorityGrant"] = grant
             result = await asyncio.to_thread(
-                self._uab_provider.act, app_name, action, params or {},
+                self._uab_provider.act, app_name, action, governed_params,
             )
         except Exception:
             self._record_trust_outcome(capability, app_name, success=False)
@@ -239,3 +336,49 @@ class UABBridge:
         if self._governance is None:
             return
         self._governance.update_trust(capability, scope, success=success)
+
+    def _issue_authority_grant(
+        self,
+        *,
+        capability: str,
+        app_name: str,
+        action: str,
+        params: Optional[Dict[str, Any]],
+        agent_id: str,
+        scoped_soul=None,
+    ) -> Dict[str, Any]:
+        if self._governance is None:
+            raise UABControlError(
+                f"Governance bridge required for UAB action '{action}' on '{app_name}'"
+            )
+
+        gov_result = self._governance.validate_action(
+            capability=capability,
+            scope=app_name,
+            target=action,
+            agent_id=agent_id,
+        )
+        if not gov_result.approved:
+            raise UABControlError(
+                f"Governance denied UAB action '{action}' on '{app_name}': "
+                f"{gov_result.reason}"
+            )
+        if not self._uab_grant_secret:
+            raise UABControlError("UAB authority grant secret is not configured")
+
+        uab_risk = _risk_label_for_action(action, app_name)
+        flags = _risk_flags_for_action(action, app_name)
+        grant = create_uab_authority_grant(
+            secret=self._uab_grant_secret,
+            risk_tier=gov_result.tier or "T2",
+            uab_risk=uab_risk,
+            capability=capability,
+            app_name=app_name,
+            action=action,
+            selector_scope=_selector_scope_from_params(params),
+            policy_version=_UAB_POLICY_VERSION,
+            soul_version=_soul_version(scoped_soul),
+            approval_id=gov_result.approval_request_id,
+            **flags,
+        )
+        return grant.to_dict()

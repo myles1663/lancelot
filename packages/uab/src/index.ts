@@ -93,6 +93,19 @@ export type {
   AuditEntry,
   PermissionOptions,
 } from './permissions.js';
+export {
+  canonicalGrantPayload,
+  signUABAuthorityGrant,
+  signUABGrantPayload,
+  validateUABAuthorityGrant,
+} from './governance/grants.js';
+export type {
+  UABAuthorityGrant,
+  UABGrantReasonCode,
+  UABGrantValidationContext,
+  UABGrantValidationResult,
+  UABRiskLabel,
+} from './governance/grants.js';
 
 export { withRetry, isRetryable, retryable, withTimeout } from './retry.js';
 export type { RetryOptions } from './retry.js';
