@@ -17,7 +17,8 @@ Receipt Types:
 - AppSessionEntry: Per-app session summary that rolls up all actions
 
 Design Principles:
-- Every action gets a receipt (Receipts are Truth)
+- Every action gets local telemetry; canonical proof belongs to the Core receipt
+  spine
 - Users must be able to reconstruct exactly what Lancelot did on their machine
 - Read-only vs mutating actions are clearly distinguished
 - Multi-step workflows (chains) are linked via chain_id
@@ -30,14 +31,294 @@ import json
 import logging
 import os
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.core.execution_authority import UABAuthorityGrant
+from src.shared.receipts import ActionType, CognitionTier, Receipt, ReceiptStatus
+from src.shared.receipts_service import (
+    ReceiptService,
+    create_finalized_receipt,
+    get_receipt_service,
+)
 from src.tools.contracts import RiskLevel
 
 logger = logging.getLogger(__name__)
+
+UAB_RECEIPT_METADATA_VERSION = "uab-receipt-metadata-v1"
+UAB_RECEIPT_ADAPTER_NAME = "uab-compatibility-adapter"
+UAB_CANONICAL_RECEIPT_SOURCE = "core-receipt-service"
+UAB_RECEIPT_CANONICAL_DEFERRAL = "CORE-B3"
+UAB_RECEIPT_OUTCOMES = ("success", "denied", "failed")
+
+
+@dataclass(frozen=True)
+class UABReceiptMetadata:
+    """Structured UAB outcome metadata for canonical receipt integration.
+
+    This is not a second receipt store. It is a transport-safe payload that can
+    be attached to a temporary compatibility receipt until CORE-B3 wires final
+    canonical UAB receipt emission through the receipt facade.
+    """
+
+    metadata_version: str = UAB_RECEIPT_METADATA_VERSION
+    grant_id: Optional[str] = None
+    app_name: str = ""
+    app_pid: int = 0
+    action: str = ""
+    selector_scope: str = ""
+    risk_tier: str = ""
+    uab_risk: str = ""
+    mutating: bool = False
+    destructive: bool = False
+    sensitive_read: bool = False
+    external_submission: bool = False
+    credential_sensitive: bool = False
+    approval_id: Optional[str] = None
+    parent_receipt_id: Optional[str] = None
+    workflow_id: str = ""
+    run_id: str = ""
+    outcome: str = "success"
+    denial_reason: Optional[str] = None
+    error_reason: Optional[str] = None
+    local_uab_audit_is_canonical: bool = field(default=False, init=False)
+    canonical_receipt_deferred_to: str = field(
+        default=UAB_RECEIPT_CANONICAL_DEFERRAL,
+        init=False,
+    )
+
+    def __post_init__(self) -> None:
+        if self.outcome not in UAB_RECEIPT_OUTCOMES:
+            raise ValueError(f"Unknown UAB receipt outcome: {self.outcome}")
+        required_context = {
+            "app_name": self.app_name,
+            "app_pid": self.app_pid if self.app_pid > 0 else None,
+            "action": self.action,
+            "selector_scope": self.selector_scope,
+            "risk_tier": self.risk_tier,
+            "uab_risk": self.uab_risk,
+            "parent_receipt_id": self.parent_receipt_id,
+            "workflow_id": self.workflow_id,
+            "run_id": self.run_id,
+        }
+        if self.outcome in ("success", "failed"):
+            required_context["grant_id"] = self.grant_id
+        missing = [name for name, value in required_context.items() if not value]
+        if missing:
+            raise ValueError(
+                "UAB receipt metadata requires " + ", ".join(sorted(missing))
+            )
+        if self.outcome == "denied" and not self.denial_reason:
+            raise ValueError("Denied UAB receipt metadata requires denial_reason")
+        if self.outcome == "failed" and not self.error_reason:
+            raise ValueError("Failed UAB receipt metadata requires error_reason")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "UABReceiptMetadata":
+        allowed = {item.name for item in fields(cls) if item.init}
+        return cls(**{key: value for key, value in data.items() if key in allowed})
+
+
+def _coerce_uab_grant(
+    grant: UABAuthorityGrant | Dict[str, Any] | None,
+) -> Optional[UABAuthorityGrant]:
+    if grant is None:
+        return None
+    if isinstance(grant, UABAuthorityGrant):
+        return grant
+    return UABAuthorityGrant.from_dict(grant)
+
+
+def build_uab_receipt_metadata(
+    *,
+    outcome: str,
+    app_name: str = "",
+    app_pid: int = 0,
+    action: str = "",
+    selector_scope: str = "",
+    grant: UABAuthorityGrant | Dict[str, Any] | None = None,
+    risk_tier: str = "",
+    uab_risk: str = "",
+    mutating: bool = False,
+    destructive: bool = False,
+    sensitive_read: bool = False,
+    external_submission: bool = False,
+    credential_sensitive: bool = False,
+    approval_id: Optional[str] = None,
+    parent_receipt_id: Optional[str] = None,
+    workflow_id: str = "",
+    run_id: str = "",
+    denial_reason: Optional[str] = None,
+    error_reason: Optional[str] = None,
+) -> UABReceiptMetadata:
+    """Build the UAB metadata payload expected by the receipt spine."""
+    parsed_grant = _coerce_uab_grant(grant)
+    if parsed_grant is not None:
+        app_name = app_name or parsed_grant.app_name
+        app_pid = app_pid or parsed_grant.app_pid or 0
+        action = action or parsed_grant.action
+        selector_scope = selector_scope or parsed_grant.selector_scope
+        risk_tier = risk_tier or parsed_grant.risk_tier
+        uab_risk = uab_risk or parsed_grant.uab_risk
+        mutating = mutating or parsed_grant.mutating
+        destructive = destructive or parsed_grant.destructive
+        sensitive_read = sensitive_read or parsed_grant.sensitive_read
+        external_submission = external_submission or parsed_grant.external_submission
+        credential_sensitive = credential_sensitive or parsed_grant.credential_sensitive
+        approval_id = approval_id or parsed_grant.approval_id
+        parent_receipt_id = parent_receipt_id or parsed_grant.parent_receipt_id
+        workflow_id = workflow_id or parsed_grant.workflow_id
+        run_id = run_id or parsed_grant.run_id
+
+    return UABReceiptMetadata(
+        grant_id=parsed_grant.grant_id if parsed_grant is not None else None,
+        app_name=app_name,
+        app_pid=app_pid,
+        action=action,
+        selector_scope=selector_scope,
+        risk_tier=risk_tier,
+        uab_risk=uab_risk,
+        mutating=mutating,
+        destructive=destructive,
+        sensitive_read=sensitive_read,
+        external_submission=external_submission,
+        credential_sensitive=credential_sensitive,
+        approval_id=approval_id,
+        parent_receipt_id=parent_receipt_id,
+        workflow_id=workflow_id,
+        run_id=run_id,
+        outcome=outcome,
+        denial_reason=denial_reason,
+        error_reason=error_reason,
+    )
+
+
+def create_uab_compatibility_receipt(
+    metadata: UABReceiptMetadata | Dict[str, Any],
+    *,
+    duration_ms: Optional[int] = None,
+    operator_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> Receipt:
+    """Create a thin finalized receipt wrapper for UAB metadata.
+
+    CORE-B3 owns final canonical receipt service wiring. This adapter only
+    places the UAB payload into the existing shared receipt shape so downstream
+    code can carry the metadata without depending on local UAB audit storage.
+    """
+    payload = (
+        metadata
+        if isinstance(metadata, UABReceiptMetadata)
+        else UABReceiptMetadata.from_dict(metadata)
+    )
+    payload_dict = payload.to_dict()
+    status = (
+        ReceiptStatus.SUCCESS
+        if payload.outcome == "success"
+        else ReceiptStatus.FAILURE
+    )
+    return create_finalized_receipt(
+        ActionType.UAB_ACTION,
+        f"uab.{payload.action or 'action'}",
+        inputs={
+            "app_name": payload.app_name,
+            "app_pid": payload.app_pid,
+            "action": payload.action,
+            "selector_scope": payload.selector_scope,
+        },
+        outputs={"uab_receipt_metadata": payload_dict},
+        status=status,
+        tier=CognitionTier.DETERMINISTIC,
+        parent_id=payload.parent_receipt_id,
+        quest_id=payload.workflow_id or None,
+        metadata={
+            "uab_receipt_metadata": payload_dict,
+            "compatibility_adapter": UAB_RECEIPT_ADAPTER_NAME,
+            "canonical_receipt_deferred_to": UAB_RECEIPT_CANONICAL_DEFERRAL,
+            "local_uab_audit_is_canonical": False,
+        },
+        operator_id=operator_id,
+        session_id=session_id or payload.run_id or None,
+        duration_ms=duration_ms,
+        error_message=payload.denial_reason or payload.error_reason,
+    )
+
+
+def create_uab_canonical_receipt(
+    metadata: UABReceiptMetadata | Dict[str, Any],
+    *,
+    duration_ms: Optional[int] = None,
+    operator_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> Receipt:
+    """Create the canonical Core receipt for a UAB action outcome."""
+    payload = (
+        metadata
+        if isinstance(metadata, UABReceiptMetadata)
+        else UABReceiptMetadata.from_dict(metadata)
+    )
+    payload_dict = payload.to_dict()
+    canonical_metadata = dict(payload_dict)
+    canonical_metadata["canonical_receipt_source"] = UAB_CANONICAL_RECEIPT_SOURCE
+    canonical_metadata.pop("canonical_receipt_deferred_to", None)
+    canonical_metadata["local_uab_audit_is_canonical"] = False
+
+    status = (
+        ReceiptStatus.SUCCESS
+        if payload.outcome == "success"
+        else ReceiptStatus.FAILURE
+    )
+    return create_finalized_receipt(
+        ActionType.UAB_ACTION,
+        f"uab.{payload.action or 'action'}",
+        inputs={
+            "app_name": payload.app_name,
+            "app_pid": payload.app_pid,
+            "action": payload.action,
+            "selector_scope": payload.selector_scope,
+            "grant_id": payload.grant_id,
+        },
+        outputs={"uab_receipt_metadata": canonical_metadata},
+        status=status,
+        tier=CognitionTier.DETERMINISTIC,
+        parent_id=payload.parent_receipt_id,
+        quest_id=payload.workflow_id or None,
+        metadata={
+            "uab_receipt_metadata": canonical_metadata,
+            "canonical_receipt_source": UAB_CANONICAL_RECEIPT_SOURCE,
+            "local_uab_audit_is_canonical": False,
+            "grant_id": payload.grant_id,
+            "outcome": payload.outcome,
+        },
+        operator_id=operator_id,
+        session_id=session_id or payload.run_id or None,
+        duration_ms=duration_ms,
+        error_message=payload.denial_reason or payload.error_reason,
+    )
+
+
+def emit_uab_canonical_receipt(
+    metadata: UABReceiptMetadata | Dict[str, Any],
+    *,
+    receipt_service: Optional[ReceiptService] = None,
+    duration_ms: Optional[int] = None,
+    operator_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> Receipt:
+    """Persist a UAB outcome through the canonical receipt service."""
+    service = receipt_service or get_receipt_service()
+    receipt = create_uab_canonical_receipt(
+        metadata,
+        duration_ms=duration_ms,
+        operator_id=operator_id,
+        session_id=session_id,
+    )
+    return service.create(receipt)
 
 
 # =============================================================================

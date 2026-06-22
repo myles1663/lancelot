@@ -604,7 +604,7 @@ export class UABServer {
       const key = body.key as string;
       if (!pid || !key) throw new Error('Missing required fields: pid, key');
       if (!conn.isConnected(pid)) await conn.connect(pid);
-      const result = await conn.keypress(pid, key);
+      const result = await conn.keypress(pid, key, body.params as any);
       return { pid, key, ...result };
     });
 
@@ -613,7 +613,7 @@ export class UABServer {
       const keys = body.keys as string | string[];
       if (!pid || !keys) throw new Error('Missing required fields: pid, keys');
       if (!conn.isConnected(pid)) await conn.connect(pid);
-      const result = await conn.hotkey(pid, keys);
+      const result = await conn.hotkey(pid, keys, body.params as any);
       return { pid, keys, ...result };
     });
 
@@ -637,7 +637,7 @@ export class UABServer {
         throw new Error('Missing required field: path (array of {x,y} with at least 2 points)');
       }
       if (!this.connector.isConnected(pid)) await this.connector.connect(pid);
-      const result = await this.connector.drag(pid, path, stepDelay, button);
+      const result = await this.connector.drag(pid, path, stepDelay, button, body.params as any);
       return { pid, ...result };
     });
 
@@ -651,7 +651,7 @@ export class UABServer {
         throw new Error('Missing required fields: pid, x, y, amount');
       }
       if (!this.connector.isConnected(pid)) await this.connector.connect(pid);
-      const result = await this.connector.scroll(pid, x, y, amount);
+      const result = await this.connector.scroll(pid, x, y, amount, body.params as any);
       return { pid, ...result };
     });
 
@@ -659,7 +659,7 @@ export class UABServer {
       const pid = body.pid as number;
       if (!pid) throw new Error('Missing required field: pid');
       if (!conn.isConnected(pid)) await conn.connect(pid);
-      const result = await conn.screenshot(pid, body.outputPath as string);
+      const result = await conn.screenshot(pid, body.outputPath as string, body.params as any);
       return { pid, ...result };
     });
 
@@ -917,10 +917,12 @@ try {
       if (!conn.isConnected(pid)) await conn.connect(pid);
 
       // Focus the window, Ctrl+A to select all, Ctrl+C to copy
-      await conn.act(pid, '', 'hotkey' as ActionType, { keys: ['ctrl', 'a'] });
+      const selectAll = await conn.act(pid, '', 'hotkey' as ActionType, { ...(body.params as any), keys: ['ctrl', 'a'] });
+      if (!selectAll.success) return { pid, ...selectAll };
       await waitForFocusAcquired(conn, pid, { timeoutMs: 500 });
       const previousClipboard = await readClipboardText().catch(() => undefined);
-      await conn.act(pid, '', 'hotkey' as ActionType, { keys: ['ctrl', 'c'] });
+      const copy = await conn.act(pid, '', 'hotkey' as ActionType, { ...(body.params as any), keys: ['ctrl', 'c'] });
+      if (!copy.success) return { pid, ...copy };
       await waitForClipboardStable(pid, previousClipboard, { timeoutMs: 750 });
 
       // Read clipboard via PowerShell
@@ -961,7 +963,7 @@ try {
       }
 
       if (!conn.isConnected(targetPid)) await conn.connect(targetPid);
-      const screenshotResult = await conn.screenshot(targetPid);
+      const screenshotResult = await conn.screenshot(targetPid, undefined, body.params as any);
       if (!(screenshotResult as any).data && !(screenshotResult as any).base64) {
         throw new Error('Screenshot failed');
       }
@@ -1109,6 +1111,7 @@ try {
       const steps = body.steps as any[];
       if (!steps || !Array.isArray(steps)) throw new Error('Missing required field: steps (array)');
       const label = (body.label as string) || 'atomic-chain';
+      if (!conn.isConnected(pid)) await conn.connect(pid);
       const result = await conn.atomicChain({ pid, steps, label });
       return { pid, label, ...result };
     });

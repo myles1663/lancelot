@@ -5,10 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.core.execution_authority import UABAuthorityGrant
 from src.core.soul.store import AutonomyPosture, Soul
 from src.hive.errors import ScopedSoulViolationError
 from src.hive.integration.governance_bridge import GovernanceResult
 from src.hive.integration.uab_executor import HiveUABExecutor, _summarize_elements
+
+TEST_GRANT_SECRET = "hive-uab-executor-test-secret"
 
 
 @dataclass
@@ -99,6 +102,17 @@ class _DenyGovernance:
         )
 
 
+class _ApprovalRequiredGovernance:
+    def validate_action(self, **kwargs):
+        return GovernanceResult(
+            approved=False,
+            tier="T2",
+            reason="Approval pending",
+            requires_operator_approval=True,
+            approval_request_id="approval-123",
+        )
+
+
 class _TrackingGovernance:
     def __init__(self):
         self.updates = []
@@ -157,6 +171,7 @@ def test_executor_updates_trust_for_successful_mutating_steps():
     executor = HiveUABExecutor(
         uab_provider=provider,
         governance_bridge=governance,
+        uab_grant_secret=TEST_GRANT_SECRET,
     )
 
     result = executor({
@@ -170,6 +185,28 @@ def test_executor_updates_trust_for_successful_mutating_steps():
         ("uab_click", "notepad", True),
         ("uab_type", "notepad", True),
     ]
+    _, click_element, click_action, click_params = provider.act_calls[0]
+    _, type_element, type_action, type_params = provider.act_calls[1]
+    assert (click_element, click_action) == ("edit1", "click")
+    assert (type_element, type_action) == ("edit1", "type")
+    click_grant = UABAuthorityGrant.from_dict(click_params["uabAuthorityGrant"])
+    type_grant = UABAuthorityGrant.from_dict(type_params["uabAuthorityGrant"])
+    assert click_grant.validate(
+        TEST_GRANT_SECRET,
+        app_name="notepad",
+        app_pid=202,
+        action="click",
+        selector_scope="edit1",
+    ).valid is True
+    assert type_grant.validate(
+        TEST_GRANT_SECRET,
+        app_name="notepad",
+        app_pid=202,
+        action="type",
+        selector_scope="edit1",
+    ).valid is True
+    assert click_params["selectorScope"] == "edit1"
+    assert type_params["selectorScope"] == "edit1"
 
 
 def test_executor_updates_trust_for_failed_mutating_step():
@@ -187,6 +224,7 @@ def test_executor_updates_trust_for_failed_mutating_step():
     executor = HiveUABExecutor(
         uab_provider=provider,
         governance_bridge=governance,
+        uab_grant_secret=TEST_GRANT_SECRET,
     )
 
     result = executor({
@@ -206,6 +244,7 @@ def test_executor_raises_scoped_violation_when_governance_denies_mutating_step()
     executor = HiveUABExecutor(
         uab_provider=provider,
         governance_bridge=_DenyGovernance(),
+        uab_grant_secret=TEST_GRANT_SECRET,
     )
 
     with pytest.raises(
@@ -219,6 +258,71 @@ def test_executor_raises_scoped_violation_when_governance_denies_mutating_step()
         })
 
     assert provider.act_calls == []
+
+
+def test_executor_missing_governance_denies_mutating_step_before_provider_call():
+    provider = _MockUABProvider()
+    executor = HiveUABExecutor(
+        uab_provider=provider,
+        uab_grant_secret=TEST_GRANT_SECRET,
+    )
+
+    with pytest.raises(
+        ScopedSoulViolationError,
+        match="Governance bridge required for UAB capability 'uab_click'",
+    ):
+        executor({
+            "spec": "type 'hello world'",
+            "agent_id": "agent-1",
+            "context": {"target_pid": 202, "target_app": "notepad"},
+        })
+
+    assert provider.act_calls == []
+
+
+def test_executor_approval_required_denies_without_grant():
+    provider = _MockUABProvider()
+    executor = HiveUABExecutor(
+        uab_provider=provider,
+        governance_bridge=_ApprovalRequiredGovernance(),
+        uab_grant_secret=TEST_GRANT_SECRET,
+    )
+
+    with pytest.raises(
+        ScopedSoulViolationError,
+        match="Governance denied UAB capability 'uab_click'",
+    ):
+        executor({
+            "spec": "type 'hello world'",
+            "agent_id": "agent-1",
+            "context": {"target_pid": 202, "target_app": "notepad"},
+        })
+
+    assert provider.act_calls == []
+
+
+def test_executor_approved_non_act_governed_step_fails_closed_without_provider_call():
+    provider = _MockUABProvider()
+    llm = _MockLLM(output='[{"method": "maximize"}]')
+    governance = _TrackingGovernance()
+    executor = HiveUABExecutor(
+        uab_provider=provider,
+        llm_router=llm,
+        governance_bridge=governance,
+        uab_grant_secret=TEST_GRANT_SECRET,
+    )
+
+    result = executor({
+        "spec": "maximize the window",
+        "agent_id": "agent-1",
+        "context": {"target_pid": 202, "target_app": "notepad"},
+    })
+
+    assert result["success"] is False
+    assert result["steps"][1]["method"] == "maximize"
+    assert "Grant-carrying provider path unavailable" in result["steps"][1]["error"]
+    assert provider.maximize_calls == []
+    assert governance.updates == [("uab_maximize", "notepad", False)]
 
 
 def test_executor_blocks_mutating_uab_steps_outside_query_only_scope():
@@ -426,10 +530,6 @@ def test_record_step_outcome_skips_non_governed_steps():
 @pytest.mark.parametrize(
     ("step", "expected"),
     [
-        ({"method": "keypress", "key": "Enter"}, {"method": "keypress", "key": "Enter"}),
-        ({"method": "hotkey", "keys": ["ctrl", "a"]}, {"method": "hotkey", "keys": ["ctrl", "a"]}),
-        ({"method": "maximize"}, {"method": "maximize"}),
-        ({"method": "restore"}, {"method": "restore"}),
         ({"method": "state"}, {"method": "state"}),
         ({"method": "query", "selector": {"id": "edit1"}}, {"method": "query"}),
         ({"method": "connect"}, {"method": "connect"}),
@@ -444,6 +544,46 @@ def test_execute_step_covers_non_act_methods(step, expected):
     assert result["success"] is True
     for key, value in expected.items():
         assert result[key] == value
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        {"method": "act", "element_id": "edit1", "action": "click"},
+        {"method": "keypress", "key": "Enter"},
+        {"method": "hotkey", "keys": ["ctrl", "a"]},
+        {"method": "maximize"},
+        {"method": "restore"},
+    ],
+)
+def test_execute_step_fails_closed_for_governed_methods_without_grant(step):
+    provider = _MockUABProvider()
+    executor = HiveUABExecutor(uab_provider=provider)
+
+    result = executor._execute_step(step, 202)
+
+    assert result["success"] is False
+    assert result["error"] == "UAB authority grant required for governed HIVE UAB step"
+    assert provider.act_calls == []
+    assert provider.keypress_calls == []
+    assert provider.hotkey_calls == []
+    assert provider.maximize_calls == []
+    assert provider.restore_calls == []
+
+
+def test_execute_step_fails_closed_for_non_act_governed_method_even_with_grant():
+    provider = _MockUABProvider()
+    executor = HiveUABExecutor(uab_provider=provider)
+
+    result = executor._execute_step(
+        {"method": "keypress", "key": "Enter"},
+        202,
+        {"grant_id": "test"},
+    )
+
+    assert result["success"] is False
+    assert "Grant-carrying provider path unavailable" in result["error"]
+    assert provider.keypress_calls == []
 
 
 def test_execute_step_returns_unknown_method_error():

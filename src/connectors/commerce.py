@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Literal
@@ -25,6 +26,47 @@ RAW_PAYMENT_METADATA_KEYS = frozenset(
         "routing_number",
     }
 )
+
+
+def _normalise_metadata_key(value: str) -> str:
+    return value.lower().replace("-", "_").replace(".", "_").replace(" ", "_")
+
+
+def looks_like_raw_payment_key(value: str) -> bool:
+    normalised = _normalise_metadata_key(value)
+    return any(term in normalised for term in RAW_PAYMENT_METADATA_KEYS)
+
+
+def assert_no_raw_payment_metadata(value: Any, path: str = "metadata") -> None:
+    """Reject raw payment-looking metadata keys recursively."""
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key)
+            child_path = f"{path}.{key_text}" if path else key_text
+            if looks_like_raw_payment_key(key_text):
+                raise ValueError(f"raw payment instrument fields are not allowed in metadata at {child_path}")
+            assert_no_raw_payment_metadata(child, child_path)
+        return
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            assert_no_raw_payment_metadata(child, f"{path}[{index}]")
+
+
+@dataclass(frozen=True)
+class UCPApprovalEvidence:
+    """Governance-verified approval context for spend-committing UCP operations."""
+
+    approval_id: str
+    approved: bool
+    source: Literal["governance"]
+    approved_by: str | None = None
+    session_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.approval_id.strip():
+            raise ValueError("UCP approval evidence requires approval_id")
+        if self.source != "governance":
+            raise ValueError("UCP approval evidence must come from governance")
 
 
 class CommerceOperation(str, Enum):
@@ -245,8 +287,7 @@ class CommerceIntent(BaseModel):
             raise ValueError(
                 "risk.declared_default_tier cannot be lower than the operation default"
             )
-        if RAW_PAYMENT_METADATA_KEYS.intersection(self.metadata):
-            raise ValueError("raw payment instrument fields are not allowed in metadata")
+        assert_no_raw_payment_metadata(self.metadata)
         return self
 
     def governance_capability(self) -> str:

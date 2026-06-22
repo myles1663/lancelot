@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from src.connectors.commerce import (
     CommerceIntent,
     CommerceOperation,
+    UCPApprovalEvidence,
     default_tier_for_operation,
     operation_requires_approval,
 )
@@ -134,6 +135,20 @@ def test_raw_payment_details_are_rejected_for_purchase_metadata() -> None:
         )
 
 
+def test_nested_raw_payment_details_are_rejected() -> None:
+    with pytest.raises(ValidationError, match="raw payment instrument"):
+        CommerceIntent.model_validate(
+            _intent(
+                operation="purchase",
+                risk={
+                    "declared_default_tier": "T3",
+                    "reason": "One-time purchase commits spend",
+                },
+                metadata={"payment": {"Card-Number": "4111111111111111"}},
+            )
+        )
+
+
 def test_operation_default_tiers_are_fail_closed_for_spend() -> None:
     assert default_tier_for_operation("quote.request") == RiskTier.T2_CONTROLLED
     assert default_tier_for_operation("purchase") == RiskTier.T3_IRREVERSIBLE
@@ -187,7 +202,12 @@ def test_spend_committing_operation_requires_approval_evidence() -> None:
         "purchase",
         {
             "intent": purchase_intent,
-            "approved": True,
+            "_governance_approval": UCPApprovalEvidence(
+                approval_id="approval-1",
+                approved=True,
+                source="governance",
+                approved_by="op-1",
+            ),
             "approval_id": "approval-1",
         },
     )

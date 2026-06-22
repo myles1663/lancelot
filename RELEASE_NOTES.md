@@ -1,5 +1,35 @@
 # Release Notes
 
+## Upcoming Public Release Candidate
+
+This release candidate is scoped to the governed runtime spine, UAB hardening,
+and proof-of-governed-execution evidence. It does not include other in-flight
+private development projects.
+
+The spine hardening work separates boot, gateway, orchestration, memory, and
+receipt responsibilities into smaller runtime modules with boundary tests and
+public architecture notes. The UAB work keeps UAB usable as a standalone package
+while aligning the embedded Lancelot integration around canonical authority
+grants, permission-risk terminology, receipt metadata, and bridge fallback
+coverage.
+
+The proof package adds a deterministic governed-execution runner, scenario
+documentation, a control-to-evidence matrix, focused tests, generated receipt
+evidence, and packet validation so reviewers can inspect governed denial,
+approval, receipt, and evidence-manifest behavior without relying on prose-only
+claims.
+
+### Release Candidate Verification
+
+- Public artifact guard.
+- Full Python coverage gate at or above 90%.
+- Focused UAB, receipt, spine-boundary, and governed-execution proof tests.
+- UAB package install and test run.
+- Installer package install and test run.
+- War Room type-check and production build.
+- Docker Compose config validation.
+- Proof packet generation and zip integrity validation.
+
 ## Current Public Release: 0.4.7
 
 Lancelot 0.4.7 adds a disabled-by-default governed UCP commerce connector

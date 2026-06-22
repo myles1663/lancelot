@@ -2,10 +2,13 @@
 
 import pytest
 
+from src.core.execution_authority import UABAuthorityGrant
 from src.core.soul.store import AutonomyPosture, Soul
 from src.hive.integration.uab_bridge import UABBridge
 from src.hive.integration.governance_bridge import GovernanceBridge, GovernanceResult
 from src.hive.errors import ScopedSoulViolationError, UABControlError
+
+TEST_GRANT_SECRET = "hive-uab-bridge-test-secret"
 
 
 class MockUABProvider:
@@ -44,6 +47,17 @@ class MockGovernanceBridgeDeny(GovernanceBridge):
     def validate_action(self, **kwargs):
         return GovernanceResult(
             approved=False, tier="T3", reason="Denied by test",
+        )
+
+
+class MockGovernanceBridgeApprovalRequired(GovernanceBridge):
+    def validate_action(self, **kwargs):
+        return GovernanceResult(
+            approved=False,
+            tier="T2",
+            reason="Approval pending",
+            requires_operator_approval=True,
+            approval_request_id="approval-123",
         )
 
 
@@ -176,9 +190,20 @@ class TestUABBridgeMutatingOps:
         bridge = UABBridge(
             uab_provider=provider,
             governance_bridge=MockGovernanceBridgeApprove(),
+            uab_grant_secret=TEST_GRANT_SECRET,
         )
         result = await bridge.act("notepad", "click", {"target": "ok"}, agent_id="a1")
         assert result["success"] is True
+        grant = provider.calls[0][3]["uabAuthorityGrant"]
+        restored = UABAuthorityGrant.from_dict(grant)
+        assert restored.validate(
+            TEST_GRANT_SECRET,
+            app_name="notepad",
+            action="click",
+        ).valid is True
+        assert restored.capability == "uab_click"
+        assert restored.uab_risk == "moderate"
+        assert restored.mutating is True
 
     async def test_act_updates_trust_on_success(self):
         provider = MockUABProvider()
@@ -189,6 +214,7 @@ class TestUABBridgeMutatingOps:
                 risk_classifier=MockRiskClassifier(default_tier=0),
                 trust_ledger=ledger,
             ),
+            uab_grant_secret=TEST_GRANT_SECRET,
         )
 
         result = await bridge.act("notepad", "click", {"target": "ok"}, agent_id="a1")
@@ -211,6 +237,7 @@ class TestUABBridgeMutatingOps:
                 risk_classifier=MockRiskClassifier(default_tier=0),
                 trust_ledger=ledger,
             ),
+            uab_grant_secret=TEST_GRANT_SECRET,
         )
 
         result = await bridge.act("notepad", "click", {"target": "ok"}, agent_id="a1")
@@ -224,13 +251,41 @@ class TestUABBridgeMutatingOps:
         bridge = UABBridge(
             uab_provider=provider,
             governance_bridge=MockGovernanceBridgeDeny(),
+            uab_grant_secret=TEST_GRANT_SECRET,
         )
         with pytest.raises(UABControlError, match="Governance denied"):
             await bridge.act("notepad", "click", {"target": "ok"}, agent_id="a1")
+        assert provider.calls == []
+
+    async def test_act_missing_governance_denies_without_grant(self):
+        provider = MockUABProvider()
+        bridge = UABBridge(
+            uab_provider=provider,
+            uab_grant_secret=TEST_GRANT_SECRET,
+        )
+
+        with pytest.raises(UABControlError, match="Governance bridge required"):
+            await bridge.act("notepad", "click", {"target": "ok"}, agent_id="a1")
+
+        assert provider.calls == []
+
+    async def test_act_approval_required_denies_without_grant(self):
+        provider = MockUABProvider()
+        bridge = UABBridge(
+            uab_provider=provider,
+            governance_bridge=MockGovernanceBridgeApprovalRequired(),
+            uab_grant_secret=TEST_GRANT_SECRET,
+        )
+
+        with pytest.raises(UABControlError, match="Governance denied"):
+            await bridge.act("notepad", "click", {"target": "ok"}, agent_id="a1")
+
+        assert provider.calls == []
 
     async def test_act_no_provider_raises(self):
         bridge = UABBridge(
             governance_bridge=MockGovernanceBridgeApprove(),
+            uab_grant_secret=TEST_GRANT_SECRET,
         )
         with pytest.raises(UABControlError, match="not available"):
             await bridge.act("notepad", "click", agent_id="a1")
@@ -240,6 +295,7 @@ class TestUABBridgeMutatingOps:
         bridge = UABBridge(
             uab_provider=provider,
             governance_bridge=MockGovernanceBridgeApprove(),
+            uab_grant_secret=TEST_GRANT_SECRET,
         )
         with pytest.raises(
             ScopedSoulViolationError,
@@ -259,6 +315,7 @@ class TestUABBridgeMutatingOps:
         bridge = UABBridge(
             uab_provider=provider,
             governance_bridge=MockGovernanceBridgeApprove(),
+            uab_grant_secret=TEST_GRANT_SECRET,
         )
         with pytest.raises(
             ScopedSoulViolationError,
@@ -278,6 +335,7 @@ class TestUABBridgeMutatingOps:
         bridge = UABBridge(
             uab_provider=provider,
             governance_bridge=MockGovernanceBridgeApprove(),
+            uab_grant_secret=TEST_GRANT_SECRET,
         )
         scoped_soul = Soul(
             version="v1",

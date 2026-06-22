@@ -1,0 +1,36 @@
+{
+  "package": "governance-spine-hardening-closeout",
+  "commit_sha": "d4923046",
+  "branch": "codex/governance-spine-hardening",
+  "timestamp_utc": "2026-06-18T00:00:00Z",
+  "python_version": "3.11.9",
+  "node_version": "v24.13.0",
+  "os": "Windows",
+  "ldds_closed": ["LDD-003"],
+  "tickets_closed": ["CLOSE-001"],
+  "commands_run": [
+    {
+      "command": "pytest tests/test_evidence_manifest_validator.py -q",
+      "status": "passed",
+      "log_path": "tests/fixtures/evidence_manifest_valid.json"
+    }
+  ],
+  "coverage_reports": ["tests/fixtures/evidence_manifest_valid.json"],
+  "docs_updated": ["tests/fixtures/evidence_manifest_valid.json"],
+  "evidence_artifacts": ["tests/fixtures/evidence_manifest_valid.json"],
+  "waivers": [
+    {
+      "waiver_id": "W-TEST",
+      "reason": "fixture waiver",
+      "risk": "none",
+      "owner": "build-loop-qa",
+      "follow_up_ticket": "none"
+    }
+  ],
+  "deferred_scope": ["Proof of Governed Execution demo"],
+  "operator_smoke": {
+    "served_runtime_passed": false,
+    "waiver_id": "W-TEST"
+  },
+  "final_gate_status": "pending"
+}

@@ -6,9 +6,13 @@
  * provides the daemon's local confirmation and audit guardrails.
  */
 
-import type { ActionType, DetectedApp } from './types.js';
+import type { ActionType, ActionParams, DetectedApp } from './types.js';
 import { readFileSync } from 'fs';
 import { createLogger } from './logger.js';
+import {
+  validateUABAuthorityGrant,
+  type UABGrantValidationContext,
+} from './governance/grants.js';
 
 const log = createLogger('uab-perms');
 
@@ -38,6 +42,12 @@ const MODIFYING_ACTIONS = new Set(ACTION_RISK_MANIFEST.mutating);
 const SAFE_ACTIONS = new Set(ACTION_RISK_MANIFEST.read_only);
 
 export type RiskLevel = 'safe' | 'moderate' | 'destructive';
+export const RISK_LEVELS: readonly RiskLevel[] = ['safe', 'moderate', 'destructive'] as const;
+const ACTION_RISK_CATEGORY_TO_LEVEL = {
+  read_only: 'safe',
+  mutating: 'moderate',
+  destructive: 'destructive',
+} as const satisfies Record<keyof Pick<ActionRiskManifest, 'read_only' | 'mutating' | 'destructive'>, RiskLevel>;
 
 export const RISK_TERMINOLOGY: Record<RiskLevel, {
   toolFabric: 'low' | 'medium' | 'high';
@@ -48,9 +58,76 @@ export const RISK_TERMINOLOGY: Record<RiskLevel, {
   destructive: { toolFabric: 'high', governance: 'T3' },
 };
 
+function assertRiskLevel(value: string): asserts value is RiskLevel {
+  if (!RISK_LEVELS.includes(value as RiskLevel)) {
+    throw new Error(`Unknown UAB risk label: ${value}`);
+  }
+}
+
+export function validateRiskTerminology(
+  terminology: Record<string, { toolFabric: string; governance: string }> = RISK_TERMINOLOGY,
+  manifest: Record<string, unknown> = ACTION_RISK_MANIFEST as unknown as Record<string, unknown>,
+): void {
+  const expectedTerminology = {
+    safe: { toolFabric: 'low', governance: 'T0/T1' },
+    moderate: { toolFabric: 'medium', governance: 'T1/T2' },
+    destructive: { toolFabric: 'high', governance: 'T3' },
+  } as const;
+
+  const labels = Object.keys(terminology).sort();
+  const expectedLabels = [...RISK_LEVELS].sort();
+  if (labels.join('|') !== expectedLabels.join('|')) {
+    throw new Error(`UAB risk terminology labels drifted: ${labels.join(',')}`);
+  }
+
+  for (const label of RISK_LEVELS) {
+    const entry = terminology[label];
+    const expected = expectedTerminology[label];
+    if (!entry || entry.toolFabric !== expected.toolFabric || entry.governance !== expected.governance) {
+      throw new Error(`UAB risk terminology mapping drifted for ${label}`);
+    }
+  }
+
+  const requiredManifestKeys = new Set([
+    ...Object.keys(ACTION_RISK_CATEGORY_TO_LEVEL),
+    'sensitive_app_patterns',
+  ]);
+  const actualManifestKeys = Object.keys(manifest);
+  const missing = [...requiredManifestKeys].filter(key => !(key in manifest));
+  const extra = actualManifestKeys.filter(key => !requiredManifestKeys.has(key));
+  if (missing.length > 0) {
+    throw new Error(`UAB action risk manifest missing keys: ${missing.join(',')}`);
+  }
+  if (extra.length > 0) {
+    throw new Error(`UAB action risk manifest has unknown keys: ${extra.join(',')}`);
+  }
+
+  const seen = new Map<string, string>();
+  for (const [category, riskLevel] of Object.entries(ACTION_RISK_CATEGORY_TO_LEVEL)) {
+    assertRiskLevel(riskLevel);
+    const actions = manifest[category];
+    if (!Array.isArray(actions) || actions.some(action => typeof action !== 'string')) {
+      throw new Error(`UAB action risk manifest category must be a string array: ${category}`);
+    }
+    for (const action of actions as string[]) {
+      const prior = seen.get(action);
+      if (prior) {
+        throw new Error(`UAB action ${action} appears in both ${prior} and ${category}`);
+      }
+      seen.set(action, category);
+    }
+  }
+
+  const sensitivePatterns = manifest.sensitive_app_patterns;
+  if (!Array.isArray(sensitivePatterns) || sensitivePatterns.some(pattern => typeof pattern !== 'string')) {
+    throw new Error('UAB action risk manifest sensitive_app_patterns must be a string array');
+  }
+}
+
 export interface PermissionCheck {
   allowed: boolean;
   riskLevel: RiskLevel;
+  reasonCode?: string;
   reason?: string;
 }
 
@@ -81,13 +158,18 @@ export interface PermissionOptions {
   maxAuditEntries?: number;
   /** PIDs that are exempt from rate limiting */
   exemptPids?: Set<number>;
+  /** HMAC key used to verify supplied central-authority UAB grants. */
+  authoritySecret?: string | Buffer;
 }
 
 export class PermissionManager {
-  private options: Required<PermissionOptions>;
+  private options: Required<Omit<PermissionOptions, 'authoritySecret'>> & {
+    authoritySecret?: string | Buffer;
+  };
   private rateLimits: Map<number, RateLimitEntry> = new Map();
   private auditLog: AuditEntry[] = [];
   private allowedPids: Set<number> = new Set(); // PIDs confirmed for destructive actions
+  private usedAuthorityGrantNonces: Set<string> = new Set();
 
   constructor(options?: PermissionOptions) {
     this.options = {
@@ -96,12 +178,60 @@ export class PermissionManager {
       rateLimitWindow: options?.rateLimitWindow ?? 60_000,
       maxAuditEntries: options?.maxAuditEntries ?? 1000,
       exemptPids: options?.exemptPids ?? new Set(),
+      authoritySecret: options?.authoritySecret ?? process.env.UAB_AUTHORITY_GRANT_SECRET,
     };
   }
 
   /** Check if an action is permitted */
-  check(pid: number, action: ActionType, app?: DetectedApp): PermissionCheck {
+  check(
+    pid: number,
+    action: ActionType,
+    app?: DetectedApp,
+    params?: ActionParams,
+    selectorScope?: string,
+  ): PermissionCheck {
     const riskLevel = this.getRiskLevel(action);
+    const grantRequired = this.requiresAuthorityGrant(action);
+
+    if (params?.uabAuthorityGrant) {
+      const grantContext: UABGrantValidationContext = {
+        appName: app?.name,
+        appPid: pid,
+        action,
+        selectorScope: selectorScope ?? params.selectorScope,
+        expectedFlags: this.expectedGrantFlags(action, riskLevel),
+      };
+      const grantValidation = validateUABAuthorityGrant(
+        params.uabAuthorityGrant,
+        this.options.authoritySecret,
+        grantContext,
+      );
+      if (!grantValidation.valid) {
+        return {
+          allowed: false,
+          riskLevel,
+          reasonCode: grantValidation.reasonCode,
+          reason: `UAB authority grant rejected: ${grantValidation.reasonCode}`,
+        };
+      }
+      const nonce = params.uabAuthorityGrant.nonce;
+      if (this.usedAuthorityGrantNonces.has(nonce)) {
+        return {
+          allowed: false,
+          riskLevel,
+          reasonCode: 'replayed_nonce',
+          reason: 'UAB authority grant rejected: replayed_nonce',
+        };
+      }
+      this.usedAuthorityGrantNonces.add(nonce);
+    } else if (grantRequired) {
+      return {
+        allowed: false,
+        riskLevel,
+        reasonCode: 'missing_authority_grant',
+        reason: `UAB authority grant required for governed action "${action}"`,
+      };
+    }
 
     // Rate limit check
     if (!this.options.exemptPids.has(pid)) {
@@ -109,6 +239,7 @@ export class PermissionManager {
         return {
           allowed: false,
           riskLevel,
+          reasonCode: 'rate_limited',
           reason: `Rate limited: too many actions on PID ${pid} (max ${this.options.rateLimit}/min)`,
         };
       }
@@ -120,6 +251,7 @@ export class PermissionManager {
         return {
           allowed: false,
           riskLevel,
+          reasonCode: 'destructive_confirmation_required',
           reason: `Destructive action "${action}" requires confirmation for PID ${pid}` +
             (app ? ` (${app.name})` : ''),
         };
@@ -188,8 +320,65 @@ export class PermissionManager {
     if (MODIFYING_ACTIONS.has(action)) return 'moderate';
     if (SAFE_ACTIONS.has(action)) return 'safe';
 
-    log.warn('Unknown UAB action risk classification; defaulting to moderate', { action });
-    return 'moderate';
+    log.warn('Unknown UAB action risk classification; defaulting to destructive', { action });
+    return 'destructive';
+  }
+
+  requiresAuthorityGrant(action: ActionType): boolean {
+    const riskLevel = this.getRiskLevel(action);
+    return (
+      riskLevel !== 'safe'
+      || this.isSensitiveReadAction(action)
+      || action === 'sendEmail'
+      || this.isCredentialSensitiveAction(action)
+    );
+  }
+
+  private expectedGrantFlags(
+    action: ActionType,
+    riskLevel: RiskLevel,
+  ): NonNullable<UABGrantValidationContext['expectedFlags']> {
+    return {
+      mutating: riskLevel !== 'safe',
+      destructive: riskLevel === 'destructive',
+      sensitive_read: this.isSensitiveReadAction(action),
+      external_submission: action === 'sendEmail',
+      credential_sensitive: this.isCredentialSensitiveAction(action),
+    };
+  }
+
+  private isSensitiveReadAction(action: ActionType): boolean {
+    return [
+      'screenshot',
+      'readDocument',
+      'readCell',
+      'readRange',
+      'readFormula',
+      'readSlides',
+      'readSlideText',
+      'readEmails',
+      'getCookies',
+      'getLocalStorage',
+      'getSessionStorage',
+    ].includes(action);
+  }
+
+  private isCredentialSensitiveAction(action: ActionType): boolean {
+    return [
+      'getCookies',
+      'setCookie',
+      'deleteCookie',
+      'clearCookies',
+      'getLocalStorage',
+      'setLocalStorage',
+      'deleteLocalStorage',
+      'clearLocalStorage',
+      'getSessionStorage',
+      'setSessionStorage',
+      'deleteSessionStorage',
+      'clearSessionStorage',
+      'executeScript',
+    ].includes(action);
   }
 
   /** Get recent audit log entries */

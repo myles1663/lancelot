@@ -152,6 +152,29 @@ def test_verify_async_job_delegates_to_verifier():
     assert calls == [("deploy", "{'ok': True}")]
 
 
+def test_runtime_state_transitions_from_mixin():
+    runtime = _runtime()
+    events = []
+    runtime.state = orchestrator.RuntimeState.ACTIVE
+    runtime.audit_logger = SimpleNamespace(
+        log_event=lambda event_type, message: events.append((event_type, message))
+    )
+
+    runtime.enter_sleep()
+    assert runtime.state == orchestrator.RuntimeState.SLEEPING
+    assert events[-1][0] == "STATE_CHANGE"
+
+    runtime.enter_sleep()
+    assert len(events) == 1
+
+    runtime.wake_up("test")
+    assert runtime.state == orchestrator.RuntimeState.ACTIVE
+    assert len(events) == 2
+
+    runtime.wake_up("already active")
+    assert len(events) == 2
+
+
 def test_plan_enrichment_no_provider_agentic_and_text_paths(monkeypatch):
     artifact = SimpleNamespace(goal="Ship release", plan_steps=["template"], next_action="template")
     runtime = _runtime()

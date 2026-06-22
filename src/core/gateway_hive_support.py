@@ -58,47 +58,16 @@ class OrchestratorRouterAdapter:
 
 def get_uab_provider(logger):
     """Return a UAB provider when the daemon can be reached or may recover later."""
-    try:
-        from src.tools.providers.uab_bridge import UABProvider
+    from src.core.uab_runtime_adapter import get_uab_provider as adapter_get_uab_provider
 
-        provider = UABProvider()
-        health = provider.health_check()
-        status = summarize_uab_provider_health(provider, health)
-        state = status["state"]
-        if state == "healthy":
-            return provider, status
-        logger.warning(
-            "HIVE UAB provider offline at startup; desktop-control workflows will remain unavailable "
-            "until the host daemon recovers (health_state=%s, daemon_url=%s, error=%s)",
-            state,
-            status["daemon_url"],
-            status["error"],
-        )
-        return provider, status
-    except Exception as exc:
-        logger.warning(
-            "HIVE UAB provider failed to initialize; desktop-control workflows will run without UAB: %s",
-            exc,
-        )
-        return None, {"state": "unavailable", "daemon_url": None, "error": str(exc)}
+    return adapter_get_uab_provider(logger)
 
 
 def summarize_uab_provider_health(provider, health):
     """Return UAB startup status through the provider's public contract."""
-    if hasattr(provider, "summarize_health"):
-        return provider.summarize_health(health)
+    from src.core.uab_runtime_adapter import summarize_uab_provider_health as adapter_summarize
 
-    metadata = getattr(health, "metadata", {}) or {}
-    state = getattr(getattr(health, "state", None), "value", "unknown")
-    daemon_url = metadata.get("daemon_url")
-    config = getattr(provider, "config", None)
-    if daemon_url is None and config is not None:
-        daemon_url = getattr(config, "daemon_url", None)
-    return {
-        "state": state,
-        "daemon_url": daemon_url,
-        "error": getattr(health, "error_message", None),
-    }
+    return adapter_summarize(provider, health)
 
 
 def init_hive(*, main_orchestrator, sentry, subsystem_manager, logger):

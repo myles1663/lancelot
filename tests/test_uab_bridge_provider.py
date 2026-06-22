@@ -3,8 +3,67 @@ import urllib.error
 
 import pytest
 
+from src.core.execution_authority import create_uab_authority_grant
 from src.tools.contracts import Capability, ProviderState, RiskLevel
 from src.tools.providers.uab_bridge import UABConfig, UABProvider, classify_action_risk
+
+TEST_GRANT_SECRET = "uab-provider-test-secret"
+
+
+def _uab_risk_for_action(action: str, app_name: str = "Notepad") -> str:
+    risk = classify_action_risk(action, app_name)
+    if risk is RiskLevel.LOW:
+        return "safe"
+    if risk is RiskLevel.MEDIUM:
+        return "moderate"
+    return "destructive"
+
+
+def _grant(action: str, *, pid: int = 7, app_name: str = "Notepad", selector_scope: str = ""):
+    uab_risk = _uab_risk_for_action(action, app_name)
+    return create_uab_authority_grant(
+        secret=TEST_GRANT_SECRET,
+        risk_tier="T2_CONTROLLED" if uab_risk != "destructive" else "T3_IRREVERSIBLE",
+        uab_risk=uab_risk,
+        capability=f"uab_{action}",
+        app_name=app_name,
+        app_pid=pid,
+        action=action,
+        selector_scope=selector_scope,
+        policy_version="test-policy",
+        soul_version="v1",
+        mutating=uab_risk != "safe",
+        destructive=uab_risk == "destructive",
+        sensitive_read=action in {
+            "screenshot",
+            "readDocument",
+            "readCell",
+            "readRange",
+            "readFormula",
+            "readSlides",
+            "readSlideText",
+            "readEmails",
+            "getCookies",
+            "getLocalStorage",
+            "getSessionStorage",
+        },
+        external_submission=action in {"sendEmail", "submitForm", "upload"},
+        credential_sensitive=action in {
+            "getCookies",
+            "setCookie",
+            "deleteCookie",
+            "clearCookies",
+            "getLocalStorage",
+            "setLocalStorage",
+            "deleteLocalStorage",
+            "clearLocalStorage",
+            "getSessionStorage",
+            "setSessionStorage",
+            "deleteSessionStorage",
+            "clearSessionStorage",
+            "executeScript",
+        },
+    ).to_dict()
 
 
 class _UrlopenResponse:
@@ -68,6 +127,19 @@ def test_health_check_exposes_standalone_status_metadata():
     assert health.metadata["standalone_features"] == ["smartInvoke"]
 
 
+def test_unknown_uab_action_risk_fails_closed():
+    assert classify_action_risk("unknownGovernedAction") is RiskLevel.HIGH
+
+
+def test_provider_uab_risk_label_uses_locked_terminology():
+    assert UABProvider._uab_risk_label(RiskLevel.LOW) == "safe"
+    assert UABProvider._uab_risk_label(RiskLevel.MEDIUM) == "moderate"
+    assert UABProvider._uab_risk_label(RiskLevel.HIGH) == "destructive"
+
+    with pytest.raises(ValueError, match="Unknown Tool Fabric risk label"):
+        UABProvider._uab_risk_label("critical")
+
+
 def test_find_by_path_and_watch_changes_extract_nested_results():
     provider = UABProvider()
 
@@ -119,6 +191,184 @@ def test_classify_action_risk_covers_destructive_sensitive_mutating_and_read_onl
     assert classify_action_risk("executeScript", app_name="Notepad") == RiskLevel.MEDIUM
     assert classify_action_risk("state", app_name="Notepad") == RiskLevel.LOW
     assert classify_action_risk("getTabs", app_name="Notepad") == RiskLevel.LOW
+
+
+def test_provider_denies_mutating_action_without_grant_before_rpc():
+    provider = UABProvider(config=UABConfig(authority_grant_secret=TEST_GRANT_SECRET))
+    provider._connected_apps[7] = {"name": "Notepad"}
+    calls = []
+    provider._rpc_call = lambda method, params=None, timeout=None: calls.append((method, params))
+
+    result = provider.act(7, "edit1", "type", {"text": "hello"})
+
+    assert result.success is False
+    assert result.error_message == "UAB authority grant required for provider action 'type'"
+    assert calls == []
+    assert provider.get_denial_events()[0]["reason_code"] == "missing_authority_grant"
+    assert provider.get_denial_events()[0]["action"] == "type"
+
+
+def test_provider_denies_invalid_grant_before_rpc():
+    provider = UABProvider(config=UABConfig(authority_grant_secret=TEST_GRANT_SECRET))
+    provider._connected_apps[7] = {"name": "Notepad"}
+    calls = []
+    provider._rpc_call = lambda method, params=None, timeout=None: calls.append((method, params))
+    tampered = _grant("type", selector_scope="edit1")
+    tampered["action"] = "click"
+
+    result = provider.act(7, "edit1", "type", {"uabAuthorityGrant": tampered})
+
+    assert result.success is False
+    assert "UAB authority grant rejected" in (result.error_message or "")
+    assert calls == []
+    assert provider.get_denial_events()[0]["reason_code"] == "invalid_authority_grant"
+
+
+def test_provider_denies_replayed_grant_before_rpc():
+    provider = UABProvider(config=UABConfig(authority_grant_secret=TEST_GRANT_SECRET))
+    provider._connected_apps[7] = {"name": "Notepad"}
+    calls = []
+
+    def fake_rpc(method, params=None, timeout=None):
+        calls.append((method, params))
+        return {"success": True, "durationMs": 1, "result": {"ok": True}}
+
+    provider._rpc_call = fake_rpc
+    grant = _grant("type", selector_scope="edit1")
+
+    first = provider.act(7, "edit1", "type", {"uabAuthorityGrant": grant})
+    second = provider.act(7, "edit1", "type", {"uabAuthorityGrant": grant})
+
+    assert first.success is True
+    assert second.success is False
+    assert second.error_message == "UAB authority grant rejected: replayed nonce"
+    assert calls == [
+        (
+            "act",
+            {
+                "pid": 7,
+                "elementId": "edit1",
+                "action": "type",
+                "params": {"uabAuthorityGrant": grant},
+            },
+        )
+    ]
+    assert provider.get_denial_events()[0]["reason_code"] == "replayed_authority_grant"
+
+
+def test_provider_denies_classification_required_read_without_app_context_or_grant():
+    provider = UABProvider(config=UABConfig(authority_grant_secret=TEST_GRANT_SECRET))
+    calls = []
+    provider._rpc_call = lambda method, params=None, timeout=None: calls.append((method, params))
+
+    result = provider.get_tabs(7)
+
+    assert result.success is False
+    assert result.error_message == "UAB provider classification required for action 'getTabs'"
+    assert calls == []
+    assert provider.get_denial_events()[0]["reason_code"] == "classification_required"
+
+
+def test_provider_allows_classified_non_sensitive_read_without_grant():
+    provider = UABProvider(config=UABConfig(authority_grant_secret=TEST_GRANT_SECRET))
+    provider._connected_apps[7] = {"name": "Notepad"}
+    calls = []
+
+    def fake_rpc(method, params=None, timeout=None):
+        calls.append((method, params))
+        return {"success": True, "durationMs": 1, "result": {"tabs": []}}
+
+    provider._rpc_call = fake_rpc
+
+    result = provider.get_tabs(7)
+
+    assert result.success is True
+    assert calls == [("act", {"pid": 7, "elementId": "", "action": "getTabs", "params": {}})]
+    assert provider.get_denial_events() == []
+
+
+def test_provider_denies_sensitive_read_without_grant():
+    provider = UABProvider(config=UABConfig(authority_grant_secret=TEST_GRANT_SECRET))
+    provider._connected_apps[7] = {"name": "Notepad"}
+    calls = []
+    provider._rpc_call = lambda method, params=None, timeout=None: calls.append((method, params))
+
+    result = provider.screenshot(7)
+
+    assert result.success is False
+    assert result.error_message == "UAB authority grant required for provider action 'screenshot'"
+    assert calls == []
+    assert provider.get_denial_events()[0]["action"] == "screenshot"
+
+
+def test_provider_denies_sensitive_app_direct_read_helpers_before_rpc():
+    provider = UABProvider(config=UABConfig(authority_grant_secret=TEST_GRANT_SECRET))
+    provider._connected_apps[7] = {"name": "Outlook"}
+    calls = []
+    provider._rpc_call = lambda method, params=None, timeout=None: calls.append((method, params))
+
+    state = provider.state(7)
+    elements = provider.enumerate(7)
+    queried = provider.query(7, {"type": "edit"})
+
+    assert state.pid == 7
+    assert elements == []
+    assert queried == []
+    assert calls == []
+    assert [event["action"] for event in provider.get_denial_events()] == [
+        "state",
+        "enumerate",
+        "query",
+    ]
+    assert all(
+        event["reason_code"] == "missing_authority_grant"
+        for event in provider.get_denial_events()
+    )
+
+
+def test_provider_allows_safe_direct_read_helpers_without_grant():
+    provider = UABProvider(config=UABConfig(authority_grant_secret=TEST_GRANT_SECRET))
+    provider._connected_apps[7] = {"name": "Notepad"}
+    calls = []
+
+    def fake_rpc(method, params=None, timeout=None):
+        calls.append((method, params))
+        if method == "state":
+            return {"window": {"title": "Notepad", "focused": True}}
+        if method == "enumerate":
+            return [{"id": "root", "type": "window"}]
+        if method == "query":
+            return [{"id": "edit1", "type": "edit"}]
+        raise AssertionError(method)
+
+    provider._rpc_call = fake_rpc
+
+    assert provider.state(7).window_title == "Notepad"
+    assert provider.enumerate(7)[0].id == "root"
+    assert provider.query(7, {"type": "edit"})[0].id == "edit1"
+    assert [call[0] for call in calls] == ["state", "enumerate", "query"]
+    assert provider.get_denial_events() == []
+
+
+def test_provider_denies_dict_helper_paths_without_grant_before_rpc():
+    provider = UABProvider(config=UABConfig(authority_grant_secret=TEST_GRANT_SECRET))
+    provider._connected_apps[7] = {"name": "Notepad"}
+    calls = []
+    provider._rpc_call = lambda method, params=None, timeout=None: calls.append((method, params))
+
+    chain = provider.execute_chain({"pid": 7, "steps": []})
+    atomic = provider.atomic_chain(7, [{"method": "click"}])
+    smart = provider.smart_invoke(7, "Save")
+
+    assert chain["success"] is False
+    assert atomic["success"] is False
+    assert smart["success"] is False
+    assert calls == []
+    assert [event["action"] for event in provider.get_denial_events()] == [
+        "chain",
+        "atomicChain",
+        "smartInvoke",
+    ]
 
 
 def test_config_uses_env_default_and_provider_metadata():
@@ -328,7 +578,8 @@ def test_enumerate_query_and_state_parse_results_and_fallbacks(caplog):
 
 
 def test_act_keypress_hotkey_window_and_screenshot_cover_success_invalid_and_failure(caplog):
-    provider = UABProvider()
+    provider = UABProvider(config=UABConfig(authority_grant_secret=TEST_GRANT_SECRET))
+    provider._connected_apps[7] = {"name": "Notepad"}
     responses = {
         "act": {"success": True, "stateChanges": ["typed"], "durationMs": 9, "result": {"ok": True}},
         "keypress": {"success": True, "durationMs": 3, "result": {"key": "Enter"}},
@@ -344,35 +595,60 @@ def test_act_keypress_hotkey_window_and_screenshot_cover_success_invalid_and_fai
 
     provider._rpc_call = fake_rpc
 
-    act_result = provider.act(7, "edit1", "type", {"text": "hello"})
+    act_result = provider.act(
+        7,
+        "edit1",
+        "type",
+        {"text": "hello", "uabAuthorityGrant": _grant("type", selector_scope="edit1")},
+    )
     assert act_result.success is True
     assert act_result.result_data == {"ok": True}
 
-    assert provider.keypress(7, "Enter").success is True
-    assert provider.hotkey(7, ["ctrl", "s"]).success is True
-    assert provider.maximize(7).success is True
-    assert provider.screenshot(7, output_path="shot.png").success is True
-    assert ("screenshot", {"pid": 7, "outputPath": "shot.png"}) in recorded
+    assert provider.keypress(7, "Enter", uab_authority_grant=_grant("keypress")).success is True
+    assert provider.hotkey(7, ["ctrl", "s"], uab_authority_grant=_grant("hotkey")).success is True
+    assert provider.maximize(7, uab_authority_grant=_grant("maximize")).success is True
+    assert provider.screenshot(
+        7,
+        output_path="shot.png",
+        uab_authority_grant=_grant("screenshot"),
+    ).success is True
+    assert recorded[0][1]["params"]["uabAuthorityGrant"]["action"] == "type"
+    assert recorded[1][1]["uabAuthorityGrant"]["action"] == "keypress"
+    assert recorded[2][1]["uabAuthorityGrant"]["action"] == "hotkey"
+    assert recorded[3][1]["uabAuthorityGrant"]["action"] == "maximize"
+    assert recorded[4][1]["uabAuthorityGrant"]["action"] == "screenshot"
+    assert recorded[4][1]["outputPath"] == "shot.png"
 
     provider._rpc_call = lambda *args, **kwargs: "bad"
-    assert provider.act(7, "edit1", "type").success is False
-    assert provider.keypress(7, "Enter").success is False
-    assert provider.hotkey(7, ["ctrl", "s"]).success is False
-    assert provider.restore(7).success is False
-    assert provider.screenshot(7).success is False
+    assert provider.act(
+        7,
+        "edit1",
+        "type",
+        {"uabAuthorityGrant": _grant("type", selector_scope="edit1")},
+    ).success is False
+    assert provider.keypress(7, "Enter", uab_authority_grant=_grant("keypress")).success is False
+    assert provider.hotkey(7, ["ctrl", "s"], uab_authority_grant=_grant("hotkey")).success is False
+    assert provider.restore(7, uab_authority_grant=_grant("restore")).success is False
+    assert provider.screenshot(7, uab_authority_grant=_grant("screenshot")).success is False
 
     provider._rpc_call = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("rpc boom"))
     with caplog.at_level(logging.WARNING):
-        assert provider.act(7, "edit1", "type").success is False
-        assert provider.keypress(7, "Enter").success is False
-        assert provider.hotkey(7, ["ctrl", "s"]).success is False
-        assert provider.minimize(7).success is False
-        assert provider.screenshot(7).success is False
+        assert provider.act(
+            7,
+            "edit1",
+            "type",
+            {"uabAuthorityGrant": _grant("type", selector_scope="edit1")},
+        ).success is False
+        assert provider.keypress(7, "Enter", uab_authority_grant=_grant("keypress")).success is False
+        assert provider.hotkey(7, ["ctrl", "s"], uab_authority_grant=_grant("hotkey")).success is False
+        assert provider.minimize(7, uab_authority_grant=_grant("minimize")).success is False
+        assert provider.screenshot(7, uab_authority_grant=_grant("screenshot")).success is False
     assert "UAB act failed" in caplog.text
 
 
 def test_chain_diag_and_spatial_helpers_cover_success_and_failure(caplog):
-    provider = UABProvider()
+    provider = UABProvider(config=UABConfig(authority_grant_secret=TEST_GRANT_SECRET))
+    provider._connected_apps[7] = {"name": "Notepad"}
 
     def fake_rpc(method, params=None, timeout=None):
         mapping = {
@@ -393,7 +669,11 @@ def test_chain_diag_and_spatial_helpers_cover_success_and_failure(caplog):
 
     provider._rpc_call = fake_rpc
 
-    assert provider.execute_chain({"steps": []}) == {"success": True}
+    assert provider.execute_chain({
+        "pid": 7,
+        "steps": [],
+        "uabAuthorityGrant": _grant("chain"),
+    }) == {"success": True}
     assert provider.get_health_summary() == [{"pid": 7}]
     assert provider.get_cache_stats() == {"tree": 2}
     assert provider.get_audit_log() == [{"action": "click"}]
@@ -403,12 +683,27 @@ def test_chain_diag_and_spatial_helpers_cover_success_and_failure(caplog):
     assert provider.focused(7) == {"id": "edit1"}
     assert provider.find_by_path(7, path=["Window", "Toolbar"], name="Save", parent="toolbar", element_type="button", occurrence=2) == [{"name": "Save"}]
     assert provider.watch_changes(7) == [{"type": "focus"}]
-    assert provider.atomic_chain(7, [{"method": "click"}]) == {"success": True}
-    assert provider.smart_invoke(7, "Save", parent="toolbar", element_type="button", occurrence=1) == {"success": True}
+    assert provider.atomic_chain(
+        7,
+        [{"method": "click"}],
+        uab_authority_grant=_grant("atomicChain"),
+    ) == {"success": True}
+    assert provider.smart_invoke(
+        7,
+        "Save",
+        parent="toolbar",
+        element_type="button",
+        occurrence=1,
+        uab_authority_grant=_grant("smartInvoke", selector_scope="Save"),
+    ) == {"success": True}
 
     provider._rpc_call = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("helper boom"))
     with caplog.at_level(logging.WARNING):
-        assert provider.execute_chain({"steps": []})["success"] is False
+        assert provider.execute_chain({
+            "pid": 7,
+            "steps": [],
+            "uabAuthorityGrant": _grant("chain"),
+        })["success"] is False
         assert provider.get_health_summary() == []
         assert provider.get_cache_stats() == {}
         assert provider.get_audit_log() == []
@@ -418,8 +713,16 @@ def test_chain_diag_and_spatial_helpers_cover_success_and_failure(caplog):
         assert provider.focused(7)["error"] == "helper boom"
         assert provider.find_by_path(7, name="Save") == []
         assert provider.watch_changes(7) == []
-        assert provider.atomic_chain(7, [{"method": "click"}])["success"] is False
-        assert provider.smart_invoke(7, "Save")["success"] is False
+        assert provider.atomic_chain(
+            7,
+            [{"method": "click"}],
+            uab_authority_grant=_grant("atomicChain"),
+        )["success"] is False
+        assert provider.smart_invoke(
+            7,
+            "Save",
+            uab_authority_grant=_grant("smartInvoke", selector_scope="Save"),
+        )["success"] is False
 
     assert "UAB chain execution failed" in caplog.text
     assert "UAB health summary failed" in caplog.text

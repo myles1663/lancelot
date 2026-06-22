@@ -922,7 +922,7 @@ class TestUABFallback:
     async def test_act_without_provider_raises(self):
         """act() with no UAB provider → UABControlError."""
         bridge = UABBridge(uab_provider=None)
-        with pytest.raises(UABControlError, match="not available"):
+        with pytest.raises(UABControlError, match="Governance bridge required"):
             await bridge.act("notepad", "click", {"element": "btn"})
 
     @pytest.mark.asyncio
@@ -959,7 +959,12 @@ class TestUABFallback:
         provider = MagicMock()
         provider.act.side_effect = ConnectionError("App crashed")
 
-        bridge = UABBridge(uab_provider=provider)
+        governance = GovernanceBridge(risk_classifier=_MockRiskClassifier(tier=1))
+        bridge = UABBridge(
+            uab_provider=provider,
+            governance_bridge=governance,
+            uab_grant_secret="test-uab-authority-secret",
+        )
         with pytest.raises(ConnectionError, match="App crashed"):
             await bridge.act("notepad", "click", {"element": "x"})
 

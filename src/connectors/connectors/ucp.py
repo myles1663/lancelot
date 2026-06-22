@@ -14,6 +14,7 @@ from src.connectors.base import ConnectorBase, ConnectorManifest, CredentialSpec
 from src.connectors.commerce import (
     CommerceIntent,
     CommerceOperation,
+    UCPApprovalEvidence,
     default_tier_for_operation,
     operation_requires_approval,
     parse_commerce_operation,
@@ -132,12 +133,14 @@ class UCPConnector(ConnectorBase):
                 f"Commerce intent operation {intent.operation.value} does not match {operation_id}"
             )
 
-        approval_id = str(params.get("approval_id") or "")
-        approved = params.get("approved") is True
-        if operation_requires_approval(operation) and not (approved and approval_id):
-            raise PermissionError(
-                "UCP spend-committing operations require governance approval evidence"
-            )
+        approval_evidence = params.get("_governance_approval")
+        approval_id = ""
+        if operation_requires_approval(operation):
+            if not isinstance(approval_evidence, UCPApprovalEvidence) or not approval_evidence.approved:
+                raise PermissionError(
+                    "UCP spend-committing operations require verified governance approval evidence"
+                )
+            approval_id = approval_evidence.approval_id
 
         path = operation.value.replace(".", "/")
         body: dict[str, Any] = {
@@ -159,6 +162,9 @@ class UCPConnector(ConnectorBase):
                 "commerce": intent.commerce_summary(),
                 "requires_approval": operation_requires_approval(operation),
                 "approval_id": approval_id or None,
+                "approval_source": approval_evidence.source
+                if isinstance(approval_evidence, UCPApprovalEvidence)
+                else None,
             },
         )
 

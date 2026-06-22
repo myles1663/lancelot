@@ -224,8 +224,8 @@ class ToolFabric:
 
         # UAB provider (Universal App Bridge — desktop app control via host)
         if FEATURE_TOOLS_UAB:
-            from src.tools.providers.uab_bridge import UABProvider
-            uab_provider = UABProvider()
+            from src.core.uab_runtime_adapter import create_uab_provider
+            uab_provider = create_uab_provider()
             self._health_monitor.register(uab_provider)
             _emit_operator_notice_once(
                 "uab_bridge_enabled",

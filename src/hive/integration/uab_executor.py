@@ -15,11 +15,20 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from src.core.execution_authority import create_uab_authority_grant
 from src.hive.errors import ScopedSoulViolationError
+from src.hive.integration.uab_bridge import (
+    _UAB_GRANT_SECRET_ENV,
+    _UAB_POLICY_VERSION,
+    _risk_flags_for_action,
+    _risk_label_for_action,
+    _soul_version,
+)
 from src.hive.scoped_soul import (
     capability_matches_allowed_categories,
     scoped_soul_capability_decision,
@@ -124,10 +133,12 @@ class HiveUABExecutor:
         uab_provider,
         llm_router=None,
         governance_bridge=None,
+        uab_grant_secret: Optional[str] = None,
     ):
         self._uab = uab_provider
         self._llm = llm_router  # _OrchestratorRouterAdapter or ModelRouter
         self._governance = governance_bridge
+        self._uab_grant_secret = uab_grant_secret or os.environ.get(_UAB_GRANT_SECRET_ENV)
 
     def __call__(self, action: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a subtask action via real UAB calls.
@@ -190,14 +201,15 @@ class HiveUABExecutor:
 
             # Step 4: Execute each UAB step
             for i, step in enumerate(uab_steps):
-                self._validate_step(
+                grant = self._validate_step(
                     step,
                     app_name,
                     agent_id,
+                    pid=pid,
                     scoped_soul=scoped_soul,
                     allowed_categories=allowed_categories,
                 )
-                step_result = self._execute_step(step, pid)
+                step_result = self._execute_step(step, pid, grant)
                 self._record_step_outcome(step, app_name, step_result)
                 step_results.append(step_result)
 
@@ -356,9 +368,10 @@ class HiveUABExecutor:
         app_name: str,
         agent_id: str,
         *,
+        pid: int,
         scoped_soul=None,
         allowed_categories: Optional[List[str]] = None,
-    ) -> None:
+    ) -> Optional[Dict[str, Any]]:
         method = str(step.get("method", "")).strip().lower()
         scope_capability = self._scope_capability_for_step(step)
 
@@ -396,22 +409,56 @@ class HiveUABExecutor:
 
         capability = self._governed_capability_for_step(step)
 
-        if capability and self._governance is not None:
-            gov_result = self._governance.validate_action(
-                capability=capability,
-                scope=app_name,
-                target=method,
-                agent_id=agent_id,
+        if capability is None:
+            return None
+
+        if self._governance is None:
+            raise ScopedSoulViolationError(
+                agent_id=agent_id or "hive-uab",
+                action=capability,
+                reason=f"Governance bridge required for UAB capability '{capability}'",
             )
-            if not gov_result.approved:
-                raise ScopedSoulViolationError(
-                    agent_id=agent_id or "hive-uab",
-                    action=capability,
-                    reason=(
-                        f"Governance denied UAB capability '{capability}': "
-                        f"{gov_result.reason}"
-                    ),
-                )
+
+        action_name = self._grant_action_for_step(step)
+        gov_result = self._governance.validate_action(
+            capability=capability,
+            scope=app_name,
+            target=action_name,
+            agent_id=agent_id,
+        )
+        if not gov_result.approved:
+            raise ScopedSoulViolationError(
+                agent_id=agent_id or "hive-uab",
+                action=capability,
+                reason=(
+                    f"Governance denied UAB capability '{capability}': "
+                    f"{gov_result.reason}"
+                ),
+            )
+        if not self._uab_grant_secret:
+            raise ScopedSoulViolationError(
+                agent_id=agent_id or "hive-uab",
+                action=capability,
+                reason="UAB authority grant secret is not configured",
+            )
+
+        selector_scope = self._selector_scope_for_step(step)
+        uab_risk = _risk_label_for_action(action_name, app_name)
+        grant = create_uab_authority_grant(
+            secret=self._uab_grant_secret,
+            risk_tier=gov_result.tier or "T2",
+            uab_risk=uab_risk,
+            capability=capability,
+            app_name=app_name,
+            app_pid=pid,
+            action=action_name,
+            selector_scope=selector_scope,
+            policy_version=_UAB_POLICY_VERSION,
+            soul_version=_soul_version(scoped_soul),
+            approval_id=gov_result.approval_request_id,
+            **_risk_flags_for_action(action_name, app_name),
+        )
+        return grant.to_dict()
 
     @staticmethod
     def _scope_capability_for_step(step: Dict[str, Any]) -> Optional[str]:
@@ -437,6 +484,19 @@ class HiveUABExecutor:
         if capability in {"uab_state", "uab_query", None}:
             return None
         return capability
+
+    @staticmethod
+    def _grant_action_for_step(step: Dict[str, Any]) -> str:
+        method = str(step.get("method", "")).strip()
+        if method == "act":
+            return str(step.get("action", "") or "click")
+        return method
+
+    @staticmethod
+    def _selector_scope_for_step(step: Dict[str, Any]) -> str:
+        if str(step.get("method", "")).strip() != "act":
+            return ""
+        return str(step.get("params", {}).get("selectorScope") or step.get("element_id") or "")
 
     def _record_step_outcome(
         self,
@@ -505,16 +565,40 @@ class HiveUABExecutor:
         self,
         step: Dict[str, Any],
         pid: int,
+        uab_authority_grant: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Execute a single UAB step and return the result."""
         method = step.get("method", "")
         start = time.monotonic()
 
         try:
+            if self._governed_capability_for_step(step) is not None:
+                if uab_authority_grant is None:
+                    return {
+                        "method": method,
+                        "success": False,
+                        "error": "UAB authority grant required for governed HIVE UAB step",
+                        "duration_ms": int((time.monotonic() - start) * 1000),
+                    }
+                if method != "act":
+                    return {
+                        "method": method,
+                        "success": False,
+                        "error": (
+                            "Grant-carrying provider path unavailable for governed "
+                            f"HIVE UAB method: {method}"
+                        ),
+                        "duration_ms": int((time.monotonic() - start) * 1000),
+                    }
+
             if method == "act":
                 element_id = step.get("element_id", "")
                 action = step.get("action", "click")
-                params = step.get("params", {})
+                params = dict(step.get("params", {}) or {})
+                if uab_authority_grant is not None:
+                    params["uabAuthorityGrant"] = uab_authority_grant
+                    if element_id and "selectorScope" not in params:
+                        params["selectorScope"] = element_id
                 result = self._uab.act(pid, element_id, action, params)
                 return {
                     "method": "act",

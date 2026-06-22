@@ -42,7 +42,37 @@ python scripts/verify-public-release.py --skip-pytest --skip-uab --skip-docker -
 
 That stricter check is intended for the public release tree after maintainer-only docs and release-prep files have been excluded.
 
-## 2. Verify Receipt Integrity
+## 2. Regenerate The Governed Execution Proof
+
+The governed-execution proof is the focused evaluator path for the UAB authority and receipt claim:
+
+```text
+request -> classify -> deny or grant -> enforce -> receipt -> operator evidence -> export
+```
+
+Run:
+
+```bash
+npm --prefix src/warroom ci
+npm --prefix src/warroom run type-check
+npm --prefix src/warroom run build
+python scripts/proof/run_governed_execution_proof.py --all
+python -m pytest -q tests/test_proof_governed_execution.py
+python -m zipfile -t artifacts/proof-of-governed-execution/proof-of-governed-execution-packet.zip
+```
+
+The War Room build is required in clean checkouts because the proof validates
+`/war-room/` through the mounted SPA route.
+
+The generated packet is written under `artifacts/proof-of-governed-execution/`. It is a local or release evidence artifact, not a source artifact to commit to the public repository.
+
+This proof exercises the real Python `UABProvider` authorization, classification, replay validation, receipt-context handling, and canonical UAB receipt path. The daemon boundary may be faked or spied through `_rpc_call` so the proof remains deterministic and does not require a live desktop automation target.
+
+The proof covers missing-grant denial before execution, valid scoped grant execution, hostile grant rejection, same-provider-instance replay rejection, sensitive read controls, controlled RPC failure receipts, receipt reconstruction, and runtime smoke for `/health`, `/health/ready`, `/ready`, and `/war-room/`.
+
+It does not prove production auth completion, separate UI-surface auth completion, multi-tenancy, durable cross-process replay protection, live desktop execution, HIVE readiness, federation readiness, or broad repository-wide coverage. If operator visibility is collected through direct `ReceiptService` lookup instead of authenticated operator API/TestClient/session evidence, the generated packet must keep that caveat visible.
+
+## 3. Verify Receipt Integrity
 
 Receipts are staged, finalized into SQLite, hash-linked, and HMAC-signed. The focused contract suite exercises immutability, chain construction, tamper detection, signature persistence, and scoped chain validation:
 
@@ -70,7 +100,7 @@ Expected clean result:
 receipt chain OK
 ```
 
-## 3. Inspect A Receipt
+## 4. Inspect A Receipt
 
 The War Room Receipt Explorer shows recent receipts, risk tiers, action type, status, duration, token counts, sanitized inputs/outputs, operator/session metadata, and quest lineage.
 
@@ -106,7 +136,7 @@ A simplified receipt has this shape:
 
 Actual runtime receipts include more fields and sanitized request/output data. Secrets and high-risk private data are not meant to be stored in plaintext receipt bodies.
 
-## 4. Verify Scoped HIVE Execution
+## 5. Verify Scoped HIVE Execution
 
 HIVE decomposes work into bounded sub-agents. The scoped execution tests prove spawned tasks cannot widen authority through mutated payloads or injected scope fields:
 
@@ -121,7 +151,7 @@ Useful tests to inspect:
 - `test_exact_category_matching_blocks_fuzzy_substring_capabilities`
 - `test_scoped_soul_violation_before_governance_emits_action_receipt`
 
-## 5. Verify Kill Switch Behavior
+## 6. Verify Kill Switch Behavior
 
 Kill switches are part of the fail-closed control path:
 
@@ -131,7 +161,7 @@ python -m pytest -q tests/test_kill_switch_contract.py
 
 This contract verifies propagation and failure behavior around operator stop controls.
 
-## 6. Verify War Room And UAB
+## 7. Verify War Room And UAB
 
 The War Room frontend should typecheck and build:
 
@@ -148,7 +178,7 @@ npm --prefix packages/uab ci
 npm --prefix packages/uab test
 ```
 
-## 7. Verify Compose Configuration
+## 8. Verify Compose Configuration
 
 The Docker Compose file should resolve without requiring a local `.env` file:
 
@@ -188,7 +218,7 @@ For a full release-readiness view, run:
 python -m pytest -q --cov=src --cov-report=term-missing --cov-report=json:coverage-full.json
 ```
 
-The latest release-readiness pass recorded `7,361 passed`, `24 skipped`, `31 deselected`, and `90.2644%` Python line coverage.
+The latest release-readiness pass recorded `7,314 passed`, `24 skipped`, `31 deselected`, and `90.3600%` Python line coverage.
 
 ## What This Does Not Prove
 
